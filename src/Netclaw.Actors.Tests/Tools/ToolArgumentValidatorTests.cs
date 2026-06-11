@@ -1,0 +1,175 @@
+// -----------------------------------------------------------------------
+// <copyright file="ToolArgumentValidatorTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using Microsoft.Extensions.AI;
+using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Security;
+using Netclaw.Tests.Utilities;
+using Netclaw.Tools;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Tools;
+
+/// <summary>
+/// Unknown-key validation at the dispatcher: near-miss keys are rejected with
+/// a suggestion (never silently bound — the original production bug passed
+/// "TimeoutSeconds" and got a silent 90s default), declared-param flexible
+/// binding is preserved, and exact meta keys pass through.
+/// </summary>
+public class ToolArgumentValidatorTests
+{
+    private readonly DispatchingToolExecutor _executor;
+
+    public ToolArgumentValidatorTests()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Auto
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+        _executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false)));
+    }
+
+    private static ToolExecutionContext PersonalContext(string sessionDir)
+        => new("signalr/thread-1", sessionDir)
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.TrustedInstance,
+            ChannelType = "signalr"
+        };
+
+    private async Task<string> ExecuteShellAsync(IDictionary<string, object?> args)
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-val-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var toolCall = new FunctionCallContent("call-1", "shell_execute", args);
+            return await _executor.ExecuteAsync(
+                toolCall, PersonalContext(sessionDir), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TimeoutSeconds_rejected_with_meta_key_suggestion()
+    {
+        // The literal arg shape from production session
+        // D0AC6CKBK5K_1781115410_840529 that was silently dropped.
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo should-not-run",
+            ["TimeoutSeconds"] = "1200"
+        });
+
+        Assert.Contains("Unrecognized argument 'TimeoutSeconds'", result);
+        Assert.Contains("Did you mean '_timeout_seconds'?", result);
+        Assert.Contains("NOT executed", result);
+        Assert.DoesNotContain("should-not-run", result);
+    }
+
+    [Fact]
+    public async Task Underscore_missing_timeout_seconds_rejected_never_bound()
+    {
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo should-not-run",
+            ["timeout_seconds"] = 300
+        });
+
+        Assert.Contains("Unrecognized argument 'timeout_seconds'", result);
+        Assert.Contains("Did you mean '_timeout_seconds'?", result);
+        Assert.DoesNotContain("should-not-run", result);
+    }
+
+    [Fact]
+    public async Task Lowercase_declared_param_still_accepted()
+    {
+        // Deterministic canonicalization for declared params is existing
+        // consumption behavior (Qwen text-parser path emits lowercase keys).
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["command"] = "echo flexible-ok"
+        });
+
+        Assert.DoesNotContain("Unrecognized argument", result);
+        Assert.Contains("flexible-ok", result);
+    }
+
+    [Fact]
+    public async Task Exact_meta_key_accepted()
+    {
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo meta-ok",
+            ["_timeout_seconds"] = 120,
+            ["_rationale"] = "test"
+        });
+
+        Assert.DoesNotContain("Unrecognized argument", result);
+        Assert.Contains("meta-ok", result);
+    }
+
+    [Fact]
+    public async Task Wholly_unknown_key_rejected_without_suggestion_lists_valid_args()
+    {
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo should-not-run",
+            ["Banana"] = true
+        });
+
+        Assert.Contains("Unrecognized argument 'Banana'", result);
+        Assert.DoesNotContain("Did you mean", result);
+        Assert.Contains("Valid arguments:", result);
+        Assert.Contains("Command", result);
+        Assert.Contains("_timeout_seconds", result);
+        Assert.DoesNotContain("should-not-run", result);
+    }
+
+    [Fact]
+    public async Task Typo_in_declared_param_rejected_with_suggestion()
+    {
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Comand"] = "echo should-not-run"
+        });
+
+        Assert.Contains("Unrecognized argument 'Comand'", result);
+        Assert.Contains("Did you mean 'Command'?", result);
+        Assert.DoesNotContain("should-not-run", result);
+    }
+
+    [Fact]
+    public void Mcp_tools_exempt_from_native_validation()
+    {
+        // McpToolAdapter is skipped at the dispatcher gate; this guards the
+        // type check stays in place. (Server-side schema validation is the
+        // authority for MCP — mcp-schema-coercion spec.)
+        Assert.Null(ToolArgumentValidator.ValidateArgumentKeys(
+            new ShellTool(new ToolConfig()), new Dictionary<string, object?>
+            {
+                ["Command"] = "echo hi"
+            }));
+    }
+}

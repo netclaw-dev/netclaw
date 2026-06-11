@@ -120,46 +120,56 @@ public class ToolCallMetaExtractorTests
     [Fact]
     public void ComputeEffectiveTimeout_WithinRange_UsesHint()
     {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
             300, TimeSpan.FromSeconds(60), 600);
 
-        Assert.Equal(TimeSpan.FromSeconds(300), result);
+        Assert.Equal(TimeSpan.FromSeconds(300), timeout);
+        Assert.Null(notice); // requested value honored — no override to surface
     }
 
     [Fact]
     public void ComputeEffectiveTimeout_AboveCeiling_ClampsToCeiling()
     {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
             1200, TimeSpan.FromSeconds(60), 600);
 
-        Assert.Equal(TimeSpan.FromSeconds(600), result);
+        Assert.Equal(TimeSpan.FromSeconds(600), timeout);
+        Assert.NotNull(notice);
+        Assert.Contains("1200s", notice);
+        Assert.Contains("600s", notice);
+        Assert.Contains("_background", notice); // steer to the right pattern for longer work
     }
 
     [Fact]
     public void ComputeEffectiveTimeout_BelowFloor_UsesDefault()
     {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
             10, TimeSpan.FromSeconds(60), 600);
 
-        Assert.Equal(TimeSpan.FromSeconds(60), result);
+        Assert.Equal(TimeSpan.FromSeconds(60), timeout);
+        Assert.NotNull(notice);
+        Assert.Contains("10s", notice);
+        Assert.Contains("60s", notice);
     }
 
     [Fact]
     public void ComputeEffectiveTimeout_Absent_UsesDefault()
     {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
             null, TimeSpan.FromSeconds(90), 600);
 
-        Assert.Equal(TimeSpan.FromSeconds(90), result);
+        Assert.Equal(TimeSpan.FromSeconds(90), timeout);
+        Assert.Null(notice); // no intent expressed — nothing to surface
     }
 
     [Fact]
     public void ComputeEffectiveTimeout_NegativeHint_UsesDefault()
     {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
             -5, TimeSpan.FromSeconds(60), 600);
 
-        Assert.Equal(TimeSpan.FromSeconds(60), result);
+        Assert.Equal(TimeSpan.FromSeconds(60), timeout);
+        Assert.Null(notice);
     }
 
     // ── Background signaling tests ──

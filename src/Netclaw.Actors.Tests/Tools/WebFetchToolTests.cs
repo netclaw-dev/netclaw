@@ -692,6 +692,71 @@ public class WebFetchToolTests : IDisposable
     /// <summary>
     /// Fake HTTP handler that returns a canned response (text or binary).
     /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_unsupported_format_rejects_without_http_request()
+    {
+        var handler = new CountingHttpHandler("irrelevant", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Url", "https://example.com/test", "Format", "markdown"),
+            CancellationToken.None);
+
+        Assert.Contains("'Format' value 'markdown' is not supported", result);
+        Assert.Contains("raw, text", result);
+        Assert.Contains("NOT performed", result);
+        Assert.Equal(0, handler.Requests);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_body_over_cap_carries_truncation_notice()
+    {
+        // 5 MB cap + 1 KB over: the notice must distinguish "truncated" from
+        // "exactly at the cap" — byte count alone is not a signal.
+        var oversized = new byte[5 * 1024 * 1024 + 1024];
+        Array.Fill(oversized, (byte)'a');
+        var handler = new FakeHttpHandler(oversized, "text/plain");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Url", "https://example.com/huge.txt"),
+            CancellationToken.None);
+
+        Assert.Contains("[content truncated at 5 MB", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_body_under_cap_has_no_truncation_notice()
+    {
+        var handler = new FakeHttpHandler("small body content", "text/plain");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Url", "https://example.com/small.txt"),
+            CancellationToken.None);
+
+        Assert.DoesNotContain("content truncated", result);
+    }
+
+    private sealed class CountingHttpHandler(string content, string contentType) : HttpMessageHandler
+    {
+        public int Requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            Requests++;
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content, Encoding.UTF8, contentType)
+            };
+            return Task.FromResult(response);
+        }
+    }
+
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly byte[] _bytes;

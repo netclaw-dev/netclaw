@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.11.1"
+  version: "2.12.0"
 ---
 
 # Netclaw Operations
@@ -258,6 +258,15 @@ Rules:
 
 - Only `shell_execute` supports background mode. Other tools ignore `_background`.
 - `_timeout_seconds` alone does NOT trigger background execution.
+- `_timeout_seconds` is clamped to a configured maximum (default 600s). When
+  your request exceeds it, the tool result includes a notice like
+  `[timeout clamped: requested 1200s, maximum 600s — use _background:true for
+  longer work]`. Do not retry the same synchronous call with a bigger timeout —
+  it will hit the same ceiling. Use `_background: true` for longer work.
+- **Long-running delegation calls** (e.g. `curl` to a local coding-agent or
+  model server that takes minutes to respond) must run as background jobs.
+  A synchronous `curl` under the timeout ceiling kills the request mid-flight
+  while the remote server is still working.
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json`.
@@ -278,6 +287,18 @@ results proactively when the job completes.
 
 Active background jobs appear in the `[active-background-jobs]` section of the
 session context on every turn.
+
+## Tool argument validation
+
+Tool argument names are validated strictly — unrecognized keys reject the call
+before execution with a `did you mean '<canonical>'?` suggestion and the list
+of valid argument names. Meta keys are exact-match: `_timeout_seconds` and
+`_background` (a leading underscore, snake_case). `TimeoutSeconds`,
+`timeout_seconds`, or `_timeoutSeconds` are rejected, never silently dropped.
+Values must parse as their declared type: `_timeout_seconds: "1200ms"` or
+`_background: "yes"` rejects the call instead of silently using defaults. When
+a call is rejected this way the tool did NOT run — fix the argument and
+re-issue once; do not retry the same shape.
 
 ## Large tool output
 

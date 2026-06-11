@@ -247,45 +247,48 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             }
             else if (p.JsonType == "integer")
             {
+                // Strict variants throw on present-but-invalid values, so the
+                // null-coalesce arms below only apply a default for a genuinely
+                // absent parameter (tool-arg-validation spec).
                 if (p.IsNullable)
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableInt(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetIntStrict(arguments, \"{p.Name}\");");
                 else if (p.IsRequired)
                 {
-                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetNullableInt(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetIntStrict(arguments, \"{p.Name}\");");
                     sb.AppendLine($"        if (__{p.Name}_raw is null)");
                     sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing.\");");
                     sb.AppendLine($"        var __{p.Name} = __{p.Name}_raw.Value;");
                 }
                 else
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableInt(arguments, \"{p.Name}\") ?? 0;");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetIntStrict(arguments, \"{p.Name}\") ?? 0;");
             }
             else if (p.JsonType == "number")
             {
                 if (p.IsNullable)
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableDouble(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetDoubleStrict(arguments, \"{p.Name}\");");
                 else if (p.IsRequired)
                 {
-                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetNullableDouble(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetDoubleStrict(arguments, \"{p.Name}\");");
                     sb.AppendLine($"        if (__{p.Name}_raw is null)");
                     sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing.\");");
                     sb.AppendLine($"        var __{p.Name} = __{p.Name}_raw.Value;");
                 }
                 else
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableDouble(arguments, \"{p.Name}\") ?? 0.0;");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetDoubleStrict(arguments, \"{p.Name}\") ?? 0.0;");
             }
             else if (p.JsonType == "boolean")
             {
                 if (p.IsNullable)
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableBool(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetBoolStrict(arguments, \"{p.Name}\");");
                 else if (p.IsRequired)
                 {
-                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetNullableBool(arguments, \"{p.Name}\");");
+                    sb.AppendLine($"        var __{p.Name}_raw = Netclaw.Tools.ToolArgumentHelper.GetBoolStrict(arguments, \"{p.Name}\");");
                     sb.AppendLine($"        if (__{p.Name}_raw is null)");
                     sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing.\");");
                     sb.AppendLine($"        var __{p.Name} = __{p.Name}_raw.Value;");
                 }
                 else
-                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetNullableBool(arguments, \"{p.Name}\") ?? false;");
+                    sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetBoolStrict(arguments, \"{p.Name}\") ?? false;");
             }
         }
 

@@ -1017,6 +1017,15 @@ assert_tool_file_list() {
     stdout_contains '\[tool:call\] file_list'
 }
 
+assert_tool_timeout_arg_recovery() {
+    # Loud arg validation: if the model emits a near-miss timeout key
+    # (TimeoutSeconds, timeout_seconds), the rejection's did-you-mean must
+    # steer it to the canonical _timeout_seconds within the turn — the
+    # command actually running is the proof of recovery.
+    stdout_contains '\[tool:call\] shell_execute' \
+        && stdout_contains 'netclaw-timeout-eval-ok'
+}
+
 # Category 5: Grounding & Alignment
 assert_grounding_no_hallucinate_version() {
     stdout_contains '\[tool:call\]'
@@ -1476,6 +1485,10 @@ run_all() {
 
     run_case tool_file_list "file_list called" \
         "What files are in my session directory?"
+
+    run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
+        "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \
+        "Use the shell to run: echo netclaw-timeout-eval-ok — give it a 300 second timeout since it might be slow."
 
     end_category
 

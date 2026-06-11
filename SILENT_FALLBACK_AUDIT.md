@@ -14,6 +14,16 @@ asymmetry is the gap.
 **Method:** 3 parallel auditors (arg/meta/pipeline layer; tool implementations; policy/security
 layer), identical rubric. CRITICAL finding independently re-verified by hand and down-graded.
 
+**Resolution status (change `loud-tool-arg-validation`):** findings #1, #2, #4, #5, #6, #7,
+#8, #9, #10 are **FIXED** by this change (unknown-key validator at the dispatcher,
+strict value binding in the generator + `ToolArgumentHelper`, pipeline-side meta-value
+rejection, `ComputeEffectiveTimeout` clamp/floor notices via `ToolExecutionContext.Notices`,
+provider-boundary args-parse sentinel, `web_fetch` format validation + truncation notice,
+`list_webhooks` Filter honored). The latent `GetInt32` uncaught-throw is also fixed
+(`TryGetInt32`). Findings #3, #11, #15, #17 (policy layer) remain **OPEN — parked** for a
+security owner, recorded as out-of-scope open questions in the change proposal. #12–#14, #16
+(BORDERLINE) remain open, unchanged.
+
 ---
 
 ## The class unifies into 3 mechanisms + standalones

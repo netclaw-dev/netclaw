@@ -52,10 +52,22 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
     {
-        if (_registry.GetByName(toolCall.Name) is null)
+        if (_registry.GetByName(toolCall.Name) is not { } registered)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
             return $"Unknown tool: {toolCall.Name}";
+        }
+
+        // Unknown-key validation runs before authorization so a doomed call
+        // never raises an approval prompt. MCP tools are exempt: their server
+        // validates against its own schema and rejects observably.
+        if (registered is not McpToolAdapter
+            && ToolArgumentValidator.ValidateArgumentKeys(registered, toolCall.Arguments) is { } keyError)
+        {
+            _logger.LogWarning(
+                "Rejected tool call with unrecognized argument(s): {ToolName} — {Error}",
+                toolCall.Name, keyError);
+            return keyError;
         }
 
         var tool = await AuthorizeCoreAsync(toolCall, context, ct);
@@ -119,10 +131,21 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         ToolExecutionContext? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        if (_registry.GetByName(toolCall.Name) is null)
+        if (_registry.GetByName(toolCall.Name) is not { } registered)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
             yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
+            yield break;
+        }
+
+        // Same pre-authorization unknown-key gate as the non-streaming path.
+        if (registered is not McpToolAdapter
+            && ToolArgumentValidator.ValidateArgumentKeys(registered, toolCall.Arguments) is { } keyError)
+        {
+            _logger.LogWarning(
+                "Rejected tool call with unrecognized argument(s): {ToolName} — {Error}",
+                toolCall.Name, keyError);
+            yield return new ToolCompletedUpdate(keyError);
             yield break;
         }
 

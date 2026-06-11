@@ -207,12 +207,62 @@ internal static class SessionToolExecutionPipeline
         TurnContext? turnContext = null,
         ModelInputBatchBudget? modelInputBudget = null)
     {
+        // Provider-boundary args parse failure: the model emitted arguments
+        // that did not deserialize, and the provider carried the failure with
+        // the call instead of dispatching null args. Reject before extraction
+        // so the model learns its emission was broken and can re-issue
+        // (tool-arg-validation spec). Deterministic on persistence re-drive.
+        if (tc.Arguments is not null
+            && tc.Arguments.TryGetValue(ToolCallArgumentErrors.ArgsParseErrorKey, out var argsParseFailure))
+        {
+            var parseError =
+                $"Error: Tool call arguments were not valid JSON: {argsParseFailure} The tool was NOT executed.";
+
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, TimeSpan.Zero, meta: null) with
+            {
+                Allowed = false,
+                DenyReason = "args_parse_error"
+            });
+
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = parseError,
+                ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name
+            }, [], [], [], []);
+        }
+
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
+
+        // Present-but-invalid meta values reject before dispatch: the agent
+        // expressed execution semantics we cannot honor, so we do not run the
+        // call on defaults instead. Validated on the ORIGINAL arguments —
+        // ExtractFrom yields null for an invalid value, which would otherwise
+        // silently drop the expressed intent (tool-call-metadata spec).
+        if (ToolCallMetaExtractor.ValidateMetaValues(tc.Arguments) is { } metaError)
+        {
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, TimeSpan.Zero, meta) with
+            {
+                Allowed = false,
+                DenyReason = "invalid_meta_value"
+            });
+
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = metaError,
+                ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name
+            }, [], [], [], []);
+        }
+
         tc = cleanedTc;
 
+        string? timeoutNotice = null;
         if (meta?.TimeoutHintSeconds is not null)
         {
-            timeout = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+            (timeout, timeoutNotice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
                 meta.TimeoutHintSeconds, timeout, maxToolTimeoutSeconds);
         }
 
@@ -228,6 +278,8 @@ internal static class SessionToolExecutionPipeline
             modelInputModalities,
             maxInlineToolResultChars);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
+        if (timeoutNotice is not null)
+            context.Notices.Add(timeoutNotice);
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
         // "approve once" before the session passivated, but there is no
@@ -571,6 +623,12 @@ internal static class SessionToolExecutionPipeline
             resultText = AppendModelInputHandoffWarning(
                 resultText,
                 modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
+
+        // Override notices (timeout clamps, response caps) append AFTER output
+        // bounding so they can never be spilled or windowed away — they must
+        // reach the model, not just the operator log (tool-arg-validation spec).
+        if (context.Notices.Count > 0)
+            resultText = resultText + "\n" + string.Join("\n", context.Notices);
 
         var message = new SerializableChatMessage
         {

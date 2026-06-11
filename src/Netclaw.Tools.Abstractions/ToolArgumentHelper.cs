@@ -50,7 +50,13 @@ public static class ToolArgumentHelper
         return false;
     }
 
-    private static string NormalizeKey(string key)
+    /// <summary>
+    /// Deterministic key canonicalization (case + punctuation folding):
+    /// <c>ChannelId</c>, <c>channel_id</c>, and <c>channel-id</c> all normalize
+    /// to <c>channelid</c>. Shared with <see cref="ToolArgumentValidator"/> so
+    /// key recognition mirrors the exact matching that binding performs.
+    /// </summary>
+    public static string NormalizeKey(string key)
     {
         if (string.IsNullOrWhiteSpace(key))
             return string.Empty;
@@ -144,5 +150,83 @@ public static class ToolArgumentHelper
             JsonElement { ValueKind: JsonValueKind.String } je when bool.TryParse(je.GetString(), out var parsed) => parsed,
             _ => null
         };
+    }
+
+    // Strict variants distinguish three states the GetNullable* helpers conflate:
+    // absent (or JSON null) → null; parseable → value; present-but-invalid →
+    // ArgumentException naming the parameter, supplied value, and expected type.
+    // Generated ParseArguments uses these so an invalid value rejects the call
+    // (surfaced via the pipeline's exception→error-result channel) instead of
+    // silently coercing to 0/0.0/false (tool-arg-validation spec).
+
+    public static int? GetIntStrict(IDictionary<string, object?>? arguments, string key)
+    {
+        if (!TryGetValueFlexible(arguments, key, out var value)
+            || value is null or JsonElement { ValueKind: JsonValueKind.Null })
+            return null;
+
+        return value switch
+        {
+            int i => i,
+            long l and >= int.MinValue and <= int.MaxValue => (int)l,
+            // Non-integral numerics are invalid for an integer parameter — no
+            // silent truncation (12.7 must not become 12).
+            double d when double.IsInteger(d) && d is >= int.MinValue and <= int.MaxValue => (int)d,
+            JsonElement { ValueKind: JsonValueKind.Number } je when je.TryGetInt32(out var parsed) => parsed,
+            string s when int.TryParse(s, out var parsed) => parsed,
+            JsonElement { ValueKind: JsonValueKind.String } je when int.TryParse(je.GetString(), out var parsed) => parsed,
+            _ => throw InvalidValue(key, value, "integer")
+        };
+    }
+
+    public static double? GetDoubleStrict(IDictionary<string, object?>? arguments, string key)
+    {
+        if (!TryGetValueFlexible(arguments, key, out var value)
+            || value is null or JsonElement { ValueKind: JsonValueKind.Null })
+            return null;
+
+        return value switch
+        {
+            double d => d,
+            float f => f,
+            int i => i,
+            long l => l,
+            JsonElement { ValueKind: JsonValueKind.Number } je when je.TryGetDouble(out var parsed) => parsed,
+            string s when double.TryParse(s, out var parsed) => parsed,
+            JsonElement { ValueKind: JsonValueKind.String } je when double.TryParse(je.GetString(), out var parsed) => parsed,
+            _ => throw InvalidValue(key, value, "number")
+        };
+    }
+
+    public static bool? GetBoolStrict(IDictionary<string, object?>? arguments, string key)
+    {
+        if (!TryGetValueFlexible(arguments, key, out var value)
+            || value is null or JsonElement { ValueKind: JsonValueKind.Null })
+            return null;
+
+        return value switch
+        {
+            bool b => b,
+            JsonElement { ValueKind: JsonValueKind.True } => true,
+            JsonElement { ValueKind: JsonValueKind.False } => false,
+            string s when bool.TryParse(s, out var parsed) => parsed,
+            JsonElement { ValueKind: JsonValueKind.String } je when bool.TryParse(je.GetString(), out var parsed) => parsed,
+            _ => throw InvalidValue(key, value, "boolean")
+        };
+    }
+
+    private static ArgumentException InvalidValue(string key, object value, string expectedType)
+    {
+        var rendered = value switch
+        {
+            JsonElement je => je.GetRawText(),
+            _ => value.ToString() ?? string.Empty
+        };
+
+        if (rendered.Length > 100)
+            rendered = rendered[..100] + "…";
+
+        return new ArgumentException(
+            $"Parameter '{key}' value '{rendered}' is not a valid {expectedType}. The tool was NOT executed.");
     }
 }

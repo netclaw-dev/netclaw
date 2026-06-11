@@ -82,10 +82,14 @@ public sealed record ToolCallMeta
             timeoutSeconds = tVal switch
             {
                 int i when i > 0 => i,
-                long l when l > 0 => (int)l,
-                double d when d > 0 => (int)d,
-                JsonElement { ValueKind: JsonValueKind.Number } je when je.GetInt32() > 0 => je.GetInt32(),
+                long l and > 0 and <= int.MaxValue => (int)l,
+                // Non-integral numerics are not valid timeouts — no silent
+                // truncation; TryGetInt32 also keeps non-integral/overflow JSON
+                // numbers from throwing out of extraction.
+                double d when d > 0 && double.IsInteger(d) && d <= int.MaxValue => (int)d,
+                JsonElement { ValueKind: JsonValueKind.Number } je when je.TryGetInt32(out var parsed) && parsed > 0 => parsed,
                 string s when int.TryParse(s, out var parsed) && parsed > 0 => parsed,
+                JsonElement { ValueKind: JsonValueKind.String } je when int.TryParse(je.GetString(), out var parsed) && parsed > 0 => parsed,
                 _ => null
             };
             if (timeoutSeconds.HasValue)
@@ -100,6 +104,7 @@ public sealed record ToolCallMeta
                 JsonElement { ValueKind: JsonValueKind.True } => true,
                 JsonElement { ValueKind: JsonValueKind.False } => false,
                 string s when bool.TryParse(s, out var parsed) => parsed,
+                JsonElement { ValueKind: JsonValueKind.String } je when bool.TryParse(je.GetString(), out var parsed) => parsed,
                 _ => false
             };
             if (background)
