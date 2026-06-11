@@ -176,8 +176,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var dynamicValidation = await ValidateChannelAccessAsync(ct);
         if (dynamicValidation.Result.HasErrors)
         {
-            // A probe that failed (auth/network/ErrorMessage/!Success) still blocks:
-            // we could not validate at all, so persisting nothing is correct.
+            // Only a genuine probe failure (bad token / unreachable, surfaced as an
+            // ErrorMessage) blocks here — we could not validate at all, so persisting
+            // nothing is correct. Merely-unresolved channel names are NOT errors: they
+            // persist verbatim and are flagged non-blockingly (see ValidateChannelAccessAsync).
             Status.Value = BuildValidationErrorStatus(dynamicValidation.Result, "Fix channel validation errors before saving.");
             RequestRedraw();
             return false;
@@ -914,15 +916,16 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var result = await _slackProbe.ResolveChannelNamesAsync(botToken, namesToResolve, ct);
         slack.LastChannelResolution = result;
 
-        // The probe itself failed — we cannot validate at all, so block the save.
+        // The probe itself failed — we cannot validate at all, so block the save. Only a
+        // genuine failure (auth/scope/network/timeout) sets ErrorMessage. NOTE: do NOT also
+        // block on !result.Success: the probe sets Success = "did EVERY name resolve?", so it
+        // is false whenever any name is merely not found — which must stay non-blocking, or a
+        // single unverifiable channel drops the whole adapter (token + valid channels) again.
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel lookup failed: {result.ErrorMessage}"));
 
-        if (!result.Success)
-            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, "Slack channel lookup failed."));
-
-        // Probe succeeded. Map resolved names to IDs and keep unresolved names as-is so
-        // the whole adapter still persists; the unresolved names are flagged, not blocked.
+        // Probe reachable. Map resolved names to IDs and keep unresolved names as-is so the
+        // whole adapter still persists; the unresolved names are flagged, not blocked.
         var resolvedByName = result.Resolved.ToDictionary(
             static channel => channel.Name,
             static channel => channel.Id,
@@ -973,12 +976,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
         discord.LastChannelResolution = result;
 
-        // The probe itself failed — block the save (cannot validate).
+        // Only a genuine probe failure (ErrorMessage) blocks. result.Success is false whenever
+        // any id is unresolved (Success = "did every id resolve?"), which must stay non-blocking.
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}"));
-
-        if (!result.Success)
-            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, "Discord channel lookup failed."));
 
         // Discord allow-list already stores raw IDs, so unresolved IDs persist as-is;
         // they are flagged but not blocked.
@@ -1006,12 +1007,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
         mattermost.LastChannelResolution = result;
 
-        // The probe itself failed — block the save (cannot validate).
+        // Only a genuine probe failure (ErrorMessage) blocks. result.Success is false whenever
+        // any id is unresolved (Success = "did every id resolve?"), which must stay non-blocking.
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}"));
-
-        if (!result.Success)
-            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, "Mattermost channel lookup failed."));
 
         // Mattermost allow-list stores raw IDs, so unresolved IDs persist as-is and are
         // flagged but not blocked.

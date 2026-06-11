@@ -776,7 +776,9 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     [Fact]
     public void Save_persists_and_flags_unresolved_slack_channel_name()
     {
-        // The probe SUCCEEDED but one name did not resolve. The whole adapter must
+        // The probe's API call worked (ErrorMessage is null) but Success is false because
+        // one name did not resolve — the real SlackProbe sets Success = (every name
+        // resolved), so any unresolved name makes Success false. The whole adapter must
         // still persist (token + resolved channels + the unresolved name kept as-is),
         // Save() returns true, and the status is a non-blocking warning.
         WriteChannelConfig();
@@ -784,7 +786,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         var slackProbe = new FakeSlackProbe
         {
             NextResolutionResult = new SlackChannelResolutionResult(
-                true,
+                false,
                 null,
                 [new ResolvedSlackChannel("openclaw", "C99")],
                 ["fake-channel"])
@@ -895,14 +897,16 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     [Fact]
     public void Save_persists_and_flags_unresolved_discord_channel_id()
     {
-        // Probe succeeded but one id did not resolve. The whole Discord adapter persists
-        // (token + resolved + unresolved id kept), Save() returns true, status is warning.
+        // The probe's API call worked (ErrorMessage is null) but Success is false because
+        // one id did not resolve — the real DiscordProbe sets Success = (every id resolved).
+        // The whole Discord adapter persists (token + resolved + unresolved id kept), Save()
+        // returns true, status is warning.
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
         var discordProbe = new FakeDiscordProbe
         {
             NextResolutionResult = new DiscordChannelResolutionResult(
-                true,
+                false,
                 null,
                 [new ResolvedDiscordChannel("123456789", "ops", "Stannard Labs")],
                 ["987654321"])
@@ -1037,14 +1041,16 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     [Fact]
     public void Save_persists_and_flags_unresolved_mattermost_channel_id()
     {
-        // Probe succeeded but one id did not resolve. The whole Mattermost adapter
-        // persists (token + resolved + unresolved id kept), Save() returns true.
+        // The probe's API call worked (ErrorMessage is null) but Success is false because
+        // one id did not resolve — the real MattermostProbe sets Success = (every id
+        // resolved). The whole Mattermost adapter persists (token + resolved + unresolved
+        // id kept), Save() returns true.
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
         var mattermostProbe = new FakeMattermostProbe
         {
             NextResolutionResult = new MattermostChannelResolutionResult(
-                true,
+                false,
                 null,
                 [new ResolvedMattermostChannel("town-square", "town-square", "Town Square")],
                 ["bogus"])
@@ -1157,9 +1163,11 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         WriteChannelSecrets();
         var slackProbe = new FakeSlackProbe
         {
-            // Only "openclaw" is real; the other two are flagged but not blocked.
+            // Only "openclaw" is real; the other two are flagged but not blocked. Success
+            // is false because not every name resolved (the real probe's semantics), yet
+            // the save must still persist everything — that is the invariant under test.
             NextResolutionResult = new SlackChannelResolutionResult(
-                true,
+                false,
                 null,
                 [new ResolvedSlackChannel("openclaw", "C77")],
                 ["netclaw-test", "fake-channel"])

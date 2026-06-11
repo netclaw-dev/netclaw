@@ -43,18 +43,26 @@ Driver: real terminal via `docker exec -it netclaw-config-poc-local …`.
 ## Pending (logged, batch before push)
 
 8. **(DATA LOSS — FIXED) Unresolved channel names blocked the entire adapter save.** Distinct
-   second mechanism from #7: when channel names were entered where some don't resolve (`netclaw-test`,
+   second mechanism from #7. When channel names were entered where some don't resolve (`netclaw-test`,
    `fake-channel` alongside a valid `openclaw`), the sub-flow completion autosave's
-   `ValidateSlack/Discord/MattermostChannelsAsync` returned an `Error` on `Unresolved.Count > 0`, so
+   `ValidateSlack/Discord/MattermostChannelsAsync` returned `ChannelAccessOutcome.Blocked`, so
    `SaveAsync` returned false and **nothing** persisted — not the valid channel, not the bot token —
-   and Escape discarded the in-memory editor. **Fix (owner decision: "save all, flag invalid"):** the
-   validation no longer blocks on unresolved channels — it persists the whole adapter (token +
-   resolved IDs + unresolved names kept verbatim, inert in the allow-list until the channel exists)
-   and surfaces a non-blocking warning. Unresolved rows render red with a `✗` (`ChannelPermissionRow.
-   IsUnresolved` from each adapter's `LastChannelResolution.Unresolved`). Genuine probe failures
-   (bad token / unreachable) still block. The `+ Add channel` resolve-before-add path stays strict.
-   Hard invariant test (mixed valid/invalid persists everything) + per-adapter probe-failure-blocks
-   tests added. Full Cli suite 1054 green.
+   and Escape discarded the in-memory editor. **Root cause (confirmed via live-binary instrumentation
+   after two wrong fixes):** each validator had a `if (!result.Success) return Blocked(...)` guard, but
+   the probe sets `Success = (EVERY name resolved)` — i.e. `Success` is false whenever *any* name is
+   merely not-found, with `ErrorMessage == null`. So a single unverifiable channel name made `Success`
+   false and dropped the whole adapter. (The first hypothesis — a `Unresolved.Count > 0` block — was
+   the same symptom via the wrong line.) The unit tests masked it because their **fake probes set
+   `Success = true` with a non-empty `Unresolved` list**, which the real probes never do. **Fix (owner
+   decision: "save all, flag invalid"):** removed the `!result.Success` guard from all three save-path
+   validators — only a genuine probe failure (`ErrorMessage` set: auth/scope/network/timeout) blocks now.
+   Unresolved names persist verbatim (inert in the allow-list until the channel exists) with a
+   non-blocking warning; rows render red with a `✗` (`ChannelPermissionRow.IsUnresolved` from each
+   adapter's `LastChannelResolution.Unresolved`). The `+ Add channel` resolve-before-add path stays
+   strict (an explicit single-channel add must resolve). Test fakes corrected to the real
+   `Success = (all resolved)` semantics so the invariant tests now actually reproduce the bug; hard
+   mixed-valid/invalid-persists-everything invariant + per-adapter probe-failure-blocks tests.
+   Full Cli suite 1054 green.
 
 7. **(DATA LOSS — FIXED) Channels save reported "saved" but persisted nothing for an enabled adapter.**
    User configured Slack (by name) + Discord (by id) with **real tokens**, saw green **"…saved"**, but
