@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.IO.Compression;
 using System.Security.Cryptography;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
@@ -51,6 +52,7 @@ internal static class UpdateCommand
     {
         var checkOnly = false;
         var force = false;
+        UpdateChannel? channelOverride = null;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -62,6 +64,21 @@ internal static class UpdateCommand
                 case "--force":
                     force = true;
                     break;
+                case "--channel":
+                    if (i + 1 >= args.Length)
+                    {
+                        Console.Error.WriteLine("--channel requires a value: stable or beta (alias: dev).");
+                        WriteHelp();
+                        return 1;
+                    }
+                    if (!TryParseChannelArg(args[++i], out var parsedChannel))
+                    {
+                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta (alias: dev).");
+                        WriteHelp();
+                        return 1;
+                    }
+                    channelOverride = parsedChannel;
+                    break;
                 case "-h" or "--help" or "help":
                     WriteHelp();
                     return 0;
@@ -70,6 +87,26 @@ internal static class UpdateCommand
                     WriteHelp();
                     return 1;
             }
+        }
+
+        // Specifying --channel switches the channel: it applies to this run and
+        // is written back to netclaw.json so the daemon's background check and
+        // future runs follow it.
+        if (channelOverride is { } overrideChannel)
+        {
+            channel = overrideChannel;
+
+            try
+            {
+                PersistChannel(paths, channel);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
+                return 1;
+            }
+
+            Console.WriteLine($"Update channel set to '{channel.ToString().ToLowerInvariant()}' ({paths.NetclawConfigPath}).");
         }
 
         var currentVersion = BuildInfo.FullVersion;
@@ -370,6 +407,42 @@ internal static class UpdateCommand
         }
     }
 
+    /// <summary>
+    /// Parses a <c>--channel</c> CLI argument. Accepts <c>stable</c> and
+    /// <c>beta</c>; <c>dev</c> is an alias for <c>beta</c> (the dev branch ships
+    /// beta prereleases). Returns false for any other value so the caller fails
+    /// loudly rather than silently defaulting.
+    /// </summary>
+    private static bool TryParseChannelArg(string value, out UpdateChannel channel)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "stable":
+                channel = UpdateChannel.Stable;
+                return true;
+            case "beta" or "dev":
+                channel = UpdateChannel.Beta;
+                return true;
+            default:
+                channel = UpdateChannel.Stable;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Persists the chosen update channel to <c>Daemon.UpdateChannel</c> in
+    /// netclaw.json, preserving every other field. Writes the canonical wire
+    /// value (<c>stable</c>/<c>beta</c>) so the on-disk config stays
+    /// schema-valid even when the user typed the <c>dev</c> alias.
+    /// </summary>
+    private static void PersistChannel(NetclawPaths paths, UpdateChannel channel)
+    {
+        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
+        var daemon = ConfigFileHelper.GetOrCreateSection(config, "Daemon");
+        daemon["UpdateChannel"] = channel.ToString().ToLowerInvariant();
+        ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
+    }
+
     internal static void WriteHelp()
     {
         Console.WriteLine("Usage: netclaw update [options]");
@@ -377,8 +450,9 @@ internal static class UpdateCommand
         Console.WriteLine("Check for and install Netclaw updates.");
         Console.WriteLine();
         Console.WriteLine("Options:");
-        Console.WriteLine("  --check    Check for updates without installing");
-        Console.WriteLine("  --force    Skip confirmation prompt");
+        Console.WriteLine("  --check              Check for updates without installing");
+        Console.WriteLine("  --force              Skip confirmation prompt");
+        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta (alias: dev)");
     }
 
     /// <summary>
