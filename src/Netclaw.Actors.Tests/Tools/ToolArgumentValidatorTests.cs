@@ -161,15 +161,34 @@ public class ToolArgumentValidatorTests
     }
 
     [Fact]
-    public void Mcp_tools_exempt_from_native_validation()
+    public async Task Mcp_tools_exempt_from_native_validation()
     {
-        // McpToolAdapter is skipped at the dispatcher gate; this guards the
-        // type check stays in place. (Server-side schema validation is the
-        // authority for MCP — mcp-schema-coercion spec.)
-        Assert.Null(ToolArgumentValidator.ValidateArgumentKeys(
-            new ShellTool(new ToolConfig()), new Dictionary<string, object?>
-            {
-                ["Command"] = "echo hi"
-            }));
+        // McpToolAdapter is skipped at the dispatcher gate: an extra unknown
+        // key must NOT produce the native "Unrecognized argument" rejection —
+        // the MCP server's own schema validation is the authority
+        // (mcp-schema-coercion spec). The unknown-key gate runs BEFORE
+        // authorization, so reaching any other outcome proves the exemption.
+        var fakeTool = AIFunctionFactory.Create(() => "mcp-result", "store");
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
+        var executor = new DispatchingToolExecutor(registry);
+
+        string result;
+        try
+        {
+            result = await executor.ExecuteAsync(
+                new FunctionCallContent("call-mcp", "memorizer/store", new Dictionary<string, object?>
+                {
+                    ["TotallyUnknownKey"] = "value"
+                }),
+                ct: TestContext.Current.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // An authorization/invocation failure is still past the key gate.
+            result = ex.Message;
+        }
+
+        Assert.DoesNotContain("Unrecognized argument", result);
     }
 }
