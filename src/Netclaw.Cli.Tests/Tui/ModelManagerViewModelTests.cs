@@ -439,7 +439,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
         Assert.Single(vm.Providers);
         Assert.Equal("my-vllm", vm.Providers[0].Name);
-        Assert.Equal("llama.cpp / vLLM", vm.Providers[0].DisplayName);
+        Assert.Equal("llama.cpp / vLLM / ds4", vm.Providers[0].DisplayName);
     }
 
     [Fact]
