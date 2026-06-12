@@ -312,6 +312,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // Background label refresh was superseded (a newer resolution started) or
+            // the user navigated away — abandon it quietly. Cancellation is not a
+            // lookup failure, so it must not fall through to the warning status below.
         }
         catch (Exception ex)
         {
