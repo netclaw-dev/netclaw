@@ -13,8 +13,11 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
-/// Wizard step for configuring agent identity (name, communication style, user profile, webhook, workspaces).
-/// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
+/// Wizard step for configuring agent identity (name, communication style, user profile).
+/// 4 sub-steps: agent name → comm style → user name → timezone.
+/// Workspaces directory and notification webhooks are post-install settings owned by
+/// <c>netclaw config</c> (Workspaces Directory; Telemetry &amp; Alerting → outbound webhooks),
+/// so the first-run wizard does not collect them.
 /// </summary>
 [NoDoctorChecks("Identity is synthetic and init-owned. Doctor coverage applies to the underlying config and generated identity files instead.")]
 public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
@@ -36,14 +39,11 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
-    public string WorkspacesDirectory { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".netclaw", "workspaces");
-    public string? WebhookUrl { get; set; }
 
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => 6;
+    public int SubStepCount => 4;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -51,8 +51,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
         1 => "  How should your assistant communicate?",
         2 => "  So your assistant knows what to call you.",
         3 => "  Used for time-aware responses and scheduling.",
-        4 => "  Where your agent stores and discovers project workspaces. Press Enter to keep the default.",
-        5 => "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
         _ => ""
     };
 
@@ -98,19 +96,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             UserName = UserName,
             UserTimezone = UserTimezone
         };
-
-        builder.Workspaces = new WorkspacesConfigSection
-        {
-            Directory = WorkspacesDirectory
-        };
-
-        if (!string.IsNullOrWhiteSpace(WebhookUrl))
-        {
-            builder.Notifications = new NotificationsConfigSection
-            {
-                WebhookUrl = WebhookUrl
-            };
-        }
     }
 
     public void ContributeSecrets(WizardSecretsBuilder builder) { }
@@ -145,11 +130,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             string.IsNullOrWhiteSpace(vm.UserName)
                 ? new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Delete)
                 : new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Set, vm.UserName),
-            new SectionFieldAction("Identity.UserTimezone", SectionFieldActionKind.Set, vm.UserTimezone),
-            new SectionFieldAction("Workspaces.Directory", SectionFieldActionKind.Set, vm.WorkspacesDirectory),
-            string.IsNullOrWhiteSpace(vm.WebhookUrl)
-                ? new SectionFieldAction("Notifications", SectionFieldActionKind.Delete)
-                : new SectionFieldAction("Notifications", SectionFieldActionKind.Set, BuildNotifications(vm.WebhookUrl!))
+            new SectionFieldAction("Identity.UserTimezone", SectionFieldActionKind.Set, vm.UserTimezone)
         ]);
     }
 
@@ -189,7 +170,9 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             ["{{AGENTS_DETAIL_DIR}}"] = paths.AgentsDetailDirectory,
             ["{{TOOLING_DETAIL_DIR}}"] = paths.ToolingDetailDirectory,
             ["{{SKILLS_DIR}}"] = paths.SkillsDirectory,
-            ["{{WORKSPACES_DIR}}"] = WorkspacesDirectory
+            // Workspaces dir is no longer collected in init; use the resolved default
+            // (configured Workspaces.Directory or {BasePath}/workspaces) for the templates.
+            ["{{WORKSPACES_DIR}}"] = paths.WorkspacesDirectory
         };
 
         File.WriteAllText(paths.SoulPath, SubstitutePlaceholders(
@@ -340,17 +323,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
         CommunicationStyle ??= ReadString(context, "Identity.CommunicationStyle");
         UserName ??= ReadString(context, "Identity.UserName");
         UserTimezone = ReadString(context, "Identity.UserTimezone") ?? UserTimezone;
-        WorkspacesDirectory = ReadString(context, "Workspaces.Directory") ?? WorkspacesDirectory;
-
-        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Notifications.Webhooks", out var webhooks)
-            && webhooks is object[] items
-            && items.Length > 0
-            && items[0] is Dictionary<string, object> firstWebhook
-            && firstWebhook.TryGetValue("Url", out var urlValue)
-            && urlValue is string url)
-        {
-            WebhookUrl ??= url;
-        }
     }
 
     private static bool HasPersistedIdentity(WizardContext context)
@@ -361,19 +333,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
            && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, path, out var value)
             ? value as string
             : null;
-
-    private static Dictionary<string, object> BuildNotifications(string webhookUrl)
-        => new()
-        {
-            ["Webhooks"] = new object[]
-            {
-                new Dictionary<string, object>
-                {
-                    ["Url"] = webhookUrl,
-                    ["Format"] = WebhookFormatDetection.InferFromUrl(webhookUrl).ToString()
-                }
-            }
-        };
 
     public void Dispose() { }
 }

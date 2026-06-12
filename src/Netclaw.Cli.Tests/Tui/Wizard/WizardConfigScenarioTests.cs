@@ -129,7 +129,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     }
 
     [Fact]
-    public void PersonalPosture_WithIdentityAndWorkspaces_ConfigMatchesChoices()
+    public void PersonalPosture_WithIdentity_ConfigMatchesChoices()
     {
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
@@ -139,14 +139,13 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         identityStep.AgentName = "Jarvis";
         identityStep.UserName = "Aaron";
         identityStep.UserTimezone = "America/Chicago";
-        identityStep.WorkspacesDirectory = "~/projects";
 
         var config = AssembleConfig(steps);
 
-        // Identity is written to separate files, not the config dict.
-        // Workspaces IS in the config dict.
-        var workspaces = GetSection(config, "Workspaces");
-        Assert.Equal("~/projects", workspaces["Directory"]);
+        // Identity is written to separate files, not the config dict. The init wizard
+        // no longer collects a workspaces directory — that is a post-install setting
+        // owned by `netclaw config`, so the assembled config must not pin one.
+        Assert.False(config.ContainsKey("Workspaces"));
 
         AssertNoDisabledFeatureFlags(config);
     }

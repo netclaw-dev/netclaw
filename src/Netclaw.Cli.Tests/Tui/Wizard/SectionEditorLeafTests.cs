@@ -75,7 +75,12 @@ public sealed class IdentitySectionEditorTests : SectionEditorTestBase<IdentityS
         var contribution = editor.BuildContribution(editor);
 
         Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Identity.AgentName");
-        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Workspaces.Directory");
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Identity.UserTimezone");
+
+        // Workspaces directory and notification webhooks are post-install settings
+        // owned by `netclaw config`; the init Identity editor must not contribute them.
+        Assert.DoesNotContain(contribution.FieldActionsOrEmpty, a => a.Path == "Workspaces.Directory");
+        Assert.DoesNotContain(contribution.FieldActionsOrEmpty, a => a.Path == "Notifications");
     }
 }
 
