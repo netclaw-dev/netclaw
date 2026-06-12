@@ -11,7 +11,7 @@ namespace Netclaw.Providers.SelfHosted;
 
 /// <summary>
 /// Provider descriptor for OpenAI-compatible endpoints such as llama.cpp,
-/// llama-server, vLLM, or Lemonade.
+/// llama-server, vLLM, Lemonade, or DwarfStar (ds4).
 /// </summary>
 public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
 {
@@ -57,7 +57,13 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
         if (contextWindow is not null)
             return contextWindow;
 
-        return model.TryGetProperty("meta", out var meta)
+        // ds4 (and other OpenRouter-shaped backends): context_length /
+        // top_provider.context_length.
+        contextWindow = Ds4BackendStrategy.ReadContextLength(model);
+        if (contextWindow is not null)
+            return contextWindow;
+
+        return model.TryGetProperty("meta", out var meta) // llama.cpp
             ? ProbeHelpers.TryReadPositiveInt32OrFallbackWhenMissing(
                 meta, "n_ctx", "n_ctx_train")
             : null;

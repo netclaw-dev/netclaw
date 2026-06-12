@@ -19,11 +19,13 @@ namespace Netclaw.Providers.SelfHosted;
 /// </summary>
 public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolver
 {
-    // Strategy order is meaningful: vLLM signals are more specific
-    // than llama.cpp's, and the generic fallback matches anything.
+    // Strategy order is meaningful: vLLM and ds4 signals are exact
+    // (owned_by markers), llama.cpp's are looser (any /props response),
+    // and the generic fallback matches anything.
     private static readonly IReadOnlyList<IOpenAiBackendStrategy> Strategies =
     [
         new VllmBackendStrategy(),
+        new Ds4BackendStrategy(),
         new LlamaCppBackendStrategy(),
         new GenericOpenAiBackendStrategy(),
     ];

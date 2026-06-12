@@ -706,12 +706,11 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 |------|------|-------|
 | `ollama` | Endpoint only | `--endpoint http://host:11434` |
 | `openai` | API key **or** OAuth (ChatGPT sub) | Codex backend for OAuth path |
-| `openai-compatible` | API key + endpoint | Generic OpenAI-shape proxies |
+| `openai-compatible` | API key + endpoint | Generic OpenAI-shape proxies, llama.cpp, vLLM. Also DwarfStar (ds4): `--endpoint http://127.0.0.1:8000`, run `ds4-server` separately, model ids `deepseek-v4-flash` / `deepseek-v4-pro`, context window auto-detected |
 | `anthropic` | API key | `sk-ant-...` |
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 | `veniceai` | API key | OpenAI-compatible at `https://api.venice.ai/api/v1`. Suppresses Venice's prepended system prompt by default; opt in via `VendorOptions.IncludeVeniceSystemPrompt = true` |
-| `ds4` | Endpoint only | DwarfStar local DeepSeek V4 engine. `--endpoint http://127.0.0.1:8000`. Run `ds4-server` separately (Metal/CUDA host); model ids `deepseek-v4-flash` / `deepseek-v4-pro` |
 
 Provider-specific behavior toggles belong under
 `Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
