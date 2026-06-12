@@ -35,6 +35,8 @@ Up
 Space
 Wait+Screen@10s /Add at least one route/
 Ctrl+Q
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 # Enabling with no routes is the intended setup order: the toggle persists
@@ -53,6 +55,8 @@ Wait+Screen@10s /Browser Automation/
 Wait+Screen@10s /Manual install guidance/
 Wait+Screen@10s /MCP permissions/
 Ctrl+Q
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo CONFIG_SURFACES_EXIT=$?"

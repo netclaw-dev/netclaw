@@ -53,6 +53,8 @@ Wait+Screen@10s /Reverse Proxy exposure mode saved/
 Enter
 Wait+Screen@10s /Security & Access/
 Ctrl+Q
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "REVERSE_PROXY=reverse-proxy BIND_HOST=0.0.0.0 PROXY_CIDR=10.0.0.0/24 jq -e '.Daemon.ExposureMode == env.REVERSE_PROXY and .Daemon.Host == env.BIND_HOST and .Daemon.TrustedProxies[0] == env.PROXY_CIDR' $NETCLAW_HOME/config/netclaw.json"
@@ -80,6 +82,8 @@ Enter
 Wait+Screen@10s /Security & Access/
 Ctrl+Q
 
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo CONFIG_EXPOSURE_EXIT=$?"

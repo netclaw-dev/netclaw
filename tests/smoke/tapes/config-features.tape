@@ -39,6 +39,10 @@ Escape
 Wait+Screen@10s /Security & Access/
 Ctrl+Q
 
+# VHS's screen scraper needs a beat to pick up the restored main buffer after the
+# TUI tears down the alternate screen (CSI ?1049l); without it /TAPE\$/ matches the
+# stale pre-restore buffer and the next keystroke is eaten by the exiting TUI.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo CONFIG_FEATURES_EXIT=$?"

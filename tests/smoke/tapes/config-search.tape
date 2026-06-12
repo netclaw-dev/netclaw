@@ -56,6 +56,8 @@ Wait+Screen@10s /Settings Areas/
 
 # ─── Back out to shell ────────────────────────────────────────────────────
 Ctrl+Q
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo CONFIG_SEARCH_EXIT=$?"

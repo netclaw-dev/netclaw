@@ -50,6 +50,8 @@ Enter
 Wait+Screen@10s /Saved/
 Wait+Screen@5s /Outbound Webhooks/
 Ctrl+Q
+# Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "OTLP_ENDPOINT=http://127.0.0.1:4318 WEBHOOK_FORMAT=Slack jq -e '.Telemetry.Enabled == true and .Telemetry.Otlp.Endpoint == env.OTLP_ENDPOINT and .Notifications.Webhooks[0].Format == env.WEBHOOK_FORMAT' $NETCLAW_HOME/config/netclaw.json"
