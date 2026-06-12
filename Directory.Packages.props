@@ -86,6 +86,11 @@
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="Aspire.Hosting.Testing" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="CommunityToolkit.Aspire.Hosting.Ollama" Version="$(CommunityToolkitAspireVersion)" />
+    <!-- Transitive pin: Aspire 13.4.x pulls MessagePack 2.5.192, which trips
+         NU1903 (GHSA-hv8m-jj95-wg3x, LZ4 decompression AccessViolation).
+         2.5.301 is the first patched release. Drop this pin once the Aspire
+         line ships a patched MessagePack on its own. -->
+    <PackageVersion Include="MessagePack" Version="2.5.301" />
   </ItemGroup>
   <!-- Image normalization (Netclaw.Media). SkiaSharp ships Windows/macOS native
        assets in the base package; Linux needs the explicit headless native asset
