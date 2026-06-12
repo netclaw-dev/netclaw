@@ -12,6 +12,7 @@ using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using R3;
+using Termina.Layout;
 using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui.Config;
@@ -179,10 +180,14 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private SkillSourcesScreen? _validationEditScreen;
     private string? _validationEditDraft;
 
-    public SkillSourcesConfigViewModel(NetclawPaths paths, ISkillFeedReachabilityProbe? probe = null)
+    public SkillSourcesConfigViewModel(
+        NetclawPaths paths,
+        ISkillFeedReachabilityProbe? probe = null,
+        IFileSystemProvider? fileSystemProvider = null)
     {
         _paths = paths;
         _probe = probe ?? new SkillFeedReachabilityProbe();
+        FileSystemProvider = fileSystemProvider ?? new DefaultFileSystemProvider();
         Screen = new ReactiveProperty<SkillSourcesScreen>(SkillSourcesScreen.Inventory);
         SelectedRow = new ReactiveProperty<int>(0);
         Draft = new ReactiveProperty<string>(string.Empty);
@@ -195,6 +200,44 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     internal Action<string>? RouteRequested { get; set; }
     internal bool ShutdownRequestedForTest { get; private set; }
+
+    /// <summary>Filesystem access for the "add local folder" directory picker (fakeable in tests).</summary>
+    public IFileSystemProvider FileSystemProvider { get; }
+
+    /// <summary>
+    /// Directory the "add local folder" picker opens at — the netclaw user's home directory. The
+    /// picker can navigate up to the filesystem root and back down, so this is only an anchor.
+    /// </summary>
+    public string BrowseStartPath => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    /// <summary>
+    /// Creates <paramref name="name"/> as a new directory under <paramref name="parentPath"/> and
+    /// commits it as the chosen local skill folder. Surfaces a status error on bad input/IO and
+    /// leaves the picker open. This is the inline "new folder" affordance the picker itself lacks.
+    /// </summary>
+    public void CreateAndSelectFolder(string parentPath, string name)
+    {
+        var trimmed = name.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed) || trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            SetStatus("Enter a valid folder name (no path separators).", ConfigStatusTone.Error);
+            return;
+        }
+
+        string created;
+        try
+        {
+            created = Path.Combine(parentPath, trimmed);
+            Directory.CreateDirectory(created);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            SetStatus($"Could not create folder: {ex.Message}", ConfigStatusTone.Error);
+            return;
+        }
+
+        CommitAddLocalPath(created);
+    }
 
     public ReactiveProperty<SkillSourcesScreen> Screen { get; }
     public ReactiveProperty<int> SelectedRow { get; }
@@ -1911,8 +1954,9 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         => feeds.Feeds.FirstOrDefault(feed => _nameComparer.Equals(feed.Name, name));
 
     private static bool IsTextEntryScreen(SkillSourcesScreen screen)
-        => screen is SkillSourcesScreen.AddLocalPath
-            or SkillSourcesScreen.AddLocalName
+        // AddLocalPath is intentionally excluded: it is an interactive directory picker, not a
+        // text field, so keystrokes/paste route to the picker rather than the draft.
+        => screen is SkillSourcesScreen.AddLocalName
             or SkillSourcesScreen.AddRemoteUrl
             or SkillSourcesScreen.AddRemoteToken
             or SkillSourcesScreen.AddRemoteName

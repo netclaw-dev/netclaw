@@ -105,6 +105,83 @@ public sealed class WorkspacesConfigViewModelTests : IDisposable
         Assert.Contains("project-specific instructions", promptProvider.GetSystemPrompt(TrustAudience.Team, projectDir));
     }
 
+    [Fact]
+    public void ApplyPickedDirectory_persists_the_chosen_directory()
+    {
+        // A directory chosen in the picker is itself the confirmation: it stages + saves at once.
+        var picked = Path.Combine(_dir.Path, "picked-workspaces");
+        Directory.CreateDirectory(picked);
+        using var vm = new WorkspacesConfigViewModel(_paths);
+
+        vm.ApplyPickedDirectory(picked);
+
+        Assert.True(vm.IsSaved.Value);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Workspaces.Directory", out var value));
+        Assert.Equal(picked, value);
+    }
+
+    [Fact]
+    public void CreateAndSelectFolder_creates_persists_and_selects_a_new_subdirectory()
+    {
+        // The inline "new folder" affordance: create a subdir under where the picker is, then
+        // select it (the directory must exist + be persisted afterward).
+        var parent = Path.Combine(_dir.Path, "parent");
+        Directory.CreateDirectory(parent);
+        using var vm = new WorkspacesConfigViewModel(_paths);
+
+        vm.CreateAndSelectFolder(parent, "fresh-workspace");
+
+        var created = Path.Combine(parent, "fresh-workspace");
+        Assert.True(Directory.Exists(created));
+        Assert.True(vm.IsSaved.Value);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Workspaces.Directory", out var value));
+        Assert.Equal(created, value);
+    }
+
+    [Fact]
+    public void CreateAndSelectFolder_rejects_an_invalid_name_without_persisting()
+    {
+        var parent = Path.Combine(_dir.Path, "parent");
+        Directory.CreateDirectory(parent);
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        using var vm = new WorkspacesConfigViewModel(_paths);
+
+        vm.CreateAndSelectFolder(parent, "bad/name");
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public void BrowseStartPath_prefers_the_existing_current_directory()
+    {
+        var fileSystem = new StubFileSystemProvider(existingDirectories: [_paths.WorkspacesDirectory]);
+        using var vm = new WorkspacesConfigViewModel(_paths, fileSystem);
+
+        Assert.Equal(_paths.WorkspacesDirectory, vm.BrowseStartPath);
+    }
+
+    [Fact]
+    public void BrowseStartPath_falls_back_to_the_parent_when_current_is_missing_but_parent_exists()
+    {
+        var parent = Path.GetDirectoryName(_paths.WorkspacesDirectory)!;
+        var fileSystem = new StubFileSystemProvider(existingDirectories: [parent]);
+        using var vm = new WorkspacesConfigViewModel(_paths, fileSystem);
+
+        Assert.Equal(parent, vm.BrowseStartPath);
+    }
+
+    [Fact]
+    public void BrowseStartPath_falls_back_to_home_when_neither_current_nor_parent_exist()
+    {
+        var fileSystem = new StubFileSystemProvider(existingDirectories: []);
+        using var vm = new WorkspacesConfigViewModel(_paths, fileSystem);
+
+        Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), vm.BrowseStartPath);
+    }
+
     private string ReadConfiguredWorkspacesDirectory()
     {
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);

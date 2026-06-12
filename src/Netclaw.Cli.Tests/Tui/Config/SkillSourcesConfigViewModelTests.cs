@@ -69,8 +69,8 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
         BeginAddLocalFolder(vm);
-        vm.AppendText("https://example.test/skills");
-        vm.ActivateSelected();
+        // The picker can't produce these, but CommitAddLocalPath still validates its input.
+        vm.CommitAddLocalPath("https://example.test/skills");
 
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("local filesystem path", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
@@ -84,8 +84,7 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
         BeginAddLocalFolder(vm);
-        vm.AppendText(Path.Combine(_dir.Path, "missing-skills"));
-        vm.ActivateSelected();
+        vm.CommitAddLocalPath(Path.Combine(_dir.Path, "missing-skills"));
 
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("must already exist", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
@@ -329,6 +328,66 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Equal(1, probe.ProbeCount);
     }
 
+    [Fact]
+    public void AddLocalPath_is_a_directory_picker_so_typing_does_not_change_the_draft()
+    {
+        // The add-local-folder step is an interactive directory picker now, not a text field:
+        // keystrokes route to the picker, so AppendText must be inert and IsTextEntryActive false.
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        BeginAddLocalFolder(vm);
+
+        vm.AppendText("/tmp/should-be-ignored");
+
+        Assert.False(vm.IsTextEntryActive);
+        Assert.Equal(string.Empty, vm.Draft.Value);
+        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
+    }
+
+    [Fact]
+    public void CommitAddLocalPath_from_picker_advances_to_symlinks()
+    {
+        // CommitAddLocalPath is the picker's SelectionConfirmed target: a chosen (existing)
+        // directory validates and advances to the symlink-security step.
+        var folder = Path.Combine(_dir.Path, "picked-skill-folder");
+        Directory.CreateDirectory(folder);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        BeginAddLocalFolder(vm);
+
+        vm.CommitAddLocalPath(folder);
+
+        Assert.Equal(SkillSourcesScreen.AddLocalSymlinks, vm.Screen.Value);
+    }
+
+    [Fact]
+    public void CreateAndSelectFolder_creates_a_new_folder_and_advances()
+    {
+        // The inline "new folder" affordance: create a subdir under the picker's location, then
+        // commit it (it now exists, so it advances to the symlink-security step).
+        var parent = Path.Combine(_dir.Path, "parent");
+        Directory.CreateDirectory(parent);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        BeginAddLocalFolder(vm);
+
+        vm.CreateAndSelectFolder(parent, "fresh-skills");
+
+        Assert.True(Directory.Exists(Path.Combine(parent, "fresh-skills")));
+        Assert.Equal(SkillSourcesScreen.AddLocalSymlinks, vm.Screen.Value);
+    }
+
+    [Fact]
+    public void CreateAndSelectFolder_rejects_an_invalid_name_and_stays_on_the_picker()
+    {
+        var parent = Path.Combine(_dir.Path, "parent");
+        Directory.CreateDirectory(parent);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        BeginAddLocalFolder(vm);
+
+        vm.CreateAndSelectFolder(parent, "bad/name");
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
+    }
+
     private static void BeginRotateToken(SkillSourcesConfigViewModel vm, string name)
     {
         OpenRemoteDetail(vm, name);
@@ -348,8 +407,9 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     private static void AddLocalFolder(SkillSourcesConfigViewModel vm, string path, string name)
     {
         BeginAddLocalFolder(vm);
-        vm.AppendText(path);
-        vm.ActivateSelected();
+        // AddLocalPath is a directory picker; CommitAddLocalPath is what its SelectionConfirmed
+        // calls with the chosen path (replaces the former type-the-path-then-Enter flow).
+        vm.CommitAddLocalPath(path);
         Assert.Equal(SkillSourcesScreen.AddLocalSymlinks, vm.Screen.Value);
         vm.ActivateSelected();
         Assert.Equal(SkillSourcesScreen.AddLocalName, vm.Screen.Value);

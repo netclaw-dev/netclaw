@@ -20,10 +20,19 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private readonly CompositeDisposable _contentSubscriptions = [];
     private TextInputNode? _textInput;
     private SkillSourcesScreen? _textInputScreen;
+    // Created once on entering AddLocalPath and reused across renders so the picker keeps its
+    // navigation state; rebuilding it every render would reset it to the start path.
+    private FilePickerNode? _directoryPicker;
+    private readonly CompositeDisposable _pickerSubscriptions = [];
+    // Inline "new folder" naming overlay — the picker itself cannot create directories.
+    private bool _namingNewFolder;
+    private string _newFolderParent = string.Empty;
+    private TextInputNode? _newFolderInput;
 
     protected override void OnBound()
     {
         base.OnBound();
+        _pickerSubscriptions.DisposeWith(Subscriptions);
         ViewModel.Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
@@ -38,6 +47,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             if (_textInputScreen is { } owner && owner != screen)
                 ResetTextInput();
 
+            SyncDirectoryPicker(screen);
             _contentNode?.Invalidate();
         }).DisposeWith(Subscriptions);
         ViewModel.SelectedRow.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
@@ -71,10 +81,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             {
                 SkillSourcesScreen.Inventory => BuildInventory(),
                 SkillSourcesScreen.SourceDetail => BuildSourceDetail(),
-                SkillSourcesScreen.AddLocalPath => BuildTextDraft(
-                    "Add a local skill folder.",
-                    "Folder path",
-                    "This must be an existing local directory."),
+                SkillSourcesScreen.AddLocalPath => BuildDirectoryPicker(),
                 SkillSourcesScreen.AddLocalSymlinks => BuildChoice(
                     "Allow symlinks inside this folder?",
                     "Symlinks can make a source scan files outside the folder.",
@@ -308,6 +315,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             SkillSourcesScreen.Inventory => " [↑/↓] Navigate  [Enter] Open/Add  [Space] Toggle  [Delete] Remove  [Esc] Settings Areas  [Ctrl+Q] Quit",
             SkillSourcesScreen.SourceDetail => " [↑/↓] Navigate  [Enter/Space] Activate  [Delete] Remove  [Esc] Skill Sources  [Ctrl+Q] Quit",
+            // The directory picker renders its own key-hint footer; keep this strip empty so the
+            // two do not stack. App-specific keys (Ctrl+N / Ctrl+Q) are shown above the picker.
+            SkillSourcesScreen.AddLocalPath => string.Empty,
             SkillSourcesScreen.AddLocalSymlinks or SkillSourcesScreen.RemoveConfirm =>
                 " [↑/↓] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
             _ => " [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Back  [Ctrl+Q] Quit",
@@ -320,6 +330,31 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             ViewModel.RequestQuit();
             return;
+        }
+
+        // On the AddLocalPath screen the directory picker (or its inline new-folder prompt) owns
+        // every key; its events advance or back out of the flow.
+        if (ViewModel.Screen.Value == SkillSourcesScreen.AddLocalPath
+            && ViewModel.ActiveValidationDialog.Value is null)
+        {
+            if (_namingNewFolder)
+            {
+                HandleNewFolderKey(keyInfo);
+                return;
+            }
+
+            if (keyInfo.Key == ConsoleKey.N && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                BeginNewFolder();
+                return;
+            }
+
+            if (_directoryPicker is not null)
+            {
+                _directoryPicker.HandleInput(keyInfo);
+                ViewModel.RequestRedraw();
+                return;
+            }
         }
 
         if (keyInfo.Key == ConsoleKey.Escape)
@@ -373,12 +408,115 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private void HandlePaste(PasteEvent paste)
     {
+        if (_namingNewFolder && _newFolderInput is not null)
+        {
+            _newFolderInput.HandlePaste(paste);
+            _contentNode?.Invalidate();
+            return;
+        }
+
         if (!ViewModel.IsTextEntryActive || _textInput is null)
             return;
 
         _textInput.HandlePaste(paste);
         ViewModel.ReplaceDraft(_textInput.Text);
         ViewModel.RequestRedraw();
+    }
+
+    private ILayoutNode BuildDirectoryPicker()
+    {
+        if (_namingNewFolder && _newFolderInput is not null)
+        {
+            return Layouts.Vertical()
+                .WithChild(Text("  New folder", Color.White))
+                .WithChild(Text($"  Created inside: {_newFolderParent}", Color.Gray))
+                .WithChild(Layouts.Empty().Height(1))
+                .WithChild(NetclawTuiChrome.BuildTextInputPanel(_newFolderInput, "Folder name"));
+        }
+
+        if (_directoryPicker is null)
+            return Layouts.Empty();
+
+        // The picker draws its own (unsuppressable) key-hint footer; keep only the app-specific
+        // keys up here so there is a single strip, not two competing ones.
+        return Layouts.Vertical()
+            .WithChild(Text("  Add a local skill folder.", Color.White))
+            .WithChild(Text("  [Ctrl+N] new folder   [Ctrl+Q] quit", Color.Gray))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(_directoryPicker);
+    }
+
+    // Creates the directory picker exactly once on entering AddLocalPath and tears it down on
+    // leaving, so the picker survives the per-render rebuilds without losing navigation state.
+    private void SyncDirectoryPicker(SkillSourcesScreen screen)
+    {
+        if (screen == SkillSourcesScreen.AddLocalPath)
+        {
+            if (_directoryPicker is not null)
+                return;
+
+            _pickerSubscriptions.Clear();
+            _directoryPicker = Layouts.FilePicker(ViewModel.BrowseStartPath)
+                .WithMode(FilePickerMode.Directories)
+                .WithSelectionMode(FilePickerSelectionMode.Single)
+                .WithFillHeight(true)
+                .WithFileSystemProvider(ViewModel.FileSystemProvider);
+            _directoryPicker.OnFocused();
+            _directoryPicker.SelectionConfirmed
+                .Subscribe(paths =>
+                {
+                    if (paths.Count > 0)
+                        ViewModel.CommitAddLocalPath(paths[0]);
+                })
+                .DisposeWith(_pickerSubscriptions);
+            _directoryPicker.Cancelled
+                .Subscribe(_ => ViewModel.GoBack())
+                .DisposeWith(_pickerSubscriptions);
+        }
+        else if (_directoryPicker is not null)
+        {
+            _pickerSubscriptions.Clear();
+            _directoryPicker = null;
+            _namingNewFolder = false;
+            _newFolderInput = null;
+        }
+    }
+
+    private void BeginNewFolder()
+    {
+        _newFolderParent = _directoryPicker?.CurrentPath ?? ViewModel.BrowseStartPath;
+        _newFolderInput = new TextInputNode().WithPlaceholder("my-skills");
+        _newFolderInput.OnFocused();
+        _namingNewFolder = true;
+        _contentNode?.Invalidate();
+    }
+
+    private void HandleNewFolderKey(ConsoleKeyInfo keyInfo)
+    {
+        if (_newFolderInput is null)
+            return;
+
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Escape:
+                _namingNewFolder = false;
+                _newFolderInput = null;
+                _contentNode?.Invalidate();
+                return;
+            case ConsoleKey.Enter:
+                // Success creates the folder and advances the flow (which disposes the picker via
+                // SyncDirectoryPicker); failure surfaces a status error and keeps the picker.
+                _namingNewFolder = false;
+                var name = _newFolderInput.Text;
+                _newFolderInput = null;
+                ViewModel.CreateAndSelectFolder(_newFolderParent, name);
+                _contentNode?.Invalidate();
+                return;
+            default:
+                _newFolderInput.HandleInput(keyInfo);
+                _contentNode?.Invalidate();
+                return;
+        }
     }
 
     private bool TryHandleTextInput(ConsoleKeyInfo keyInfo)

@@ -11,6 +11,7 @@ using Netclaw.Tests.Utilities;
 using Termina;
 using Termina.Hosting;
 using Termina.Input;
+using Termina.Layout;
 using Termina.Terminal;
 using Xunit;
 
@@ -31,18 +32,29 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public async Task Workspaces_page_accepts_typed_and_pasted_path_input()
+    public async Task Workspaces_page_choosing_a_directory_in_the_picker_saves_it()
     {
-        var app = CreateWorkspacesApp(out var input, out var vm);
+        // The page is the directory picker (no Tab, no typed form): Space chooses the highlighted
+        // directory, which saves it as the workspaces directory.
+        var target = Path.Combine(_dir.Path, "chosen-workspaces");
+        Directory.CreateDirectory(target);
+        var start = _paths.WorkspacesDirectory;
+        var fileSystem = new StubFileSystemProvider(
+            existingDirectories: [start, target],
+            entries: new Dictionary<string, IReadOnlyList<FileSystemEntry>>
+            {
+                [start] = [StubFileSystemProvider.Dir(target)],
+            });
+        var app = CreateWorkspacesApp(out var input, out var vm, fileSystem);
 
-        input.EnqueueString("/tmp/netclaw-");
-        input.EnqueuePaste("workspace-test");
+        input.EnqueueKey(ConsoleKey.Spacebar); // choose the highlighted directory -> save.
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal("/tmp/netclaw-workspace-test", vm.DirectoryDraft.Value);
+        Assert.True(vm.IsSaved.Value);
+        Assert.Equal(target, vm.CurrentDirectory.Value);
     }
 
     [Fact]
@@ -63,71 +75,31 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_page_accepts_typed_and_pasted_path_input()
+    public async Task Skill_sources_local_path_screen_renders_directory_picker()
     {
-        var app = CreateSkillSourcesApp(out var input, out var vm);
+        var app = CreateSkillSourcesApp(out var input, out _, out var terminal,
+            fileSystem: SkillFolderPickerFs(out _));
 
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueString("/tmp/netclaw smoke-");
-        input.EnqueuePaste("skills");
-        input.EnqueueKey(ConsoleKey.LeftArrow);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
-        Assert.Equal("/tmp/netclaw smoke-skills", vm.Draft.Value);
-    }
-
-    [Fact]
-    public async Task Skill_sources_local_path_screen_renders_visible_input_box()
-    {
-        var app = CreateSkillSourcesApp(out var input, out _, out var terminal);
-
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter); // Inventory -> Add local folder -> directory picker.
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         var screen = terminal.ToString();
-        Assert.True(screen.Contains("Folder path", StringComparison.Ordinal),
-            $"Expected folder path input label in terminal output. Screen:\n{terminal}");
-        Assert.DoesNotContain("Type here...|", screen, StringComparison.Ordinal);
+        Assert.Contains("Add a local skill folder.", screen, StringComparison.Ordinal);
+        Assert.Contains("[Ctrl+N] new folder", screen, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Skill_sources_local_path_enter_rejects_missing_directory_before_persistence()
+    public async Task Skill_sources_choosing_existing_directory_advances_without_persisting_incomplete_flow()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm);
+        var app = CreateSkillSourcesApp(out var input, out var vm, out _,
+            fileSystem: SkillFolderPickerFs(out _));
 
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueString(Path.Combine(_dir.Path, "missing-skills"));
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("must already exist", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
-    }
-
-    [Fact]
-    public async Task Skill_sources_local_path_enter_accepts_existing_directory_without_persisting_incomplete_flow()
-    {
-        var externalDir = Path.Combine(_dir.Path, "team-skills");
-        Directory.CreateDirectory(externalDir);
-        var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm);
-
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueuePaste(externalDir);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // -> directory picker (the folder is highlighted).
+        input.EnqueueKey(ConsoleKey.Spacebar);  // choose the folder -> AddLocalSymlinks.
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -140,15 +112,13 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     [Fact]
     public async Task Skill_sources_local_name_enter_persists_source_to_external_skills()
     {
-        var externalDir = Path.Combine(_dir.Path, "team-skills");
-        Directory.CreateDirectory(externalDir);
-        var app = CreateSkillSourcesApp(out var input, out var vm);
+        var app = CreateSkillSourcesApp(out var input, out var vm, out _,
+            fileSystem: SkillFolderPickerFs(out var externalDir));
 
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueuePaste(externalDir);
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // -> directory picker.
+        input.EnqueueKey(ConsoleKey.Spacebar);  // choose the folder -> AddLocalSymlinks.
+        input.EnqueueKey(ConsoleKey.Enter);     // symlinks default (No) -> AddLocalName.
+        input.EnqueueKey(ConsoleKey.Enter);     // default name (folder basename) -> persist -> SourceDetail.
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -663,12 +633,15 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         Assert.Equal("https://alerts.example.test/hook", webhook.Url);
     }
 
-    private TerminaApplication CreateWorkspacesApp(out VirtualInputSource input, out WorkspacesConfigViewModel vm)
+    private TerminaApplication CreateWorkspacesApp(
+        out VirtualInputSource input,
+        out WorkspacesConfigViewModel vm,
+        IFileSystemProvider? fileSystem = null)
     {
         var terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
-        var capturedVm = new WorkspacesConfigViewModel(_paths);
+        var capturedVm = new WorkspacesConfigViewModel(_paths, fileSystem);
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);
@@ -722,12 +695,13 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         out VirtualInputSource input,
         out SkillSourcesConfigViewModel vm,
         out VirtualTerminal terminal,
-        ISkillFeedReachabilityProbe? probe = null)
+        ISkillFeedReachabilityProbe? probe = null,
+        IFileSystemProvider? fileSystem = null)
     {
         terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
-        var capturedVm = new SkillSourcesConfigViewModel(_paths, probe ?? new FakeSkillFeedProbe());
+        var capturedVm = new SkillSourcesConfigViewModel(_paths, probe ?? new FakeSkillFeedProbe(), fileSystem);
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);
@@ -743,6 +717,21 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var sp = services.BuildServiceProvider();
         vm = capturedVm!;
         return sp.GetRequiredService<TerminaApplication>();
+    }
+
+    // A fake filesystem whose home directory contains exactly one real temp folder, so the
+    // "add local folder" directory picker highlights it and Space chooses it deterministically.
+    private StubFileSystemProvider SkillFolderPickerFs(out string externalDir)
+    {
+        externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return new StubFileSystemProvider(
+            existingDirectories: [home, externalDir],
+            entries: new Dictionary<string, IReadOnlyList<FileSystemEntry>>
+            {
+                [home] = [StubFileSystemProvider.Dir(externalDir)],
+            });
     }
 
     private TerminaApplication CreateTelemetryAlertingApp(out VirtualInputSource input, out TelemetryAlertingConfigViewModel vm)

@@ -6,6 +6,7 @@
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using R3;
+using Termina.Layout;
 using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui.Config;
@@ -14,9 +15,10 @@ internal sealed class WorkspacesConfigViewModel : ReactiveViewModel
 {
     private readonly NetclawPaths _paths;
 
-    public WorkspacesConfigViewModel(NetclawPaths paths)
+    public WorkspacesConfigViewModel(NetclawPaths paths, IFileSystemProvider? fileSystemProvider = null)
     {
         _paths = paths;
+        FileSystemProvider = fileSystemProvider ?? new DefaultFileSystemProvider();
         CurrentDirectory = new ReactiveProperty<string>(LoadCurrentDirectory());
         DirectoryDraft = new ReactiveProperty<string>(string.Empty);
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
@@ -26,10 +28,69 @@ internal sealed class WorkspacesConfigViewModel : ReactiveViewModel
     internal Action<string>? RouteRequested { get; set; }
     internal bool ShutdownRequestedForTest { get; private set; }
 
+    public IFileSystemProvider FileSystemProvider { get; }
+
     public ReactiveProperty<string> CurrentDirectory { get; }
     public ReactiveProperty<string> DirectoryDraft { get; }
     public ReactiveProperty<ConfigStatusMessage> Status { get; }
     public ReactiveProperty<bool> IsSaved { get; }
+
+    /// <summary>
+    /// Directory the picker opens at. Prefers the current workspaces directory when it exists
+    /// (you are most likely re-pointing near it); otherwise the launch working directory. The
+    /// picker can navigate up to the filesystem root and back down, so this is only an anchor.
+    /// </summary>
+    public string BrowseStartPath
+    {
+        get
+        {
+            var current = CurrentDirectory.Value;
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                if (FileSystemProvider.DirectoryExists(current))
+                    return current;
+
+                // The configured dir does not exist yet (e.g. never created, or removed): open at
+                // its parent so you stay in the right neighborhood rather than the process working
+                // directory (which can be the binary's location).
+                var parent = FileSystemProvider.GetParentDirectory(current);
+                if (!string.IsNullOrWhiteSpace(parent) && FileSystemProvider.DirectoryExists(parent))
+                    return parent;
+            }
+
+            return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+    }
+
+    /// <summary>
+    /// Creates <paramref name="name"/> under <paramref name="parentPath"/> and selects it. The
+    /// inline "new folder" affordance the picker lacks; <see cref="Save"/> performs the actual
+    /// directory creation and persistence.
+    /// </summary>
+    public void CreateAndSelectFolder(string parentPath, string name)
+    {
+        var trimmed = name.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed) || trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            Status.Value = new ConfigStatusMessage("Enter a valid folder name (no path separators).", ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
+        ApplyPickedDirectory(Path.Combine(parentPath, trimmed));
+    }
+
+    /// <summary>
+    /// Applies a directory chosen in the picker: stages it as the draft and saves immediately
+    /// (picking an existing directory is itself the confirmation). The picker stays open with the
+    /// new value reflected as Current.
+    /// </summary>
+    public void ApplyPickedDirectory(string path)
+    {
+        DirectoryDraft.Value = path;
+        IsSaved.Value = false;
+        Save();
+    }
 
     public string CandidateDirectory => string.IsNullOrWhiteSpace(DirectoryDraft.Value)
         ? CurrentDirectory.Value

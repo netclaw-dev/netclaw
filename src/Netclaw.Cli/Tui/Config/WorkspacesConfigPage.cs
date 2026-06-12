@@ -16,11 +16,19 @@ namespace Netclaw.Cli.Tui.Config;
 internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewModel>
 {
     private DynamicLayoutNode? _contentNode;
-    private readonly TextInputNode _pasteBuffer = new();
+    // The picker is the screen (no Tab gate). Created once and reused so it keeps its navigation
+    // state across renders; rebuilding it every frame would snap it back to the start path.
+    private FilePickerNode? _directoryPicker;
+    private readonly CompositeDisposable _pickerSubscriptions = [];
+    // Inline "new folder" naming overlay — the picker itself cannot create directories.
+    private bool _namingNewFolder;
+    private string _newFolderParent = string.Empty;
+    private TextInputNode? _newFolderInput;
 
     protected override void OnBound()
     {
         base.OnBound();
+        _pickerSubscriptions.DisposeWith(Subscriptions);
         ViewModel.Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
@@ -29,8 +37,9 @@ internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewMo
             .DisposeWith(Subscriptions);
 
         ViewModel.CurrentDirectory.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.DirectoryDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
         ViewModel.IsSaved.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+
+        EnsurePicker();
     }
 
     public override ILayoutNode BuildLayout()
@@ -38,27 +47,34 @@ internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewMo
 
     private ILayoutNode BuildInnerLayout()
         => Layouts.Vertical()
-            .WithSpacing(1)
-            .WithChild(BuildContent())
-            .WithChild(Layouts.Empty().Fill())
-            .WithChild(BuildStatusBar())
-            .WithChild(BuildKeyBindings());
+            .WithChild(BuildContent().Fill())
+            .WithChild(BuildStatusBar());
 
     private LayoutNode BuildContent()
     {
         _contentNode = new DynamicLayoutNode(() =>
         {
-            var draft = ViewModel.DirectoryDraft.Value;
-            var candidate = string.IsNullOrWhiteSpace(draft) ? "(leave unchanged)" : draft;
+            if (_namingNewFolder && _newFolderInput is not null)
+            {
+                return Layouts.Vertical()
+                    .WithChild(Header("  New folder"))
+                    .WithChild(Hint($"  Created inside: {_newFolderParent}"))
+                    .WithChild(Hint("  [Enter] create   [Esc] cancel   [Ctrl+Q] quit"))
+                    .WithChild(Layouts.Empty().Height(1))
+                    .WithChild(NetclawTuiChrome.BuildTextInputPanel(_newFolderInput, "Folder name"));
+            }
 
+            if (_directoryPicker is null)
+                return Layouts.Empty();
+
+            // Only the picker renders a key-hint footer (Termina draws it and it can't be turned
+            // off); the app-specific keys live up here so there is a single strip, not two.
             return Layouts.Vertical()
-                .WithChild(Header("  Workspaces Directory"))
-                .WithChild(Hint("  Sets the root Netclaw uses for project discovery and workspace-scoped prompts."))
+                .WithChild(Header("  Choose the workspaces directory"))
+                .WithChild(Hint($"  Current: {ViewModel.CurrentDirectory.Value}"))
+                .WithChild(Hint("  [Ctrl+N] new folder   [Ctrl+Q] quit"))
                 .WithChild(Layouts.Empty().Height(1))
-                .WithChild(Text($"  Current: {ViewModel.CurrentDirectory.Value}", Color.White))
-                .WithChild(Text($"  New:     {candidate}", Color.Cyan))
-                .WithChild(Layouts.Empty().Height(1))
-                .WithChild(Hint("  Type a local path. The directory is created if it does not exist."));
+                .WithChild(_directoryPicker);
         });
 
         return _contentNode;
@@ -72,9 +88,6 @@ internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewMo
             .AsLayout()
             .Height(1);
 
-    private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
-
     private void HandleKeyPress(KeyPressed key)
     {
         var keyInfo = key.KeyInfo;
@@ -84,38 +97,111 @@ internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewMo
             return;
         }
 
-        if (keyInfo.Key == ConsoleKey.Escape)
+        if (_namingNewFolder)
         {
-            ViewModel.GoBack();
+            HandleNewFolderKey(keyInfo);
             return;
         }
 
-        if (keyInfo.Key == ConsoleKey.Enter)
+        if (keyInfo.Key == ConsoleKey.N && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
-            ViewModel.Save();
+            BeginNewFolder();
             return;
         }
 
-        if (keyInfo.Key == ConsoleKey.Backspace)
-        {
-            ViewModel.Backspace();
-            return;
-        }
+        // The picker owns every other key: arrows, Enter (open folder), Space (choose),
+        // Backspace (up), Esc (cancel -> GoBack). Its events drive selection + exit.
+        _directoryPicker?.HandleInput(keyInfo);
+        ViewModel.RequestRedraw();
+    }
 
-        if (!char.IsControl(keyInfo.KeyChar))
-            ViewModel.AppendText(keyInfo.KeyChar.ToString());
+    private void HandleNewFolderKey(ConsoleKeyInfo keyInfo)
+    {
+        if (_newFolderInput is null)
+            return;
+
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Escape:
+                EndNewFolder();
+                return;
+            case ConsoleKey.Enter:
+                // On success the folder is created + saved; on failure a status error shows. Either
+                // way re-create the picker so a newly created folder actually shows up, then leave
+                // naming so the operator sees the result against the refreshed picker.
+                ViewModel.CreateAndSelectFolder(_newFolderParent, _newFolderInput.Text);
+                RecreatePickerAt(_newFolderParent);
+                EndNewFolder();
+                return;
+            default:
+                _newFolderInput.HandleInput(keyInfo);
+                ViewModel.RequestRedraw();
+                return;
+        }
     }
 
     private void HandlePaste(PasteEvent paste)
     {
-        _pasteBuffer.Text = string.Empty;
-        _pasteBuffer.HandlePaste(paste);
-        ViewModel.AppendText(_pasteBuffer.Text);
+        if (_namingNewFolder && _newFolderInput is not null)
+        {
+            _newFolderInput.HandlePaste(paste);
+            ViewModel.RequestRedraw();
+        }
+    }
+
+    private void EnsurePicker()
+    {
+        if (_directoryPicker is null)
+            RecreatePickerAt(ViewModel.BrowseStartPath);
+    }
+
+    // (Re)creates the picker rooted at a directory. Used on first show and to refresh the listing
+    // after a new folder is created (FilePickerNode has no public reload). WithFillHeight paints
+    // the full content area so it does not leave stale cells from earlier frames.
+    private void RecreatePickerAt(string path)
+    {
+        _pickerSubscriptions.Clear();
+        _directoryPicker = Layouts.FilePicker(path)
+            .WithMode(FilePickerMode.Directories)
+            .WithSelectionMode(FilePickerSelectionMode.Single)
+            .WithFillHeight(true)
+            .WithFileSystemProvider(ViewModel.FileSystemProvider);
+        _directoryPicker.OnFocused();
+        _directoryPicker.SelectionConfirmed
+            .Subscribe(paths =>
+            {
+                if (paths.Count > 0)
+                    ViewModel.ApplyPickedDirectory(paths[0]);
+            })
+            .DisposeWith(_pickerSubscriptions);
+        _directoryPicker.Cancelled
+            .Subscribe(_ => ViewModel.GoBack())
+            .DisposeWith(_pickerSubscriptions);
+    }
+
+    private void BeginNewFolder()
+    {
+        _newFolderParent = _directoryPicker?.CurrentPath ?? ViewModel.BrowseStartPath;
+        _newFolderInput = new TextInputNode().WithPlaceholder("my-workspace");
+        _newFolderInput.OnFocused();
+        _namingNewFolder = true;
+        InvalidateAll();
+    }
+
+    private void EndNewFolder()
+    {
+        _namingNewFolder = false;
+        _newFolderInput = null;
+        InvalidateAll();
+    }
+
+    private void InvalidateAll()
+    {
+        _contentNode?.Invalidate();
     }
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.Gray);
-    private static TextNode Text(string text, Color color) => new TextNode(text).WithForeground(color);
 
     private static Color ToColor(ConfigStatusTone tone)
         => tone switch
