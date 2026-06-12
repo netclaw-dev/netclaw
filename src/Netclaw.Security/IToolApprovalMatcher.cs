@@ -195,22 +195,31 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return candidates;
     }
 
-    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(string command)
+    /// <summary>
+    /// Parses <paramref name="command"/>, returning null when the parser
+    /// rejects it (unparseable, no clauses) or throws — a parser exception
+    /// must never take down the approval flow. Callers treat null as
+    /// "cannot decompose" and apply their own fail-safe: an empty
+    /// pattern/candidate list (messy semantics — Once/Deny prompt only) or
+    /// the flattened raw command for display.
+    /// </summary>
+    private static ShellSyntaxTree.ParsedCommand? TryParseCommand(string command)
     {
-        ShellSyntaxTree.ParsedCommand result;
         try
         {
-            result = Parser.Parse(command);
+            var result = Parser.Parse(command);
+            return result.IsUnparseable || result.Clauses.Count == 0 ? null : result;
         }
         catch
         {
-            // Defensive: an unhandled parser exception shouldn't take down
-            // the approval flow. Fail-empty so the matcher treats this as
-            // a messy command (Once+Deny prompt only).
-            return [];
+            return null;
         }
+    }
 
-        if (result.IsUnparseable || result.Clauses.Count == 0)
+    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(string command)
+    {
+        var result = TryParseCommand(command);
+        if (result is null)
             return [];
 
         // Group consecutive Pipe clauses into a single approval unit so
@@ -327,12 +336,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (ShellTokenizer.IsMessyCompoundCommand(command))
             return [];
 
+        var result = TryParseCommand(command);
+        if (result is null)
+            return [];
+
         try
         {
-            var result = Parser.Parse(command);
-            if (result.IsUnparseable || result.Clauses.Count == 0)
-                return [];
-
             var units = new List<string>();
             var current = new StringBuilder();
 
@@ -361,10 +370,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
         catch
         {
-            // Defensive: a parser exception — or an unmapped redirect/clause
-            // shape from a future ShellSyntaxTree release — must not take
-            // down the approval prompt. Fail-empty so the matcher treats the
-            // command as messy (Once/Deny prompt only).
+            // Defensive: an unmapped redirect/clause shape from a future
+            // ShellSyntaxTree release must not take down the approval
+            // prompt. Fail-empty so the matcher treats the command as messy
+            // (Once/Deny prompt only).
             return [];
         }
     }
@@ -403,6 +412,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (IsCallSpecificValueToken(arg.Raw))
                 break;
 
+            // Issue #1402: a multi-line quoted string (a message body, an
+            // inline script) is call-specific content that varies between
+            // invocations — and an embedded line break corrupts the stored
+            // pattern's display. Like the digit rule above, hitting one
+            // terminates the walk.
+            if (ContainsLineBreak(arg.Raw))
+                break;
+
             if (sb.Length > 0)
                 sb.Append(' ');
             sb.Append(arg.Raw);
@@ -416,6 +433,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrEmpty(redirect.Target))
                 continue;
 
+            // Issue #1402: a quoted redirect target can carry an embedded
+            // line break too (`> "$LOGDIR\nfile"`), and quote-aware path
+            // normalization preserves it — same termination rule as args so
+            // the break never reaches the stored pattern.
+            if (ContainsLineBreak(redirect.Target))
+                break;
+
             if (sb.Length > 0)
                 sb.Append(' ');
             sb.Append(RedirectToken(redirect.Direction));
@@ -425,6 +449,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// True when <paramref name="value"/> contains an embedded line break.
+    /// Checks CR as well as LF: a lone carriage return corrupts a stored
+    /// pattern just like a newline, and in a terminal-rendered prompt it
+    /// returns the cursor to column 0 so attacker-influenced content (e.g.
+    /// quoted ticket text flowing into a tool argument) could visually
+    /// overwrite the rendered command at the moment of approval.
+    /// </summary>
+    private static bool ContainsLineBreak(string value)
+        => value.AsSpan().IndexOfAny('\r', '\n') >= 0;
 
     /// <summary>
     /// True when <paramref name="token"/> is a call-specific value that varies
@@ -535,7 +570,143 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         => ShellTokenizer.IsMessyCompoundCommand(GetCommand(arguments));
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
-        => GetCommand(arguments) ?? "(empty command)";
+    {
+        var command = GetCommand(arguments);
+        if (string.IsNullOrWhiteSpace(command))
+            return "(empty command)";
+
+        // Fast path: a command with no embedded line break renders verbatim.
+        if (!ContainsLineBreak(command))
+            return command;
+
+        // Issue #1402: channel renderers embed DisplayText in single-line
+        // code fences, so a multi-line quoted string (a message body, an
+        // inline script) dumped verbatim corrupts the approval prompt. On
+        // POSIX, rebuild a one-line view from the parse tree with multi-line
+        // args summarized by size; Windows flattens — ShellSyntaxTree is
+        // bash-only. The trailing ReplaceLineEndings catches line breaks the
+        // reconstruction can leak and collapses CRLF to a single space.
+        var display = OperatingSystem.IsWindows()
+            ? command
+            : BuildSanitizedDisplayViaParser(command);
+
+        return display.ReplaceLineEndings(" ");
+    }
+
+    /// <summary>
+    /// Rebuilds a one-line display string for a multi-line command from its
+    /// parse tree: statement separators render as explicit operators and any
+    /// multi-line argument is replaced with a <c>(N lines, M chars)</c>
+    /// summary — the operator approving the command needs its shape, not the
+    /// full content (issue #1402). Returns the raw command (for the caller
+    /// to flatten) when the parser cannot decompose it, when the command
+    /// contains a heredoc — the parser drops heredoc bodies entirely (only
+    /// the <c>&lt;&lt;EOF</c> marker survives as a redirect target), so a
+    /// tree reconstruction would silently omit executable content the
+    /// approver must see — or when it contains a subshell, whose grouping
+    /// does not survive the flat clause list, so a reconstruction would
+    /// misstate which statements a pipe or <c>&amp;&amp;</c> guard applies
+    /// to. The flattened raw command is ugly but fully disclosed.
+    /// </summary>
+    private static string BuildSanitizedDisplayViaParser(string command)
+    {
+        var result = TryParseCommand(command);
+        if (result is null)
+            return command;
+
+        if (result.Clauses.Any(c => c.IsSubshell || c.Redirects.Any(IsHeredocRedirect)))
+            return command;
+
+        try
+        {
+            var sb = new StringBuilder();
+            var first = true;
+
+            foreach (var clause in result.Clauses)
+            {
+                if (!first)
+                    sb.Append(ClauseOperatorText(clause.Operator));
+                first = false;
+
+                sb.Append(clause.Verb.Joined);
+
+                foreach (var arg in clause.Args)
+                {
+                    if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
+                        continue;
+
+                    sb.Append(' ');
+                    sb.Append(ContainsLineBreak(arg.Raw)
+                        ? SummarizeMultilineArg(arg.Raw)
+                        : arg.Raw);
+                }
+
+                foreach (var redirect in clause.Redirects)
+                {
+                    if (string.IsNullOrEmpty(redirect.Target))
+                        continue;
+
+                    sb.Append(' ');
+                    sb.Append(RedirectToken(redirect.Direction));
+                    sb.Append(' ');
+                    sb.Append(ContainsLineBreak(redirect.Target)
+                        ? SummarizeMultilineArg(redirect.Target)
+                        : redirect.Target);
+                }
+            }
+
+            return sb.ToString();
+        }
+        catch
+        {
+            // Defensive: display formatting must never take down the
+            // approval prompt — the caller flattens the raw command's
+            // line breaks instead.
+            return command;
+        }
+    }
+
+    /// <summary>
+    /// True when a parsed redirect is a heredoc marker (<c>&lt;&lt;EOF</c>,
+    /// <c>&lt;&lt;-EOF</c>). The parser keeps only the marker as the redirect
+    /// target and drops the body from the tree, so heredoc-bearing commands
+    /// must not be display-reconstructed — see
+    /// <see cref="BuildSanitizedDisplayViaParser"/>.
+    /// </summary>
+    private static bool IsHeredocRedirect(ShellSyntaxTree.Redirect redirect)
+        => redirect.Target?.StartsWith("<<", StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// Size summary shown in place of a multi-line argument. Outer quotes
+    /// are excluded from the character count — the operator cares about the
+    /// content's size, not the shell syntax around it. Line endings are
+    /// normalized first so CRLF and lone CR count the same as LF.
+    /// </summary>
+    private static string SummarizeMultilineArg(string raw)
+    {
+        var content = raw.Length >= 2 && (raw[0] == '"' || raw[0] == '\'') && raw[^1] == raw[0]
+            ? raw[1..^1]
+            : raw;
+
+        var normalized = content.ReplaceLineEndings("\n");
+        var lines = normalized.Count(c => c == '\n') + 1;
+        return $"({lines} lines, {normalized.Length} chars)";
+    }
+
+    private static string ClauseOperatorText(ShellSyntaxTree.CompoundOperator op) => op switch
+    {
+        ShellSyntaxTree.CompoundOperator.AndIf => " && ",
+        ShellSyntaxTree.CompoundOperator.OrIf => " || ",
+        ShellSyntaxTree.CompoundOperator.Sequence => "; ",
+        ShellSyntaxTree.CompoundOperator.Pipe => " | ",
+        // None is not just the leading-clause marker: the parser emits it on
+        // the clause following a closed subshell, so it is reachable on
+        // non-first clauses. Render it as a plain statement separator.
+        ShellSyntaxTree.CompoundOperator.None => "; ",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(op), op,
+            "Unknown ShellSyntaxTree compound operator — a package upgrade needs a matcher update."),
+    };
 
     private static string? GetCommand(IDictionary<string, object?>? arguments)
         => ToolArgumentHelper.GetString(arguments, "Command");

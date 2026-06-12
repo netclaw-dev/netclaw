@@ -123,6 +123,20 @@ tokens (`aws s3 ls`) SHALL NOT be removed. Trimming SHALL apply
 identically on the gate (candidate) path and the persisted/display
 pattern path so the two normalize to the same verb chain.
 
+A multi-line argument — one containing an embedded line break (LF or
+CR), which can only arise inside quoting — SHALL also terminate pattern
+extraction, excluding the argument and everything after it (issue
+#1402). Multi-line quoted strings are call-specific content (message
+bodies, inline scripts) that varies between invocations of the same
+verb chain, and an embedded line break corrupts the stored pattern's
+display and the approval store's formatting; a lone CR additionally
+permits cursor-repositioning spoofing in terminal-rendered prompts. A
+preceding flag (e.g. `--message`) SHALL be retained in the pattern — it
+carries invocation intent. The same termination rule SHALL apply to
+redirect targets: a quoted redirect target carrying an embedded line
+break (e.g. `>> "$LOGDIR⏎file"`) terminates the redirect walk so the
+break never reaches the stored pattern.
+
 For shell approval units, `&&`, `||`, and `;` SHALL split into separate
 units, while `|` SHALL remain inside the current unit. For `bash -c` or
 `sh -c` wrappers, the inner command SHALL be extracted and scanned
@@ -191,6 +205,17 @@ chain. Compound commands SHALL produce N entries from one user click on
 - **AND** a standing `git tag` grant auto-approves both forms
 - **AND** the lowercase-leading form is handled by trimming the trailing
   value token the greedy walk folded into the chain
+
+#### Scenario: Multi-line quoted argument terminates the pattern
+
+- **GIVEN** the command `freshdesk ticket reply --message "Hi,⏎Thanks."`
+  where the quoted argument spans two lines
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `freshdesk ticket reply --message`
+- **AND** the multi-line body and everything after it are excluded
+  because multi-line arguments are call-specific content
+- **AND** the flag `--message` is retained because flags carry
+  invocation intent
 
 #### Scenario: Digit-bearing ref folded into the chain is trimmed
 
@@ -808,6 +833,25 @@ Single-verb commands MAY collapse the list into the header
 (`Approve <verb> in <cwd> ?`). The body SHALL NOT render separate
 "Patterns" or "Directory Roots" sections.
 
+The display text for a shell command SHALL be single-line. A command
+containing embedded line breaks (LF or CR) SHALL be reconstructed from
+its parse tree: statement separators render as explicit operators (`;`,
+`&&`, `||`, `|`) and each multi-line argument or redirect target is
+replaced with a `(N lines, M chars)` size summary instead of its
+verbatim content (issue #1402) — channel renderers embed the display
+text in single-line code fences, and dumping a multi-line quoted blob
+verbatim corrupts the prompt layout. When the parser cannot decompose
+the command, line breaks SHALL be flattened to spaces.
+
+Commands containing heredocs or subshell groupings SHALL NOT be
+display-reconstructed: the parser drops heredoc bodies from the tree
+(only the `<<EOF` marker survives as a redirect target), so a
+reconstruction would silently omit executable content the approver must
+see — and subshell grouping does not survive the flat clause list, so a
+reconstruction would misstate which statements a pipe or `&&` guard
+applies to. Both fall back to the flattened raw command — ugly but
+fully disclosed.
+
 Button semantics:
 
 - `Once` SHALL run the command this one time and persist nothing.
@@ -865,6 +909,16 @@ Button semantics:
 - **THEN** the current call is refused
 - **AND** `tool-approvals.json` is NOT modified
 - **AND** a later `git push` call still prompts
+
+#### Scenario: Multi-line quoted argument summarized in display text
+
+- **GIVEN** the agent invokes `shell_execute` with command
+  `freshdesk ticket reply 605 --message "Hi,⏎We've rolled out a fix. Please verify."`
+  where the quoted argument spans two lines
+- **WHEN** the approval prompt is rendered
+- **THEN** the display text reads
+  `freshdesk ticket reply 605 --message (2 lines, 42 chars)`
+- **AND** the display text contains no newline characters
 
 ### Requirement: Resolution message single-line format
 
