@@ -1,46 +1,22 @@
 # config-ops-surfaces.tape - exercise Task 1.6 config areas.
 #
 # Covers:
-#   - Skill Sources external directory save path
 #   - Telemetry & Alerting telemetry + outbound webhook save path
+#
+# The Skill Sources "add a local folder" save path moved to config-skill-picker.tape:
+# that screen is now a Termina FilePickerNode, whose terminal scroll region the vhs
+# emulator does not reset on exit, so a second netclaw launch in the same recording
+# never renders. Each directory-picker flow therefore gets its own single-launch tape.
 #
 # Post-tape assertion validates the persisted config semantically.
 
 Output "/tmp/tape-config-ops-surfaces.gif"
 
-# Seed minimal installed config and local skill directory.
-Type "mkdir -p $NETCLAW_HOME/config /tmp/netclaw-smoke-config-ops-skills"
+# Seed minimal installed config.
+Type "mkdir -p $NETCLAW_HOME/config"
 Enter
 Type "jq -n '{configVersion:1}' > $NETCLAW_HOME/config/netclaw.json"
 Enter
-
-# Skill Sources: save an existing external skill directory.
-Type "netclaw config"
-Enter
-Wait+Screen@10s /Settings Areas/
-Down 4
-Enter
-Wait+Screen@10s /Skill Sources/
-Wait+Screen@5s /Places Netclaw loads skills from/
-Enter
-Wait+Screen@10s /Add a local skill folder/
-Type "/tmp/netclaw-smoke-config-ops-skills"
-Enter
-Wait+Screen@10s /Allow symlinks inside this folder/
-Enter
-Wait+Screen@10s /Review local folder source/
-Enter
-Wait+Screen@10s /Added local skill folder/
-Escape
-Wait+Screen@10s /Local folders/
-Escape
-Wait+Screen@10s /Settings Areas/
-Ctrl+Q
-Wait+Screen@10s /TAPE\$/
-
-Type "SKILL_DIR=/tmp/netclaw-smoke-config-ops-skills jq -e '.ExternalSkills.Sources[0].Path == env.SKILL_DIR' $NETCLAW_HOME/config/netclaw.json"
-Enter
-Wait+Screen@5s /true/
 
 # Telemetry & Alerting: enable OTLP, set the endpoint, then add an outbound
 # Slack webhook through the multi-webhook list editor.

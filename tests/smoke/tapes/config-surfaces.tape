@@ -1,9 +1,13 @@
 # config-surfaces.tape — exercise Task 1.5 config areas.
 #
 # Covers:
-#   - Workspaces Directory successful save path
 #   - Inbound Webhooks timeout editing and enable-first advisory (no routes yet)
 #   - Browser Automation guidance-only path without shelling out from the TUI
+#
+# The Workspaces Directory save path moved to config-workspaces-picker.tape: that
+# screen is now a Termina FilePickerNode, whose terminal scroll region the vhs
+# emulator does not reset on exit, so a second netclaw launch in the same recording
+# never renders. Each directory-picker flow therefore gets its own single-launch tape.
 #
 # Post-tape assertion validates the persisted config semantically.
 
@@ -14,28 +18,6 @@ Type "mkdir -p $NETCLAW_HOME/config"
 Enter
 Type "jq -n '{configVersion:1}' > $NETCLAW_HOME/config/netclaw.json"
 Enter
-
-# ─── Launch config dashboard and save Workspaces Directory ─────────────────
-Type "netclaw config"
-Enter
-Wait+Screen@10s /Settings Areas/
-
-# Workspaces Directory is after Security & Access.
-Down 9
-Enter
-Wait+Screen@10s /Workspaces Directory/
-Wait+Screen@5s /workspace-scoped prompts/
-Type "/tmp/netclaw-smoke-config-surfaces-workspaces"
-Enter
-Wait+Screen@10s /Workspaces Directory saved/
-Escape
-Wait+Screen@10s /Settings Areas/
-Ctrl+Q
-Wait+Screen@10s /TAPE\$/
-
-Type "WORKSPACES_DIR=/tmp/netclaw-smoke-config-surfaces-workspaces jq -e '.Workspaces.Directory == env.WORKSPACES_DIR' $NETCLAW_HOME/config/netclaw.json"
-Enter
-Wait+Screen@5s /true/
 
 # ─── Inbound Webhooks timeout save and enable-first advisory ────────────────
 Type "netclaw config"
@@ -55,6 +37,8 @@ Wait+Screen@10s /Add at least one route/
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 
+# Enabling with no routes is the intended setup order: the toggle persists
+# Enabled=true and the advisory just points at `netclaw webhooks set`.
 Type "jq -e '.Webhooks.Enabled == true and .Webhooks.ExecutionTimeoutSeconds == 45' $NETCLAW_HOME/config/netclaw.json"
 Enter
 Wait+Screen@5s /true/
