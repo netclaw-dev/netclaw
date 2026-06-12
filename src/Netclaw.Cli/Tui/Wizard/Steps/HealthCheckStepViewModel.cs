@@ -271,6 +271,13 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         var startedAt = _timeProvider.GetUtcNow();
         var verb = ProgressLabel(wasRunning);
 
+        // When the daemon was down and Start() defers to a container supervisor, hold onto
+        // that reason. If the supervisor never actually brings the daemon up — the marker is
+        // set but no supervisor is present (e.g. a derived image that kept
+        // NETCLAW_CONTAINER_SUPERVISOR but replaced the entrypoint) — the readiness poll
+        // below times out, and this message is what the operator needs instead of a generic
+        // "did not become ready".
+        string? supervisorDeferral = null;
         if (!wasRunning)
         {
             // Nothing is running to reload the config, so start it. Guarded: under a
@@ -289,6 +296,9 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
                 NotifyChanged();
                 return false;
             }
+
+            if (!result.Success && result.Message.Contains("container supervisor", StringComparison.OrdinalIgnoreCase))
+                supervisorDeferral = result.Message;
         }
 
         // Poll until a newer generation is healthy. We never break early on "not
@@ -335,10 +345,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         // Timed out: surface the startup-abort crash-log diagnostic if present, so a
         // bad-config crash-loop isn't reported as a generic "not ready".
         var crashFailure = _daemonManager.TryReadStartupFailureFromCrashLog(startedAt, out var crashLogPath);
-        var failureMessage = (crashFailure, crashLogPath) switch
+        var failureMessage = (crashFailure, crashLogPath, supervisorDeferral) switch
         {
-            (not null, _) => $"{crashFailure} See crash log: {crashLogPath}",
-            (null, not null) => $"{NotReadyMessage}. See crash log: {crashLogPath}",
+            (not null, _, _) => $"{crashFailure} See crash log: {crashLogPath}",
+            (null, not null, _) => $"{NotReadyMessage}. See crash log: {crashLogPath}",
+            // Marker set but the supervised daemon never came up: surface the actionable
+            // supervisor reason ("check the container/entrypoint logs — the marker may be
+            // set without a supervisor present") instead of the generic timeout message.
+            (null, null, not null) => supervisorDeferral,
             _ => null
         };
         if (failureMessage is not null)

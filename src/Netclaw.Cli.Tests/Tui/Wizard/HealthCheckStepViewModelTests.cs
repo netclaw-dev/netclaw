@@ -215,6 +215,48 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.False(HealthCheckStepViewModel.IsRestartedGeneration(before: 1, current: null));
     }
 
+    [Fact]
+    public async Task RunWithOrchestrator_SupervisorMarkerSetButNoSupervisor_SurfacesActionableReason()
+    {
+        // NETCLAW_CONTAINER_SUPERVISOR is set (IsExternallySupervised) but nothing actually
+        // starts the daemon — e.g. a derived image that kept the marker yet replaced the
+        // entrypoint with `sleep infinity`. DaemonManager.Start() defers to the (absent)
+        // supervisor and the daemon never comes up; the readiness check must surface that
+        // actionable reason, not the generic "Daemon did not become ready".
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System, new FakeSupervisor(supervised: true));
+
+        using var step = new HealthCheckStepViewModel(
+            daemonManager,
+            // No readiness probe → the poll loop is skipped and we fall straight through to
+            // the timeout diagnostic, exercising the message path without a real wait.
+            daemonApi: null,
+            navigationState: new ChatNavigationState());
+        using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+        exposureStep.OnEnter(context, NavigationDirection.Forward);
+        using var orchestrator = new WizardOrchestrator([exposureStep, step], context);
+
+        await step.RunWithOrchestrator(orchestrator);
+
+        var failure = Assert.Single(step.Results, r => r.Passed is false);
+        Assert.Contains("container supervisor", failure.Label, StringComparison.Ordinal);
+        Assert.Contains("marker may be set without a supervisor present", failure.Label, StringComparison.Ordinal);
+        Assert.DoesNotContain("Daemon did not become ready", failure.Label, StringComparison.Ordinal);
+        Assert.False(step.Succeeded.Value);
+    }
+
+    private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
+    {
+        public bool IsExternallySupervised => supervised;
+    }
+
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
