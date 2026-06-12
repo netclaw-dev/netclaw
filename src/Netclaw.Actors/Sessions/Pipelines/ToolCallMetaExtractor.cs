@@ -26,35 +26,6 @@ internal static class ToolCallMetaExtractor
     }
 
     /// <summary>
-    /// Computes the effective timeout by clamping the LLM's hint between the tool's
-    /// default floor and the config ceiling. When the effective value differs from
-    /// the requested value, the returned notice MUST reach the tool result the
-    /// model reads — silent clamping manufactured a false belief in production
-    /// (the agent "set" 1200s, got 90s, and looped; tool-call-metadata spec).
-    /// </summary>
-    public static (TimeSpan Timeout, string? Notice) ComputeEffectiveTimeout(
-        int? hintSeconds, TimeSpan defaultTimeout, int maxToolTimeoutSeconds)
-    {
-        if (!hintSeconds.HasValue || hintSeconds.Value <= 0)
-            return (defaultTimeout, null);
-
-        var floorSeconds = (int)defaultTimeout.TotalSeconds;
-        if (hintSeconds.Value < floorSeconds)
-        {
-            return (defaultTimeout,
-                $"[timeout request {hintSeconds.Value}s is below the {floorSeconds}s tool default; {floorSeconds}s applied]");
-        }
-
-        if (hintSeconds.Value > maxToolTimeoutSeconds)
-        {
-            return (TimeSpan.FromSeconds(maxToolTimeoutSeconds),
-                $"[timeout clamped: requested {hintSeconds.Value}s, maximum {maxToolTimeoutSeconds}s applied — to run without blocking the turn, submit it with _background:true (same maximum)]");
-        }
-
-        return (TimeSpan.FromSeconds(hintSeconds.Value), null);
-    }
-
-    /// <summary>
     /// Rejects present-but-invalid meta values before dispatch. Returns null when
     /// the meta surface is valid; otherwise a model-facing error (the call must
     /// not execute — the agent expressed execution semantics we cannot honor, so

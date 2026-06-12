@@ -7,10 +7,10 @@ every tool's JSON schema and populated by the LLM as part of normal tool
 calling. The metadata captures the model's intent (`_rationale`), a per-call
 synchronous timeout hint (`_timeout_seconds`), and an explicit background
 execution signal (`_background`). The tool execution pipeline extracts these
-fields before dispatch so tool implementations never receive them, clamps the
-timeout hint to a configurable ceiling, persists the metadata on the tool call
-for journal replay, and enriches audit entries with the rationale and timeout
-hint. This capability defines the signaling and metadata mechanism only;
+fields before dispatch so tool implementations never receive them, honors the
+timeout hint as requested (rejecting only invalid values), persists the
+metadata on the tool call for journal replay, and enriches audit entries with
+the rationale and timeout hint. This capability defines the signaling and metadata mechanism only;
 actual background job execution is consumed by a follow-on change.
 
 ## Requirements
@@ -88,51 +88,39 @@ call in one sentence — what are you trying to accomplish and why?"
 
 ### Requirement: Per-call timeout hint
 
-The `_timeout_seconds` field SHALL allow the LLM to request a per-call timeout
-override. The value SHALL be clamped to a configurable ceiling
-(`ToolConfig.MaxToolTimeoutSeconds`, default 600). Values below the tool's
-default timeout SHALL NOT lower the timeout (the default applies). The pipeline
-SHALL use the effective value when creating the per-call
-`CancellationTokenSource`. Whenever the effective value differs from the
-requested value (ceiling clamp or below-floor request), the pipeline SHALL
-append a model-facing notice to the tool result stating the requested value,
-the applied value, and — for ceiling clamps — steering the model to
-`_background: true` for longer work. Silent clamping or silent ignoring of the
-hint SHALL NOT occur.
+The `_timeout_seconds` field SHALL allow the LLM to set a per-call timeout. A
+positive value SHALL be honored exactly — it SHALL NOT be clamped to a ceiling
+nor floored to the tool default; the agent owns this judgement. When no hint is
+provided, the inherited per-call default (`SessionConfig.ToolExecutionTimeout`)
+SHALL apply. The pipeline SHALL use this value when creating the per-call
+`CancellationTokenSource`, and the same value SHALL govern the background-job
+path when `_background` is set. (A present-but-invalid value — non-positive or
+unparseable — is rejected before dispatch; see "Malformed meta values".)
 
-#### Scenario: Timeout hint applied within ceiling
+#### Scenario: Timeout hint is honored exactly
 
-- **GIVEN** `MaxToolTimeoutSeconds` is 600
-- **AND** the LLM requests `_timeout_seconds: 300` on a shell_execute call
+- **GIVEN** the LLM requests `_timeout_seconds: 1200` on a shell_execute call
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout is set to 300 seconds
-- **AND** no override notice is appended (requested value was honored)
+- **THEN** the timeout is set to 1200 seconds
+- **AND** nothing is appended to the tool result
 
-#### Scenario: Timeout hint exceeds ceiling
+#### Scenario: A small timeout hint is honored, not floored
 
-- **GIVEN** `MaxToolTimeoutSeconds` is 600
-- **AND** the LLM requests `_timeout_seconds: 1200`
-- **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout is clamped to 600 seconds
-- **AND** the tool result includes a notice stating 1200s was requested, 600s
-  was applied, and `_background: true` is available for longer work
-
-#### Scenario: Timeout hint below tool default surfaces a notice
-
-- **GIVEN** `ShellTimeoutSeconds` is 60 (shell tool default)
 - **AND** the LLM requests `_timeout_seconds: 10`
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout remains at 60 seconds (the tool default)
-- **AND** the tool result includes a notice stating 10s was requested and the
-  60s tool default was applied
+- **THEN** the timeout is set to 10 seconds (no floor is imposed)
 
-#### Scenario: No timeout hint uses default
+#### Scenario: No timeout hint uses the inherited default
 
 - **GIVEN** the LLM does not provide `_timeout_seconds`
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the existing default timeout applies (60s for shell, 90s for
-  general tool execution)
-- **AND** no override notice is appended (no intent was expressed)
+- **THEN** the `SessionConfig.ToolExecutionTimeout` default applies
+
+#### Scenario: Background path honors the same hint
+
+- **GIVEN** the LLM sets `_background: true` and `_timeout_seconds: 1800`
+- **WHEN** the call is routed to a background job
+- **THEN** the job's timeout is 1800 seconds (not clamped)
 
 ### Requirement: Background execution signal
 
@@ -163,7 +151,7 @@ execution); this spec defines only the signaling mechanism.
 - **GIVEN** background job execution is not yet available
 - **AND** the LLM requests `_background: true`
 - **WHEN** the pipeline processes the tool call
-- **THEN** the tool executes synchronously with the requested (clamped) timeout
+- **THEN** the tool executes synchronously with the requested timeout
 - **AND** a log message indicates background execution was requested but is not
   yet available
 
@@ -246,31 +234,4 @@ allow/deny, duration, approval decision).
 
 - **GIVEN** the LLM provides a timeout hint on a tool call
 - **WHEN** the audit entry is logged
-- **THEN** the entry includes the `TimeoutHintSeconds` value (pre-clamp, as
-  requested by the LLM)
-
-### Requirement: Configuration for timeout ceiling
-
-`ToolConfig` SHALL include `MaxToolTimeoutSeconds` (int, default 600). It SHALL
-be validated in the config schema (`netclaw-config.v1.schema.json`) with
-`minimum: 1`. The schema SHALL include a default value for migration-friendly
-`netclaw doctor --fix` support.
-
-#### Scenario: Config properties parsed
-
-- **GIVEN** the config file includes `tools.MaxToolTimeoutSeconds: 900`
-- **WHEN** the config is loaded
-- **THEN** `ToolConfig.MaxToolTimeoutSeconds` is 900
-
-#### Scenario: Config defaults applied
-
-- **GIVEN** the config file does not include timeout properties
-- **WHEN** the config is loaded
-- **THEN** `ToolConfig.MaxToolTimeoutSeconds` is 600
-
-#### Scenario: Config schema validates new properties
-
-- **GIVEN** `netclaw-config.v1.schema.json` includes the new properties
-- **WHEN** `netclaw doctor` validates a config with these properties
-- **THEN** validation passes
-- **AND** `SchemaFixResolver` can insert defaults for missing properties
+- **THEN** the entry includes the `TimeoutHintSeconds` value as requested by the LLM

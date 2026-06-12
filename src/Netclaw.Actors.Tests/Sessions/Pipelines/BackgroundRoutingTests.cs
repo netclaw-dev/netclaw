@@ -118,30 +118,29 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
     }
 
     [Fact]
-    public async Task ExplicitBackground_ClampsTimeoutToCeiling()
+    public async Task ExplicitBackground_HonorsRequestedTimeout()
     {
-        // _background must not be a way around MaxToolTimeoutSeconds: a huge
-        // requested timeout is clamped to the same ceiling as the sync path,
-        // not scheduled as an ~11-day kill timer.
+        // The agent's requested timeout is honored on the background path too —
+        // it is not clamped to a ceiling (the agent owns that judgement).
         var executor = new EchoExecutor();
-        var probe = CreateTestProbe("pipeline-probe-bg-clamp");
-        var jobManagerProbe = CreateTestProbe("job-manager-bg-clamp");
+        var probe = CreateTestProbe("pipeline-probe-bg-timeout");
+        var jobManagerProbe = CreateTestProbe("job-manager-bg-timeout");
         var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
 
         var toolCalls = new List<FunctionCallContent>
         {
-            new("call-bg-clamp", "shell_execute", new Dictionary<string, object?>
+            new("call-bg-timeout", "shell_execute", new Dictionary<string, object?>
             {
-                ["command"] = "sleep 1000000",
+                ["command"] = "sleep 1200",
                 ["_background"] = true,
-                ["_timeout_seconds"] = 999999,
+                ["_timeout_seconds"] = 1800,
                 ["_rationale"] = "long job"
             })
         };
 
         await SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor, toolCalls,
-            new SessionId("test/background-clamp"),
+            new SessionId("test/background-timeout"),
             source: TestMessageSource(),
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -151,7 +150,6 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            maxToolTimeoutSeconds: 600,
             backgroundJobManager: fakeJobManager,
             ct: TestContext.Current.CancellationToken);
 
@@ -162,7 +160,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(600, received.TimeoutSeconds);
+        Assert.Equal(1800, received.TimeoutSeconds);
     }
 
     [Fact]

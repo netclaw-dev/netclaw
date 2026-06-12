@@ -83,9 +83,9 @@ category as `shell_execute`).
 
 ## Configuration
 
-Background jobs inherit the session's tool timeout ceiling
-(`MaxToolTimeoutSeconds`, default 600s). The `_timeout_seconds` metadata field
-on the tool call controls per-job timeout within that ceiling.
+The `_timeout_seconds` metadata field on the tool call sets the per-job timeout
+and is honored as requested; when omitted, the session's default tool timeout
+(`SessionConfig.ToolExecutionTimeout`) applies.
 
 No separate configuration surface exists — background jobs use the same
 approval policy and audience ACL as regular shell execution.

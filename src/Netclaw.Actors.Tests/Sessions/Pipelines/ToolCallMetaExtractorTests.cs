@@ -115,62 +115,10 @@ public class ToolCallMetaExtractorTests
         Assert.Null(meta);
     }
 
-    // ── Timeout clamping tests ──
-
-    [Fact]
-    public void ComputeEffectiveTimeout_WithinRange_UsesHint()
-    {
-        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            300, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(300), timeout);
-        Assert.Null(notice); // requested value honored — no override to surface
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_AboveCeiling_ClampsToCeiling()
-    {
-        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            1200, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(600), timeout);
-        Assert.NotNull(notice);
-        Assert.Contains("1200s", notice);
-        Assert.Contains("600s", notice);
-        Assert.Contains("_background", notice); // steer to the right pattern for longer work
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_BelowFloor_UsesDefault()
-    {
-        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            10, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(60), timeout);
-        Assert.NotNull(notice);
-        Assert.Contains("10s", notice);
-        Assert.Contains("60s", notice);
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_Absent_UsesDefault()
-    {
-        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            null, TimeSpan.FromSeconds(90), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(90), timeout);
-        Assert.Null(notice); // no intent expressed — nothing to surface
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_NegativeHint_UsesDefault()
-    {
-        var (timeout, notice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            -5, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(60), timeout);
-        Assert.Null(notice);
-    }
+    // Timeout-hint application (honor-or-default; no clamp/floor) is exercised
+    // end-to-end in MetaValidationAndNoticeTests against the pipeline. ExtractFrom's
+    // own parsing of _timeout_seconds (positive int → hint; else null) is covered
+    // by the extraction tests above and ToolArgumentHelperStrictTests.
 
     // ── Background signaling tests ──
 

@@ -1878,8 +1878,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             approvalChannel: _approvalChannel,
             emitApprovalRequest: request => self.Tell(request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
-            maxToolTimeoutSeconds: _toolAccessPolicy?.MaxToolTimeoutSeconds ?? 600,
-            shellTimeoutSeconds: _toolAccessPolicy?.ShellTimeoutSeconds ?? 60,
             backgroundJobManager: bgJobManager,
             projectDirectory: _state.WorkingContext.ProjectDirectory,
             setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,

@@ -48,10 +48,15 @@ public class ShellToolTests
     [Fact]
     public async Task Timeout_kills_long_running_process()
     {
-        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
+        var tool = new ShellTool(new ToolConfig());
         var args = ToolInput.Create("Command", "sleep 100");
+        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Personal,
+            RequestedTimeoutSeconds = 1
+        };
 
-        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("timed out", result);
     }
@@ -59,7 +64,7 @@ public class ShellToolTests
     [Fact]
     public async Task Requested_timeout_overrides_default_timeout()
     {
-        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
+        var tool = new ShellTool(new ToolConfig());
         var args = ToolInput.Create("Command", "sleep 1");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
@@ -82,7 +87,7 @@ public class ShellToolTests
         // exception. On Unix the command also spawns a background child that
         // inherits stdout/stderr; if the tree kill regresses, that child keeps
         // the pipe write-ends open and the test never completes.
-        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 100 });
+        var tool = new ShellTool(new ToolConfig());
         var command = OperatingSystem.IsWindows()
             ? "ping 127.0.0.1 -n 120 > nul"
             : "sleep 120 & wait";

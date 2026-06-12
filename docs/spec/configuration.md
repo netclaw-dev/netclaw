@@ -189,7 +189,6 @@ shape, confirm that strict-default fallback is active, or verify that
 {
   "Tools": {
     "ShellMode": "HostAllowed",
-    "ShellTimeoutSeconds": 60,
     "MaxOutputChars": 32000,
     "AudienceProfiles": {
       "Public": {
@@ -230,7 +229,6 @@ shape, confirm that strict-default fallback is active, or verify that
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ShellMode` | string? | `null` | Optional shell mode override (`Off`, `SandboxOnly`, `HostAllowed`). Falls back to security posture defaults when omitted. |
-| `ShellTimeoutSeconds` | int | `60` | Timeout for shell command execution. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
 | `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem scopes. Default tool grants are monotonic — `public` ⊆ `team` ⊆ `personal`. `public` gets read-only file tools only (`file_read`, `file_list`, `attach_file`) — no file-mutation and no outbound web tools; `team` adds the file-mutation, web (`web_search`/`web_fetch`), scheduling, and skill tools but not `shell_execute`, the webhook tools, or any MCP server; `personal` defaults to unrestricted tool/file access and all MCP servers. `public` and `team` keep session-scoped file access until the operator opts in. |
 
@@ -536,7 +534,6 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="60"
     "ToolExecutionTimeoutSeconds": 90
   },
   "Tools": {
-    "ShellTimeoutSeconds": 60,
     "MaxOutputChars": 32000
   }
 }

@@ -92,14 +92,6 @@ public sealed class ToolExecutionContext
     /// </summary>
     public int? RequestedTimeoutSeconds { get; set; }
 
-    /// <summary>
-    /// Model-facing notices accumulated during dispatch (timeout clamps,
-    /// response caps). The pipeline appends these to the tool result after
-    /// output bounding so they can never be spilled or windowed away —
-    /// log-only signaling does not satisfy the surfacing requirement
-    /// (tool-arg-validation spec: overridden values are surfaced).
-    /// </summary>
-    public List<string> Notices { get; } = [];
 
     public string? ChannelType { get; set; }
 

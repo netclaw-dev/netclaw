@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.12.0"
+  version: "2.12.1"
 ---
 
 # Netclaw Operations
@@ -258,15 +258,14 @@ Rules:
 
 - Only `shell_execute` supports background mode. Other tools ignore `_background`.
 - `_timeout_seconds` alone does NOT trigger background execution.
-- `_timeout_seconds` is clamped to a configured maximum (default 600s). When
-  your request exceeds it, the tool result includes a notice like
-  `[timeout clamped: requested 1200s, maximum 600s — use _background:true for
-  longer work]`. Do not retry the same synchronous call with a bigger timeout —
-  it will hit the same ceiling. Use `_background: true` for longer work.
+- `_timeout_seconds` is honored as you set it (there is no ceiling or floor) —
+  set it to however long the work genuinely needs. When omitted, the default
+  tool timeout applies.
 - **Long-running delegation calls** (e.g. `curl` to a local coding-agent or
-  model server that takes minutes to respond) must run as background jobs.
-  A synchronous `curl` under the timeout ceiling kills the request mid-flight
-  while the remote server is still working.
+  model server that takes minutes to respond) should run as background jobs and
+  carry a `_timeout_seconds` large enough for the work. A synchronous call set
+  to a short timeout (or left at the default) will be killed mid-flight while
+  the remote server is still working.
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json`.

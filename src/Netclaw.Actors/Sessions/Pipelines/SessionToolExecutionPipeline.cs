@@ -83,9 +83,7 @@ internal static class SessionToolExecutionPipeline
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequestDispatch>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
-        int maxToolTimeoutSeconds = 600,
         ILogger? logger = null,
-        int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
         bool setWorkingDirectoryAvailable = false,
@@ -121,9 +119,7 @@ internal static class SessionToolExecutionPipeline
                     approvalChannel,
                     emitApprovalRequest,
                     approvalTimeout ?? Timeout.InfiniteTimeSpan,
-                    maxToolTimeoutSeconds,
                     logger,
-                    shellTimeoutSeconds,
                     backgroundJobManager,
                     projectDirectory,
                     setWorkingDirectoryAvailable,
@@ -195,9 +191,7 @@ internal static class SessionToolExecutionPipeline
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequestDispatch>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
-        int maxToolTimeoutSeconds = 600,
         ILogger? logger = null,
-        int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
         bool setWorkingDirectoryAvailable = false,
@@ -234,12 +228,11 @@ internal static class SessionToolExecutionPipeline
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
 
-        string? timeoutNotice = null;
-        if (meta?.TimeoutHintSeconds is not null)
-        {
-            (timeout, timeoutNotice) = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-                meta.TimeoutHintSeconds, timeout, maxToolTimeoutSeconds);
-        }
+        // The agent's per-call timeout hint is honored as requested; when absent
+        // the inherited default (SessionConfig.ToolExecutionTimeout) applies.
+        // ExtractFrom only yields a positive hint, so there is nothing to clamp.
+        if (meta?.TimeoutHintSeconds is { } hintSeconds)
+            timeout = TimeSpan.FromSeconds(hintSeconds);
 
         var sw = Stopwatch.StartNew();
         string resultText;
@@ -253,8 +246,6 @@ internal static class SessionToolExecutionPipeline
             modelInputModalities,
             maxInlineToolResultChars);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
-        if (timeoutNotice is not null)
-            context.Notices.Add(timeoutNotice);
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
         // "approve once" before the session passivated, but there is no
@@ -403,11 +394,10 @@ internal static class SessionToolExecutionPipeline
                         tc, sessionId, source, auditLogger, timeProvider,
                         turnContext,
                         meta, backgroundJobManager,
-                        // Clamp to the same ceiling as the synchronous path —
-                        // background execution must not become a way to exceed
-                        // MaxToolTimeoutSeconds (its value is non-blocking
-                        // execution, not an unbounded timeout).
-                        Math.Min(meta.TimeoutHintSeconds ?? shellTimeoutSeconds, maxToolTimeoutSeconds),
+                        // Honor the agent's requested timeout; when absent, the
+                        // inherited per-call default applies (same source as the
+                        // synchronous path).
+                        meta.TimeoutHintSeconds ?? (int)timeout.TotalSeconds,
                         sw.Elapsed, logger,
                         context.AppliedApprovalDecision,
                         context.AppliedApprovalPattern);
@@ -507,11 +497,10 @@ internal static class SessionToolExecutionPipeline
                         tc, sessionId, source, auditLogger, timeProvider,
                         turnContext,
                         meta, backgroundJobManager,
-                        // Clamp to the same ceiling as the synchronous path —
-                        // background execution must not become a way to exceed
-                        // MaxToolTimeoutSeconds (its value is non-blocking
-                        // execution, not an unbounded timeout).
-                        Math.Min(meta.TimeoutHintSeconds ?? shellTimeoutSeconds, maxToolTimeoutSeconds),
+                        // Honor the agent's requested timeout; when absent, the
+                        // inherited per-call default applies (same source as the
+                        // synchronous path).
+                        meta.TimeoutHintSeconds ?? (int)timeout.TotalSeconds,
                         sw.Elapsed, logger,
                         decision.ToString(),
                         string.Join(", ", ctx.Patterns));
@@ -606,12 +595,6 @@ internal static class SessionToolExecutionPipeline
             resultText = AppendModelInputHandoffWarning(
                 resultText,
                 modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
-
-        // Override notices (timeout clamps, response caps) append AFTER output
-        // bounding so they can never be spilled or windowed away — they must
-        // reach the model, not just the operator log (tool-arg-validation spec).
-        if (context.Notices.Count > 0)
-            resultText = resultText + "\n" + string.Join("\n", context.Notices);
 
         var message = new SerializableChatMessage
         {

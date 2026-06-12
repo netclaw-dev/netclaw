@@ -53,8 +53,7 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
     private async Task<ToolExecutionCompleted> RunPipelineAsync(
         IToolExecutor executor,
         Dictionary<string, object?> args,
-        TimeSpan? timeout = null,
-        int maxToolTimeoutSeconds = 600)
+        TimeSpan? timeout = null)
     {
         var probe = CreateTestProbe();
         var sessionId = new SessionId("D1/meta-validation-test");
@@ -76,7 +75,6 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            maxToolTimeoutSeconds: maxToolTimeoutSeconds,
             turnContext: InteractiveTurnContext(sessionId),
             ct: TestContext.Current.CancellationToken);
 
@@ -110,11 +108,13 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         }
     }
 
-    // ── Timeout override notices ──
+    // ── Timeout hint is honored exactly (no clamp, no floor) ──
 
     [Fact]
-    public async Task Ceiling_clamp_executes_at_max_and_surfaces_notice_with_background_steer()
+    public async Task High_timeout_request_honored_exactly()
     {
+        // The agent's judgement governs: a large value is used as-is, not
+        // clamped to a ceiling, and nothing is appended to the result.
         var executor = new EchoExecutor();
         var completed = await RunPipelineAsync(executor, new Dictionary<string, object?>
         {
@@ -124,15 +124,17 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         var content = completed.ToolResults[0].Content;
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(600, executor.LastContext?.RequestedTimeoutSeconds);
-        Assert.Contains("[timeout clamped: requested 1200s, maximum 600s", content);
-        Assert.Contains("_background:true", content);
+        Assert.Equal(1200, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.DoesNotContain("clamped", content);
+        Assert.DoesNotContain("[timeout", content);
         Assert.Contains("ok", content);
     }
 
     [Fact]
-    public async Task Below_floor_request_executes_at_default_and_surfaces_notice()
+    public async Task Low_timeout_request_honored_exactly()
     {
+        // A value below the inherited default is used as-is — a shorter timeout
+        // is the agent's prerogative and is strictly safer; no floor is imposed.
         var executor = new EchoExecutor();
         var completed = await RunPipelineAsync(executor, new Dictionary<string, object?>
         {
@@ -142,8 +144,8 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         var content = completed.ToolResults[0].Content;
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(60, executor.LastContext?.RequestedTimeoutSeconds);
-        Assert.Contains("[timeout request 10s is below the 60s tool default; 60s applied]", content);
+        Assert.Equal(10, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.DoesNotContain("[timeout", content);
     }
 
     [Fact]
@@ -273,79 +275,4 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         Assert.Equal(content, second.ToolResults[0].Content);
     }
 
-    // ── Notice survives output bounding ──
-
-    [Fact]
-    public async Task Notice_survives_spilled_over_budget_result()
-    {
-        // Real dispatcher so ToolOutputSpill bounding actually runs; shell's
-        // verbose budget (2000) forces a spill for a 3000-char echo. The clamp
-        // notice must appear in the INLINE result the model reads, after the
-        // truncation steer — not be windowed away with the overflow.
-        var config = new ToolConfig();
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Auto
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
-
-        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-notice-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(sessionDir);
-        try
-        {
-            var probe = CreateTestProbe();
-            var sessionId = new SessionId("D1/notice-spill-test");
-            var toolCalls = new List<FunctionCallContent>
-            {
-                new("call-spill", "shell_execute", new Dictionary<string, object?>
-                {
-                    ["Command"] = $"echo {new string('x', 3000)}",
-                    ["_timeout_seconds"] = 1200
-                })
-            };
-
-            var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-                executor,
-                toolCalls,
-                sessionId,
-                source: null,
-                auditLogger: null,
-                timeProvider: TimeProvider.System,
-                sessionDir: sessionDir,
-                maxInlineToolResultChars: 4096,
-                timeout: TimeSpan.FromSeconds(60),
-                self: probe.Ref,
-                emitSubAgentOutput: _ => { },
-                spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-                maxToolTimeoutSeconds: 600,
-                turnContext: InteractiveTurnContext(sessionId),
-                ct: TestContext.Current.CancellationToken);
-
-            var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-                TimeSpan.FromSeconds(10),
-                cancellationToken: TestContext.Current.CancellationToken);
-            await pipelineTask.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-            var content = completed.ToolResults[0].Content;
-            Assert.Contains("output truncated", content);
-            Assert.Contains("[timeout clamped: requested 1200s, maximum 600s", content);
-        }
-        finally
-        {
-            Directory.Delete(sessionDir, recursive: true);
-        }
-    }
 }
