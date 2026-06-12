@@ -43,15 +43,16 @@ public sealed record DiscordApprovalResponse(
 
 /// <summary>
 /// Sent to the gateway to wire up the actor hierarchy for a proactively-created
-/// Discord thread. The message has already been posted and the thread created;
-/// this initializes the session pipeline so user replies route to a live
-/// session.
+/// Discord session. Channel posts use a Discord thread; DMs use the root DM
+/// message as the stable session anchor.
 /// </summary>
 public sealed record StartProactiveThread(
     DiscordChannelId ChannelId,
     DiscordReplyChannelId ReplyChannelId,
     DiscordThreadOrMessageId ThreadOrMessageId,
-    SessionId SessionId) : INoSerializationVerificationNeeded;
+    SessionId SessionId,
+    DiscordUserId? DirectMessageUserId = null,
+    DiscordMessageId? RootMessageId = null) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Acknowledgement that a proactive thread's session pipeline was initialized.

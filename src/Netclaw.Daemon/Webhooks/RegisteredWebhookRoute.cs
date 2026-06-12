@@ -6,6 +6,7 @@
 using System.IO;
 using Microsoft.AspNetCore.Http;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Webhooks;
 
@@ -80,10 +81,25 @@ public sealed record RegisteredWebhookRoute(string Name, string FilePath, DateTi
 
     public string BuildDefaultNotifyInstructions()
     {
-        if (Config.NotificationTarget is not { Kind: NotificationTargetKind.Slack, ChannelId: { Length: > 0 } channelId })
+        var target = BuildNotificationDeliveryTarget();
+        if (target is null)
             return string.Empty;
 
-        return $"If you need to notify a human, use send_slack_message to post to Slack channel {channelId}.";
+        return "If you need to notify a human, use send_channel_message with " +
+               $"channel_key='{target.ChannelKey}', destination.channel_key='{target.ChannelKey}', " +
+               $"destination.kind='{target.DestinationKind}', destination.id='{target.DestinationId}', and text set to your notification.";
+    }
+
+    public ChannelDeliveryTargetInfo? BuildNotificationDeliveryTarget()
+    {
+        if (Config.NotificationTarget is not { Kind: NotificationTargetKind.Slack, ChannelId: { Length: > 0 } channelId })
+            return null;
+
+        return new ChannelDeliveryTargetInfo(
+            "slack",
+            "destination",
+            channelId,
+            channelId);
     }
 
     public static string? GetHeaderValue(IHeaderDictionary headers, string name)

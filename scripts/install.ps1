@@ -222,6 +222,40 @@ try {
         return
     }
 
+    # ── Persist UpdateChannel into config ──
+    # Only runs when -Channel was explicitly passed. Without this guard a plain
+    # upgrade would silently overwrite an existing beta channel to stable.
+    if ($PSBoundParameters.ContainsKey('Channel')) {
+        $configDir = if ($env:NETCLAW_CONFIG_DIR) { $env:NETCLAW_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".netclaw\config" }
+        $configFile = Join-Path $configDir "netclaw.json"
+        if (Test-Path $configFile) {
+            try {
+                $existingConfig = Get-Content -Raw $configFile | ConvertFrom-Json
+                if (-not $existingConfig.Daemon) {
+                    $existingConfig | Add-Member -NotePropertyName "Daemon" -NotePropertyValue ([PSCustomObject]@{ UpdateChannel = $Channel })
+                } else {
+                    if ($existingConfig.Daemon.PSObject.Properties["UpdateChannel"]) {
+                        $existingConfig.Daemon.UpdateChannel = $Channel
+                    } else {
+                        $existingConfig.Daemon | Add-Member -NotePropertyName "UpdateChannel" -NotePropertyValue $Channel
+                    }
+                }
+                $existingConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $configFile -Encoding UTF8
+                Write-Host "  Set Daemon.UpdateChannel to '$Channel' in $configFile"
+            } catch {
+                Write-Host "  Note: could not update Daemon.UpdateChannel in config: $_"
+                Write-Host "  To receive $Channel updates, set Daemon.UpdateChannel to '$Channel' in $configFile"
+            }
+        } elseif ($Channel -ne "stable") {
+            # Fresh install: config doesn't exist yet. Write a minimal seed so
+            # `netclaw init` can discover the channel preference.
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+            $seed = @{ configVersion = 1; Daemon = @{ UpdateChannel = $Channel } }
+            $seed | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Encoding UTF8
+            Write-Host "  Created $configFile with UpdateChannel '$Channel'"
+        }
+    }
+
     # Check PATH and offer to add if missing
     Write-Host ""
     $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")

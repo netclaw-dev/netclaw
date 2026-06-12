@@ -80,4 +80,23 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
         Assert.Contains("exceeds creator authority", result);
         Assert.False(_store.TryGet("escalate-route", out _));
     }
+
+    [Fact]
+    public async Task Notify_instructions_require_notification_target()
+    {
+        var tool = new SetWebhookTool(_store);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["RouteName"] = "notify-without-target",
+            ["Prompt"] = "Handle inbound delivery.",
+            ["VerificationKind"] = "Hmac",
+            ["Secret"] = "test-secret",
+            ["NotifyInstructions"] = "Post a summary to the release channel.",
+            ["DeliveryRequired"] = false
+        }, Context(TrustAudience.Team), TestContext.Current.CancellationToken);
+
+        Assert.Equal("Error: NotificationTarget is required when NotifyInstructions are provided.", result);
+        Assert.False(_store.TryGet("notify-without-target", out _));
+    }
 }

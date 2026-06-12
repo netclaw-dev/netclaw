@@ -67,6 +67,10 @@ Wait+Screen@5s /seed-a/
 # ─── Exit and verify clean shell post-TUI ───────────────────────────
 Ctrl+Q
 
+# VHS's screen scraper needs a beat to pick up the restored main buffer
+# after the TUI tears down the alternate screen (CSI ?1049l).
+Sleep 1s
+
 # Anchor on the prompt. If the alt screen wasn't torn down cleanly,
 # the prompt either wouldn't render or would be visually merged with
 # TUI artefacts. The TAPE$ regex must match for this tape to pass.

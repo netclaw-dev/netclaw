@@ -31,10 +31,10 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─Input────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Approval required for shell_execute.                                                                                  │
-│cd /Users/kevin/code/compiler/Diagnostics.pn compiler/Symbol.pn compiler/Binder /private/var/… [Ctrl+V to view full]  │
+│cd /Users/kevin/code/compiler/Diagnostics.pn compiler/Symbol.pn compiler/Binder /private/var/… [Ctrl+O to view full]  │
 │Select an option and press Enter.                                                                                     │
 │1. Once                                                                                                               │
 │2. This chat                                                                                                          │
 │3. Deny                                                                                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-[Up/Down] Select [Enter] Confirm [Ctrl+V] View full [PgUp/PgDn] Scroll [Ctrl+Q] Quit | Approval required | test-model
+[Up/Down] Select [Enter] Confirm [Ctrl+O] View full [PgUp/PgDn] Scroll [Ctrl+Q] Quit | Approval required | test-model

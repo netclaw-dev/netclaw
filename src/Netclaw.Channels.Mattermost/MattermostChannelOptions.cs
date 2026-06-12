@@ -7,7 +7,7 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Mattermost;
 
-public sealed class MattermostChannelOptions
+public sealed class MattermostChannelOptions : IRemoteChatChannelOptions
 {
     public bool Enabled { get; init; }
 

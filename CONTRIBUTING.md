@@ -121,11 +121,16 @@ failure GIFs, screenshot diffs) for debugging.
 - Channels: `src/Netclaw.Channels/` (channel abstractions)
 - Slack: `src/Netclaw.Channels.Slack/` (Slack Socket Mode gateway)
 - Discord: `src/Netclaw.Channels.Discord/` (Discord gateway)
+- Mattermost: `src/Netclaw.Channels.Mattermost/` (Mattermost gateway)
 - Providers: `src/Netclaw.Providers/` (LLM provider implementations)
 - OpenAI Compatible: `src/Netclaw.OpenAICompatible/` (OpenAI-compatible API layer)
 - Search: `src/Netclaw.Search/` (web search backends)
 - Security: `src/Netclaw.Security/` (ACL, device pairing, token management)
 - Tools: `src/Netclaw.Tools.Abstractions/` and `src/Netclaw.Tools.Generators/`
+
+For a step-by-step guide to adding a new chat channel integration (e.g.,
+Microsoft Teams, WhatsApp, Signal), see
+[Adding a Channel](docs/runbooks/adding-a-channel.md).
 
 ## Architecture
 

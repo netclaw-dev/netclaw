@@ -997,6 +997,10 @@ assert_tool_discovery() {
     stdout_contains '\[tool:call\] search_tools'
 }
 
+assert_tool_channel_lookup_discovery() {
+    stdout_contains '\[tool:call\] search_tools'
+}
+
 assert_tool_shell() {
     stdout_contains '\[tool:call\] shell_execute'
 }
@@ -1457,6 +1461,9 @@ run_all() {
 
     run_case tool_discovery "search_tools called" \
         "What MCP servers are available?"
+
+    run_case tool_channel_lookup_discovery "search_tools called for channel lookup tools" \
+        "Find the available tool for looking up a user on a chat channel before messaging them."
 
     run_case tool_shell "shell_execute called" \
         "Run 'echo hello' in the shell"

@@ -144,6 +144,15 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs
         },
 
+        ProcessingStateOutput msg => new SessionOutputDto
+        {
+            Type = SessionOutputTypes.ProcessingState,
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            IsProcessing = msg.IsProcessing,
+            ProcessingStateRequired = msg.IsRequired
+        },
+
         CompactionOutput msg => new SessionOutputDto
         {
             Type = SessionOutputTypes.Compaction,
@@ -302,6 +311,12 @@ public static class SessionOutputDtoMapper
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs
+            },
+            SessionOutputTypes.ProcessingState => new ProcessingStateOutput(dto.IsProcessing ?? false)
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                IsRequired = dto.ProcessingStateRequired ?? false
             },
             SessionOutputTypes.Compaction => new CompactionOutput
             {

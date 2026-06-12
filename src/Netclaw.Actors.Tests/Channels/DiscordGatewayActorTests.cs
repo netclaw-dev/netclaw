@@ -297,6 +297,8 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
         DiscordChannelOptions? options = null,
         Func<DiscordChannelId, DiscordGatewayDependencies, Props>? conversationPropsFactory = null)
     {
+        var replyClient = new UnconfiguredDiscordReplyClient();
+
         return new DiscordGatewayDependencies(
             Pipeline: null!,
             IngressGate: null,
@@ -307,7 +309,8 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 AllowedChannelIds = ["ch-7"]
             },
             DefaultChannelId: null,
-            ReplyClient: new UnconfiguredDiscordReplyClient(),
+            ChannelRegistry: TestChannelRegistries.DiscordWithProcessingRenderer(replyClient),
+            ReplyClient: replyClient,
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,

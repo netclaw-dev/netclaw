@@ -21,6 +21,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDiscordG
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
     public event Func<string, Task>? CleanReconnectRequired;
+    public event Func<DiscordGatewaySnapshot, Task>? ConnectionRestored;
 
     internal enum DiscordChannelKind
     {
@@ -90,4 +91,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDiscordG
 
     Task IDiscordGatewayEventSink.PublishCleanReconnectRequiredAsync(string reason) =>
         CleanReconnectRequired?.Invoke(reason) ?? Task.CompletedTask;
+
+    Task IDiscordGatewayEventSink.PublishConnectionRestoredAsync(DiscordGatewaySnapshot snapshot) =>
+        ConnectionRestored?.Invoke(snapshot) ?? Task.CompletedTask;
 }

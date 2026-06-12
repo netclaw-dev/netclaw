@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.10.0"
+  version: "2.11.2"
 ---
 
 # Netclaw Operations
@@ -135,25 +135,68 @@ Other scheduling tools: `list_reminders`, `cancel_reminder`,
 
 To start a brand-new conversation on a chat channel — a `delivery_kind=channel`
 reminder firing, or unprompted cross-channel outreach ("let the team know") —
-use the channel's proactive-post tool:
+use the generic proactive-post tool:
 
-- Slack: `send_slack_message` — posts to a channel or DMs a user.
-- Discord: `send_discord_message` — posts to a channel only.
-- Mattermost: `send_mattermost_message` — posts to a channel, or DMs a user
-  when direct messages are enabled.
+- `send_channel_message(channel_key, destination, text)` posts through the
+  selected enabled channel and creates a new conversation thread when that
+  channel supports it.
+- `destination` must be a resolved object with `channel_key`, `kind`, and `id`.
+  Do not pass bare display names like `#general` or `@alice`.
+- `destination.kind="destination"` posts to a channel/destination ID returned by
+  `lookup_channel_destination`.
+- `destination.kind="direct_message"` sends a DM using the stable user ID from
+  `lookup_channel_user`; this is supported only by channels that advertise DM
+  output (Slack, Discord, and Mattermost when enabled in config).
+- Reminder- and webhook-originated turns may only call `send_channel_message`
+  against the delivery target configured on the reminder or webhook route. If a
+  trigger turn has no configured target, Netclaw fails loud instead of choosing a
+  default output channel.
 
-`send_discord_message` posts the `message` to a Discord channel and creates a
-conversation thread off it, so user replies route back to a live session.
-Provide `channel_id` (or omit it to use the configured default channel); an
-optional `thread_name` titles the thread. The channel must be in the Discord
-allow-list. Discord DM targets are not supported yet — the tool posts to
-channels only.
+Use the generic lookup tools before sending when you do not already have a
+stable channel/user ID:
 
-`send_mattermost_message` behaves like the Slack tool: it posts the `message`
-to a Mattermost channel (or, when `AllowDirectMessages` is enabled, a user's
-direct-message channel) and threads replies back to a live session. Mattermost
-direct messages are addressable, so `delivery_kind=channel` reminders may
-target a DM (`@user`) — unlike Discord.
+- `lookup_channel_user(channel_key, query)` resolves users on enabled channels
+  that support user lookup, currently Slack, Discord, and Mattermost.
+- `lookup_channel_destination(channel_key, query)` resolves destinations on
+  enabled channels that support destination lookup. Slack can resolve channel
+  names and IDs; Discord can resolve channel mentions, stable IDs, and cached
+  text-channel names; Mattermost requires an exact channel ID.
+- **Discovery:** call `lookup_channel_destination` with `query` omitted (or
+  blank) to list every destination the channel can currently deliver to —
+  Slack lists the configured allowlist (the resolved default channel plus
+  `AllowedChannelIds`) with display names resolved from the API and archived
+  channels excluded, Discord lists ACL-allowed guild text channels, and
+  Mattermost lists the configured allowlist. Use this to answer "where can I
+  post?" before sending. Listing is destination-only: user directories are
+  unbounded, so `lookup_channel_user` always requires a query.
+
+Both tools require `channel_key` as the first argument. Use the returned
+`channel_key` and `stable_id` exactly; for destination lookups, use the returned
+`address_kind` (`destination`) as `destination.kind`. For user lookups, set
+`destination.kind` to `direct_message` and pass the returned user `stable_id`.
+If lookup is ambiguous, pick from the returned candidates instead of guessing.
+Do not use channel-specific lookup aliases such as `lookup_slack_user` or
+`lookup_mattermost_user`; lookup is intentionally routed through the generic
+channel tools.
+
+Examples:
+
+```
+send_channel_message(
+  channel_key: "slack",
+  destination: { channel_key: "slack", kind: "destination", id: "C0123ABC" },
+  text: "Deployment finished successfully.")
+
+send_channel_message(
+  channel_key: "mattermost",
+  destination: { channel_key: "mattermost", kind: "direct_message", id: "26characterMattermostUserId" },
+  text: "Your report is ready.")
+
+send_channel_message(
+  channel_key: "discord",
+  destination: { channel_key: "discord", kind: "direct_message", id: "123456789012345678" },
+  text: "Your report is ready.")
+```
 
 ### Approval Requirements for Reminders and Webhooks
 
@@ -931,6 +974,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | Action | Command (via `shell_execute`) |
 |--------|-------------------------------|
 | Check for updates | `netclaw update` |
+| Switch update channel (saved) | `netclaw update --channel beta` |
 | Self-diagnose | `netclaw doctor` |
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |

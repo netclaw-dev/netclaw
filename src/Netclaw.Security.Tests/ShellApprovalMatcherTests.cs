@@ -30,7 +30,7 @@ public sealed class ShellApprovalMatcherTests
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
     /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
     /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
-    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix))]</c>
+    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]</c>
     /// produces a proper "Skipped" entry in the test log on Windows
     /// runners instead of hiding the gap behind an early-return.
     /// </summary>
@@ -97,6 +97,95 @@ public sealed class ShellApprovalMatcherTests
             Args("cat /home/user/.netclaw/logs/crash.log"));
         Assert.Single(verbs);
         Assert.Equal("cat", verbs[0]);
+    }
+
+    // ---- Call-specific value normalization (digit-bearing tokens) ----
+    // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds lowercase-leading
+    // value tokens into the verb chain (`git tag v0.4.2`, `git show aa211dcb`)
+    // but stops at digit-leading ones (`0.4.2` lands in Args, verb stays
+    // `git tag`). Both are call-specific values, so the matcher trims trailing
+    // digit-bearing non-flag, non-path tokens off the chain on the gate path
+    // (ExtractCandidateVerbs / IsApproved) AND the persisted-pattern path
+    // (ExtractPatterns), so the same intent yields one stable verb. Regression
+    // for the v0.4.2-vs-0.4.2 approval divergence.
+
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    [InlineData("git tag v0.4.2")]
+    [InlineData("git tag 0.4.2")]
+    [InlineData("git tag 1.0.0-beta.3")]
+    [InlineData("git tag v2.0")]
+    public void ExtractCandidateVerbs_strips_trailing_value_token(string command)
+    {
+        var verbs = _matcher.ExtractCandidateVerbs(new ToolName("shell_execute"), Args(command));
+        Assert.Single(verbs);
+        Assert.Equal("git tag", verbs[0]);
+    }
+
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    [InlineData("git tag v0.4.2")]
+    [InlineData("git tag 0.4.2")]
+    public void ExtractPatterns_strips_trailing_value_token(string command)
+    {
+        // The persisted grant (ExtractPatterns) must normalize to the same
+        // `git tag` the gate compares, so a freshly-granted version generalizes
+        // across versions instead of pinning to the one that was approved.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"), Args(command));
+        Assert.Single(patterns);
+        Assert.Equal("git tag", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_digit_bearing_operand_terminates_pattern()
+    {
+        // Digit-bearing operands (`test123`) are call-specific values and
+        // terminate the pattern; flags before the value are retained.
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("docker run --name test123 --port=8080"));
+        Assert.Single(patterns);
+        Assert.Equal("docker run --name", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void IsApproved_git_tag_grant_matches_both_version_forms()
+    {
+        // The exact production scenario: a standing `git tag` (anywhere) grant
+        // auto-approved `git tag 0.4.2` but `git tag v0.4.2` re-prompted,
+        // because the `v`-prefixed version folded into the verb chain.
+        var approved = new[] { Verb("git tag") };
+
+        Assert.True(_matcher.IsApproved(
+            new ToolName("shell_execute"), Args("git tag v0.4.2"), approved, cwd: "/repo"));
+        Assert.True(_matcher.IsApproved(
+            new ToolName("shell_execute"), Args("git tag 0.4.2"), approved, cwd: "/repo"));
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void IsApproved_tag_then_push_compound_matches_standing_grants()
+    {
+        // Full session command: `git tag <v> && git push origin <v>` under
+        // standing `git tag` + `git push origin` grants.
+        var approved = new[] { Verb("git tag"), Verb("git push origin") };
+
+        Assert.True(_matcher.IsApproved(
+            new ToolName("shell_execute"),
+            Args("git tag v0.4.2 && git push origin v0.4.2"),
+            approved,
+            cwd: "/repo"));
+    }
+
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    [InlineData("git checkout v2", "git checkout")]               // digit-bearing ref is a value
+    [InlineData("git show 1234abcd", "git show")]                 // digit-leading SHA lands in Args
+    [InlineData("git show aa211dcb", "git show")]                 // alpha-leading SHA folds into chain, then trims
+    [InlineData("git log v0.4.1..dev", "git log")]                // range ref is a value
+    [InlineData("git push origin main", "git push origin main")]  // all-alpha operands are unclassifiable by shape -> preserved
+    [InlineData("aws s3 ls", "aws s3 ls")]                        // mid-chain digit token is not trailing -> untouched
+    public void ExtractCandidateVerbs_trims_digit_bearing_tokens_trailing_only(string command, string expected)
+    {
+        var verbs = _matcher.ExtractCandidateVerbs(new ToolName("shell_execute"), Args(command));
+        Assert.Single(verbs);
+        Assert.Equal(expected, verbs[0]);
     }
 
     [Fact]
@@ -309,7 +398,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
     /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
     /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
-    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix))]</c>
+    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]</c>
     /// produces a proper "Skipped" entry in the test log on Windows
     /// runners instead of hiding the gap behind an early-return.
     /// </summary>

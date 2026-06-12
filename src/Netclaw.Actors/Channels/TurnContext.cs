@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Channels;
 
@@ -30,6 +31,13 @@ public sealed record TurnContext
     public required PrincipalClassification RequesterPrincipal { get; init; }
 
     public required SourceProvenance Provenance { get; init; }
+
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? EffectiveDeliveryTarget
+        => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
 
     public bool HasAdoptedContext { get; init; }
 
@@ -60,6 +68,8 @@ public sealed record TurnContext
             RequesterSenderId = source?.SenderId,
             RequesterPrincipal = source?.Principal ?? PrincipalClassification.UntrustedExternal,
             Provenance = provenance,
+            DefaultDeliveryTarget = source?.DefaultDeliveryTarget,
+            RequestedDeliveryTarget = source?.RequestedDeliveryTarget,
             HasAdoptedContext = source?.HasAdoptedContext ?? false,
             HasThirdPartyAdoptedContext = source?.HasThirdPartyAdoptedContext ?? false,
             AdoptedSpeakerIds = source?.AdoptedSpeakerIds ?? [],
@@ -85,6 +95,8 @@ public sealed record TurnContext
             PayloadTaint = Provenance.PayloadTaint,
             SourceScope = sourceScope is null ? null : sourceScope.Value.Value,
             SourceKind = sourceKind is null ? null : sourceKind.Value.Value,
+            DefaultDeliveryTarget = DefaultDeliveryTarget,
+            RequestedDeliveryTarget = RequestedDeliveryTarget,
             HasAdoptedContext = HasAdoptedContext,
             HasThirdPartyAdoptedContext = HasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = [.. AdoptedSpeakerIds],
@@ -153,6 +165,8 @@ public sealed record TurnContext
                 SourceScope = string.IsNullOrWhiteSpace(record.SourceScope) ? null : new SourceScope(record.SourceScope),
                 SourceKind = string.IsNullOrWhiteSpace(record.SourceKind) ? null : new SourceKind(record.SourceKind)
             },
+            DefaultDeliveryTarget = record.DefaultDeliveryTarget,
+            RequestedDeliveryTarget = record.RequestedDeliveryTarget,
             HasAdoptedContext = record.HasAdoptedContext,
             HasThirdPartyAdoptedContext = record.HasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = record.AdoptedSpeakerIds,

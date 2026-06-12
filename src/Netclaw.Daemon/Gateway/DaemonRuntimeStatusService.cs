@@ -7,13 +7,10 @@ using System.Diagnostics;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Options;
-using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
-using Netclaw.Channels.Discord;
-using Netclaw.Channels.Slack;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
@@ -27,9 +24,7 @@ namespace Netclaw.Daemon.Gateway;
 internal sealed class DaemonRuntimeStatusService(
     DaemonStartClock startClock,
     TimeProvider timeProvider,
-    IEnumerable<IChannel> channels,
-    SlackChannelOptions slackOptions,
-    DiscordChannelOptions discordOptions,
+    IChannelRegistry channelRegistry,
     DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
     ModelCapabilities modelCapabilities,
@@ -46,14 +41,7 @@ internal sealed class DaemonRuntimeStatusService(
         var now = timeProvider.GetUtcNow();
         var uptime = now - startClock.StartedAt;
 
-        var channelLookup = channels.ToDictionary(c => c.ChannelType);
-        var connectors = new List<DaemonRuntimeStatus.Connector>
-        {
-            await BuildChannelStatusAsync(channelLookup, Actors.Channels.ChannelType.Slack,
-                slackOptions.Enabled, "slack", "Slack", cancellationToken),
-            await BuildChannelStatusAsync(channelLookup, Actors.Channels.ChannelType.Discord,
-                discordOptions.Enabled, "discord", "Discord", cancellationToken)
-        };
+        var connectors = await BuildChannelStatusesAsync(cancellationToken);
 
         connectors.AddRange(BuildMcpStatuses());
 
@@ -97,9 +85,10 @@ internal sealed class DaemonRuntimeStatusService(
 
     private DaemonRuntimeStatus.Telemetry BuildTelemetry()
     {
-        var enabledChannelTypes = new HashSet<Actors.Channels.ChannelType>();
-        if (slackOptions.Enabled) enabledChannelTypes.Add(Actors.Channels.ChannelType.Slack);
-        if (discordOptions.Enabled) enabledChannelTypes.Add(Actors.Channels.ChannelType.Discord);
+        var enabledChannelTypes = channelRegistry.ListChannels()
+            .Where(descriptor => descriptor.IsEnabled)
+            .Select(descriptor => descriptor.ChannelType)
+            .ToHashSet();
 
         var channelActivities = ChannelTelemetry.GetAllSnapshots()
             .Where(s => enabledChannelTypes.Contains(s.ChannelType))
@@ -114,52 +103,39 @@ internal sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private static async Task<DaemonRuntimeStatus.Connector> BuildChannelStatusAsync(
-        Dictionary<Actors.Channels.ChannelType, IChannel> channelLookup,
-        Actors.Channels.ChannelType channelType,
-        bool enabled,
-        string key,
-        string displayName,
+    private async Task<List<DaemonRuntimeStatus.Connector>> BuildChannelStatusesAsync(
         CancellationToken cancellationToken)
     {
-        if (!enabled)
+        var connectors = new List<DaemonRuntimeStatus.Connector>();
+
+        foreach (var descriptor in channelRegistry.ListChannels())
         {
-            return new DaemonRuntimeStatus.Connector
-            {
-                Key = key,
-                DisplayName = displayName,
-                Enabled = false,
-                Status = "disabled",
-                Message = $"{displayName} connector is disabled in configuration."
-            };
+            var snapshot = await channelRegistry.GetSnapshotAsync(descriptor.Key, cancellationToken);
+            connectors.Add(ToConnector(descriptor, snapshot));
         }
 
-        if (!channelLookup.TryGetValue(channelType, out var channel))
-        {
-            return new DaemonRuntimeStatus.Connector
-            {
-                Key = key,
-                DisplayName = displayName,
-                Enabled = true,
-                Status = "disconnected",
-                Message = $"{displayName} connector is enabled but was not registered."
-            };
-        }
+        return connectors;
+    }
 
-        var health = await channel.GetHealthAsync(cancellationToken);
+    internal static DaemonRuntimeStatus.Connector ToConnector(
+        ChannelDescriptor descriptor,
+        ChannelRuntimeSnapshot snapshot)
+    {
         return new DaemonRuntimeStatus.Connector
         {
-            Key = key,
-            DisplayName = channel.DisplayName,
-            Enabled = true,
-            Status = health.Status switch
-            {
-                ChannelHealthStatus.Healthy => "healthy",
-                ChannelHealthStatus.Degraded => "degraded",
-                ChannelHealthStatus.Disconnected => "disconnected",
-                _ => "unknown"
-            },
-            Message = health.Detail
+            Key = descriptor.Key.Value,
+            DisplayName = descriptor.DisplayName,
+            Enabled = snapshot.IsEnabled,
+            Status = snapshot.IsEnabled
+                ? snapshot.Health switch
+                {
+                    ChannelHealthStatus.Healthy => "healthy",
+                    ChannelHealthStatus.Degraded => "degraded",
+                    ChannelHealthStatus.Disconnected => "disconnected",
+                    _ => "unknown"
+                }
+                : "disabled",
+            Message = snapshot.HealthDetail
         };
     }
 

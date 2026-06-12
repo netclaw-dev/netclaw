@@ -59,6 +59,13 @@ public sealed record MattermostGatewayInteraction(
     DateTimeOffset ReceivedAt,
     MattermostPostId? PromptPostId = null);
 
+public sealed record MattermostGatewaySnapshot(
+    bool IsConnected,
+    bool IsReady,
+    string? HealthDetail,
+    MattermostUserId? BotUserId,
+    string? BotUsername) : IGatewaySnapshot;
+
 public interface IMattermostGatewayClient
 {
     // Interactive button callbacks arrive via the channel-owned HTTP endpoint
@@ -69,13 +76,29 @@ public interface IMattermostGatewayClient
     // the WebSocket, so its client does expose an InteractionReceived event.)
     event Func<MattermostGatewayMessage, Task>? MessageReceived;
 
+    /// <summary>
+    /// Raised when the current Mattermost socket/session must be discarded and
+    /// replaced with a fresh stop/start cycle.
+    /// </summary>
+    event Func<string, Task>? CleanReconnectRequired;
+
+    /// <summary>
+    /// Raised when the lifecycle actor successfully reconnects after a transient
+    /// failure. The snapshot contains the restored bot identity and health state.
+    /// </summary>
+    event Func<MattermostGatewaySnapshot, Task>? ConnectionRestored;
+
     bool IsConnected { get; }
+
+    bool IsReady { get; }
 
     MattermostUserId? BotUserId { get; }
 
     string? BotUsername { get; }
 
-    Task ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default);
+    Task<MattermostGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default);
+
+    Task<MattermostGatewaySnapshot> ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);
 }
@@ -88,6 +111,12 @@ public interface IMattermostReplyClient
         MattermostPostId postId,
         string text,
         IReadOnlyList<MattermostAttachment>? attachments,
+        CancellationToken cancellationToken = default);
+
+    Task<string> UploadFileAsync(
+        MattermostChannelId channelId,
+        string filePath,
+        string? fileName = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -162,15 +191,40 @@ public sealed class UnconfiguredMattermostGatewayClient : IMattermostGatewayClie
         remove { }
     }
 
+    public event Func<string, Task>? CleanReconnectRequired
+    {
+        add { }
+        remove { }
+    }
+
+    public event Func<MattermostGatewaySnapshot, Task>? ConnectionRestored
+    {
+        add { }
+        remove { }
+    }
+
     public bool IsConnected => false;
+
+    public bool IsReady => false;
 
     public MattermostUserId? BotUserId => null;
 
     public string? BotUsername => null;
 
-    public Task ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default)
-        => throw new InvalidOperationException(
-            "Mattermost channel is enabled, but no Mattermost gateway client is configured.");
+    public Task<MattermostGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new MattermostGatewaySnapshot(
+            IsConnected: false,
+            IsReady: false,
+            HealthDetail: "Mattermost gateway client is not configured.",
+            BotUserId: null,
+            BotUsername: null));
+
+    public Task<MattermostGatewaySnapshot> ConnectAsync(
+        string serverUrl,
+        string botToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<MattermostGatewaySnapshot>(new InvalidOperationException(
+            "Mattermost channel is enabled, but no Mattermost gateway client is configured."));
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default)
         => Task.CompletedTask;
@@ -188,4 +242,12 @@ public sealed class UnconfiguredMattermostReplyClient : IMattermostReplyClient
     public Task UpdatePostAsync(MattermostPostId postId, string text, IReadOnlyList<MattermostAttachment>? attachments, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Mattermost channel attempted to update a post, but no Mattermost reply client is configured.");
+
+    public Task<string> UploadFileAsync(
+        MattermostChannelId channelId,
+        string filePath,
+        string? fileName = null,
+        CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Mattermost channel attempted to upload a file, but no Mattermost reply client is configured.");
 }

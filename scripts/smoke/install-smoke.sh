@@ -245,6 +245,106 @@ else
   echo "$bad_out" | indent
 fi
 
+# ── 8. Config channel persistence ───────────────────────────────────────────
+echo ""
+echo "=== config channel persistence ==="
+
+# 8a. Fresh install with --channel beta seeds a config file
+FRESH_DIR="$WORK/fresh-beta"
+FRESH_CONFIG_DIR="$WORK/fresh-beta-config/config"
+set +e
+fresh_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+            INSTALL_DIR="$FRESH_DIR" \
+            CONFIG_DIR="$FRESH_CONFIG_DIR" \
+            bash "$INSTALL_SH" --channel beta 2>&1)
+fresh_rc=$?
+set -e
+if [ "$fresh_rc" -eq 0 ] && [ -f "$FRESH_CONFIG_DIR/netclaw.json" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    val=$(jq -r '.Daemon.UpdateChannel' "$FRESH_CONFIG_DIR/netclaw.json")
+    if [ "$val" = "beta" ]; then
+      pass "config: fresh --channel beta seeds config with UpdateChannel=beta"
+    else
+      fail "config: fresh --channel beta wrote UpdateChannel='$val' (expected 'beta')"
+    fi
+  else
+    pass "config: fresh --channel beta created config file (no jq to verify contents)"
+  fi
+else
+  fail "config: fresh --channel beta did not create config (exit=$fresh_rc)"
+  echo "$fresh_out" | indent
+fi
+
+# 8b. --channel beta on existing config patches UpdateChannel
+EXIST_DIR="$WORK/existing-beta"
+EXIST_CONFIG_DIR="$WORK/existing-beta-config/config"
+mkdir -p "$EXIST_CONFIG_DIR"
+printf '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}\n' > "$EXIST_CONFIG_DIR/netclaw.json"
+set +e
+exist_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+            INSTALL_DIR="$EXIST_DIR" \
+            CONFIG_DIR="$EXIST_CONFIG_DIR" \
+            bash "$INSTALL_SH" --channel beta 2>&1)
+exist_rc=$?
+set -e
+if [ "$exist_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+  val=$(jq -r '.Daemon.UpdateChannel' "$EXIST_CONFIG_DIR/netclaw.json")
+  mode=$(jq -r '.Daemon.ExposureMode' "$EXIST_CONFIG_DIR/netclaw.json")
+  if [ "$val" = "beta" ] && [ "$mode" = "local" ]; then
+    pass "config: --channel beta patches existing config, preserves other Daemon keys"
+  else
+    fail "config: --channel beta patch (UpdateChannel='$val', ExposureMode='$mode')"
+  fi
+else
+  fail "config: --channel beta on existing config (exit=$exist_rc)"
+fi
+
+# 8c. Plain upgrade (no --channel) leaves existing beta config alone
+NOFLAG_DIR="$WORK/noflag"
+NOFLAG_CONFIG_DIR="$WORK/noflag-config/config"
+mkdir -p "$NOFLAG_CONFIG_DIR"
+printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$NOFLAG_CONFIG_DIR/netclaw.json"
+set +e
+noflag_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+             INSTALL_DIR="$NOFLAG_DIR" \
+             CONFIG_DIR="$NOFLAG_CONFIG_DIR" \
+             bash "$INSTALL_SH" 2>&1)
+noflag_rc=$?
+set -e
+if [ "$noflag_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+  val=$(jq -r '.Daemon.UpdateChannel' "$NOFLAG_CONFIG_DIR/netclaw.json")
+  if [ "$val" = "beta" ]; then
+    pass "config: plain upgrade preserves existing beta channel"
+  else
+    fail "config: plain upgrade changed UpdateChannel to '$val' (expected 'beta')"
+  fi
+else
+  fail "config: plain upgrade (exit=$noflag_rc)"
+fi
+
+# 8d. --channel stable on existing beta overwrites to stable
+DOWNGRADE_DIR="$WORK/downgrade"
+DOWNGRADE_CONFIG_DIR="$WORK/downgrade-config/config"
+mkdir -p "$DOWNGRADE_CONFIG_DIR"
+printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$DOWNGRADE_CONFIG_DIR/netclaw.json"
+set +e
+down_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+           INSTALL_DIR="$DOWNGRADE_DIR" \
+           CONFIG_DIR="$DOWNGRADE_CONFIG_DIR" \
+           bash "$INSTALL_SH" --channel stable 2>&1)
+down_rc=$?
+set -e
+if [ "$down_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+  val=$(jq -r '.Daemon.UpdateChannel' "$DOWNGRADE_CONFIG_DIR/netclaw.json")
+  if [ "$val" = "stable" ]; then
+    pass "config: --channel stable overwrites existing beta"
+  else
+    fail "config: --channel stable wrote UpdateChannel='$val' (expected 'stable')"
+  fi
+else
+  fail "config: --channel stable on existing beta (exit=$down_rc)"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

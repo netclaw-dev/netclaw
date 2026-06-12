@@ -93,7 +93,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Create step VMs in the canonical order:
         // provider -> security-posture -> feature-selection -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
-        ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory);
+        ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory, daemonApi);
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
         var exposureModeStep = new ExposureModeStepViewModel();

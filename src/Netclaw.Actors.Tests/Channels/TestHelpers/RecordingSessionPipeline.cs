@@ -20,6 +20,9 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private readonly List<IWithSessionId> _recordedFeedback = [];
     private readonly Func<SessionId, IReadOnlyList<SessionOutput>> _outputFactory;
     private readonly bool _reactive;
+    private readonly TaskCompletionSource<SessionPipelineOptions> _created = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private SessionPipelineOptions? _capturedOptions;
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -45,7 +48,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         _reactive = reactive;
     }
 
-    public SessionPipelineOptions? CapturedOptions { get; private set; }
+    public SessionPipelineOptions? CapturedOptions => Volatile.Read(ref _capturedOptions);
+    public Task<SessionPipelineOptions> Created => _created.Task;
     public IReadOnlyList<IWithSessionId> RecordedFeedback
     {
         get { lock (_feedbackLock) return _recordedFeedback.ToList(); }
@@ -60,7 +64,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
-        CapturedOptions = options;
+        Volatile.Write(ref _capturedOptions, options);
+        _created.TrySetResult(options);
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
         var outputs = _outputFactory(sessionId).ToList();

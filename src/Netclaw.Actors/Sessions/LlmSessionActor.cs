@@ -81,6 +81,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<SerializableMediaReference> _pendingModelInputMediaReferences = [];
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
+    private bool _processingStateActive;
     private ApprovalTurnState _approvalTurnState = ApprovalTurnState.None;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
@@ -332,6 +333,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentPhase = target;
         _log.Info("session_phase_transition from={From} to={To}", from, target);
 
+        EmitProcessingStateForPhase(target);
+
         _observerActor?.Tell(new SessionPhaseChanged(target));
 
         switch (target)
@@ -362,6 +365,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SessionPhase.Passivating => to is SessionPhase.Ready or SessionPhase.Processing,
         _ => false
     };
+
+    private void EmitProcessingStateForPhase(SessionPhase phase)
+    {
+        var isProcessing = phase is SessionPhase.Processing or SessionPhase.Compacting;
+        if (_processingStateActive == isProcessing)
+            return;
+
+        _processingStateActive = isProcessing;
+        EmitOutput(new ProcessingStateOutput(isProcessing)
+        {
+            SessionId = _sessionId
+        }, OutputFilter.ProcessingState);
+    }
 
     // ── Command behaviors ──
 

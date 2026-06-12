@@ -95,6 +95,21 @@ public sealed class ToolExecutionContext
     public string? ChannelType { get; set; }
 
     /// <summary>
+    /// Delivery target inherited from channel-originated input. Trigger sources
+    /// must not rely on this because they are not output channels.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; set; }
+
+    /// <summary>
+    /// Explicit delivery target selected by a trigger source such as a reminder
+    /// or webhook route when it expects external output.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; set; }
+
+    public ChannelDeliveryTargetInfo? EffectiveDeliveryTarget
+        => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
+
+    /// <summary>
     /// Whether the originating channel supports interactive approval prompts.
     /// When false, approval-gated tools are automatically denied.
     /// </summary>

@@ -236,6 +236,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
+            _toolExecutionContext.DefaultDeliveryTarget = msg.DefaultDeliveryTarget;
+            _toolExecutionContext.RequestedDeliveryTarget = msg.RequestedDeliveryTarget;
             _toolExecutionContext.ModelInputModalities = msg.ModelInputModalities;
             _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;
             _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
@@ -1125,6 +1127,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Boundary = source.Boundary,
             RequestedTimeoutSeconds = source.RequestedTimeoutSeconds,
             ChannelType = source.ChannelType,
+            DefaultDeliveryTarget = source.DefaultDeliveryTarget,
+            RequestedDeliveryTarget = source.RequestedDeliveryTarget,
             ModelInputModalities = source.ModelInputModalities,
             ProjectDirectory = source.ProjectDirectory,
             InheritedCwd = source.InheritedCwd,

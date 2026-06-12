@@ -27,6 +27,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 {
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
+    private bool _initializedForTests;
 
     public McpToolPermissionsViewModel(NetclawPaths paths, DaemonApi daemonApi)
     {
@@ -68,6 +69,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public override void OnActivated()
     {
         base.OnActivated();
+        if (_initializedForTests) return;
         _ = LoadServersAsync();
     }
 
@@ -120,6 +122,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     /// </summary>
     internal void InitializeForTests(McpServerName serverName, IEnumerable<string> tools)
     {
+        _initializedForTests = true;
         SelectedServer = serverName.Value;
         DiscoveredTools.Clear();
         DiscoveredTools.AddRange(tools);
@@ -127,6 +130,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         if (!_pendingGrants.ContainsKey(serverName.Value))
             InitializePendingGrantsFromConfig(serverName);
         CurrentState.Value = ToolPermissionsState.ToolGrid;
+        NotifyStateChanged();
     }
 
     internal void SetSelectedAudienceForTests(TrustAudience audience)

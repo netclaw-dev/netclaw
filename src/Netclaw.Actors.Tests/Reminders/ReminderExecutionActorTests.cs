@@ -14,6 +14,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Reminders;
@@ -93,8 +94,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             {
                 SessionId = sessionId,
                 CallId = new Netclaw.Tools.ToolCallId("call-1"),
-                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
-                Result = "Error parsing arguments for tool 'send_slack_message': Required parameter 'Message' is missing or empty."
+                ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
+                Result = "Error: 'text' parameter is required."
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
@@ -109,7 +110,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         Assert.False(completed.Success);
         Assert.Equal("notify-fail-test", completed.Id.Value);
-        Assert.Contains("Required parameter 'Message'", completed.ErrorMessage);
+        Assert.Contains("'text' parameter is required", completed.ErrorMessage);
     }
 
     [Fact]
@@ -121,7 +122,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             {
                 SessionId = sessionId,
                 CallId = new Netclaw.Tools.ToolCallId("call-2"),
-                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+                ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
@@ -195,7 +196,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             {
                 SessionId = sessionId,
                 CallId = new Netclaw.Tools.ToolCallId("call-err"),
-                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+                ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Error: channel not found"
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
@@ -379,6 +380,43 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Assert.Equal(TrustAudience.Personal, input.Audience);
     }
 
+    [Fact]
+    public async Task Channel_delivery_execution_carries_requested_delivery_target()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+        ]);
+
+        var target = new ChannelDeliveryTargetInfo(
+            "slack",
+            "destination",
+            "C1234567890",
+            "#alerts");
+        var definition = CreateDefinition("delivery-target") with
+        {
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.Channel,
+                Transport = "slack",
+                Address = "C1234567890",
+                Target = target
+            },
+            DeliveryInstructions = string.Empty,
+            DeliveryRequired = false
+        };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-delivery-target");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var input = await pipeline.InputCaptured.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(target, input.RequestedDeliveryTarget);
+        Assert.Null(input.DefaultDeliveryTarget);
+    }
+
     // Note: Execution_fails_when_definition_audience_missing was removed in issue #994.
     // Audience is now required TrustAudience (non-nullable), so the missing-audience
     // failure path no longer exists in ReminderExecutionActor. The type system enforces
@@ -443,7 +481,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
-        // Use Kind = None so success is not gated on send_slack_message
+        // Use Kind = None so success is not gated on send_channel_message
         var definition = CreateDefinition("history-success-test") with
         {
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None }

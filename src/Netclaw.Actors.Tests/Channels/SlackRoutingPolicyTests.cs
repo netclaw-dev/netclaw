@@ -8,25 +8,15 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
 
+/// <summary>
+/// Slack-specific routing policy tests: AppMention short-circuit, file_share
+/// subtypes, hidden messages, bot_message filtering, and BlockAction refusal.
+/// Cross-channel routing behaviors (mention gating, thread continuation/rehydration,
+/// DM matrix, empty content) live in <see cref="Contracts.RoutingPolicyContractTests"/>
+/// via <see cref="Contracts.SlackRoutingPolicyContractTests"/>.
+/// </summary>
 public class SlackRoutingPolicyTests
 {
-    [Fact]
-    public void MessageWithoutMention_DoesNotStartThread_WhenMentionOnly()
-    {
-        var message = CreateMessage(text: "hello", threadTs: null, isDirectMessage: false);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(SlackRoutingIgnoreReason.ChannelMentionRequired, decision.IgnoreReason);
-    }
-
     [Fact]
     public void AppMention_StartsThread_WhenMentionOnly()
     {
@@ -42,68 +32,6 @@ public class SlackRoutingPolicyTests
 
         Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
         Assert.Null(decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void ExistingThreadReply_ContinuesWithoutMention()
-    {
-        var message = CreateMessage(text: "follow up", threadTs: "1740468105.120900", isDirectMessage: false);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: false,
-            threadExists: true,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.ContinueOnly, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void ThreadReply_RehydratesSession_AfterDaemonRestart()
-    {
-        // ThreadTs differs from EventTs — this is a reply in an existing thread,
-        // but the thread actor was lost due to a daemon restart.
-        var message = CreateMessage(text: "follow up", threadTs: "1740468105.120900", isDirectMessage: false);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
-    }
-
-    [Theory]
-    [InlineData(true, false, false, SlackRoutingDecisionKind.StartOrContinue, null)]
-    [InlineData(false, false, false, SlackRoutingDecisionKind.Ignore, SlackRoutingIgnoreReason.DmNotAllowed)]
-    [InlineData(true, true, false, SlackRoutingDecisionKind.Ignore, SlackRoutingIgnoreReason.DmMentionRequired)]
-    [InlineData(true, true, true, SlackRoutingDecisionKind.StartOrContinue, null)]
-    internal void DirectMessage_routing_decision(
-        bool allowDirectMessages,
-        bool mentionRequiredInDm,
-        bool containsBotMention,
-        SlackRoutingDecisionKind expectedKind,
-        SlackRoutingIgnoreReason? expectedReason)
-    {
-        var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: allowDirectMessages,
-            mentionRequiredInDm: mentionRequiredInDm,
-            threadExists: false,
-            containsBotMention: containsBotMention);
-
-        Assert.Equal(expectedKind, decision.Kind);
-        Assert.Equal(expectedReason, decision.IgnoreReason);
     }
 
     [Fact]
@@ -245,23 +173,6 @@ public class SlackRoutingPolicyTests
 
         Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
         Assert.Equal(SlackRoutingIgnoreReason.UnsupportedSubtype, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void NoTextNoFiles_Ignored()
-    {
-        var message = CreateMessage(text: "", threadTs: null, isDirectMessage: false);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: false,
-            allowDirectMessages: false,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(SlackRoutingIgnoreReason.NoContent, decision.IgnoreReason);
     }
 
     [Fact]

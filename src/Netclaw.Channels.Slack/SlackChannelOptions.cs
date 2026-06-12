@@ -7,7 +7,7 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Slack;
 
-public sealed class SlackChannelOptions
+public sealed class SlackChannelOptions : IRemoteChatChannelOptions
 {
     public bool Enabled { get; init; }
 

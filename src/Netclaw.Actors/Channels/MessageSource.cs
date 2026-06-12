@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Channels;
 
@@ -84,6 +85,20 @@ public sealed record MessageSource
     public string? ExecutableText { get; init; }
 
     /// <summary>
+    /// Default output target inherited from the channel that produced this turn.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
+
+    /// <summary>
+    /// Explicit output target selected by a trigger source such as a reminder or
+    /// webhook route.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? EffectiveDeliveryTarget
+        => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
+
+    /// <summary>
     /// True when the model input contains a quoted adopted-context window.
     /// </summary>
     public bool HasAdoptedContext
@@ -152,4 +167,19 @@ public sealed record MessageSource
     /// serializable and <see cref="MessageSource"/> is never persisted.
     /// </summary>
     public IActorRef? AckTarget { get; init; }
+
+    /// <summary>
+    /// Optional long-lived reply target for reminder delivery confirmation.
+    /// Unlike <see cref="AckTarget"/> (the dispatcher's <c>Ask</c> temp actor,
+    /// which completes at turn-accept time and is then dead), this is the
+    /// dispatching <c>ReminderExecutionActor</c>'s own ref, alive until the
+    /// turn delivers. When set, the channel binding actor tells it a
+    /// <see cref="Protocol.ReminderDeliveryResult"/> on turn completion,
+    /// reporting whether the assistant reply actually reached the channel.
+    /// Only populated for <c>DeliveryKind.CurrentSession</c> reminders with
+    /// <c>DeliveryRequired = true</c>; null otherwise. Runtime-only — an
+    /// <see cref="IActorRef"/> is not serializable and <see cref="MessageSource"/>
+    /// is never persisted.
+    /// </summary>
+    public IActorRef? DeliveryObserver { get; init; }
 }

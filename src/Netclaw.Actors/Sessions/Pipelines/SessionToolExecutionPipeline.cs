@@ -968,6 +968,8 @@ internal static class SessionToolExecutionPipeline
         context.Boundary = turnContext?.Boundary ?? source?.Boundary;
         context.ChannelType = turnContext?.ChannelType?.ToWireValue()
                               ?? (source is null ? null : source.ChannelType.ToWireValue());
+        context.DefaultDeliveryTarget = turnContext?.DefaultDeliveryTarget ?? source?.DefaultDeliveryTarget;
+        context.RequestedDeliveryTarget = turnContext?.RequestedDeliveryTarget ?? source?.RequestedDeliveryTarget;
         context.SupportsInteractiveApproval = turnContext?.SupportsInteractiveApproval
                                                ?? source?.ChannelType.SupportsInteractiveApproval();
         context.ModelInputModalities = modelInputModalities;

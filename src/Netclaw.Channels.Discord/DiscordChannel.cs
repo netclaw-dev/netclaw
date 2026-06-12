@@ -9,6 +9,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Channels;
 using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -22,6 +23,7 @@ public sealed class DiscordChannel : IChannel
     private readonly SessionIngressGate _ingressGate;
     private readonly IDiscordGatewayClient _gatewayClient;
     private readonly IDiscordReplyClient _replyClient;
+    private readonly IChannelRegistry _channelRegistry;
     private readonly IContentScanner _contentScanner;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -34,13 +36,8 @@ public sealed class DiscordChannel : IChannel
     private readonly ModelCapabilities _modelCapabilities;
     private readonly NetclawPaths _paths;
 
-    // Cancels the background reconnect loop when the channel stops.
-    private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly object _reconnectLock = new();
-    private int _queuedCleanReconnect;
-
-    private IActorRef? _gateway;
-    private Task? _reconnectTask;
+    private readonly object _connectionSetupLock = new();
+    private volatile IActorRef? _gateway;
     private volatile string? _connectFailureDetail;
 
     public DiscordChannel(
@@ -49,6 +46,7 @@ public sealed class DiscordChannel : IChannel
         SessionIngressGate ingressGate,
         IDiscordGatewayClient gatewayClient,
         IDiscordReplyClient replyClient,
+        IChannelRegistry channelRegistry,
         IContentScanner contentScanner,
         IPromptInjectionDetector? promptInjectionDetector,
         IHttpClientFactory httpClientFactory,
@@ -66,6 +64,7 @@ public sealed class DiscordChannel : IChannel
         _ingressGate = ingressGate;
         _gatewayClient = gatewayClient;
         _replyClient = replyClient;
+        _channelRegistry = channelRegistry;
         _contentScanner = contentScanner;
         // Fail loud rather than substituting a no-op detector — a no-op reports
         // every input as safe, silently disabling injection scanning. A null
@@ -83,6 +82,7 @@ public sealed class DiscordChannel : IChannel
         _paths = paths;
 
         _gatewayClient.CleanReconnectRequired += HandleCleanReconnectRequiredAsync;
+        _gatewayClient.ConnectionRestored += HandleConnectionRestoredAsync;
     }
 
     public ChannelType ChannelType => ChannelType.Discord;
@@ -102,18 +102,11 @@ public sealed class DiscordChannel : IChannel
             return new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled.");
 
         var gatewaySnapshot = await _gatewayClient.GetSnapshotAsync(cancellationToken);
-
-        if (gatewaySnapshot.IsReady)
-            return new ChannelHealth(ChannelHealthStatus.Healthy);
-
-        if (gatewaySnapshot.IsConnected)
-            return new ChannelHealth(
-                ChannelHealthStatus.Degraded,
-                gatewaySnapshot.HealthDetail ?? _connectFailureDetail ?? "Discord gateway connected but not ready.");
-
-        return new ChannelHealth(
-            ChannelHealthStatus.Disconnected,
-            _connectFailureDetail ?? gatewaySnapshot.HealthDetail ?? "Discord gateway disconnected.");
+        return GatewayChannelHealth.Evaluate(
+            gatewaySnapshot,
+            _connectFailureDetail,
+            notReadyFallback: "Discord gateway connected but not ready.",
+            disconnectedFallback: "Discord gateway disconnected.");
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -159,13 +152,25 @@ public sealed class DiscordChannel : IChannel
 
     /// <summary>
     /// Wires up message handling and the gateway actor once a connection
-    /// succeeds. Idempotent — safe to call again after a reconnect.
+    /// succeeds. Idempotent and thread-safe: ConnectionRestored publishes on
+    /// every transition to Ready, so a normal operator connect reaches this
+    /// from both the connect-ask continuation and the event handler — the
+    /// lock + guard make the setup exactly-once (no duplicate gateway actor,
+    /// no double event subscription).
     /// </summary>
     private void CompleteConnectionSetup(DiscordUserId? botUserId)
     {
-        if (_gateway is not null)
-            return;
+        lock (_connectionSetupLock)
+        {
+            if (_gateway is not null)
+                return;
 
+            CompleteConnectionSetupCore(botUserId);
+        }
+    }
+
+    private void CompleteConnectionSetupCore(DiscordUserId? botUserId)
+    {
         _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
 
@@ -180,6 +185,7 @@ public sealed class DiscordChannel : IChannel
                 DefaultChannelId: !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
                     ? new DiscordChannelId(_options.DefaultChannelId)
                     : null,
+                ChannelRegistry: _channelRegistry,
                 ReplyClient: _replyClient,
                 ContentScanner: _contentScanner,
                 AudienceProfiles: _audienceProfiles,
@@ -213,8 +219,6 @@ public sealed class DiscordChannel : IChannel
 
         if (failure.IsFatal)
         {
-            // Retrying will not help — the operator must fix the configuration.
-            // The rest of the daemon keeps running.
             _logger.LogError(
                 failure,
                 "Discord channel could not connect and will stay offline until the "
@@ -224,131 +228,29 @@ public sealed class DiscordChannel : IChannel
             return;
         }
 
+        // Transient failures are retried by the lifecycle actor's built-in
+        // auto-reconnect. The channel just logs and waits for the
+        // ConnectionRestored event.
         _logger.LogWarning(
             failure,
-            "Discord channel could not connect (transient). The daemon will keep running "
-            + "and retry the connection in the background. {Reason}",
+            "Discord channel could not connect (transient). The lifecycle actor will "
+            + "retry the connection in the background. {Reason}",
             failure.Message);
-        StartReconnectLoop(initialDelay: TimeSpan.FromSeconds(5));
-    }
-
-    private void StartReconnectLoop(TimeSpan initialDelay)
-    {
-        lock (_reconnectLock)
-        {
-            if (_reconnectTask is { IsCompleted: false } activeReconnect)
-            {
-                if (initialDelay == TimeSpan.Zero)
-                {
-                    Interlocked.Exchange(ref _queuedCleanReconnect, 1);
-                    _ = activeReconnect.ContinueWith(
-                        _ => StartQueuedCleanReconnect(),
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously,
-                        TaskScheduler.Default);
-                }
-
-                return;
-            }
-
-            _reconnectTask = Task.Run(() => ReconnectLoopAsync(initialDelay, _lifetimeCts.Token));
-        }
-    }
-
-    private void StartQueuedCleanReconnect()
-    {
-        if (Volatile.Read(ref _queuedCleanReconnect) == 0)
-            return;
-
-        StartReconnectLoop(initialDelay: TimeSpan.Zero);
     }
 
     private Task HandleCleanReconnectRequiredAsync(string reason)
     {
         _connectFailureDetail = reason;
         _logger.LogWarning("Gateway requested clean reconnect: {Reason}", reason);
-        StartReconnectLoop(initialDelay: TimeSpan.Zero);
         return Task.CompletedTask;
     }
 
-    private async Task ReconnectLoopAsync(TimeSpan initialDelay, CancellationToken cancellationToken)
+    private Task HandleConnectionRestoredAsync(DiscordGatewaySnapshot snapshot)
     {
-        var delay = initialDelay;
-        var maxDelay = TimeSpan.FromMinutes(5);
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            if (delay > TimeSpan.Zero)
-            {
-                try
-                {
-                    await Task.Delay(delay, _timeProvider, cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-            }
-
-            // Reset transport state so the retry performs a clean login + connect.
-            try
-            {
-                await _gatewayClient.DisconnectAsync(cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Transport reset before reconnect failed; continuing.");
-            }
-
-            try
-            {
-                if (_options.BotToken.IsNullOrEmpty())
-                    throw new ChannelConnectException(
-                        ChannelConnectFailureKind.Fatal,
-                        "Discord is enabled but no bot token is configured.");
-
-                var gatewaySnapshot = await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
-                EnsureGatewayReadyAfterConnect(gatewaySnapshot);
-                CompleteConnectionSetup(gatewaySnapshot.BotUserId);
-                _connectFailureDetail = null;
-                _logger.LogInformation("Channel reconnected after a transient failure.");
-
-                if (Interlocked.Exchange(ref _queuedCleanReconnect, 0) == 1)
-                {
-                    delay = TimeSpan.Zero;
-                    continue;
-                }
-
-                return;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                var classified = DiscordConnectFailureClassifier.Classify(ex);
-                _connectFailureDetail = classified.Message;
-
-                if (classified.IsFatal)
-                {
-                    _logger.LogError(
-                        classified,
-                        "Discord reconnect hit a fatal failure; giving up until the daemon "
-                        + "is restarted. {Reason}",
-                        classified.Message);
-                    return;
-                }
-
-                _logger.LogWarning(
-                    classified,
-                    "Discord reconnect attempt failed; will retry. {Reason}",
-                    classified.Message);
-                delay = delay == TimeSpan.Zero
-                    ? TimeSpan.FromSeconds(5)
-                    : TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
-            }
-        }
+        _connectFailureDetail = null;
+        CompleteConnectionSetup(snapshot.BotUserId);
+        _logger.LogInformation("Gateway connection ready; channel setup ensured.");
+        return Task.CompletedTask;
     }
 
     private static void EnsureGatewayReadyAfterConnect(DiscordGatewaySnapshot gatewaySnapshot)
@@ -363,22 +265,8 @@ public sealed class DiscordChannel : IChannel
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // Stop the background reconnect loop before tearing down the transport.
-        await _lifetimeCts.CancelAsync();
-        if (_reconnectTask is { } reconnectTask)
-        {
-            try
-            {
-                await reconnectTask;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Reconnect loop ended with an error during shutdown.");
-            }
-        }
-
-        // Unsubscribe events first so no new messages enter the actor system.
         _gatewayClient.CleanReconnectRequired -= HandleCleanReconnectRequiredAsync;
+        _gatewayClient.ConnectionRestored -= HandleConnectionRestoredAsync;
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
 
@@ -402,8 +290,6 @@ public sealed class DiscordChannel : IChannel
         await _gatewayClient.DisconnectAsync(cancellationToken);
         if (_gatewayClient is IDisposable disposable)
             disposable.Dispose();
-
-        _lifetimeCts.Dispose();
     }
 
     private Task HandleMessageReceivedAsync(DiscordGatewayMessage message)

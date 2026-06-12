@@ -67,7 +67,7 @@ public sealed class ChatPageTests
     }
 
     [Fact]
-    public async Task CollapsedView_ShowsEllipsisAndCtrlVHint()
+    public async Task CollapsedView_ShowsEllipsisAndCtrlOHint()
     {
         var (terminal, app, _) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -92,9 +92,9 @@ public sealed class ChatPageTests
             $"Bottom rows:\n{inputAndStatus}\nFull screen:\n{terminal}");
 
         // The user needs to know how to see the full body. Both the inline
-        // hint in the Input panel AND the status-bar hint advertise Ctrl+V.
-        Assert.True(screen.Contains("Ctrl+V", StringComparison.Ordinal),
-            $"Expected 'Ctrl+V' affordance to be visible. Screen:\n{terminal}");
+        // hint in the Input panel AND the status-bar hint advertise Ctrl+O.
+        Assert.True(screen.Contains("Ctrl+O", StringComparison.Ordinal),
+            $"Expected 'Ctrl+O' affordance to be visible. Screen:\n{terminal}");
     }
 
     /// <summary>
@@ -119,14 +119,14 @@ public sealed class ChatPageTests
     }
 
     [Fact]
-    public async Task CtrlV_TogglesFullBodyAndKeepsControlsVisible()
+    public async Task CtrlO_TogglesFullBodyAndKeepsControlsVisible()
     {
         var (terminal, app, vm) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
 
-        // Ctrl+V to expand, then quit. The toggle happens before the next
+        // Ctrl+O to expand, then quit. The toggle happens before the next
         // render, so by the time the app shuts down the terminal holds the
         // expanded frame.
-        input.EnqueueKey(ConsoleKey.V, false, false, true);
+        input.EnqueueKey(ConsoleKey.O, false, false, true);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -135,7 +135,7 @@ public sealed class ChatPageTests
         var screen = terminal.ToString();
 
         // Controls remain visible even in expanded mode — that's the whole
-        // point: Ctrl+V must not regress the original bug. Scope assertions
+        // point: Ctrl+O must not regress the original bug. Scope assertions
         // to the bottom of the screen so we're checking the Input panel,
         // not the chat history pane that always echoes the full body.
         var inputAndStatus = BottomRows(screen, terminalWidth: 120, rowCount: 14);
@@ -150,6 +150,23 @@ public sealed class ChatPageTests
             $"Expected status hint to flip to 'Collapse' after expand. Screen:\n{terminal}");
 
         Assert.True(vm.IsApprovalDetailVisible.Value);
+    }
+
+    [Fact]
+    public async Task CtrlV_DoesNotToggleDetail()
+    {
+        // Ctrl+V was the original keybinding but is intercepted as "paste" on
+        // Windows terminals (#1334). After remapping to Ctrl+O, Ctrl+V must
+        // NOT expand the approval detail.
+        var (terminal, app, vm) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
+
+        input.EnqueueKey(ConsoleKey.V, false, false, true);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.False(vm.IsApprovalDetailVisible.Value);
     }
 
     [Fact]
@@ -169,11 +186,11 @@ public sealed class ChatPageTests
     }
 
     [Fact]
-    public async Task NarrowTerminal_PreservesCtrlVHint()
+    public async Task NarrowTerminal_PreservesCtrlOHint()
     {
         // 60-col terminal — narrower than the previous hard-coded 76-col
         // body budget. The pre-scaling code would wrap the body+hint to a
-        // second line and body.Height(1) would clip the Ctrl+V suffix.
+        // second line and body.Height(1) would clip the Ctrl+O suffix.
         // With width-aware sizing the hint must still be visible.
         var (terminal, app, _) = CreateHeadlessApp(
             BuildApproval(LongShellBody), out var input, width: 60, height: 30);
@@ -185,9 +202,9 @@ public sealed class ChatPageTests
         var screen = terminal.ToString();
         var bottom = BottomRows(screen, terminalWidth: 60, rowCount: 14);
 
-        Assert.True(bottom.Contains("Ctrl+V", StringComparison.Ordinal)
-                || bottom.Contains("^V", StringComparison.Ordinal),
-            $"Expected Ctrl+V affordance to be visible on a 60-col terminal. " +
+        Assert.True(bottom.Contains("Ctrl+O", StringComparison.Ordinal)
+                || bottom.Contains("^O", StringComparison.Ordinal),
+            $"Expected Ctrl+O affordance to be visible on a 60-col terminal. " +
             $"Bottom rows:\n{bottom}\nFull screen:\n{terminal}");
 
         // Confirm options are still visible — the original #1132 invariant
@@ -219,7 +236,7 @@ public sealed class ChatPageTests
             width: 120, height: 40, options: fiveOptions);
 
         // Expand first, then quit, so the assertion sees the harder layout.
-        input.EnqueueKey(ConsoleKey.V, false, false, true);
+        input.EnqueueKey(ConsoleKey.O, false, false, true);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -241,7 +258,7 @@ public sealed class ChatPageTests
         // (which uses .Fill()) still has at least a few visible rows.
         var (terminal, app, _) = CreateHeadlessApp(
             BuildApproval(LongShellBody), out var input, width: 100, height: 16);
-        input.EnqueueKey(ConsoleKey.V, false, false, true); // expand to stress
+        input.EnqueueKey(ConsoleKey.O, false, false, true); // expand to stress
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -286,9 +303,9 @@ public sealed class ChatPageTests
         var bottom = BottomRows(terminal.ToString(), terminalWidth: 50, rowCount: 12);
 
         // The narrow status bar should use the short Ctrl-prefix form
-        // (^V) or omit the longer scroll/quit hints.
-        Assert.True(bottom.Contains("^V", StringComparison.Ordinal)
-                || bottom.Contains("[Ctrl+V]", StringComparison.Ordinal),
+        // (^O) or omit the longer scroll/quit hints.
+        Assert.True(bottom.Contains("^O", StringComparison.Ordinal)
+                || bottom.Contains("[Ctrl+O]", StringComparison.Ordinal),
             $"Expected resize to re-render with the narrow status bar. Bottom rows:\n{bottom}");
     }
 
@@ -311,7 +328,7 @@ public sealed class ChatPageTests
     {
         var (terminal, app, _) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
         if (expand)
-            input.EnqueueKey(ConsoleKey.V, false, false, true);
+            input.EnqueueKey(ConsoleKey.O, false, false, true);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));

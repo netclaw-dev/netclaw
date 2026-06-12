@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using SlackNet;
 using SlackNet.WebApi;
+using Netclaw.Channels;
+using ChannelType = Netclaw.Actors.Channels.ChannelType;
 
 namespace Netclaw.Channels.Slack;
 
@@ -30,13 +32,23 @@ public interface ISlackTargetLookupClient
 {
     Task<SlackChannelPage> ListChannelsAsync(string? cursor, CancellationToken ct = default);
     Task<SlackUserPage> ListUsersAsync(string? cursor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Fetches metadata (name, archived state) for a single conversation via
+    /// <c>conversations.info</c>. Throws <see cref="SlackException"/> when the
+    /// channel is unknown or unreadable by the bot.
+    /// </summary>
+    Task<Conversation> GetChannelInfoAsync(string channelId, CancellationToken ct = default);
 }
 
 public sealed class SlackApiTargetLookupClient(ISlackApiClient slackApi) : ISlackTargetLookupClient
 {
     public async Task<SlackChannelPage> ListChannelsAsync(string? cursor, CancellationToken ct = default)
     {
+        // Archived channels are never deliverable, so they must not resolve
+        // through name search either.
         var page = await slackApi.Conversations.List(
+            excludeArchived: true,
             types: [ConversationType.PublicChannel, ConversationType.PrivateChannel],
             cursor: cursor,
             cancellationToken: ct);
@@ -49,10 +61,25 @@ public sealed class SlackApiTargetLookupClient(ISlackApiClient slackApi) : ISlac
         var page = await slackApi.Users.List(cursor: cursor, cancellationToken: ct);
         return new SlackUserPage(page.Members.ToList(), page.ResponseMetadata?.NextCursor);
     }
+
+    public Task<Conversation> GetChannelInfoAsync(string channelId, CancellationToken ct = default)
+        => slackApi.Conversations.Info(channelId, cancellationToken: ct);
 }
 
-public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) : ISlackTargetResolver
+public sealed class SlackTargetResolver(
+    ISlackTargetLookupClient lookupClient,
+    SlackChannelOptions options,
+    Func<SlackChannelId?> defaultChannelIdAccessor) : ISlackTargetResolver, IChannelAddressResolver
 {
+    private static readonly IReadOnlySet<ChannelAddressKind> SupportedAddressKinds = new HashSet<ChannelAddressKind>
+    {
+        ChannelAddressKind.Destination
+    };
+
+    public ChannelDescriptorKey Key { get; } = ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+
+    public IReadOnlySet<ChannelAddressKind> AddressKinds => SupportedAddressKinds;
+
     public async Task<SlackTargetResolutionResult> ResolveAsync(string target, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(target))
@@ -60,11 +87,21 @@ public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) :
 
         var raw = target.Trim();
 
-        if (raw.StartsWith("C", StringComparison.Ordinal) || raw.StartsWith("G", StringComparison.Ordinal))
-            return new SlackTargetResolutionResult(true, null, raw, null);
+        if (IsSlackChannelId(raw))
+        {
+            var channelId = new SlackChannelId(raw);
+            return SlackAclPolicy.IsAllowedChannel(channelId, options, defaultChannelIdAccessor())
+                ? new SlackTargetResolutionResult(true, null, raw, null)
+                : new SlackTargetResolutionResult(false, $"Slack channel '{raw}' is not in the allowed channels list.", null, null);
+        }
 
-        if (raw.StartsWith("U", StringComparison.Ordinal))
-            return new SlackTargetResolutionResult(true, null, null, raw);
+        if (IsSlackUserId(raw))
+        {
+            var userId = new SlackUserId(raw);
+            return SlackAclPolicy.IsAllowedUser(userId, options)
+                ? new SlackTargetResolutionResult(true, null, null, raw)
+                : new SlackTargetResolutionResult(false, $"Slack user '{raw}' is not in the allowed users list.", null, null);
+        }
 
         if (raw.StartsWith("#", StringComparison.Ordinal))
         {
@@ -105,6 +142,88 @@ public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) :
             null);
     }
 
+    public async ValueTask<ChannelAddressResolutionResult> ResolveAsync(
+        ChannelAddressResolutionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!request.ChannelKey.Equals(Key))
+            return ChannelAddressResolutionResult.Unsupported($"Slack resolver cannot resolve channel key '{request.ChannelKey}'.");
+
+        if (request.AddressKind != ChannelAddressKind.Destination)
+            return ChannelAddressResolutionResult.Unsupported($"Slack destination resolver does not support address kind '{request.AddressKind}'.");
+
+        var raw = request.Query.Trim();
+        if (raw.StartsWith('#'))
+            raw = raw[1..].Trim();
+
+        if (IsSlackChannelId(raw))
+        {
+            var channelId = new SlackChannelId(raw);
+            return SlackAclPolicy.IsAllowedChannel(channelId, options, defaultChannelIdAccessor())
+                ? ChannelAddressResolutionResult.Resolved(new ResolvedChannelAddress(Key, request.AddressKind, raw, raw))
+                : ChannelAddressResolutionResult.NotFound($"Slack channel '{raw}' is not in the allowed channels list.");
+        }
+
+        var matches = await FindChannelMatchesAsync(raw, cancellationToken);
+        return ToResolutionResult(request.AddressKind, matches, raw);
+    }
+
+    /// <summary>
+    /// Blank-query listing derived from configuration, mirroring the
+    /// Mattermost resolver: the deliverable destination set is exactly the
+    /// runtime-resolved default channel plus
+    /// <see cref="SlackChannelOptions.AllowedChannelIds"/> — the same
+    /// allowlist <see cref="SlackAclPolicy.IsAllowedChannel"/> enforces — so
+    /// no workspace-wide <c>conversations.list</c> pagination is needed
+    /// (O(allowlist) instead of O(workspace) rate-limited calls). Display
+    /// names are resolved per channel via <c>conversations.info</c>; channels
+    /// whose info reports archived are skipped because archived channels are
+    /// never deliverable. Membership is not required for a channel to appear
+    /// here — the operator allowlisted it; a send to a channel the bot has
+    /// not joined fails loudly at delivery time.
+    /// </summary>
+    public async ValueTask<ChannelAddressResolutionResult> ListDestinationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var ids = new List<string>();
+        if (defaultChannelIdAccessor() is { } defaultChannel)
+            ids.Add(defaultChannel.Value);
+
+        ids.AddRange(options.AllowedChannelIds);
+
+        var destinations = new List<ResolvedChannelAddress>();
+        foreach (var id in ids
+                     .Where(id => !string.IsNullOrWhiteSpace(id))
+                     .Distinct(StringComparer.Ordinal)
+                     .Order(StringComparer.Ordinal))
+        {
+            Conversation? info;
+            try
+            {
+                info = await lookupClient.GetChannelInfoAsync(id, cancellationToken);
+            }
+            catch (SlackException)
+            {
+                // Fall back to the raw ID as the display name (Mattermost
+                // precedent): the operator configured this channel as
+                // deliverable even if the bot cannot read its metadata.
+                info = null;
+            }
+
+            // Archived channels are never deliverable — skip them.
+            if (info?.IsArchived == true)
+                continue;
+
+            var displayName = string.IsNullOrWhiteSpace(info?.Name) ? id : $"#{info!.Name}";
+            destinations.Add(new ResolvedChannelAddress(
+                Key, ChannelAddressKind.Destination, id, displayName));
+        }
+
+        return ChannelAddressResolutionResult.Listed(destinations);
+    }
+
     private async Task<string?> ResolveChannelByNameAsync(string channelName, CancellationToken ct)
     {
         var cursor = default(string);
@@ -113,8 +232,9 @@ public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) :
             var page = await lookupClient.ListChannelsAsync(cursor, ct);
 
             var match = page.Channels.FirstOrDefault(c =>
-                string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(c.NameNormalized, channelName, StringComparison.OrdinalIgnoreCase));
+                IsAllowedChannel(c)
+                && (string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(c.NameNormalized, channelName, StringComparison.OrdinalIgnoreCase)));
 
             if (match is not null)
                 return match.Id;
@@ -123,6 +243,111 @@ public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) :
         } while (!string.IsNullOrWhiteSpace(cursor));
 
         return null;
+    }
+
+    private async Task<List<ResolvedChannelAddress>> FindChannelMatchesAsync(string query, CancellationToken ct)
+    {
+        var exactMatches = new List<ResolvedChannelAddress>();
+        var substringMatches = new List<ResolvedChannelAddress>();
+        var cursor = default(string);
+
+        do
+        {
+            var page = await lookupClient.ListChannelsAsync(cursor, ct);
+            foreach (var channel in page.Channels)
+            {
+                if (!IsAllowedChannel(channel))
+                    continue;
+
+                var quality = GetMatchQuality(channel, query);
+                if (quality == MatchQuality.None)
+                    continue;
+
+                var displayName = string.IsNullOrWhiteSpace(channel.Name)
+                    ? channel.Id
+                    : $"#{channel.Name}";
+                var address = new ResolvedChannelAddress(Key, ChannelAddressKind.Destination, channel.Id, displayName);
+
+                if (quality == MatchQuality.Exact)
+                    exactMatches.Add(address);
+                else
+                    substringMatches.Add(address);
+            }
+
+            cursor = page.NextCursor;
+        } while (!string.IsNullOrWhiteSpace(cursor));
+
+        return exactMatches.Count > 0 ? exactMatches : substringMatches;
+    }
+
+    private ChannelAddressResolutionResult ToResolutionResult(
+        ChannelAddressKind addressKind,
+        IReadOnlyList<ResolvedChannelAddress> matches,
+        string query)
+    {
+        if (matches.Count == 0)
+            return ChannelAddressResolutionResult.NotFound($"No Slack {addressKind} matched '{query}'.");
+
+        if (matches.Count == 1)
+            return ChannelAddressResolutionResult.Resolved(matches[0]);
+
+        return ChannelAddressResolutionResult.Ambiguous(
+            matches,
+            $"Slack {addressKind} query '{query}' matched {matches.Count} destinations.");
+    }
+
+    private bool IsAllowedChannel(Conversation channel)
+    {
+        if (string.IsNullOrWhiteSpace(channel.Id))
+            return false;
+
+        return SlackAclPolicy.IsAllowedChannel(new SlackChannelId(channel.Id), options, defaultChannelIdAccessor());
+    }
+
+    private enum MatchQuality { None, Substring, Exact }
+
+    private static MatchQuality GetMatchQuality(Conversation channel, string query)
+    {
+        var name = channel.Name ?? string.Empty;
+        var normalizedName = channel.NameNormalized ?? string.Empty;
+
+        if (string.Equals(name, query, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalizedName, query, StringComparison.OrdinalIgnoreCase))
+            return MatchQuality.Exact;
+
+        if (name.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || normalizedName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return MatchQuality.Substring;
+
+        return MatchQuality.None;
+    }
+
+    private static bool IsSlackChannelId(string value)
+    {
+        if (value.Length < 9)
+            return false;
+        if (!value.StartsWith("C", StringComparison.Ordinal) && !value.StartsWith("G", StringComparison.Ordinal))
+            return false;
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool IsSlackUserId(string value)
+    {
+        if (value.Length < 9)
+            return false;
+        if (!value.StartsWith("U", StringComparison.Ordinal) && !value.StartsWith("W", StringComparison.Ordinal))
+            return false;
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]))
+                return false;
+        }
+        return true;
     }
 
     private async Task<string?> ResolveUserAsync(string query, CancellationToken ct)
@@ -136,6 +361,9 @@ public sealed class SlackTargetResolver(ISlackTargetLookupClient lookupClient) :
             foreach (var user in response.Users)
             {
                 if (user.IsBot || user.Deleted)
+                    continue;
+
+                if (!SlackAclPolicy.IsAllowedUser(new SlackUserId(user.Id), options))
                     continue;
 
                 var displayName = user.Profile?.DisplayName ?? string.Empty;

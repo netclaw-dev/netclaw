@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-12T17:20:55.7365203+00:00",
-  "updatedAt": "2026-05-12T17:20:55.74213+00:00",
+  "updatedAt": "2026-06-10T19:44:08.3092383+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC",
   "entries": [
     {
@@ -146,7 +146,7 @@
       "lineNumber": 30,
       "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
       "message": "Test method 'ExtractPatterns_multiline_command_splits_one_unit_per_statement' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
-      "baselinedAt": "2026-05-16T00:00:00.0000000+00:00"
+      "baselinedAt": "2026-05-16T00:00:00+00:00"
     },
     {
       "hash": "a016290b3480868d",
@@ -155,7 +155,25 @@
       "lineNumber": 68,
       "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only path semantics\")",
       "message": "Test method 'ExtractCandidates_multiline_surfaces_each_verb' is disabled: POSIX-only path semantics",
-      "baselinedAt": "2026-05-16T00:00:00.0000000+00:00"
+      "baselinedAt": "2026-05-16T00:00:00+00:00"
+    },
+    {
+      "hash": "da8ee1bcfe9df24e",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherTests.cs",
+      "lineNumber": 111,
+      "codeSnippet": "Theory(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'ExtractCandidateVerbs_strips_trailing_version_token' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "baselinedAt": "2026-06-10T19:44:08.3078562+00:00"
+    },
+    {
+      "hash": "5d2151723744bf3e",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherTests.cs",
+      "lineNumber": 136,
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'IsApproved_git_tag_grant_matches_both_version_forms' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "baselinedAt": "2026-06-10T19:44:08.3092375+00:00"
     }
   ]
 }

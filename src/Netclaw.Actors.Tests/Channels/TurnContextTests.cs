@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -36,6 +37,17 @@ public sealed class TurnContextTests
             },
             ReceivedAt = new DateTimeOffset(2026, 5, 28, 12, 0, 0, TimeSpan.Zero),
             ExecutableText = "run git status",
+            DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "slack",
+                "destination",
+                "C123",
+                "#alerts",
+                "1700000000.000001"),
+            RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "mattermost",
+                "direct_message",
+                "user1234567890123456789012",
+                "@alice"),
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U67890"],
             AdoptedContextProjection = "quoted context",
@@ -61,6 +73,9 @@ public sealed class TurnContextTests
         var sourceKind = Assert.NotNull(context.Provenance.SourceKind);
         Assert.Equal("slack-workspace:T123", sourceScope.Value);
         Assert.Equal("slack", sourceKind.Value);
+        Assert.Equal(source.DefaultDeliveryTarget, context.DefaultDeliveryTarget);
+        Assert.Equal(source.RequestedDeliveryTarget, context.RequestedDeliveryTarget);
+        Assert.Equal(source.RequestedDeliveryTarget, context.EffectiveDeliveryTarget);
         Assert.True(context.HasAdoptedContext);
         Assert.True(context.HasThirdPartyAdoptedContext);
         Assert.Equal(["U12345", "U67890"], context.AdoptedSpeakerIds);
@@ -120,6 +135,17 @@ public sealed class TurnContextTests
                 SourceScope = new SourceScope("slack-workspace:T123"),
                 SourceKind = new SourceKind("slack")
             },
+            DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "slack",
+                "destination",
+                "C123",
+                "#alerts",
+                "1700000000.000001"),
+            RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "mattermost",
+                "direct_message",
+                "user1234567890123456789012",
+                "@alice"),
             HasAdoptedContext = true,
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U67890"],
@@ -138,6 +164,8 @@ public sealed class TurnContextTests
         Assert.Equal(original.RequesterSenderId, restored.RequesterSenderId);
         Assert.Equal(original.RequesterPrincipal, restored.RequesterPrincipal);
         Assert.Equal(original.Provenance, restored.Provenance);
+        Assert.Equal(original.DefaultDeliveryTarget, restored.DefaultDeliveryTarget);
+        Assert.Equal(original.RequestedDeliveryTarget, restored.RequestedDeliveryTarget);
         Assert.Equal(original.HasAdoptedContext, restored.HasAdoptedContext);
         Assert.Equal(original.HasThirdPartyAdoptedContext, restored.HasThirdPartyAdoptedContext);
         Assert.Equal(original.AdoptedSpeakerIds, restored.AdoptedSpeakerIds);

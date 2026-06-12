@@ -108,6 +108,10 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
 
     public string? ChannelType { get; init; }
 
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
+
     /// <summary>
     /// Input modalities supported by the model selected for this sub-agent run.
     /// Tools use this to decide whether model-visible media handoff is allowed.

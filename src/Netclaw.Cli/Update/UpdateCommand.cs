@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.IO.Compression;
 using System.Security.Cryptography;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
@@ -51,6 +52,7 @@ internal static class UpdateCommand
     {
         var checkOnly = false;
         var force = false;
+        UpdateChannel? channelOverride = null;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -62,6 +64,21 @@ internal static class UpdateCommand
                 case "--force":
                     force = true;
                     break;
+                case "--channel":
+                    if (i + 1 >= args.Length)
+                    {
+                        Console.Error.WriteLine("--channel requires a value: stable or beta.");
+                        WriteHelp();
+                        return 1;
+                    }
+                    if (!DaemonConfig.TryParseUpdateChannel(args[++i], out var parsedChannel))
+                    {
+                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
+                        WriteHelp();
+                        return 1;
+                    }
+                    channelOverride = parsedChannel;
+                    break;
                 case "-h" or "--help" or "help":
                     WriteHelp();
                     return 0;
@@ -69,6 +86,35 @@ internal static class UpdateCommand
                     Console.WriteLine($"Unknown option: {args[i]}");
                     WriteHelp();
                     return 1;
+            }
+        }
+
+        // Specifying --channel selects the channel this run evaluates against.
+        // Outside of --check it also switches the channel: the value is written
+        // back to netclaw.json so the daemon's background check and future runs
+        // follow it. --check is a read-only verb, so it previews the requested
+        // channel without persisting anything.
+        if (channelOverride is { } overrideChannel)
+        {
+            channel = overrideChannel;
+
+            if (checkOnly)
+            {
+                Console.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
+            }
+            else
+            {
+                try
+                {
+                    PersistChannel(paths, channel);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
+                    return 1;
+                }
+
+                Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
             }
         }
 
@@ -370,6 +416,19 @@ internal static class UpdateCommand
         }
     }
 
+    /// <summary>
+    /// Persists the chosen update channel to <c>Daemon.UpdateChannel</c> in
+    /// netclaw.json, preserving every other field. Writes the canonical wire
+    /// value (<c>stable</c>/<c>beta</c>) so the on-disk config stays schema-valid.
+    /// </summary>
+    private static void PersistChannel(NetclawPaths paths, UpdateChannel channel)
+    {
+        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
+        var daemon = ConfigFileHelper.GetOrCreateSection(config, "Daemon");
+        daemon["UpdateChannel"] = channel.ToWireValue();
+        ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
+    }
+
     internal static void WriteHelp()
     {
         Console.WriteLine("Usage: netclaw update [options]");
@@ -377,8 +436,9 @@ internal static class UpdateCommand
         Console.WriteLine("Check for and install Netclaw updates.");
         Console.WriteLine();
         Console.WriteLine("Options:");
-        Console.WriteLine("  --check    Check for updates without installing");
-        Console.WriteLine("  --force    Skip confirmation prompt");
+        Console.WriteLine("  --check              Check for updates without installing");
+        Console.WriteLine("  --force              Skip confirmation prompt");
+        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
     }
 
     /// <summary>

@@ -148,6 +148,8 @@ public sealed class SubAgentSpawner
                     Audience = context.Audience,
                     Boundary = context.Boundary,
                     ChannelType = context.ChannelType,
+                    DefaultDeliveryTarget = context.DefaultDeliveryTarget,
+                    RequestedDeliveryTarget = context.RequestedDeliveryTarget,
                     ModelInputModalities = context.ModelInputModalities,
                     ParentSessionDirectory = context.SessionDirectory,
                     ParentProjectDirectory = context.ProjectDirectory,

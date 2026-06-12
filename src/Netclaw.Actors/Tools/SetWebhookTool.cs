@@ -112,6 +112,10 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             };
         }
 
+        var validationErrors = WebhookRouteValidator.Validate(routeName, definition);
+        if (validationErrors.Count > 0)
+            return Task.FromResult($"Error: {validationErrors[0]}");
+
         _store.Save(routeName, definition);
         return Task.FromResult($"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
     }

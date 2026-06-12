@@ -15,6 +15,7 @@ using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
+using Netclaw.Tools;
 using IOFile = System.IO.File;
 
 namespace Netclaw.Channels.Mattermost.Transport;
@@ -247,7 +248,13 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
                 SourceScope = new SourceScope(rootPostId.Value)
             },
             Contents = contents,
-            ReceivedAt = message.Timestamp
+            ReceivedAt = message.Timestamp,
+            DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                ChannelType.Mattermost.ToWireValue(),
+                "destination",
+                channelId.Value,
+                channelId.Value,
+                rootPostId.Value)
         };
     }
 

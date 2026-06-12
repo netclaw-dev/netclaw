@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Protocol;
@@ -784,6 +785,17 @@ public sealed class SerializationRoundTripTests : TestKit
                 PayloadTaint = Netclaw.Configuration.PayloadTaint.Community,
                 SourceScope = "slack-workspace:T123",
                 SourceKind = "slack",
+                DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                    "slack",
+                    "destination",
+                    "C123",
+                    "#alerts",
+                    "1700000000.000001"),
+                RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
+                    "mattermost",
+                    "direct_message",
+                    "user1234567890123456789012",
+                    "@alice"),
                 HasAdoptedContext = true,
                 HasThirdPartyAdoptedContext = true,
                 AdoptedSpeakerIds = ["U12345", "U-observer"],
@@ -826,6 +838,8 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.TurnContext.PayloadTaint, result.TurnContext.PayloadTaint);
         Assert.Equal(wrapped.TurnContext.SourceScope, result.TurnContext.SourceScope);
         Assert.Equal(wrapped.TurnContext.SourceKind, result.TurnContext.SourceKind);
+        Assert.Equal(wrapped.TurnContext.DefaultDeliveryTarget, result.TurnContext.DefaultDeliveryTarget);
+        Assert.Equal(wrapped.TurnContext.RequestedDeliveryTarget, result.TurnContext.RequestedDeliveryTarget);
         Assert.Equal(wrapped.TurnContext.HasAdoptedContext, result.TurnContext.HasAdoptedContext);
         Assert.Equal(wrapped.TurnContext.HasThirdPartyAdoptedContext, result.TurnContext.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.TurnContext.AdoptedSpeakerIds, result.TurnContext.AdoptedSpeakerIds);

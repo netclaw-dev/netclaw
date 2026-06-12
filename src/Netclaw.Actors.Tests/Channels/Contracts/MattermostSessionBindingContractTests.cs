@@ -104,6 +104,9 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     protected override void SetReplyClientThrows(Exception ex)
         => _replyClient.ThrowOnPost = ex;
 
+    protected override void SetReplyClientThrowsOnce(Exception ex)
+        => _replyClient.ThrowOnceOnPost = ex;
+
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
@@ -170,7 +173,12 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;
-        _replyClient = new RecordingMattermostReplyClient { ThrowOnPost = pendingThrow };
+        var pendingUploadThrow = _replyClient.ThrowOnUpload;
+        _replyClient = new RecordingMattermostReplyClient
+        {
+            ThrowOnPost = pendingThrow,
+            ThrowOnUpload = pendingUploadThrow
+        };
     }
 
     private IActorRef CreateActorCore(
@@ -200,6 +208,44 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             new MattermostChannelId("ch-test"),
             new MattermostRootPostId("root-test"),
             deps), name);
+    }
+
+    [Fact]
+    public async Task FileOutput_uploads_file_and_posts_file_id_to_mattermost_thread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("session-mm-file-output");
+        var paths = TestMattermostGatewayDeps.NewTestPaths();
+        var filePath = Path.Combine(paths.BasePath, $"mattermost-upload-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(filePath, "hello mattermost", ct);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new FileOutput
+            {
+                SessionId = sid,
+                FilePath = filePath,
+                FileName = "report.txt",
+                MimeType = new Netclaw.Media.MimeType("text/plain")
+            },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        ]);
+
+        CreateActorCore(sid, pipeline, new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
+
+        await AwaitAssertAsync(() =>
+        {
+            var upload = Assert.Single(_replyClient.Uploads);
+            Assert.Equal("ch-test", upload.ChannelId.Value);
+            Assert.Equal(filePath, upload.FilePath);
+            Assert.Equal("report.txt", upload.FileName);
+
+            var post = Assert.Single(_replyClient.Posts);
+            Assert.NotNull(post.FileIds);
+            Assert.Single(post.FileIds!);
+            Assert.Contains("report.txt", post.Text, StringComparison.Ordinal);
+            Assert.Equal("root-test", post.RootPostId?.Value);
+        }, cancellationToken: ct);
     }
 
     // Regression for #939: cold-spawn redraw via the Mattermost action callback's

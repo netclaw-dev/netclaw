@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
@@ -39,12 +40,19 @@ public sealed record MattermostApprovalResponse(
     MattermostUserId? RequesterSenderId = null,
     MattermostPostId? PromptPostId = null);
 
+/// <summary>
+/// Sent to the gateway to wire up the actor hierarchy for a proactively-created
+/// Mattermost session. For DMs, <paramref name="DirectMessageUserId"/> carries
+/// the target user so the conversation actor can validate the user ACL instead
+/// of the channel ACL (DM channel ids are ephemeral and never allowlisted).
+/// </summary>
 public sealed record StartMattermostProactiveThread(
     MattermostChannelId ChannelId,
     MattermostRootPostId RootPostId,
-    SessionId SessionId);
+    SessionId SessionId,
+    MattermostUserId? DirectMessageUserId = null) : INoSerializationVerificationNeeded;
 
-public sealed record MattermostProactiveThreadAck(SessionId SessionId);
+public sealed record MattermostProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
 
 internal sealed class PendingApprovalRequest
 {

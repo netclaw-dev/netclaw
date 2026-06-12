@@ -13,13 +13,17 @@ Slack and Discord implement identical security logic independently: ACL policies
 | `PromptClassificationTests` | 10 | No | `PromptClassifier.ClassifyAsync` (shared code, no abstract base) |
 | `AclPolicyContractTests` | 16 | No | ACL allow/deny, audience resolution, principal classification, provenance |
 | `GatewayRoutingContractTests` | 3 | Yes | Message routing, duplicate event filtering, ACL enforcement at gateway |
+| `RoutingPolicyContractTests` | 11 | No | Inbound routing policy: mention gating, thread continuation/rehydration, DM matrix, empty content |
 | `SessionBindingContractTests` | 16 | Yes | Prompt injection gate, approval flows, output rendering, failure notification, pipeline lifecycle |
+| `ChannelHealthContractTests` | 3 | Yes | `IChannel.GetHealthAsync`: healthy when connected+ready, disconnected with a reason, degraded when disabled |
+| `SnapshotChannelHealthContractTests` | +2 | Yes | Snapshot transports only (Discord, Mattermost): degraded when connected-but-not-ready, health detail propagated from the transport snapshot. Slack's socket-mode transport is binary and implements only the base health contract |
+| `GatewayLifecycleContractTests` | 7 | Yes | Gateway lifecycle state machine (Discord and Mattermost only — Slack has no lifecycle actor): not-ready ingress dropped, runtime disconnect → clean reconnect, spurious ready signal → clean reconnect, no duplicate transport handlers across reconnects, not-ready reported while transport still connected, auto-reconnect after disconnect, retry timer cancelled on actor stop. Runs on `Akka.TestKit.TestScheduler` (virtual time); retry/ready-timeout timers are driven via `AdvanceScheduler` |
 
-Total: **45 contract assertions per channel** (16 ACL + 3 gateway + 16 session binding + 10 shared prompt classification).
+Total: **59 contract assertions per channel** (16 ACL + 3 gateway + 11 routing policy + 16 session binding + 3 health + 10 shared prompt classification), plus 2 extra health assertions for snapshot-transport channels and 7 lifecycle assertions for channels with a gateway lifecycle actor.
 
 ## Adding a new channel
 
-You need three implementation classes, each providing factory methods that map channel-neutral inputs to your channel's types.
+You need four implementation classes, each providing factory methods that map channel-neutral inputs to your channel's types.
 
 ### 1. ACL contract: `{Channel}AclContractTests`
 
@@ -78,7 +82,29 @@ public sealed class ExampleGatewayContractTests(ITestOutputHelper output)
 }
 ```
 
-### 3. Session binding contract: `{Channel}SessionBindingContractTests`
+### 3. Routing policy contract: `{Channel}RoutingPolicyContractTests`
+
+Subclass `RoutingPolicyContractTests`. No TestKit needed — routing policies are static methods.
+
+```csharp
+public sealed class ExampleRoutingPolicyContractTests : RoutingPolicyContractTests
+{
+    protected override RoutingVerdict Evaluate(
+        bool mentionOnly, bool allowDm, bool mentionRequiredInDm,
+        bool isDm, bool containsMention, bool threadExists, bool isThreadReply, string text)
+    {
+        // 1. Construct a plain text-only inbound message for your channel
+        //    (no attachments, no platform-specific subtypes), mapping
+        //    isThreadReply onto however your platform marks thread replies.
+        // 2. Call your ExampleRoutingPolicy.Evaluate(...)
+        // 3. Map your decision kind/ignore reason onto RoutingVerdict.
+        //    Throw on channel-specific ignore reasons — they belong in
+        //    standalone tests, not the contract.
+    }
+}
+```
+
+### 4. Session binding contract: `{Channel}SessionBindingContractTests`
 
 Subclass `SessionBindingContractTests`. This is the largest contract — it tests the full actor lifecycle.
 
@@ -122,6 +148,29 @@ public sealed class ExampleSessionBindingContractTests(ITestOutputHelper output)
 }
 ```
 
+### 5. Health contract: `{Channel}ChannelHealthContractTests`
+
+Subclass `ChannelHealthContractTests` (or `SnapshotChannelHealthContractTests` if your transport exposes a connected/ready snapshot with a health detail, like Discord and Mattermost). Requires Akka.Hosting.TestKit.
+
+```csharp
+public sealed class ExampleChannelHealthContractTests(ITestOutputHelper output)
+    : SnapshotChannelHealthContractTests(output)
+{
+    protected override IChannel CreateChannel(bool enabled)
+    {
+        // Construct your channel wired to a controllable fake transport client.
+    }
+
+    protected override Task SetTransportStateAsync(bool connected, bool ready, string? healthDetail)
+    {
+        // Drive the fake transport into the given state. If your transport can
+        // only connect through the channel's own connect path (like Slack),
+        // run channel.StartAsync here and throw NotSupportedException for
+        // states your transport cannot represent.
+    }
+}
+```
+
 If your binding actor uses persistence (like Slack's `ReceivePersistentActor`), override `ConfigureAkka` to add in-memory journal and snapshot store:
 
 ```csharp
@@ -132,6 +181,35 @@ protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IService
 ```
 
 Use `Interlocked.Increment` for unique actor names when persistence requires unique `PersistenceId` values.
+
+### 6. Gateway lifecycle contract: `{Channel}GatewayLifecycleContractTests`
+
+Only for channels with a gateway lifecycle actor (a WebSocket transport the
+channel manages itself — Discord and Mattermost today; Slack's socket-mode
+client manages its own connection and is excluded). Subclass
+`GatewayLifecycleContractTests`. Requires Akka.Hosting.TestKit.
+
+The base runs on `Akka.TestKit.TestScheduler` (virtual time): retry timers and
+ready timeouts never fire on their own — tests drive them with
+`AdvanceScheduler(offset)`. Your fixture provides:
+
+- `CreateLifecycleActor()` — wire your lifecycle actor to a fresh fake
+  transport and recording event sink, stored on the fixture
+- `GetSnapshotAsync` / `ConnectAsync` / `DisconnectAsync` — drive the actor's
+  ask protocol and normalize your snapshot type to `LifecycleSnapshotView`
+- `RaiseRuntimeDisconnectAsync` — raise a transport drop and drive the actor
+  to the clean-reconnect decision (advance virtual time past your ready
+  timeout if your channel defers it, like Discord's 30s READY wait)
+- `RaiseSpuriousReadySignalAsync` / `RaiseIngressEventAsync` — fire transport
+  events outside a clean startup cycle
+- Subscriber-count assertions plus `DeferTransportStop`/`ReleaseTransportStop`
+  on the fake transport (a deferrable `StopAsync` lets the contract observe
+  the not-ready-while-still-connected teardown window)
+
+Lifecycle behaviors unique to your platform stay as extra `[Fact]`s on the
+fixture — e.g. Discord's spurious-Connected-while-Ready clean reconnect, and
+Mattermost's ingress-forwarded-exactly-once-after-reconnect check (Discord
+cannot construct a forwardable `SocketUserMessage`).
 
 ## Shared test helpers
 
@@ -156,7 +234,7 @@ Contract tests cover shared behavioral requirements. You should still add channe
 - Bot message filtering (Discord-specific)
 - Interaction component routing (Discord-specific)
 - Thread history backfill (Slack-specific)
-- Mention-based filtering (Slack-specific)
+- file_share subtype / hidden message / BlockAction handling (Slack-specific)
 - Attachment processing (Slack-specific)
 
 The rule of thumb: if the behavior exists in your channel but not others, test it separately. If the behavior should be identical across channels, it belongs in a contract.

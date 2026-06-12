@@ -64,10 +64,13 @@ Sleep 1s
 Screenshot "/tmp/shot-wizard-security-posture.png"
 Sleep 1s
 
-# Both frames captured; abandon the wizard. Ctrl+C drops out of the
-# interactive prompt back to the shell — capture-only tape, no config to
-# validate.
-Ctrl+C
+# Both frames captured; abandon the wizard. Ctrl+Q is the TUI quit
+# shortcut (Ctrl+C requires a double-press under raw input mode).
+Ctrl+Q
+
+# VHS's screen scraper needs a beat to pick up the restored main buffer
+# after the TUI tears down the alternate screen (CSI ?1049l).
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "exit"

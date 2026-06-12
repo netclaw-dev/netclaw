@@ -40,6 +40,24 @@ internal sealed class MattermostNetReplyClient : IMattermostReplyClient
         await _client.UpdatePostAsync(postId.Value, text, BuildProps(attachments));
     }
 
+    public async Task<string> UploadFileAsync(
+        MattermostChannelId channelId,
+        string filePath,
+        string? fileName = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var resolvedFileName = fileName ?? Path.GetFileName(filePath);
+        await using var stream = File.OpenRead(filePath);
+        var details = await _client.UploadFileAsync(channelId.Value, resolvedFileName, stream, progressChanged: _ => { });
+
+        if (details is null || string.IsNullOrWhiteSpace(details.Id))
+            throw new InvalidOperationException("Mattermost returned no file ID — the upload was not delivered.");
+
+        return details.Id;
+    }
+
     private static PostProps? BuildProps(IReadOnlyList<MattermostAttachment>? attachments)
     {
         if (attachments is null or { Count: 0 })

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -34,12 +35,13 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public ProviderStepViewModel(
         ProviderDescriptorRegistry registry,
         IProviderProbe probe,
-        DeviceFlowServiceFactory? oauthFactory = null)
+        DeviceFlowServiceFactory? oauthFactory = null,
+        DaemonApi? daemonApi = null)
     {
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
-        OAuth = new OAuthFlowCoordinator(registry, oauthFactory, null, () => { });
+        OAuth = new OAuthFlowCoordinator(registry, oauthFactory, daemonApi, () => { });
     }
 
     public string StepId => WizardStepIds.Provider;

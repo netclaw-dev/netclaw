@@ -110,7 +110,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 return;
             }
 
-            var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
+            var sessionId = SessionIdFormat.Build(_conversationId.Value, threadTs.Value);
             var turnId = string.IsNullOrWhiteSpace(message.EventId.Value)
                 ? IdGen.ShortId()
                 : message.EventId.Value;
@@ -255,7 +255,7 @@ public sealed class SlackConversationActor : ReceiveActor
 
     private Props CreateThreadProps(SlackChannelId channelId, SlackThreadTs threadTs)
     {
-        var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
+        var sessionId = SessionIdFormat.Build(_conversationId.Value, threadTs.Value);
 
         if (_dependencies.ThreadPropsFactory is not null)
             return _dependencies.ThreadPropsFactory(sessionId, channelId, threadTs, _dependencies);

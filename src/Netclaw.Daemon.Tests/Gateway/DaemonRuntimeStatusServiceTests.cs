@@ -7,11 +7,10 @@ using System.Net;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Channels;
-using Netclaw.Channels.Discord;
-using Netclaw.Channels.Slack;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
@@ -42,6 +41,58 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     private readonly string _tempBase = Path.Combine(Path.GetTempPath(), $"netclaw-status-test-{Guid.NewGuid():N}");
 
     private NetclawPaths CreatePaths() => new(_tempBase);
+
+    private DaemonRuntimeStatusService CreateService(
+        IChannelRegistry? channelRegistry = null,
+        DaemonPersistenceOptions? persistenceOptions = null,
+        IOptions<TelemetryOptions>? telemetryOptions = null,
+        ModelCapabilities? modelCapabilities = null,
+        ModelSelection? modelSelection = null,
+        DaemonConfig? daemonConfig = null,
+        NetclawPaths? paths = null,
+        McpClientManager? mcpClientManager = null,
+        SQLiteMemoryStore? sqliteMemoryStore = null)
+    {
+        return new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
+            TimeProvider.System,
+            channelRegistry ?? CreateRegistry([]),
+            persistenceOptions ?? new DaemonPersistenceOptions(),
+            telemetryOptions ?? Options.Create(new TelemetryOptions()),
+            modelCapabilities ?? DefaultModelCapabilities,
+            modelSelection ?? DefaultModelSelection,
+            daemonConfig ?? new DaemonConfig(),
+            paths ?? CreatePaths(),
+            mcpClientManager,
+            sqliteMemoryStore);
+    }
+
+    private static IChannelRegistry CreateRegistry(
+        IReadOnlyCollection<ChannelDescriptor> descriptors,
+        IReadOnlyCollection<IChannel>? channels = null)
+    {
+        channels ??= [];
+        return new ChannelRegistry(
+            descriptors.Select(descriptor => new StaticChannelDescriptorProvider(descriptor)),
+            descriptors.Select(descriptor => new DescriptorChannelRuntimeSnapshotProvider(descriptor, channels)));
+    }
+
+    private static ChannelDescriptor Descriptor(
+        ChannelType channelType,
+        bool enabled,
+        ChannelKind kind = ChannelKind.RemoteChat)
+    {
+        return new ChannelDescriptor(
+            ChannelDescriptorKey.FromChannelType(channelType),
+            channelType,
+            kind,
+            channelType.ToString(),
+            enabled,
+            ChannelCapabilities.RuntimeHealth,
+            ToolIntents: new HashSet<ChannelToolIntentKind>(),
+            AddressKinds: new HashSet<ChannelAddressKind>(),
+            SupportedOutputEffects: new HashSet<ChannelOutputEffectKind>());
+    }
 
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
@@ -88,18 +139,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     [Fact]
     public async Task IncludesSlackConnectorAsDisabled_WhenNotEnabled()
     {
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: CreatePaths());
+        var service = CreateService(channelRegistry: CreateRegistry([
+            Descriptor(ChannelType.Slack, enabled: false)
+        ]));
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
         var slack = status.Connectors.Single(c => c.Key == "slack");
@@ -111,18 +153,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     [Fact]
     public async Task ReportsSlackAsDisconnected_WhenEnabledButMissingRuntimeChannel()
     {
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = true, AllowedChannelIds = ["C1"] },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: CreatePaths());
+        var service = CreateService(channelRegistry: CreateRegistry([
+            Descriptor(ChannelType.Slack, enabled: true)
+        ]));
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
         var slack = status.Connectors.Single(c => c.Key == "slack");
@@ -132,20 +165,53 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StatusEnumeratesDescriptorBackedOutputChannels()
+    {
+        var service = CreateService(channelRegistry: CreateRegistry([
+            Descriptor(ChannelType.Slack, enabled: false),
+            Descriptor(ChannelType.Discord, enabled: false),
+            Descriptor(ChannelType.Mattermost, enabled: false),
+            Descriptor(ChannelType.Tui, enabled: true, ChannelKind.LocalInteractiveClient)
+        ]));
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new[] { "discord", "mattermost", "slack", "tui" },
+            status.Connectors.Select(connector => connector.Key).Order(StringComparer.Ordinal));
+
+        var mattermost = status.Connectors.Single(connector => connector.Key == "mattermost");
+        Assert.False(mattermost.Enabled);
+        Assert.Equal("disabled", mattermost.Status);
+
+        var tui = status.Connectors.Single(connector => connector.Key == "tui");
+        Assert.True(tui.Enabled);
+        Assert.Equal("healthy", tui.Status);
+    }
+
+    [Fact]
+    public async Task StatusMapsRuntimeChannelHealthThroughSnapshotProvider()
+    {
+        var channel = new TestChannel(
+            ChannelType.Slack,
+            new ChannelHealth(ChannelHealthStatus.Healthy));
+
+        var service = CreateService(channelRegistry: CreateRegistry([
+            Descriptor(ChannelType.Slack, enabled: true)
+        ], [channel]));
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        var slack = status.Connectors.Single(connector => connector.Key == "slack");
+
+        Assert.True(slack.Enabled);
+        Assert.Equal("healthy", slack.Status);
+        Assert.Null(slack.Message);
+    }
+
+    [Fact]
     public async Task StatusIncludesModelCapabilities()
     {
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: CreatePaths());
+        var service = CreateService();
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
@@ -196,19 +262,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         await manager.StartAsync(CancellationToken.None);
         try
         {
-            var service = new DaemonRuntimeStatusService(
-                new DaemonStartClock(TimeProvider.System),
-                TimeProvider.System,
-                channels: Array.Empty<IChannel>(),
-                slackOptions: new SlackChannelOptions { Enabled = false },
-                discordOptions: new DiscordChannelOptions { Enabled = false },
-                persistenceOptions: new DaemonPersistenceOptions(),
-                telemetryOptions: Options.Create(new TelemetryOptions()),
-                modelCapabilities: DefaultModelCapabilities,
-                modelSelection: DefaultModelSelection,
-                daemonConfig: new DaemonConfig(),
-                paths: CreatePaths(),
-                mcpClientManager: manager);
+            var service = CreateService(mcpClientManager: manager);
 
             var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
@@ -262,19 +316,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
         await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: paths,
-            sqliteMemoryStore: sqliteStore);
+        var service = CreateService(paths: paths, sqliteMemoryStore: sqliteStore);
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
@@ -298,18 +340,10 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         slack.RecordReplyPosted(42);
         slack.RecordReplyFailed(77);
 
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = true },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: CreatePaths());
+        var service = CreateService(channelRegistry: CreateRegistry([
+            Descriptor(ChannelType.Slack, enabled: true),
+            Descriptor(ChannelType.Discord, enabled: false)
+        ]));
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
@@ -325,22 +359,29 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     [Fact]
     public async Task StatusIncludesSelfUpdateDisabledFlag()
     {
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig { DisableSelfUpdate = true },
-            paths: CreatePaths());
+        var service = CreateService(daemonConfig: new DaemonConfig { DisableSelfUpdate = true });
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(status.Update);
         Assert.True(status.Update!.SelfUpdateDisabled);
+    }
+
+    private sealed class TestChannel(
+        ChannelType channelType,
+        ChannelHealth health) : IChannel
+    {
+        public ChannelType ChannelType => channelType;
+
+        public string DisplayName => channelType.ToString();
+
+        public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+        {
+            return ValueTask.FromResult(health);
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -97,6 +98,10 @@ public sealed record TurnContextRecord
     public string? SourceScope { get; init; }
 
     public string? SourceKind { get; init; }
+
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
 
     public bool HasAdoptedContext { get; init; }
 
