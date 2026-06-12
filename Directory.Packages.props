@@ -106,4 +106,11 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.300" />
   </ItemGroup>
+  <!-- Transitive security pin: Aspire.Hosting.AppHost → StreamJsonRpc pulls in
+       MessagePack 2.5.192, flagged by NuGetAudit (GHSA-hv8m-jj95-wg3x, LZ4
+       decompression DoS). Netclaw uses MessagePack nowhere — this is sample-only
+       Aspire tooling RPC — but pin to the patched v2 (2.5.301) to clear the audit. -->
+  <ItemGroup>
+    <PackageVersion Include="MessagePack" Version="2.5.301" />
+  </ItemGroup>
 </Project>

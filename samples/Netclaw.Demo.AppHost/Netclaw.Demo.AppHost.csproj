@@ -14,6 +14,9 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="CommunityToolkit.Aspire.Hosting.Ollama" />
+    <!-- Promote the transitive MessagePack (via StreamJsonRpc) to the patched
+         2.5.301 to clear NuGetAudit GHSA-hv8m-jj95-wg3x. See Directory.Packages.props. -->
+    <PackageReference Include="MessagePack" />
   </ItemGroup>
 
   <ItemGroup>
