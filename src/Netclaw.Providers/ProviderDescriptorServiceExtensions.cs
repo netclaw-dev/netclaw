@@ -7,7 +7,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
-using Netclaw.Providers.Ds4;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -52,7 +51,6 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
-        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ds4);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
@@ -61,7 +59,6 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ds4);
 
         services.AddSingleton(sp =>
             new ProviderDescriptorRegistry(sp.GetRequiredService<ProviderDescriptorCatalog>().All));

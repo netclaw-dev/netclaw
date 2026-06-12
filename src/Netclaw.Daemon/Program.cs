@@ -30,7 +30,6 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers;
 using ShellSyntaxTree;
-using Netclaw.Providers.Ds4;
 using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -440,14 +439,6 @@ static void ConfigureDaemonServices(
             : mainProvider.Endpoint)
         : null;
     var openAiCompatibleApiKey = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
-        ? mainProvider?.ApiKey?.Value
-        : null;
-    var ds4Endpoint = mainProviderType?.Equals("ds4", StringComparison.OrdinalIgnoreCase) == true
-        ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
-            ? Ds4Descriptor.DefaultEndpointValue
-            : mainProvider.Endpoint)
-        : null;
-    var ds4ApiKey = mainProviderType?.Equals("ds4", StringComparison.OrdinalIgnoreCase) == true
         ? mainProvider?.ApiKey?.Value
         : null;
 
@@ -910,16 +901,6 @@ static void ConfigureDaemonServices(
                 openAiCompatibleEndpoint,
                 openAiCompatibleApiKey));
     }
-    if (ds4Endpoint is not null)
-    {
-        services.AddHttpClient(nameof(Ds4CapabilityResolver)).AddNetclawHeaders("capability-probe");
-        services.AddSingleton(sp =>
-            new Ds4CapabilityResolver(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(Ds4CapabilityResolver)),
-                sp.GetRequiredService<ILogger<Ds4CapabilityResolver>>(),
-                ds4Endpoint,
-                ds4ApiKey));
-    }
     // modelId → provider type lookup for CompositeCapabilityResolver scoping.
     // Covers Main + optional Compaction independently so multi-provider
     // deployments resolve each model's capabilities against the right backend.
@@ -937,8 +918,6 @@ static void ConfigureDaemonServices(
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OpenAiCompatibleCapabilityResolver>());
-        if (ds4Endpoint is not null)
-            resolvers.Add(sp.GetRequiredService<Ds4CapabilityResolver>());
         resolvers.Add(sp.GetRequiredService<OpenRouterOracleResolver>());
         resolvers.Add(sp.GetRequiredService<HuggingFaceCapabilityResolver>());
 

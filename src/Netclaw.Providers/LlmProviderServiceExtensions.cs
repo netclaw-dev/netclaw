@@ -6,7 +6,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
-using Netclaw.Providers.Ds4;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
@@ -50,7 +49,6 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton<OpenRouterProviderPlugin>();
         services.AddSingleton<GitHubCopilotProviderPlugin>();
         services.AddSingleton<VeniceAiProviderPlugin>();
-        services.AddSingleton<Ds4ProviderPlugin>();
 
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OllamaProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiCompatibleProviderPlugin>());
@@ -59,7 +57,6 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenRouterProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<GitHubCopilotProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<VeniceAiProviderPlugin>());
-        services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<Ds4ProviderPlugin>());
 
         return services;
     }

@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Providers.Anthropic;
-using Netclaw.Providers.Ds4;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -26,8 +25,7 @@ public sealed class ProviderDescriptorCatalog
         AnthropicDescriptor anthropic,
         OpenRouterDescriptor openRouter,
         GitHubCopilotDescriptor gitHubCopilot,
-        VeniceAiDescriptor veniceAi,
-        Ds4Descriptor ds4)
+        VeniceAiDescriptor veniceAi)
     {
         Ollama = ollama;
         OpenAiCompatible = openAiCompatible;
@@ -36,8 +34,7 @@ public sealed class ProviderDescriptorCatalog
         OpenRouter = openRouter;
         GitHubCopilot = gitHubCopilot;
         VeniceAi = veniceAi;
-        Ds4 = ds4;
-        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter, GitHubCopilot, VeniceAi, Ds4];
+        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter, GitHubCopilot, VeniceAi];
     }
 
     public OllamaDescriptor Ollama { get; }
@@ -53,8 +50,6 @@ public sealed class ProviderDescriptorCatalog
     public GitHubCopilotDescriptor GitHubCopilot { get; }
 
     public VeniceAiDescriptor VeniceAi { get; }
-
-    public Ds4Descriptor Ds4 { get; }
 
     public IReadOnlyList<IProviderDescriptor> All { get; }
 
@@ -73,7 +68,6 @@ public sealed class ProviderDescriptorCatalog
             new AnthropicDescriptor(httpClient),
             new OpenRouterDescriptor(httpClient),
             new GitHubCopilotDescriptor(httpClient, copilotTokenExchanger),
-            new VeniceAiDescriptor(httpClient),
-            new Ds4Descriptor(httpClient));
+            new VeniceAiDescriptor(httpClient));
     }
 }
