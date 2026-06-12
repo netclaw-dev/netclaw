@@ -78,6 +78,91 @@ public sealed class UpdateCommandTests : IDisposable
     }
 
     [Theory]
+    [InlineData("beta", "beta")]
+    [InlineData("stable", "stable")]
+    public async Task RunAsync_PersistsChannel_WhenSwitched(string arg, string expectedWire)
+    {
+        var manifest = CreateManifest("99.0.0", UpdateCheckService.GetCurrentRid());
+        UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
+
+        using var stdout = new StringWriter();
+        var originalOut = Console.Out;
+        var originalIn = Console.In;
+        Console.SetOut(stdout);
+        // An update is available; decline the install prompt so this exercises
+        // only channel switching + persistence, not the download path.
+        Console.SetIn(new StringReader("n\n"));
+
+        try
+        {
+            var exitCode = await UpdateCommand.RunAsync(
+                ["update", "--channel", arg], _paths);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(expectedWire, ReadPersistedChannel());
+            Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetIn(originalIn);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_DoesNotPersistChannel_UnderCheck()
+    {
+        var manifest = CreateManifest("99.0.0", UpdateCheckService.GetCurrentRid());
+        UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
+
+        using var stdout = new StringWriter();
+        var originalOut = Console.Out;
+        Console.SetOut(stdout);
+
+        try
+        {
+            var exitCode = await UpdateCommand.RunAsync(
+                ["update", "--check", "--channel", "beta"], _paths);
+
+            Assert.Equal(0, exitCode);
+            // --check is read-only: the channel is previewed for this run, not written to disk.
+            Assert.False(File.Exists(_paths.NetclawConfigPath));
+            Assert.Contains("Checking 'beta' channel", stdout.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_RejectsUnknownChannel()
+    {
+        using var stderr = new StringWriter();
+        var originalErr = Console.Error;
+        Console.SetError(stderr);
+
+        try
+        {
+            var exitCode = await UpdateCommand.RunAsync(["update", "--channel", "nightly"], _paths);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("Unknown channel", stderr.ToString());
+            Assert.False(File.Exists(_paths.NetclawConfigPath));
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
+    private string? ReadPersistedChannel()
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        return doc.RootElement.GetProperty("Daemon").GetProperty("UpdateChannel").GetString();
+    }
+
+    [Theory]
     [MemberData(nameof(StartupUpdateSkippedCases))]
     public void ShouldRunStartupUpdateCheck_ReturnsFalse_ForInteractiveOrSelfUpdateFlows(string[] args)
     {

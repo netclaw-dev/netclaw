@@ -39,6 +39,10 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract void SetReplyClientThrows(Exception ex);
 
+    // Fail only the next post, then recover. Lets a test fail a content post
+    // while letting a follow-up (e.g. the empty-turn fallback) succeed.
+    protected abstract void SetReplyClientThrowsOnce(Exception ex);
+
     protected abstract void ClearReplyClientThrows();
 
     protected abstract ChannelType ExpectedChannelType { get; }
@@ -261,27 +265,154 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     [Fact]
-    public async Task Reminder_delivery_publishes_observation()
+    public async Task Reminder_delivery_reports_success_when_post_succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-reminder");
+        var sid = new SessionId("session-reminder-success");
+        const string reminderKey = "reminder-1:123456";
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = "reminder-1:123456" }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+        ], reactive: true);
+
+        var observer = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "run the reminder", CreateReminderSource(reminderKey, observer.Ref)));
+
+        var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(ExpectedChannelType, result.ChannelType);
+        Assert.True(result.Delivered);
+    }
+
+    // Regression for the silent-loss class of bugs (Discord/Mattermost marked
+    // a reminder turn delivered even when the post threw). A failed post must
+    // report Delivered=false so the execution actor redelivers instead of
+    // acking a delivery that never happened.
+    [Fact]
+    public async Task Reminder_delivery_reports_failure_when_post_throws()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-reminder-failure");
+        const string reminderKey = "reminder-1:123456";
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("reminder output") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+        ], reactive: true);
+
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        var observer = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "run the reminder", CreateReminderSource(reminderKey, observer.Ref)));
+
+        var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(ExpectedChannelType, result.ChannelType);
+        Assert.False(result.Delivered);
+
+        ClearReplyClientThrows();
+    }
+
+    // Regression for the observer-clobber bug: two distinct reminders can target
+    // the same session concurrently. A single observer field is overwritten by
+    // the second dispatch before the first turn completes, so the first
+    // reminder's result is misrouted. Each observer must receive ITS OWN keyed
+    // result.
+    [Fact]
+    public async Task Concurrent_reminders_to_same_session_each_get_their_own_result()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-reminder-concurrent");
+        const string keyA = "reminder-A:111";
+        const string keyB = "reminder-B:222";
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("reply A") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = keyA },
+            new TextOutput("reply B") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = keyB }
+        ], reactive: true);
+
+        var observerA = CreateTestProbe();
+        var observerB = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+
+        // Both reminders dispatched before either turn completes.
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder A", CreateReminderSource(keyA, observerA.Ref)));
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder B", CreateReminderSource(keyB, observerB.Ref)));
+
+        var resultA = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(keyA, resultA.ReminderDeliveryKey);
+
+        var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(keyB, resultB.ReminderDeliveryKey);
+    }
+
+    // Regression for the misleading-fallback bug: when the real content post
+    // fails (the model DID produce a reply, the transport rejected it), the
+    // binding must NOT then post the "I didn't manage to produce a reply"
+    // fallback. That message is for genuinely empty turns; on a failed post the
+    // session was already notified, and the fallback both misleads and doubles
+    // up with the redelivered reply. Slack already guarded this; Discord and
+    // Mattermost did not.
+    [Fact]
+    public async Task Failed_content_post_does_not_post_empty_turn_fallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-failed-post-no-fallback");
+        // Turn 1's content post fails; turn 2 is a barrier — once its reply is
+        // visible, turn 1 (including its fallback decision) is fully processed.
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("real reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) },
+            new TextOutput("barrier reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) }
         ]);
 
-        var probe = CreateTestProbe();
-        Sys.EventStream.Subscribe(probe, typeof(ReminderDeliveryObserved));
-
+        // Fail only the first post (the real reply); the fallback, if attempted,
+        // would succeed and be recorded.
+        SetReplyClientThrowsOnce(new InvalidOperationException("transient channel error"));
         CreateBindingActor(sid, pipeline, detector);
 
-        var observed = await probe.ExpectMsgAsync<ReminderDeliveryObserved>(
-            TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal("reminder-1:123456", observed.ReminderDeliveryKey);
-        Assert.Equal(ExpectedChannelType, observed.ChannelType);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(GetPostedTexts(), t => t.Contains("barrier reply", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        var texts = GetPostedTexts();
+        Assert.DoesNotContain(texts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
     }
+
+    private MessageSource CreateReminderSource(string reminderKey, IActorRef deliveryObserver)
+        => new()
+        {
+            ChannelType = ExpectedChannelType,
+            SenderId = new Netclaw.Actors.Protocol.SenderId("reminder-system"),
+            Audience = TrustAudience.Public,
+            Boundary = TrustBoundary.TrustedInstance,
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+            {
+                SourceKind = new SourceKind("reminder")
+            },
+            ReceivedAt = DateTimeOffset.UnixEpoch,
+            ReminderId = reminderKey,
+            DeliveryObserver = deliveryObserver
+        };
 
     // --- Approval Flow ---
 

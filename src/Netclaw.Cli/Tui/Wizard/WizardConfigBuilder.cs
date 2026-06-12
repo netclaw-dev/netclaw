@@ -338,7 +338,7 @@ public sealed class WizardConfigBuilder
                 daemonSection["ExposureMode"] = Daemon.ExposureMode.ToWireValue();
 
             if (Daemon.UpdateChannel is not null)
-                daemonSection["UpdateChannel"] = Daemon.UpdateChannel.Value.ToString().ToLowerInvariant();
+                daemonSection["UpdateChannel"] = Daemon.UpdateChannel.Value.ToWireValue();
 
             if (!string.IsNullOrWhiteSpace(Daemon.Host))
                 daemonSection["Host"] = Daemon.Host;

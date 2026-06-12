@@ -63,6 +63,17 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    // True when a content post/upload this turn was attempted but failed (the
+    // model produced output, the transport rejected it). Distinct from "nothing
+    // was produced" — it suppresses the empty-turn fallback so a failed post
+    // isn't followed by a misleading "I didn't manage to produce a reply".
+    private bool _postFailedThisTurn;
+    // Reply targets for in-flight reminder delivery confirmations, keyed by
+    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
+    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
+    // Keyed (not a single field) because multiple reminders can target the
+    // same session concurrently — a single field would be clobbered.
+    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
@@ -229,6 +240,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            _postFailedThisTurn = false;
+            // A reinit aborts any in-flight reminder turn before its
+            // TurnCompleted. Report those as not-delivered now so the
+            // execution actor redelivers immediately instead of stalling
+            // until the backstop timeout.
+            FailPendingReminderDeliveries($"Discord pipeline reinitialized: {msg.Reason}");
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -1041,6 +1058,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             AckTarget = ackTarget
         };
 
+        // Only delivery-gated (DeliveryRequired) reminders carry a
+        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
+        // second concurrent reminder to this session can't overwrite the
+        // first's observer before its turn reaches TurnCompleted.
+        if (message.Source.DeliveryObserver is { } deliveryObserver
+            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
+            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
+
         try
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -1100,18 +1125,24 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         switch (msg.Output)
         {
             case TextOutput textOutput:
-                await SafeReplyAsync(textOutput.Text);
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync(textOutput.Text))
+                    _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case ErrorOutput error:
-                await SafeReplyAsync($":warning: {error.Message}");
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync($":warning: {error.Message}"))
+                    _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case FileOutput file:
                 if (await SafeUploadFileAsync(file))
                     _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case ProcessingStateOutput processing:
@@ -1161,15 +1192,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     AdvanceCursor(pendingSnowflake);
                 _pendingCursorSnowflake = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
+                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
                 {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                    reminderObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Discord,
-                        completed.TimestampMs));
+                        Delivered: _deliveredThisTurn,
+                        FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
+                        ObservedAtMs: completed.TimestampMs));
                 }
 
-                if (!_deliveredThisTurn)
+                // Only post the empty-turn fallback when the turn genuinely
+                // produced nothing. A failed post already notified the session
+                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
+                // didn't manage to produce a reply" on top would be misleading
+                // (a reply WAS produced) and double up with the redelivered one.
+                if (!_deliveredThisTurn && !_postFailedThisTurn)
                     await SafeReplyAsync(EmptyTurnFallbackText);
 
                 _turnNumber = completed.TurnNumber;
@@ -1187,6 +1226,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
+                _postFailedThisTurn = false;
                 break;
         }
     }
@@ -1260,7 +1300,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SafeReplyAsync(string text)
+    /// <summary>
+    /// Posts <paramref name="text"/> (chunked) to Discord. Returns true only
+    /// when every chunk posted successfully; false if any chunk failed (after
+    /// notifying the session of the delivery failure). Callers that gate
+    /// reminder delivery confirmation on real delivery must honor the result.
+    /// </summary>
+    private async Task<bool> SafeReplyAsync(string text)
     {
         var chunks = ChunkMessage(text);
         foreach (var chunk in chunks)
@@ -1280,9 +1326,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
                 ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return;
+                return false;
             }
         }
+
+        return true;
     }
 
     private DiscordPostMessage BuildPostMessage(
@@ -1373,6 +1421,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _rootMessageId = null;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
         }
+    }
+
+    /// <summary>
+    /// Tells every in-flight reminder observer that delivery did not happen,
+    /// then clears them. Called when a turn can no longer reach TurnCompleted
+    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
+    /// rather than waiting out its backstop timeout.
+    /// </summary>
+    private void FailPendingReminderDeliveries(string reason)
+    {
+        if (_reminderDeliveryObservers.Count == 0)
+            return;
+
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Discord, Delivered: false, FailureReason: reason));
+
+        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)

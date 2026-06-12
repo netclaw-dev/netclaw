@@ -1,3 +1,17 @@
+#### 0.24.0-beta.4 2026-06-11 ####
+
+Netclaw v0.24.0-beta.4 — Reminder delivery fixes and shell approval normalization
+
+**Bug Fixes**
+
+* **In-session reminder delivery now confirms successfully** — fixed current-session reminders that were incorrectly reporting delivery failures. Reminders scheduled with `delivery_kind: current_session` now complete without spurious errors. ([#1387](https://github.com/netclaw-dev/netclaw/pull/1387))
+
+* **Reminder list includes disabled reminders** — the reminder list endpoint now correctly returns disabled reminders alongside active ones, so you can see the full schedule even for paused reminders. ([#1386](https://github.com/netclaw-dev/netclaw/pull/1386))
+
+* **Shell approval no longer matches version/value arguments** — normalized how version and value arguments are processed in shell approval verb chains, preventing false-positive pattern matches on numeric arguments. ([#1388](https://github.com/netclaw-dev/netclaw/pull/1388))
+
+---
+
 #### 0.24.0-beta.3 2026-06-10 ####
 
 Netclaw v0.24.0-beta.3 — Channel infrastructure standardization, Discord/Mattermost gateway self-healing, and install script fix

@@ -167,4 +167,19 @@ public sealed record MessageSource
     /// serializable and <see cref="MessageSource"/> is never persisted.
     /// </summary>
     public IActorRef? AckTarget { get; init; }
+
+    /// <summary>
+    /// Optional long-lived reply target for reminder delivery confirmation.
+    /// Unlike <see cref="AckTarget"/> (the dispatcher's <c>Ask</c> temp actor,
+    /// which completes at turn-accept time and is then dead), this is the
+    /// dispatching <c>ReminderExecutionActor</c>'s own ref, alive until the
+    /// turn delivers. When set, the channel binding actor tells it a
+    /// <see cref="Protocol.ReminderDeliveryResult"/> on turn completion,
+    /// reporting whether the assistant reply actually reached the channel.
+    /// Only populated for <c>DeliveryKind.CurrentSession</c> reminders with
+    /// <c>DeliveryRequired = true</c>; null otherwise. Runtime-only — an
+    /// <see cref="IActorRef"/> is not serializable and <see cref="MessageSource"/>
+    /// is never persisted.
+    /// </summary>
+    public IActorRef? DeliveryObserver { get; init; }
 }

@@ -995,6 +995,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | Action | Command (via `shell_execute`) |
 |--------|-------------------------------|
 | Check for updates | `netclaw update` |
+| Switch update channel (saved) | `netclaw update --channel beta` |
 | Self-diagnose | `netclaw doctor` |
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |
