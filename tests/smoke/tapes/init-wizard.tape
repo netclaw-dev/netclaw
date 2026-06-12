@@ -61,11 +61,8 @@ Enter
 Wait+Screen@10s /Your timezone:/
 Enter
 
-Wait+Screen@10s /Projects directory:/
-Enter
-
-Wait+Screen@10s /Notification webhook URL/
-Enter
+# Identity ends at timezone — workspaces directory and notification webhooks are
+# post-install settings owned by `netclaw config`, no longer collected in init.
 
 # ─── Step 3 of 4: Security Posture ──────────────────────────────────
 Wait+Screen@10s /Who will interact with this Netclaw instance/
