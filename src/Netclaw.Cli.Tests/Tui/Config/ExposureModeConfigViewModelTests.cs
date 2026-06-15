@@ -102,7 +102,7 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
     }
 
     [Fact]
-    public void Saving_non_local_with_orphaned_local_token_blocks_before_persistence()
+    public void Saving_non_local_with_orphaned_local_token_pairs_current_client()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
             """
@@ -113,24 +113,34 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
               }
             }
             """);
-        File.WriteAllText(Context.Paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"orphaned-token\"}");
-        var configBefore = File.ReadAllText(Context.Paths.NetclawConfigPath);
+        // A real DeviceToken is always a base64url token; orphaned = present in secrets with no
+        // matching device in the (absent) registry.
+        var (orphanedToken, _) = CreatePairedDevice("orphan");
+        File.WriteAllText(Context.Paths.SecretsPath, JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["DeviceToken"] = orphanedToken
+        }));
 
         using var vm = new ExposureModeConfigViewModel(Context.Paths);
         vm.Step.SelectedMode = ExposureMode.TailscaleServe;
 
         AdvanceTunnelModeToSave(vm);
 
-        Assert.False(vm.IsSaved.Value);
-        Assert.Contains("netclaw doctor", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("docs/spec/SPEC-006-gateway-exposure-and-remote-access.md", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
-        Assert.Contains("#875", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
-        Assert.Equal(configBefore, File.ReadAllText(Context.Paths.NetclawConfigPath));
-        Assert.False(File.Exists(Context.Paths.DevicesPath));
+        // Auto-pair instead of blocking: keep the operator's existing token and mint a device that
+        // accepts it so the configuring client is not locked out of chat.
+        Assert.True(vm.IsSaved.Value);
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Daemon.ExposureMode", out var mode));
+        Assert.Equal("tailscale-serve", mode);
+        Assert.Equal(orphanedToken, ReadLocalDeviceToken());
+        var device = Assert.Single(ReadPairedDevices());
+        Assert.True(device.IsBootstrapDevice);
+        Assert.True(PairedDevice.VerifyToken(orphanedToken, device));
     }
 
     [Fact]
-    public void Saving_non_local_with_empty_devices_file_blocks_before_persistence()
+    public void Saving_non_local_with_empty_devices_file_pairs_current_client()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
             """
@@ -142,22 +152,26 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
             }
             """);
         File.WriteAllText(Context.Paths.DevicesPath, "[]");
-        var configBefore = File.ReadAllText(Context.Paths.NetclawConfigPath);
 
         using var vm = new ExposureModeConfigViewModel(Context.Paths);
         vm.Step.SelectedMode = ExposureMode.TailscaleServe;
 
         AdvanceTunnelModeToSave(vm);
 
-        Assert.False(vm.IsSaved.Value);
-        Assert.Contains("netclaw doctor", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("#875", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
-        Assert.Equal(configBefore, File.ReadAllText(Context.Paths.NetclawConfigPath));
-        Assert.Equal("[]", File.ReadAllText(Context.Paths.DevicesPath));
+        // No token and an empty registry: mint a fresh token+device for the configuring client.
+        Assert.True(vm.IsSaved.Value);
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Daemon.ExposureMode", out var mode));
+        Assert.Equal("tailscale-serve", mode);
+        var rawToken = ReadLocalDeviceToken();
+        Assert.False(string.IsNullOrWhiteSpace(rawToken));
+        var device = Assert.Single(ReadPairedDevices());
+        Assert.True(device.IsBootstrapDevice);
+        Assert.True(PairedDevice.VerifyToken(rawToken, device));
     }
 
     [Fact]
-    public void Saving_non_local_with_mismatched_local_token_blocks_before_persistence()
+    public void Saving_non_local_with_mismatched_local_token_pairs_current_client()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
             """
@@ -176,17 +190,23 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
             ["configVersion"] = 1,
             ["DeviceToken"] = mismatchedToken
         }));
-        var configBefore = File.ReadAllText(Context.Paths.NetclawConfigPath);
 
         using var vm = new ExposureModeConfigViewModel(Context.Paths);
         vm.Step.SelectedMode = ExposureMode.TailscaleServe;
 
         AdvanceTunnelModeToSave(vm);
 
-        Assert.False(vm.IsSaved.Value);
-        Assert.Contains("Bootstrap pairing state", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("#875", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
-        Assert.Equal(configBefore, File.ReadAllText(Context.Paths.NetclawConfigPath));
+        // The local token matches no registered device: mint an additional device that accepts it
+        // without removing the pre-existing one, so the configuring client retains access.
+        Assert.True(vm.IsSaved.Value);
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Daemon.ExposureMode", out var mode));
+        Assert.Equal("tailscale-serve", mode);
+        Assert.Equal(mismatchedToken, ReadLocalDeviceToken());
+        var devices = ReadPairedDevices();
+        Assert.Equal(2, devices.Count);
+        Assert.Contains(devices, d => PairedDevice.VerifyToken(mismatchedToken, d));
+        Assert.Contains(devices, d => d.Name == registeredDevice.Name);
     }
 
     [Fact]

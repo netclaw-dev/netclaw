@@ -62,14 +62,13 @@ public sealed class ExposureModeConfigViewModel : ReactiveViewModel
             return;
         }
 
-        if (_step.GetBootstrapPairingValidationError(_context.Paths) is { } pairingError)
-        {
-            _context.StatusMessage.Value = pairingError;
-            NotifyContentChanged();
-            return;
-        }
-
         _orchestrator.WriteConfig();
+
+        // Keep the configuring client authenticated after switching to a non-local mode. WriteConfig
+        // already auto-pairs a fully fresh install (the wizard bootstrap path); this also covers
+        // leftover/partial pairing state so `netclaw config` never locks the operator out of chat.
+        _step.EnsureCurrentClientPaired(_context.Paths);
+
         IsSaved.Value = true;
         _context.StatusMessage.Value = "Exposure mode saved.";
         NotifyContentChanged();

@@ -305,19 +305,119 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
             : null;
     }
 
-    internal string? GetBootstrapPairingValidationError(NetclawPaths paths)
+    /// <summary>
+    /// Guarantees the operator's current client keeps daemon access after a non-local exposure
+    /// mode is saved. If the local <c>DeviceToken</c> does not already match a paired device, the
+    /// configuring client is paired: an existing-but-unmatched token (orphaned or mismatched local
+    /// state) gets a device minted to accept it; a missing token gets a fresh token+device. Existing
+    /// devices are never removed, so this only ever ADDS access for the operator at the keyboard.
+    ///
+    /// This replaces an earlier hard "fix pairing via `netclaw doctor` before saving" block: that
+    /// block locked the configuring client out of <c>netclaw chat</c> on any leftover/partial pairing
+    /// state. Auto-pairing here mirrors the wizard's bootstrap (<see cref="ContributeSecrets"/>) and
+    /// the daemon's <c>BootstrapDeviceSeeder</c>, which only auto-pair on a fully fresh install.
+    /// </summary>
+    public void EnsureCurrentClientPaired(NetclawPaths paths)
     {
         if (!SelectedMode.RequiresRemoteAuthentication())
-            return null;
+            return;
 
         var snapshot = DeviceRegistryInspector.Read(paths);
-        if (!snapshot.DevicesFileExists && !snapshot.HasLocalDeviceToken && !snapshot.HasCompletedBootstrap)
+        if (snapshot.LocalTokenMatchesDevice)
+            return; // The configuring client already has a working pairing — nothing to do.
+
+        var saltHex = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+        // Keep the operator's existing local token when one is present and usable (orphaned/
+        // mismatched) so an already-distributed token keeps working; otherwise — including a
+        // corrupted/unparseable token — mint a fresh one for this client rather than crash the save.
+        var rawToken = snapshot.HasLocalDeviceToken ? ReadLocalDeviceTokenValue(paths) : null;
+        if (string.IsNullOrWhiteSpace(rawToken) || !TryComputeTokenHash(rawToken, saltHex, out var tokenHash))
+        {
+            rawToken = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
+            WriteLocalDeviceTokenValue(paths, rawToken);
+            tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var device = new PairedDevice
+        {
+            Name = Environment.MachineName,
+            IsBootstrapDevice = true,
+            TokenHash = tokenHash,
+            Salt = saltHex,
+            CreatedAt = now,
+            LastUsedAt = now,
+        };
+
+        var devices = ReadPairedDevices(paths);
+        devices.Add(device);
+        WritePairedDevices(paths, devices);
+    }
+
+    private static string? ReadLocalDeviceTokenValue(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.SecretsPath))
             return null;
 
-        if (snapshot.DeviceCount > 0 && snapshot.LocalTokenMatchesDevice)
+        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
+        if (!secrets.TryGetValue("DeviceToken", out var rawValue))
             return null;
 
-        return "Bootstrap pairing state is incomplete or mismatched. Run 'netclaw doctor', review docs/spec/SPEC-006-gateway-exposure-and-remote-access.md, and see issue #875 before saving non-local exposure.";
+        var token = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
+        return ConfigFileHelper.DecryptIfEncrypted(paths, token);
+    }
+
+    private static void WriteLocalDeviceTokenValue(NetclawPaths paths, string rawToken)
+    {
+        var secrets = File.Exists(paths.SecretsPath)
+            ? ConfigFileHelper.LoadJsonDict(paths.SecretsPath)
+            : new Dictionary<string, object>();
+        secrets["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+        secrets["DeviceToken"] = rawToken;
+        ConfigFileHelper.WriteSecretsFile(paths, secrets);
+    }
+
+    private static List<PairedDevice> ReadPairedDevices(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.DevicesPath))
+            return [];
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(paths.DevicesPath));
+            return doc.RootElement.ValueKind == JsonValueKind.Array
+                ? JsonSerializer.Deserialize<List<PairedDevice>>(doc.RootElement.GetRawText(), DevicesJsonOptions) ?? []
+                : [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static void WritePairedDevices(NetclawPaths paths, IReadOnlyList<PairedDevice> devices)
+    {
+        var json = JsonSerializer.Serialize(devices, DevicesJsonOptions);
+        File.WriteAllText(paths.DevicesPath, json);
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
+            File.SetUnixFileMode(paths.DevicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    private static bool TryComputeTokenHash(string rawToken, string saltHex, out string tokenHash)
+    {
+        try
+        {
+            tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
+            return true;
+        }
+        catch (FormatException)
+        {
+            // A corrupted/non-base64url local token cannot produce a usable device hash; signal the
+            // caller to mint a fresh token instead of letting the save crash.
+            tokenHash = string.Empty;
+            return false;
+        }
     }
 
     public SectionContribution BuildContribution(IWizardStepViewModel editor)
