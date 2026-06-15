@@ -229,13 +229,15 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
 
         allPassed = runner.AllPassed;
         Succeeded.Value = allPassed;
-        if (allPassed && _context is not null)
+        if (allPassed)
         {
-            // Don't auto-launch: show the post-flight summary so the operator sees the
-            // bootstrap-vs-config split (Enter launches `netclaw chat`; `netclaw config`
-            // owns ongoing settings). The page invokes LaunchChat() on Enter.
-            _context.StatusMessage.Value =
-                "✓ Netclaw is ready. Press Enter to start chatting — run `netclaw config` anytime to adjust settings.";
+            // Validation passed — launch chat automatically rather than gating on a second
+            // Enter. Mirrors the provider step's async-success auto-advance: this runs on
+            // the health-check task and drives navigation through the same wired Navigate
+            // delegate the Enter handler used (it sets the onboarding trigger first).
+            if (_context is not null)
+                _context.StatusMessage.Value = "✓ Netclaw is ready — starting chat…";
+            LaunchChat();
         }
         else if (_context is not null)
         {

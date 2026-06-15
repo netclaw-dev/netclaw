@@ -354,8 +354,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             }
         }
 
-        // Health check step: Enter triggers the check, or finishes the post-flight summary.
-        // A clean bootstrap launches `netclaw chat`; warnings/failures just exit.
+        // Health check step: Enter triggers the check. On completion a clean bootstrap
+        // auto-launches `netclaw chat` (HealthCheckStepViewModel calls LaunchChat itself),
+        // so the success branch here is only a fallback; warnings/failures stay on the
+        // summary and Enter exits.
         if (currentStep is HealthCheckStepViewModel healthVm && keyInfo.Key == ConsoleKey.Enter)
         {
             if (healthVm.IsComplete.Value)

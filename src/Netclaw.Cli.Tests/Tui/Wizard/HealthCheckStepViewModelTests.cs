@@ -175,6 +175,8 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
             daemonApi,
             navigationState: new ChatNavigationState(),
             timeProvider: TimeProvider.System);
+        string? launchedRoute = null;
+        step.Navigate = route => launchedRoute = route;
         using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
         using var context = new WizardContext
         {
@@ -191,6 +193,9 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         Assert.True(File.Exists(_paths.NetclawConfigPath));
         Assert.Contains(step.Results, r => r.Label == "Daemon ready" && r.Passed == true);
+        // A clean bootstrap launches chat automatically — no second Enter required.
+        Assert.True(step.Succeeded.Value);
+        Assert.Equal("/chat", launchedRoute);
         // It confirmed readiness by polling health (not by spawning/POSTing).
         Assert.Contains("GET /api/health/ready", handler.Requests);
         // Watcher-owned: the wizard never stops the daemon and never triggers the restart itself.
@@ -231,6 +236,8 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
             // the timeout diagnostic, exercising the message path without a real wait.
             daemonApi: null,
             navigationState: new ChatNavigationState());
+        var launched = false;
+        step.Navigate = _ => launched = true;
         using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
         using var context = new WizardContext
         {
@@ -250,6 +257,8 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.Contains("marker may be set without a supervisor present", failure.Label, StringComparison.Ordinal);
         Assert.DoesNotContain("Daemon did not become ready", failure.Label, StringComparison.Ordinal);
         Assert.False(step.Succeeded.Value);
+        // A failed health check must NOT auto-launch chat — it stays on the summary.
+        Assert.False(launched);
     }
 
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor

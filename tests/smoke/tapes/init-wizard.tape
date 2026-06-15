@@ -75,13 +75,12 @@ Wait+Screen@10s /Press Enter to run health checks/
 Enter
 
 # Health checks contact ollama, write config, validate, and start the daemon.
-# On a clean bootstrap the post-flight summary appears and waits for Enter
-# (it no longer auto-launches chat) — it nudges toward `netclaw chat` and
-# `netclaw config`. Generous timeout: daemon cold-start + Ollama model load.
-Wait+Screen@240s /Netclaw is ready/
-Enter
-
-# Enter launches chat with the configured model.
+# On a clean bootstrap, once validation passes the wizard launches chat
+# automatically — there is no Enter gate / post-flight summary to confirm.
+# Anchor on a health item that renders during the run (it stays on screen
+# through the daemon-start poll), then wait for the chat screen to take over.
+# Generous timeout: daemon cold-start + Ollama model load.
+Wait+Screen@240s /Configuration written/
 Wait+Screen@240s /Ready  \|  qwen2:0.5b/
 Ctrl+Q
 
