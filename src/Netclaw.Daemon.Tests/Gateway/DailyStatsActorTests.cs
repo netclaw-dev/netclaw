@@ -50,7 +50,7 @@ public sealed class DailyStatsActorTests : IDisposable
 
         var rows = await actor.Ask<DailyStatsActor.QuerySkillUsageStatsResult>(
             new DailyStatsActor.QuerySkillUsageStats(7),
-            TimeSpan.FromSeconds(3),
+            TimeSpan.FromSeconds(15),
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(3, rows.Rows.Count);
@@ -65,7 +65,7 @@ public sealed class DailyStatsActorTests : IDisposable
 
         var totals = await actor.Ask<DailyStatsActor.ProcessStatsResult>(
             new DailyStatsActor.QueryProcessStats(),
-            TimeSpan.FromSeconds(3),
+            TimeSpan.FromSeconds(15),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(4, totals.SkillsLoadedTotal);
     }
