@@ -111,13 +111,6 @@ public sealed class NoDoctorChecksAttribute(string justification) : Attribute
 /// </summary>
 public static class SectionEditorExemptions
 {
-    public static readonly IReadOnlyDictionary<string, string> SyntheticOrInitOwned =
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["provider"] = "Provider is an init-owned bootstrap leaf and later config surfaces may route to dedicated provider commands.",
-            ["identity"] = "Identity spans generated identity files and config-backed fields, so it remains init-owned and menu-hidden."
-        };
-
     public static readonly IReadOnlySet<string> ConfigSmokeExemptions =
         new HashSet<string>(StringComparer.Ordinal)
         {
