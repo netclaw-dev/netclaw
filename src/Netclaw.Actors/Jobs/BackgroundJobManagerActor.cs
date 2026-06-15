@@ -61,6 +61,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         Receive<QueryBackgroundJob>(HandleQuery);
         Receive<KillJobsForSession>(HandleKillJobsForSession);
         Receive<Reconcile>(_ => HandleReconcile());
+        Receive<GetBackgroundJobManagerHealth>(_ => HandleGetHealth());
     }
 
     protected override void PreStart()
@@ -272,6 +273,11 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             Elapsed = elapsed,
             Rationale = def.Rationale
         });
+    }
+
+    private void HandleGetHealth()
+    {
+        Sender.Tell(new BackgroundJobManagerHealthResponse(_activeJobIds.Count, _deferredQueue.Count));
     }
 
     private void HandleReconcile()

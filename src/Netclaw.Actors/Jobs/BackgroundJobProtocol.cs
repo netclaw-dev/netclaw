@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Configuration;
@@ -189,3 +190,14 @@ public sealed record BackgroundJobDefinition
     public DateTimeOffset? CompletedAt =>
         CompletedAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(CompletedAtMs.Value) : null;
 }
+
+/// <summary>Ping sent to <see cref="BackgroundJobManagerActor"/> to confirm it is ready (PreStart + startup reconciliation complete).</summary>
+public sealed record GetBackgroundJobManagerHealth : INoSerializationVerificationNeeded
+{
+    public static readonly GetBackgroundJobManagerHealth Instance = new();
+}
+
+/// <summary>Response from <see cref="GetBackgroundJobManagerHealth"/> with current runtime counters.</summary>
+public sealed record BackgroundJobManagerHealthResponse(
+    int ActiveJobCount,
+    int QueuedJobCount) : INoSerializationVerificationNeeded;

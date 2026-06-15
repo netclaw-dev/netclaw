@@ -233,9 +233,14 @@ public class BackgroundJobManagerActorTests : TestKit
 
         // A fresh manager's PreStart reconciliation marks the orphan Lost and
         // must notify the owning session through the gateway.
-        Sys.ActorOf(
+        var manager = Sys.ActorOf(
             Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
             "lost-notify-manager");
+
+        // Readiness barrier: reconciliation runs before this reply.
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var delivery = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -270,18 +275,19 @@ public class BackgroundJobManagerActorTests : TestKit
         _store.Save(orphanDef);
 
         // Create a second manager — its PreStart reconciliation should mark the orphan as Lost
-        Sys.ActorOf(
+        var manager = Sys.ActorOf(
             Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
             "reconcile-test-manager");
 
-        await AwaitAssertAsync(() =>
-        {
-            var reconciled = _store.Get(new BackgroundJobId("orphan-123"));
-            Assert.NotNull(reconciled);
-            Assert.Equal(BackgroundJobStatus.Lost, reconciled!.Status);
-            Assert.NotNull(reconciled.CompletedAtMs);
-            return Task.CompletedTask;
-        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        // Readiness barrier: reconciliation runs before this reply.
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var reconciled = _store.Get(new BackgroundJobId("orphan-123"));
+        Assert.NotNull(reconciled);
+        Assert.Equal(BackgroundJobStatus.Lost, reconciled!.Status);
+        Assert.NotNull(reconciled.CompletedAtMs);
     }
 
     [Fact]
@@ -305,17 +311,18 @@ public class BackgroundJobManagerActorTests : TestKit
         var store = new BackgroundJobDefinitionStore(paths);
         var sink = new RecordingNotificationSink();
 
-        Sys.ActorOf(
+        var legacyManager = Sys.ActorOf(
             Props.Create(() => new BackgroundJobManagerActor(store, TimeProvider.System, sink)),
             "legacy-job-alert-manager");
 
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Contains(sink.Alerts, alert =>
-                alert.Category == AlertType.BackgroundJobSchemaDropped
-                && alert.Summary.Contains(jobId, StringComparison.Ordinal));
-            return Task.CompletedTask;
-        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        // Readiness barrier: startup alert emission runs before this reply.
+        await legacyManager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Contains(sink.Alerts, alert =>
+            alert.Category == AlertType.BackgroundJobSchemaDropped
+            && alert.Summary.Contains(jobId, StringComparison.Ordinal));
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink
