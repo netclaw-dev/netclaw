@@ -195,6 +195,7 @@ public sealed record BackgroundJobDefinition
 public sealed record GetBackgroundJobManagerHealth : INoSerializationVerificationNeeded
 {
     public static readonly GetBackgroundJobManagerHealth Instance = new();
+    private GetBackgroundJobManagerHealth() { }
 }
 
 /// <summary>Response from <see cref="GetBackgroundJobManagerHealth"/> with current runtime counters.</summary>

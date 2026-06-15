@@ -221,7 +221,7 @@ public class BackgroundJobManagerActorTests : TestKit
             SessionId = sessionId,
             Rationale = "dev server",
             Status = BackgroundJobStatus.Running,
-            StartedAtMs = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds(),
+            StartedAtMs = TimeProvider.System.GetUtcNow().AddMinutes(-5).ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
             OriginChannelType = ChannelType.Tui
@@ -267,7 +267,7 @@ public class BackgroundJobManagerActorTests : TestKit
             SessionId = new Netclaw.Actors.Protocol.SessionId("test/thread"),
             Rationale = "orphaned test",
             Status = BackgroundJobStatus.Running,
-            StartedAtMs = DateTimeOffset.UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds(),
+            StartedAtMs = TimeProvider.System.GetUtcNow().AddMinutes(-30).ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
             OriginChannelType = ChannelType.Tui
@@ -293,6 +293,9 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task StartupReconciliation_EmitsAlert_ForLegacyJobMissingTrustFields()
     {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+
         const string jobId = "legacy-job-alert";
         var filePath = Path.Combine(_dir.Path, "jobs", $"{Uri.EscapeDataString(jobId)}.json");
         File.WriteAllText(filePath, $$"""
@@ -307,7 +310,6 @@ public class BackgroundJobManagerActorTests : TestKit
             }
             """);
 
-        var paths = new NetclawPaths(_dir.Path);
         var store = new BackgroundJobDefinitionStore(paths);
         var sink = new RecordingNotificationSink();
 
