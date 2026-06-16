@@ -1019,7 +1019,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             AllowSymlinks = _pendingLocalAllowSymlinks,
         });
 
-        SaveExternalConfig(external);
+        if (!SaveExternalConfig(external))
+            return;
         ClearPendingFlow();
         ReloadSources();
         _selectedKind = SkillSourceKind.LocalFolder;
@@ -1257,7 +1258,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                 : null,
         });
 
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         ClearPendingFlow();
         ReloadSources();
         _selectedKind = SkillSourceKind.RemoteSkillServer;
@@ -1296,7 +1298,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             }
 
             source.Enabled = !source.Enabled;
-            SaveExternalConfig(external);
+            if (!SaveExternalConfig(external))
+                return;
             ReloadSources();
             SetStatus($"Local skill folder '{name}' {(source.Enabled ? "enabled" : "disabled")}.", ConfigStatusTone.Success);
             return;
@@ -1312,7 +1315,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         feed.Enabled = !feed.Enabled;
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         ReloadSources();
         SetStatus($"Skill server '{name}' {(feed.Enabled ? "enabled" : "disabled")}.", ConfigStatusTone.Success);
     }
@@ -1329,7 +1333,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         source.AllowSymlinks = !source.AllowSymlinks;
-        SaveExternalConfig(external);
+        if (!SaveExternalConfig(external))
+            return;
         ReloadSources();
         SetStatus($"Local skill folder '{name}' symlink policy saved.", ConfigStatusTone.Success);
     }
@@ -1352,7 +1357,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             _ => 10,
         };
 
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         ReloadSources();
         SetStatus($"Skill server '{name}' timeout saved as {feed.TimeoutSeconds}s.", ConfigStatusTone.Success);
     }
@@ -1432,7 +1438,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             }
 
             item.Name = newName;
-            SaveExternalConfig(external);
+            if (!SaveExternalConfig(external))
+                return;
         }
         else
         {
@@ -1446,7 +1453,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             }
 
             item.Name = newName;
-            SaveSkillFeedsConfig(feeds);
+            if (!SaveSkillFeedsConfig(feeds))
+                return;
         }
 
         _selectedName = newName;
@@ -1550,7 +1558,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         item.Path = fullPath;
-        SaveExternalConfig(external);
+        if (!SaveExternalConfig(external))
+            return;
         ReloadSources();
         ShowDetail($"Local skill folder '{source.Name}' path saved.");
     }
@@ -1585,7 +1594,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         var timeoutSeconds = item.TimeoutSeconds;
         item.Url = normalizedUrl;
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         ReloadSources();
         ShowDetail($"Skill server '{source.Name}' URL saved.");
 
@@ -1636,7 +1646,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         var feedUrl = feed.Url;
         var timeoutSeconds = feed.TimeoutSeconds;
         feed.ApiKey = ProtectApiKeyForConfig(_paths, token);
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         _editingAction = null;
         ReloadSources();
         ShowDetail($"Skill server '{source.Name}' token rotated.");
@@ -1671,7 +1682,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         feed.ApiKey = null;
-        SaveSkillFeedsConfig(feeds);
+        if (!SaveSkillFeedsConfig(feeds))
+            return;
         ReloadSources();
         SetStatus($"Skill server '{name}' token removed.", ConfigStatusTone.Success);
     }
@@ -1706,13 +1718,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         {
             var external = LoadExternalConfig();
             external.Sources.RemoveAll(s => _nameComparer.Equals(s.Name, name));
-            SaveExternalConfig(external);
+            if (!SaveExternalConfig(external))
+                return;
         }
         else
         {
             var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
             feeds.Feeds.RemoveAll(f => _nameComparer.Equals(f.Name, name));
-            SaveSkillFeedsConfig(feeds);
+            if (!SaveSkillFeedsConfig(feeds))
+                return;
         }
 
         _selectedKind = null;
@@ -1978,7 +1992,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private ExternalSkillsConfig LoadExternalConfig()
         => ConfigFileHelper.LoadSection<ExternalSkillsConfig>(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), "ExternalSkills");
 
-    private void SaveExternalConfig(ExternalSkillsConfig external)
+    private bool SaveExternalConfig(ExternalSkillsConfig external)
     {
         var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
@@ -1987,10 +2001,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         else
             root["ExternalSkills"] = BuildExternalSkillsSection(external);
 
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+        return TryWriteConfigRoot(root);
     }
 
-    private void SaveSkillFeedsConfig(SkillFeedsConfigDocument feeds)
+    private bool SaveSkillFeedsConfig(SkillFeedsConfigDocument feeds)
     {
         var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
@@ -1999,7 +2013,25 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         else
             root["SkillFeeds"] = BuildSkillFeedsSection(feeds);
 
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+        return TryWriteConfigRoot(root);
+    }
+
+    // Persists the config root, surfacing a disk-write IO failure (disk full, permission denied,
+    // path too long — PathTooLongException derives from IOException) as an error status instead of
+    // letting it propagate into the Termina event loop and crash the page. Returns false on failure
+    // so the caller skips its success/navigation path and the error status survives.
+    private bool TryWriteConfigRoot(Dictionary<string, object> root)
+    {
+        try
+        {
+            ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetStatus($"Could not save skill sources config: {ex.Message}", ConfigStatusTone.Error);
+            return false;
+        }
     }
 
     private ExternalSkillSource? FindLocalSource(ExternalSkillsConfig external, string name)

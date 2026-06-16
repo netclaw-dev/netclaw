@@ -145,7 +145,18 @@ internal sealed class WorkspacesConfigViewModel : ReactiveViewModel
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
         ConfigFileHelper.SetPathValue(config, "Workspaces.Directory", fullPath);
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+
+        try
+        {
+            ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A disk-write IO error here must surface as a status, not propagate into the event loop.
+            Status.Value = new ConfigStatusMessage($"Workspaces Directory could not be saved: {ex.Message}", ConfigStatusTone.Error);
+            RequestRedraw();
+            return false;
+        }
 
         CurrentDirectory.Value = fullPath;
         DirectoryDraft.Value = string.Empty;

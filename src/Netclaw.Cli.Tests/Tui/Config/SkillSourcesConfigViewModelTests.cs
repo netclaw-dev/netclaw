@@ -472,6 +472,43 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
             Assert.Contains("PLAINTEXT", authRow.Label, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Config_write_io_failure_surfaces_an_error_and_persists_nothing()
+    {
+        // Inject a real disk-write failure (config dir made read-only) and confirm the save surfaces
+        // an error status, does not advance to the detail screen, and persists nothing — instead of
+        // throwing IOException into the Termina event loop. chmod-based injection is Unix-only.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        BeginAddLocalFolder(vm);
+        vm.CommitAddLocalPath(externalDir);
+        vm.ActivateSelected();              // symlinks → name screen (no write yet)
+        ReplaceDraft(vm, "team-skills");
+
+        var configDir = Path.GetDirectoryName(_paths.NetclawConfigPath)!;
+        var originalMode = File.GetUnixFileMode(configDir);
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        File.SetUnixFileMode(configDir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // no write
+        try
+        {
+            vm.ActivateSelected();          // CommitAddLocalName → SaveNewLocalSource → write fails
+        }
+        finally
+        {
+            File.SetUnixFileMode(configDir, originalMode);
+        }
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("Could not save", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(SkillSourcesScreen.SourceDetail, vm.Screen.Value); // did not falsely advance
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));  // nothing persisted
+    }
+
     private static void BeginRotateToken(SkillSourcesConfigViewModel vm, string name)
     {
         OpenRemoteDetail(vm, name);
