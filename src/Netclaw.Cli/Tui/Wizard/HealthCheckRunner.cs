@@ -28,7 +28,10 @@ public sealed class HealthCheckRunner
     /// </summary>
     public void Add(HealthCheckItem item)
     {
-        Results.Add(item);
+        // Results is read by the render thread while step checks mutate it off-thread; synchronize
+        // on the list instance — the same lock HealthCheckStepViewModel uses for its own writes.
+        lock (Results)
+            Results.Add(item);
         _notifyChanged();
     }
 
@@ -38,8 +41,12 @@ public sealed class HealthCheckRunner
     /// </summary>
     public void UpdateLast(HealthCheckItem item)
     {
-        if (Results.Count > 0)
-            Results[^1] = item;
+        lock (Results)
+        {
+            if (Results.Count > 0)
+                Results[^1] = item;
+        }
+
         _notifyChanged();
     }
 
@@ -90,5 +97,12 @@ public sealed class HealthCheckRunner
     }
 
     /// <summary>Whether all checks passed so far.</summary>
-    public bool AllPassed => Results.All(h => h.Passed == true);
+    public bool AllPassed
+    {
+        get
+        {
+            lock (Results)
+                return Results.All(h => h.Passed == true);
+        }
+    }
 }

@@ -55,6 +55,43 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     public List<HealthCheckItem> Results { get; } = [];
     internal ReactiveProperty<int> ResultVersion { get; } = new(0);
 
+    // All Results access is synchronized on the list instance: the async health-check core and its
+    // daemon-poll timer mutate Results off the UI thread while the render thread reads it (through
+    // ResultsSnapshot). HealthCheckRunner locks the same object for its Add/UpdateLast.
+    private void AddResult(HealthCheckItem item)
+    {
+        lock (Results)
+            Results.Add(item);
+    }
+
+    private void ClearResults()
+    {
+        lock (Results)
+            Results.Clear();
+    }
+
+    private void SetLastResult(HealthCheckItem item)
+    {
+        lock (Results)
+        {
+            if (Results.Count > 0)
+                Results[^1] = item;
+        }
+    }
+
+    private bool LastResultPending()
+    {
+        lock (Results)
+            return Results.Count > 0 && Results[^1].Passed is null;
+    }
+
+    /// <summary>Thread-safe snapshot for the render thread; Results is mutated off the UI thread.</summary>
+    internal IReadOnlyList<HealthCheckItem> ResultsSnapshot()
+    {
+        lock (Results)
+            return Results.ToArray();
+    }
+
     /// <summary>Task that completes when health check finishes. For testing.</summary>
     internal Task? HealthCheckCompletion { get; private set; }
 
@@ -87,7 +124,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             IsRunning.Value = false;
             IsComplete.Value = false;
             Succeeded.Value = false;
-            Results.Clear();
+            ClearResults();
             NotifyChanged();
         }
     }
@@ -121,7 +158,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         }
         catch (OperationCanceledException) when (overallCts.IsCancellationRequested)
         {
-            Results.Add(new HealthCheckItem("Health check timed out", false));
+            AddResult(new HealthCheckItem("Health check timed out", false));
             IsRunning.Value = false;
             IsComplete.Value = true;
             NotifyChanged();
@@ -135,7 +172,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         // Standalone mode — no orchestrator. Used for testing.
         IsRunning.Value = true;
         IsComplete.Value = false;
-        Results.Clear();
+        ClearResults();
         NotifyChanged();
 
         IsRunning.Value = false;
@@ -148,7 +185,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     {
         IsRunning.Value = true;
         IsComplete.Value = false;
-        Results.Clear();
+        ClearResults();
         NotifyChanged();
 
         var runner = new HealthCheckRunner(Results, NotifyChanged);
@@ -217,7 +254,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             {
                 runner.UpdateLast(new HealthCheckItem("Daemon ready", true));
             }
-            else if (Results.Count > 0 && Results[^1].Passed is null)
+            else if (LastResultPending())
             {
                 runner.UpdateLast(new HealthCheckItem(NotReadyMessage, false));
             }
@@ -290,11 +327,11 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
                 && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase)
                 && !result.Message.Contains("container supervisor", StringComparison.OrdinalIgnoreCase))
             {
-                Results[^1] = new HealthCheckItem(
+                SetLastResult(new HealthCheckItem(
                     result.CrashLogPath is null
                         ? result.Message
                         : $"{result.Message} See crash log: {result.CrashLogPath}",
-                    false);
+                    false));
                 NotifyChanged();
                 return false;
             }
@@ -334,12 +371,12 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             var abort = _daemonManager.TryReadStartupFailureFromCrashLog(startedAt, out var abortLogPath);
             if (abort is not null)
             {
-                Results[^1] = new HealthCheckItem($"{abort} See crash log: {abortLogPath}", false);
+                SetLastResult(new HealthCheckItem($"{abort} See crash log: {abortLogPath}", false));
                 NotifyChanged();
                 return false;
             }
 
-            Results[^1] = new HealthCheckItem($"{verb} ({++elapsedSeconds}s)", null);
+            SetLastResult(new HealthCheckItem($"{verb} ({++elapsedSeconds}s)", null));
             NotifyChanged();
             await Task.Delay(TimeSpan.FromSeconds(1), _timeProvider, ct);
         }
@@ -359,7 +396,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         };
         if (failureMessage is not null)
         {
-            Results[^1] = new HealthCheckItem(failureMessage, false);
+            SetLastResult(new HealthCheckItem(failureMessage, false));
             NotifyChanged();
         }
 

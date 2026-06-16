@@ -23,7 +23,8 @@ public sealed class HealthCheckStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (HealthCheckStepViewModel)stepVm;
-        var items = vm.Results;
+        // Snapshot: Results is mutated off the UI thread by the async health-check and its timer.
+        var items = vm.ResultsSnapshot();
         var lines = new List<ILayoutNode>();
 
         foreach (var item in items)

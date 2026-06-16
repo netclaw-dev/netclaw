@@ -99,6 +99,32 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ResultsSnapshot_is_safe_to_read_while_results_are_mutated_concurrently()
+    {
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System);
+        using var step = new HealthCheckStepViewModel(
+            daemonManager, daemonApi: null, navigationState: new ChatNavigationState());
+
+        var runner = new HealthCheckRunner(step.Results, () => { });
+        using var cts = new CancellationTokenSource();
+        var writer = Task.Run(() =>
+        {
+            while (!cts.IsCancellationRequested)
+                runner.Add(new HealthCheckItem("probe", true));
+        }, TestContext.Current.CancellationToken);
+
+        // Read snapshots while the writer mutates Results off-thread. Without the synchronized
+        // snapshot, ToArray throws "Collection was modified" during a concurrent Add.
+        for (var i = 0; i < 50_000; i++)
+            _ = step.ResultsSnapshot();
+
+        cts.Cancel();
+        await writer;
+
+        Assert.NotEmpty(step.ResultsSnapshot());
+    }
+
+    [Fact]
     public async Task OnEnter_Forward_AfterFailedRun_ResetsStateForRetry()
     {
         using var step = new HealthCheckStepViewModel(
