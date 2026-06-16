@@ -21,7 +21,7 @@ Cited file:line numbers are from the review doc and may drift as fixes land. -->
 
 ## 2. Theme 2 — fail-loud parsing, deny-by-default fallbacks
 
-- [ ] 2.1 `SecurityAccessViewModel` (review:634) — unparseable `DeploymentPosture` surfaces an error instead of silently defaulting to `Personal`. Test: fake-bad-posture config → error surfaced, no permissive assumption.
+- [x] 2.1 `SecurityAccessViewModel` (review:634) — unparseable `DeploymentPosture` surfaces an error instead of silently defaulting to `Personal`. Test: fake-bad-posture config → error surfaced, no permissive assumption. — `ReadPosture` split into `TryReadPosture`: a MISSING key still defaults to Personal (normal fresh-config state), but a PRESENT-but-unparseable value now fails **closed** to `Public` (matching the daemon's `TrustContextPolicy` fallback — the prior silent `Personal` was the *most permissive* and disagreed with the fail-closed runtime). New `PostureConfigWarning` surfaces the raw bad value, and the Security Posture menu summary renders `Unknown ('…') — using Public`. New `Unparseable_posture_fails_loud_and_closed_not_permissive`.
 - [ ] 2.2 `BrowserAutomationConfigViewModel.IsServerEnabled` (review:292) — return `false` for an unrecognized JSON shape (default-deny), not `true`. Test: unrecognized shape → disabled.
 - [ ] 2.3 `SkillSourcesConfigViewModel` (review:2111) — a stored plaintext API key surfaces a warning (and/or opportunistic re-encrypt), never silent acceptance. Test: plaintext key → warning raised.
 - [ ] 2.4 `SecurityAccessViewModel` (review:650 `ParseExposureMode`, :552 `ConvertConfigObject`) — guard parse/convert on render and mutation paths to surface a status instead of throwing into the loop. Test: malformed exposure/audience config → status, no crash.

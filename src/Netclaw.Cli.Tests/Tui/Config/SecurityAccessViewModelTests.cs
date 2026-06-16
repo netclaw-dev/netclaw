@@ -33,6 +33,30 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Unparseable_posture_fails_loud_and_closed_not_permissive()
+    {
+        // A stored posture the editor cannot parse (renamed enum member, stale value, hand-edited
+        // typo) must NOT be silently treated as the permissive Personal default. It fails closed to
+        // Public (matching the daemon's TrustContextPolicy fallback) and surfaces the corruption.
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Galaxy-Brain" }
+            }
+            """);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        Assert.NotEqual(DeploymentPosture.Personal, vm.CurrentPosture); // no permissive assumption
+        Assert.Equal(DeploymentPosture.Public, vm.CurrentPosture);      // fail closed
+        Assert.NotNull(vm.PostureConfigWarning);
+        Assert.Contains("Galaxy-Brain", vm.PostureConfigWarning!, StringComparison.Ordinal);
+
+        var postureSummary = vm.Items.Single(static item => item.Label == "Security Posture").Summary;
+        Assert.Contains("Unknown", postureSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Exposure_mode_routes_to_exposure_editor()
     {
         using var vm = new SecurityAccessViewModel(Context.Paths);

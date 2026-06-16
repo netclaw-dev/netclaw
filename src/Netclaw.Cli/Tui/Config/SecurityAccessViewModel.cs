@@ -133,6 +133,17 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     public IReadOnlyList<string> FeatureDescriptions => FeatureSelectionStepViewModel.FeatureDescriptions;
     public TrustAudience SelectedAudience => Audiences[SelectedAudienceIndex.Value].Value;
     public DeploymentPosture CurrentPosture => ReadPosture(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+
+    /// <summary>
+    /// Non-null when <c>Security.DeploymentPosture</c> holds an unrecognized value. The editor fails
+    /// closed (<see cref="CurrentPosture"/> reports <see cref="DeploymentPosture.Public"/>) and
+    /// surfaces this so the operator sees the config is corrupt instead of the editor silently
+    /// assuming a posture.
+    /// </summary>
+    public string? PostureConfigWarning =>
+        TryReadPosture(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), out _, out var invalid)
+            ? null
+            : $"Unknown deployment posture '{invalid}' in config — treating as Public (most restrictive). Fix Security.DeploymentPosture.";
     public string SelectedAudienceOverrideStatus => AudienceHasOverrides(SelectedAudience) ? "Customized overrides" : "No custom overrides";
 
     public void MoveSelection(int delta)
@@ -588,9 +599,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     private IReadOnlyList<SecurityAccessItem> BuildItems()
     {
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        TryReadPosture(config, out var posture, out var invalidPosture);
         return
         [
-            new("Security Posture", ReadPosture(config).ToString(), "Deployment trust stance."),
+            new("Security Posture",
+                invalidPosture is null ? posture.ToString() : $"Unknown ('{invalidPosture}') — using Public",
+                "Deployment trust stance."),
             new("Enabled Features", ReadEnabledFeaturesSummary(config), "Deployment-wide runtime feature gates."),
             new("Audience Profiles", ReadAudienceProfilesSummary(config), "Curated per-audience access rules."),
             new("Exposure Mode", ReadExposureModeSummary(config), "Daemon reachability and tunnel topology.", "/exposure-mode")
@@ -631,16 +645,37 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         return !JsonEquivalent(current, defaults);
     }
 
-    private static DeploymentPosture ReadPosture(Dictionary<string, object> config)
+    // Reads the configured deployment posture and reports a misconfiguration. A MISSING key is the
+    // normal "not yet configured" state and defaults to Personal. A PRESENT but unrecognized value
+    // (renamed enum member, stale numeric, hand-edited typo) is a misconfiguration: fail CLOSED to
+    // Public — the most restrictive posture, matching the daemon's TrustContextPolicy fallback — and
+    // report the raw value. CLAUDE.md forbids silent fallbacks on security paths; the prior code
+    // silently treated a corrupt posture as the permissive Personal default, which both hid the
+    // error and disagreed with the fail-closed runtime, so re-saving could lock in the widest access.
+    private static bool TryReadPosture(Dictionary<string, object> config, out DeploymentPosture posture, out string? invalidValue)
     {
-        if (ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value)
-            && value is string posture
-            && Enum.TryParse<DeploymentPosture>(posture, ignoreCase: true, out var parsed))
+        invalidValue = null;
+        if (!ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value))
         {
-            return parsed;
+            posture = DeploymentPosture.Personal;
+            return true;
         }
 
-        return DeploymentPosture.Personal;
+        if (value is string text && Enum.TryParse<DeploymentPosture>(text, ignoreCase: true, out var parsed))
+        {
+            posture = parsed;
+            return true;
+        }
+
+        posture = DeploymentPosture.Public;
+        invalidValue = value?.ToString() ?? "(null)";
+        return false;
+    }
+
+    private static DeploymentPosture ReadPosture(Dictionary<string, object> config)
+    {
+        TryReadPosture(config, out var posture, out _);
+        return posture;
     }
 
     private static string ReadExposureModeSummary(Dictionary<string, object> config)
