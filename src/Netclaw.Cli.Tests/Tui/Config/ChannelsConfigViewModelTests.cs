@@ -1143,6 +1143,31 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ApplyResetConfirmation_surfaces_save_failure_without_crashing_the_loop()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        using var vm = CreateViewModel();
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
+        vm.ActivateManagementMenuItem();
+        vm.MoveResetConfirmation(1);
+
+        // Force the reset's session.Save() to fail like a disk-full / permission-denied failure:
+        // AtomicFile cannot replace a path that is a directory. Cycle-1's race fix added the
+        // cancel-and-await guard here but left the write+reload unguarded.
+        File.Delete(_paths.NetclawConfigPath);
+        Directory.CreateDirectory(_paths.NetclawConfigPath);
+
+        vm.ApplyResetConfirmation(); // must not throw into the Termina event loop
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        // Stayed on the confirmation screen instead of advancing as if the reset succeeded.
+        Assert.Equal(ChannelsConfigScreen.ResetConfirm, vm.Screen.Value);
+    }
+
+    [Fact]
     public void Autosave_of_a_completed_action_does_not_run_the_network_channel_probe()
     {
         WriteAllChannelConfig();

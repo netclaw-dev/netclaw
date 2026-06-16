@@ -1272,22 +1272,35 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         var resetType = _activeAdapterType;
         var resetName = ActiveAdapterName;
-        var session = new ConfigEditorSession(_paths);
-        session.Apply(_mapper.BuildResetContribution(resetType));
-        session.Save();
+        try
+        {
+            var session = new ConfigEditorSession(_paths);
+            session.Apply(_mapper.BuildResetContribution(resetType));
+            session.Save();
 
-        var savedDraft = _mapper.Load(_paths);
-        _knownProviders.Clear();
-        foreach (var provider in savedDraft.KnownProviders)
-            _knownProviders.Add(provider);
+            var savedDraft = _mapper.Load(_paths);
+            _knownProviders.Clear();
+            foreach (var provider in savedDraft.KnownProviders)
+                _knownProviders.Add(provider);
 
-        LoadAudienceDrafts(savedDraft);
-        Step.OnEnter(_context, NavigationDirection.Forward);
-        _mapper.ApplyToStep(Step, savedDraft);
-        _activeAdapterType = resetType;
-        Screen.Value = ChannelsConfigScreen.Picker;
-        Status.Value = new ConfigStatusMessage($"{resetName} reset saved.", ConfigStatusTone.Success);
-        IsSaved.Value = true;
+            LoadAudienceDrafts(savedDraft);
+            Step.OnEnter(_context, NavigationDirection.Forward);
+            _mapper.ApplyToStep(Step, savedDraft);
+            _activeAdapterType = resetType;
+            Screen.Value = ChannelsConfigScreen.Picker;
+            Status.Value = new ConfigStatusMessage($"{resetName} reset saved.", ConfigStatusTone.Success);
+            IsSaved.Value = true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // A disk-full / permission-denied write, or a malformed existing netclaw.json (the reload
+            // deserializes it), must surface to the operator — not escape into the Termina event loop.
+            // Stay on the confirmation screen so the reset can be retried. Mirrors every other save
+            // path in this VM (ConfigAutosave.Run); this reset path bypasses SaveAsync, so it needs
+            // the same guard the cycle-1 race fix did not add.
+            Status.Value = new ConfigStatusMessage($"Could not save reset: {ex.Message}", ConfigStatusTone.Error);
+        }
+
         NotifyContentChanged();
     }
 
