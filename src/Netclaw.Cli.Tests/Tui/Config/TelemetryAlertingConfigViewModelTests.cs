@@ -162,6 +162,23 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Editing_a_webhook_clears_the_auth_header_with_the_dash_gesture()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":[{\"Name\":\"ops-alerts\",\"Url\":\"https://alerts.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"},\"Format\":\"Generic\"}]}}");
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginEditWebhook(0);
+        Assert.True(vm.EditingHasPersistedAuthHeader.Value);
+        // A blank field would preserve the header; "-" explicitly removes it.
+        vm.WebhookAuthHeaderDraft.Value = "-";
+        vm.ActivateSelected();
+
+        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
+        Assert.Null(webhook.Headers);
+    }
+
+    [Fact]
     public void Saving_a_webhook_without_a_url_is_rejected_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);

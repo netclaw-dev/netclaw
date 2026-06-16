@@ -260,9 +260,13 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         }
 
         var authDraft = WebhookAuthHeaderDraft.Value.Trim();
+        // A single "-" explicitly clears a persisted auth header; a blank field preserves it. Without
+        // this gesture there is no way to remove a header once set (blank always means "keep").
+        var clearAuth = authDraft == "-";
         string? headerName = null;
         string? headerValue = null;
-        if (!string.IsNullOrWhiteSpace(authDraft)
+        if (!clearAuth
+            && !string.IsNullOrWhiteSpace(authDraft)
             && !TryParseHeader(authDraft, out headerName, out headerValue, out var headerError))
         {
             Status.Value = new ConfigStatusMessage(headerError, ConfigStatusTone.Error);
@@ -275,7 +279,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             : WebhookNameDraft.Value.Trim();
 
         var editing = _editingWebhookIndex;
-        var newAuth = !string.IsNullOrWhiteSpace(authDraft);
+        var newAuth = !clearAuth && !string.IsNullOrWhiteSpace(authDraft);
         var verb = editing is null ? "added" : "updated";
         var saved = PersistWebhooks(webhooks =>
         {
@@ -293,6 +297,12 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                     [headerName!] = headerValue!
                 };
             }
+            else if (clearAuth)
+            {
+                target.Headers = null;
+            }
+
+            // Otherwise (blank, no "-"): leave target.Headers untouched so an unedited header is kept.
 
             if (editing is null)
                 webhooks.Add(target);

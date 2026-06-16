@@ -98,7 +98,7 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
     {
         var format = ViewModel.DraftFormat;
         var authState = ViewModel.EditingHasPersistedAuthHeader.Value && string.IsNullOrWhiteSpace(ViewModel.WebhookAuthHeaderDraft.Value)
-            ? "(stored header preserved)"
+            ? "(stored header preserved — enter - to clear)"
             : string.IsNullOrWhiteSpace(ViewModel.WebhookAuthHeaderDraft.Value) ? "(optional)" : "(new header entered)";
 
         var title = ViewModel.EditingHasPersistedAuthHeader.Value || !string.IsNullOrWhiteSpace(ViewModel.WebhookNameDraft.Value)
