@@ -100,7 +100,10 @@ public static class OAuthTokenPersistence
         else
             configProvider.Remove("OAuthTokenExpiry");
 
-        File.WriteAllText(paths.NetclawConfigPath,
+        // Atomic write (temp + rename) so a crash/power-loss between truncate and write cannot leave
+        // netclaw.json empty or partial — IConfiguration silently drops every section on a torn read.
+        // Matches the AtomicFile seam ConfigFileHelper.WriteConfigFile uses for the same file.
+        AtomicFile.WriteAllText(paths.NetclawConfigPath,
             configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
