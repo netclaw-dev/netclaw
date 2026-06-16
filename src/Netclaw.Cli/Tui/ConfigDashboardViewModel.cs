@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Actors.Channels;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
@@ -244,9 +245,19 @@ internal sealed class ConfigDashboardStatusReader
 
     private string SkillSourcesSummary(Dictionary<string, object> config)
     {
-        var dirs = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(config, "ExternalSkills").Sources.Count;
-        var feeds = ConfigFileHelper.LoadSection<SkillFeedsConfig>(config, "SkillFeeds").Feeds.Count;
-        return $"{dirs} {(dirs == 1 ? "dir" : "dirs")} · {feeds} {(feeds == 1 ? "feed" : "feeds")}";
+        try
+        {
+            var dirs = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(config, "ExternalSkills").Sources.Count;
+            var feeds = ConfigFileHelper.LoadSection<SkillFeedsConfig>(config, "SkillFeeds").Feeds.Count;
+            return $"{dirs} {(dirs == 1 ? "dir" : "dirs")} · {feeds} {(feeds == 1 ? "feed" : "feeds")}";
+        }
+        catch (JsonException)
+        {
+            // These two summaries deserialize whole sections (unlike the others, which use
+            // TryGetPathValue and can't throw). A hand-edited/migrated section with the wrong shape
+            // must degrade to a visible indicator here — Summarize runs in the dashboard layout render.
+            return "– config error";
+        }
     }
 
     private static string SearchSummary(Dictionary<string, object> config)
@@ -269,8 +280,16 @@ internal sealed class ConfigDashboardStatusReader
     private string TelemetrySummary(Dictionary<string, object> config)
     {
         var otlp = BoolAt(config, "Telemetry.Enabled") ? "on" : "off";
-        var webhooks = ConfigFileHelper.LoadSection<NotificationsConfig>(config, "Notifications").Webhooks.Count;
-        return $"OTLP {otlp} · {Pluralize(webhooks, "webhook", "webhooks")}";
+        try
+        {
+            var webhooks = ConfigFileHelper.LoadSection<NotificationsConfig>(config, "Notifications").Webhooks.Count;
+            return $"OTLP {otlp} · {Pluralize(webhooks, "webhook", "webhooks")}";
+        }
+        catch (JsonException)
+        {
+            // A malformed Notifications section must not crash the dashboard layout render.
+            return $"OTLP {otlp} · – config error";
+        }
     }
 
     private static string SecuritySummary(Dictionary<string, object> config)

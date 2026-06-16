@@ -136,6 +136,23 @@ public sealed class ConfigDashboardViewModelTests
     }
 
     [Fact]
+    public void Malformed_sections_render_a_config_error_indicator_without_crashing()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        // Sources/Webhooks have the wrong JSON shape (a number / string instead of an array), as a
+        // hand-edited or migrated config might. Summarize runs in the dashboard layout render and
+        // must degrade to a visible indicator rather than throwing JsonException into the render loop.
+        File.WriteAllText(paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"ExternalSkills\":{\"Sources\":42},\"Notifications\":{\"Webhooks\":\"nope\"}}");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Contains("config error", vm.StatusFor(vm.Items.Single(i => i.Label == "Skill Sources")), StringComparison.Ordinal);
+        Assert.Contains("config error", vm.StatusFor(vm.Items.Single(i => i.Label == "Telemetry & Alerting")), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_summaries_reflect_an_empty_default_config()
     {
         using var dir = new DisposableTempDir();
