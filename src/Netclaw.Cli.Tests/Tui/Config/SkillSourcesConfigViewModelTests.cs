@@ -450,6 +450,28 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Contains("Testing skill server", statusBeforeDispose.Text, StringComparison.OrdinalIgnoreCase);
     }
 
+    // A migrated/hand-edited config may store a bearer token unencrypted. The editor must NOT silently
+    // accept and use it: a plaintext token is flagged (so the operator can rotate/re-encrypt it),
+    // while an ENC:-protected token is not flagged.
+    [Theory]
+    [InlineData("raw-plaintext-token", true)]
+    [InlineData("ENC:protected-blob", false)]
+    public void Feed_token_stored_as_plaintext_is_flagged_not_silently_accepted(string storedApiKey, bool expectedPlaintext)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"feed-x\",\"Url\":\"https://feed.example.test\",\"ApiKey\":\"{storedApiKey}\",\"Enabled\":true}}]}}}}");
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        var feed = vm.Sources.Single(s => s.Kind == SkillSourceKind.RemoteSkillServer);
+        Assert.Equal(expectedPlaintext, feed.ApiKeyIsPlaintext);
+
+        OpenRemoteDetail(vm, "feed-x");
+        var authRow = vm.DetailRows.Single(r => r.Action == SkillSourceDetailAction.Authentication);
+        Assert.Equal(expectedPlaintext ? ConfigStatusTone.Warning : ConfigStatusTone.Neutral, authRow.Tone);
+        if (expectedPlaintext)
+            Assert.Contains("PLAINTEXT", authRow.Label, StringComparison.Ordinal);
+    }
+
     private static void BeginRotateToken(SkillSourcesConfigViewModel vm, string name)
     {
         OpenRemoteDetail(vm, name);

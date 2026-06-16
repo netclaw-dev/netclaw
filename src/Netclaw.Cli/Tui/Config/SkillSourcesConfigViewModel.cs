@@ -134,7 +134,11 @@ internal sealed record SkillSourceDisplay(
     bool HasApiKey,
     int TimeoutSeconds,
     string StatusText,
-    ConfigStatusTone StatusTone);
+    ConfigStatusTone StatusTone,
+    // True when a remote feed's stored token is present but NOT ENC:-encrypted (a hand-edited or
+    // migrated config). The editor surfaces this as a warning rather than silently using the
+    // unprotected credential — CLAUDE.md forbids silent fallbacks on security paths.
+    bool ApiKeyIsPlaintext = false);
 
 internal sealed record SkillSourcesInventoryRow(
     SkillSourcesInventoryAction Action,
@@ -1771,7 +1775,12 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         [
             new(SkillSourceDetailAction.ToggleEnabled, $"Enabled                 [{Check(source.Enabled)}]", "Autosaves source enabled state.", ConfigStatusTone.Neutral),
             new(SkillSourceDetailAction.Location, $"URL                     {source.Location}", "Enter to change URL and test discovery.", ConfigStatusTone.Neutral),
-            new(SkillSourceDetailAction.Authentication, $"Authentication          {(source.HasApiKey ? "bearer token configured" : "none")}", "Use Rotate token or Remove token for credentials.", ConfigStatusTone.Neutral),
+            new(SkillSourceDetailAction.Authentication,
+                $"Authentication          {(source.HasApiKey ? source.ApiKeyIsPlaintext ? "bearer token stored as PLAINTEXT" : "bearer token configured" : "none")}",
+                source.ApiKeyIsPlaintext
+                    ? "Token is stored unencrypted in config — use Rotate token to re-enter and encrypt it."
+                    : "Use Rotate token or Remove token for credentials.",
+                source.ApiKeyIsPlaintext ? ConfigStatusTone.Warning : ConfigStatusTone.Neutral),
             new(SkillSourceDetailAction.SyncInterval, $"HTTP timeout             {source.TimeoutSeconds}s", "Enter to cycle 10s / 30s / 60s.", ConfigStatusTone.Neutral),
             new(SkillSourceDetailAction.TestConnection, "Test connection", "Probe the discovery endpoint.", ConfigStatusTone.Neutral),
             new(SkillSourceDetailAction.Rename, "Rename source", "Change the display/config name.", ConfigStatusTone.Neutral),
@@ -1825,7 +1834,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                 !string.IsNullOrWhiteSpace(feed.ApiKey),
                 feed.TimeoutSeconds,
                 string.IsNullOrWhiteSpace(feed.ApiKey) ? "no auth" : "token configured",
-                ConfigStatusTone.Neutral);
+                ConfigStatusTone.Neutral,
+                ApiKeyIsPlaintext: !string.IsNullOrWhiteSpace(feed.ApiKey) && !ISecretsProtector.IsEncrypted(feed.ApiKey));
         }
     }
 
