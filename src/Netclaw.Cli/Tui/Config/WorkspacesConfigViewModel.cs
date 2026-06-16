@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using R3;
@@ -142,17 +143,18 @@ internal sealed class WorkspacesConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-        ConfigFileHelper.SetPathValue(config, "Workspaces.Directory", fullPath);
-
         try
         {
+            // Read + modify + write as one guarded unit: LoadJsonDict deserializes netclaw.json, so a
+            // malformed (hand-edited) config throws JsonException on the read — which sat outside the
+            // guard and propagated into the Termina event loop.
+            var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+            config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+            ConfigFileHelper.SetPathValue(config, "Workspaces.Directory", fullPath);
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            // A disk-write IO error here must surface as a status, not propagate into the event loop.
             Status.Value = new ConfigStatusMessage($"Workspaces Directory could not be saved: {ex.Message}", ConfigStatusTone.Error);
             RequestRedraw();
             return false;

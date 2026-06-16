@@ -56,6 +56,22 @@ public sealed class InboundWebhooksConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Save_surfaces_write_failure_without_crashing_the_loop()
+    {
+        using var vm = new InboundWebhooksConfigViewModel(_paths);
+
+        // Force the config write to fail like a disk-full / permission-denied failure: AtomicFile
+        // cannot replace a path that is a directory. The Enter-key Save() previously bypassed the
+        // ConfigAutosave.Run guard (only the autosave path was wrapped), letting this escape into
+        // the Termina event loop.
+        File.Delete(_paths.NetclawConfigPath);
+        Directory.CreateDirectory(_paths.NetclawConfigPath);
+
+        Assert.False(vm.Save());
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_rejects_invalid_timeout_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);

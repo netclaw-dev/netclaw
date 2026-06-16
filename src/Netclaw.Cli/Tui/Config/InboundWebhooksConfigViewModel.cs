@@ -98,7 +98,11 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
     }
 
     public bool Save()
-        => Save("Inbound Webhooks settings saved.");
+        => ConfigAutosave.Run(
+            () => Save("Inbound Webhooks settings saved."),
+            Status,
+            "Inbound Webhooks save failed",
+            RequestRedraw);
 
     private bool Save(string successMessage)
     {

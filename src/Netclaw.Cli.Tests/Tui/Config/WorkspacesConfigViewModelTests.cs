@@ -73,6 +73,22 @@ public sealed class WorkspacesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Save_surfaces_malformed_config_read_failure_without_crashing()
+    {
+        var target = Path.Combine(_dir.Path, "workspaces");
+        Directory.CreateDirectory(target);
+        using var vm = new WorkspacesConfigViewModel(_paths);
+        vm.AppendText(target);
+
+        // Corrupt netclaw.json so the save-time LoadJsonDict read (which sat between the two
+        // try/catch blocks, outside the guard) throws JsonException rather than an IOException.
+        File.WriteAllText(_paths.NetclawConfigPath, "{ this is not valid json ");
+
+        Assert.False(vm.Save());
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_rejects_existing_file_before_persistence()
     {
         var filePath = Path.Combine(_dir.Path, "not-a-directory");

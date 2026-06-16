@@ -1993,41 +1993,40 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         => ConfigFileHelper.LoadSection<ExternalSkillsConfig>(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), "ExternalSkills");
 
     private bool SaveExternalConfig(ExternalSkillsConfig external)
-    {
-        var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-        if (external.Sources.Count == 0)
-            root.Remove("ExternalSkills");
-        else
-            root["ExternalSkills"] = BuildExternalSkillsSection(external);
-
-        return TryWriteConfigRoot(root);
-    }
+        => TryEditConfig(root =>
+        {
+            if (external.Sources.Count == 0)
+                root.Remove("ExternalSkills");
+            else
+                root["ExternalSkills"] = BuildExternalSkillsSection(external);
+        });
 
     private bool SaveSkillFeedsConfig(SkillFeedsConfigDocument feeds)
-    {
-        var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-        if (feeds.Feeds.Count == 0)
-            root.Remove("SkillFeeds");
-        else
-            root["SkillFeeds"] = BuildSkillFeedsSection(feeds);
+        => TryEditConfig(root =>
+        {
+            if (feeds.Feeds.Count == 0)
+                root.Remove("SkillFeeds");
+            else
+                root["SkillFeeds"] = BuildSkillFeedsSection(feeds);
+        });
 
-        return TryWriteConfigRoot(root);
-    }
-
-    // Persists the config root, surfacing a disk-write IO failure (disk full, permission denied,
-    // path too long — PathTooLongException derives from IOException) as an error status instead of
-    // letting it propagate into the Termina event loop and crash the page. Returns false on failure
-    // so the caller skips its success/navigation path and the error status survives.
-    private bool TryWriteConfigRoot(Dictionary<string, object> root)
+    // Reads, mutates, and writes the config root as one guarded unit, surfacing a disk-write IO
+    // failure (disk full, permission denied, path too long — PathTooLongException derives from
+    // IOException) OR a malformed existing netclaw.json (LoadJsonDict deserializes it, so a
+    // hand-edited file throws JsonException on the read) as an error status instead of letting it
+    // propagate into the Termina event loop and crash the page. The read previously sat outside the
+    // guard. Returns false on failure so the caller skips its success/navigation path.
+    private bool TryEditConfig(Action<Dictionary<string, object>> mutate)
     {
         try
         {
+            var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+            root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+            mutate(root);
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             SetStatus($"Could not save skill sources config: {ex.Message}", ConfigStatusTone.Error);
             return false;

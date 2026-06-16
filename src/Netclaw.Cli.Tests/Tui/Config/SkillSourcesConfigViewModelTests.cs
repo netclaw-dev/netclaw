@@ -85,6 +85,32 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Adding_a_source_surfaces_config_write_failure_without_crashing()
+    {
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        // Force the config write to fail like a disk-full / permission-denied failure: AtomicFile
+        // cannot replace a path that is a directory. LoadJsonDict treats it as missing, so the save's
+        // read returns a skeleton and only the write throws — exercising the TryEditConfig guard that
+        // now brackets the save read+write as one unit.
+        File.Delete(_paths.NetclawConfigPath);
+        Directory.CreateDirectory(_paths.NetclawConfigPath);
+
+        // Drive the full add-local-folder flow (path -> symlinks -> name); the final commit persists
+        // via SaveExternalConfig. (We inline rather than call AddLocalFolder, which asserts the
+        // success-path screen transition that does not happen when the save fails.)
+        BeginAddLocalFolder(vm);
+        vm.CommitAddLocalPath(externalDir);
+        vm.ActivateSelected();
+        ReplaceDraft(vm, "team-skills");
+        vm.ActivateSelected();
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_external_directory_does_not_decrypt_unedited_feed_api_key()
     {
         File.WriteAllText(_paths.NetclawConfigPath,
