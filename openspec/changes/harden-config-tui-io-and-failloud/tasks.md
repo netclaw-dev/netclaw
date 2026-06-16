@@ -7,7 +7,7 @@ Cited file:line numbers are from the review doc and may drift as fixes land. -->
 ## 0. Foundation — atomic write seam
 
 - [x] 0.1 Add an atomic write helper to `ConfigFileHelper` (write sibling temp file → flush → `File.Move(overwrite:true)`) and route `WriteConfigFile`/`WriteSecretsFile` through it. Test: round-trip + a partial/interrupted-write test proving the prior file survives. — Added `AtomicFile` (Netclaw.Configuration); routed `ConfigFileHelper.WriteConfigFile` + `SecretsFileWriter.Write` (secrets perms now hardened on the temp before rename). `AtomicFileTests`.
-- [ ] 0.2 Route the device-registry writer (`ExposureModeStepViewModel.WriteLocalDeviceTokenValue` / `WritePairedDevices`, review:392) through the shared atomic helper. Test: `devices.json` round-trip; no corruption on concurrent/interrupted write.
+- [x] 0.2 Route the device-registry writer (`ExposureModeStepViewModel.WriteLocalDeviceTokenValue` / `WritePairedDevices`, review:392) through the shared atomic helper. Test: `devices.json` round-trip; no corruption on concurrent/interrupted write. — Both `devices.json` writes (`WritePairedDevices` + `WriteBootstrapDevice`) now use `AtomicFile.WriteAllText` + `AtomicFile.HardenOwnerOnly`; the chmod-600 logic deduped into one helper (was 3 copies; secrets path delegates to it). New atomicity assertion in `ExposureModeConfigViewModelTests`.
 
 ## 1. Theme 1 — concurrency & background-task discipline
 

@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Runtime.InteropServices;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -61,5 +63,16 @@ public static class AtomicFile
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Restrict a file to owner-only read/write (chmod 600) on Linux/macOS; a no-op on Windows,
+    /// which relies on user-profile ACLs. Pass as the harden callback to <see cref="WriteAllText"/>
+    /// when writing secrets.json or devices.json so those files are never group/world-readable.
+    /// </summary>
+    public static void HardenOwnerOnly(string path)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(path))
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 }

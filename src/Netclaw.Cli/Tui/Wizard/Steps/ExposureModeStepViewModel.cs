@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Buffers.Text;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -389,9 +388,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
     private static void WritePairedDevices(NetclawPaths paths, IReadOnlyList<PairedDevice> devices)
     {
         var json = JsonSerializer.Serialize(devices, DevicesJsonOptions);
-        File.WriteAllText(paths.DevicesPath, json);
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
-            File.SetUnixFileMode(paths.DevicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        AtomicFile.WriteAllText(paths.DevicesPath, json, AtomicFile.HardenOwnerOnly);
     }
 
     private static bool TryComputeTokenHash(string rawToken, string saltHex, out string tokenHash)
@@ -469,9 +466,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
             return;
 
         var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
-        File.WriteAllText(paths.DevicesPath, json);
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
-            File.SetUnixFileMode(paths.DevicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        AtomicFile.WriteAllText(paths.DevicesPath, json, AtomicFile.HardenOwnerOnly);
     }
 
     /// <summary>The raw bootstrap token, exposed for testing.</summary>

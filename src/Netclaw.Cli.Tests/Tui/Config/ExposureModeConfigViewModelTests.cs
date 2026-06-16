@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Buffers.Text;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Netclaw.Cli.Config;
@@ -137,6 +138,32 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
         var device = Assert.Single(ReadPairedDevices());
         Assert.True(device.IsBootstrapDevice);
         Assert.True(PairedDevice.VerifyToken(orphanedToken, device));
+    }
+
+    [Fact]
+    public void Pairing_writes_devices_registry_atomically_with_owner_only_permissions()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": { "ExposureMode": "local" }
+            }
+            """);
+        File.WriteAllText(Context.Paths.DevicesPath, "[]");
+
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.TailscaleServe;
+
+        AdvanceTunnelModeToSave(vm);
+
+        Assert.True(vm.IsSaved.Value);
+        Assert.Single(ReadPairedDevices());
+        // The atomic write leaves no temp sibling behind, and devices.json stays owner-only.
+        var dir = Path.GetDirectoryName(Context.Paths.DevicesPath)!;
+        Assert.Empty(Directory.GetFiles(dir, "*.tmp-*"));
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Context.Paths.DevicesPath));
     }
 
     [Fact]

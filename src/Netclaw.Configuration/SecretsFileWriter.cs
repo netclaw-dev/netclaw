@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration.Secrets;
@@ -207,11 +206,5 @@ public static class SecretsFileWriter
     /// <summary>
     /// Set owner-only permissions (chmod 600) on Unix. No-op on Windows.
     /// </summary>
-    internal static void SetOwnerOnlyPermissions(string path)
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(path))
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-    }
+    internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
 }
