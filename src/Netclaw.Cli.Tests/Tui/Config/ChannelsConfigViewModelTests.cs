@@ -1109,6 +1109,40 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ApplyResetConfirmation_cancels_and_awaits_in_flight_label_refresh_before_writing()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            // Block the resolve so the background refresh is genuinely in flight during the reset.
+            DelayBeforeResult = TimeSpan.FromMinutes(5),
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("general", "C01")], []),
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        // Enter Manage Channels to start the background label refresh, then leave it in flight.
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        MoveToManagementAction(vm, ChannelsManagementAction.ManageChannels);
+        vm.ActivateManagementMenuItem();
+        Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true); // background is in flight
+
+        // Drive the reset confirmation (which bypasses SaveAsync) while the refresh is still running.
+        vm.GoBack();
+        MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
+        vm.ActivateManagementMenuItem();
+        vm.MoveResetConfirmation(1);
+
+        vm.ApplyResetConfirmation();
+
+        // The reset cancelled and awaited the blocked refresh rather than racing its disk write or
+        // rebuilding view-model state under it (and without hanging for the 5-minute probe delay);
+        // the tracked task is unwound to null.
+        Assert.Null(vm.PendingLabelRefresh);
+    }
+
+    [Fact]
     public void Autosave_of_a_completed_action_does_not_run_the_network_channel_probe()
     {
         WriteAllChannelConfig();

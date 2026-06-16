@@ -1261,6 +1261,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
         }
 
+        // Cancel and await any in-flight Slack label refresh before persisting the reset and
+        // rebuilding view-model state. A live background normalizer would otherwise write a stale
+        // snapshot over the reset's config file, or clobber the just-reloaded view-model state — the
+        // same race SaveAsync guards at its top (line 168). This path bypassed SaveAsync, so it needs
+        // the same guard. Bridged synchronously like the VM's other sync save entry points: Termina
+        // has no SynchronizationContext, so blocking the loop thread for the cancelled refresh's
+        // prompt completion cannot deadlock, and the reset stays synchronous as before.
+        CancelAndAwaitLabelRefreshAsync().GetAwaiter().GetResult();
+
         var resetType = _activeAdapterType;
         var resetName = ActiveAdapterName;
         var session = new ConfigEditorSession(_paths);
