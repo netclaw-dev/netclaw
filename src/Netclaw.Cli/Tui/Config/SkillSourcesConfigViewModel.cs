@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
 using Netclaw.Cli.Config;
@@ -1247,15 +1248,20 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         if (!TryLoadSkillFeeds(out var feeds)) return;
+
+        string? protectedApiKey = null;
+        if (_pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken
+            && !string.IsNullOrWhiteSpace(_pendingRemoteApiKey)
+            && !TryProtectApiKey(_pendingRemoteApiKey, out protectedApiKey))
+            return;
+
         feeds.Feeds.Add(new SkillFeedConfigEntry
         {
             Name = name,
             Url = _pendingRemoteUrl,
             Enabled = true,
             TimeoutSeconds = _pendingRemoteTimeoutSeconds,
-            ApiKey = _pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken && !string.IsNullOrWhiteSpace(_pendingRemoteApiKey)
-                ? ProtectApiKeyForConfig(_paths, _pendingRemoteApiKey)
-                : null,
+            ApiKey = protectedApiKey,
         });
 
         if (!SaveSkillFeedsConfig(feeds))
@@ -1645,7 +1651,9 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         var feedUrl = feed.Url;
         var timeoutSeconds = feed.TimeoutSeconds;
-        feed.ApiKey = ProtectApiKeyForConfig(_paths, token);
+        if (!TryProtectApiKey(token, out var protectedToken))
+            return;
+        feed.ApiKey = protectedToken;
         if (!SaveSkillFeedsConfig(feeds))
             return;
         _editingAction = null;
@@ -2266,6 +2274,25 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private static string ProtectApiKeyForConfig(NetclawPaths paths, string apiKey)
         => SecretsProtection.CreateProtector(paths).Protect(apiKey);
+
+    // Encrypt an API key, surfacing a DataProtection key-ring failure (unavailable/rotated keys throw
+    // CryptographicException; a missing/locked keys directory throws IOException) as an error status
+    // instead of letting it escape into the Termina event loop. The .Protect() call ran before
+    // TryEditConfig, so it was outside the write guard.
+    private bool TryProtectApiKey(string apiKey, out string? protectedApiKey)
+    {
+        try
+        {
+            protectedApiKey = ProtectApiKeyForConfig(_paths, apiKey);
+            return true;
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            protectedApiKey = null;
+            SetStatus($"Could not encrypt the API key: {ex.Message}", ConfigStatusTone.Error);
+            return false;
+        }
+    }
 
     private static Dictionary<string, object> BuildSkillFeedsSection(SkillFeedsConfigDocument config)
         => new()

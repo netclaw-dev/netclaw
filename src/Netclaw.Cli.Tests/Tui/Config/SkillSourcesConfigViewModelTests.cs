@@ -111,6 +111,34 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Adding_a_remote_source_surfaces_keyring_failure_without_crashing()
+    {
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
+
+        // Drive the remote-add flow up to (but not through) the final commit, which encrypts the token.
+        BeginAddRemoteServer(vm);
+        vm.AppendText("https://skills.example.test");
+        vm.ActivateSelected();
+        await vm.PendingProbe!;
+        vm.ActivateSelected(); // RequiresAuth -> token field
+        vm.AppendText("secret-token");
+        vm.ActivateSelected();
+        await vm.PendingProbe!;
+        vm.ActivateSelected(); // success -> name review
+        ReplaceDraft(vm, "custom-feed");
+
+        // Make the DataProtection keys directory unusable (a file, not a directory) so the commit's
+        // ProtectApiKeyForConfig().Protect() throws the way an unavailable / rotated key ring would.
+        if (Directory.Exists(_paths.KeysDirectory))
+            Directory.Delete(_paths.KeysDirectory, recursive: true);
+        File.WriteAllText(_paths.KeysDirectory, "not a directory");
+
+        vm.ActivateSelected(); // commit -> key-ring failure must surface, not crash the loop
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Malformed_config_does_not_crash_construction_or_a_source_mutation()
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{ this is not valid json ");
