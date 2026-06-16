@@ -46,7 +46,10 @@ Enter
 Wait+Screen@10s /Enter the base URL of your SearXNG instance/
 Type "https://search.test.local"
 Enter
-Wait+Screen@10s /Validating Search configuration/
+# Do NOT anchor on the "Validating Search configuration..." spinner: it is a
+# transient probe state that can clear faster than vhs's screen-poll interval,
+# so the wait hard-times-out even though validation ran. Anchor on the stable
+# post-validation state instead (mirrors tapes/screenshots/config-search.tape).
 Wait+Screen@10s /Search Validation Warning/
 Down 2
 Enter
