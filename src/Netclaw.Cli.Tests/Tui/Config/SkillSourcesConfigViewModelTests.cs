@@ -39,14 +39,14 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_persists_external_directory_and_skill_feed_for_runtime_binding()
+    public async Task Save_persists_external_directory_and_skill_feed_for_runtime_binding()
     {
         var externalDir = Path.Combine(_dir.Path, "team-skills");
         Directory.CreateDirectory(externalDir);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
         AddLocalFolder(vm, externalDir, "team-skills");
-        AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
+        await AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
 
         var external = Bind<ExternalSkillsConfig>("ExternalSkills");
         var resolved = external.ResolveEnabledSources();
@@ -122,14 +122,19 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_rejects_multiline_skill_feed_api_key_before_persistence()
+    public async Task Save_rejects_multiline_skill_feed_api_key_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
+        // Two-phase add-remote review: the URL probe (off-loop) reports RequiresAuth; phase 2 reveals
+        // the token field. A multiline token is then rejected by structural validation before any
+        // re-probe or persistence.
         BeginAddRemoteServer(vm);
         vm.AppendText("https://skills.example.test");
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // phase 1: no-auth probe -> 401
+        await vm.PendingProbe!;
+        vm.ActivateSelected();              // phase 2: RequiresAuth -> reveal token field
         Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
         vm.AppendText("token\nnext");
         vm.ActivateSelected();
@@ -140,21 +145,27 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_unreachable_skill_feed_until_second_save_anyway()
+    public async Task Save_blocks_unreachable_skill_feed_until_second_save_anyway()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(false));
 
+        // Two-phase: the first Enter on AddRemoteUrl kicks off the off-loop probe (phase 1). Once it
+        // completes (unreachable, non-auth) the status warns "save anyway" and the screen stays on
+        // AddRemoteUrl — nothing persisted. A second Enter (phase 2) acts on that result and advances
+        // to the name review. This preserves the original intent: an unreachable open server can still
+        // be added via a deliberate second Enter.
         BeginAddRemoteServer(vm);
         vm.AppendText("https://skills.example.test");
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // phase 1: kick off probe
+        await vm.PendingProbe!;
 
         Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
         Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
         Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
 
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // phase 2: save anyway -> name review
         Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
         ReplaceDraft(vm, "custom-feed");
         vm.ActivateSelected();
@@ -204,11 +215,11 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Location_detail_row_opens_remote_url_editor()
+    public async Task Location_detail_row_opens_remote_url_editor()
     {
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
-        AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
+        await AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
         MoveToDetailAction(vm, SkillSourceDetailAction.Location);
         vm.ActivateSelected();
 
@@ -300,32 +311,32 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Rotate_token_blocks_unreachable_feed_until_second_save_anyway()
+    public async Task Rotate_token_persists_immediately_then_warns_when_feed_unreachable()
     {
+        // Persist-now, validate-async: rotating a token no longer blocks on a reachability gate
+        // (a blocking probe froze the loop). The new token is persisted on the first Enter and an
+        // off-loop warn-probe surfaces a non-blocking Warning when the feed is unreachable — the
+        // rotation is NOT reverted.
         var protector = SecretsProtection.CreateProtector(_paths);
         var oldEncrypted = protector.Protect("old-token");
         File.WriteAllText(_paths.NetclawConfigPath,
             $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"{oldEncrypted}\",\"Enabled\":true}}]}}}}");
-        var before = File.ReadAllText(_paths.NetclawConfigPath);
         var probe = new CountingSkillFeedProbe(success: false);
         using var vm = new SkillSourcesConfigViewModel(_paths, probe);
 
         BeginRotateToken(vm, "custom-feed");
         ReplaceDraft(vm, "new-token");
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // persists now, then kicks off the off-loop warn-probe
+        await vm.PendingProbe!;
 
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
-        Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, probe.ProbeCount);
-        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal(oldEncrypted, SingleFeedSection()["ApiKey"]);
-
-        vm.ActivateSelected();
-
+        // The rotation is persisted (not reverted), and the warn-probe flagged the unreachable feed.
         var rotated = SingleFeedSection()["ApiKey"];
         Assert.NotNull(rotated);
         Assert.Equal("new-token", protector.Unprotect(rotated!));
+        Assert.NotEqual(oldEncrypted, rotated);
         Assert.Equal(1, probe.ProbeCount);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("unreachable", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -388,6 +399,64 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
     }
 
+    [Fact]
+    public async Task Probe_runs_off_the_loop_and_does_not_block_input()
+    {
+        // Regression for the deep-review finding: the reachability probe used to run synchronously
+        // on the single-threaded TUI loop (HttpClient.Send), freezing input for up to 10s. It now
+        // runs off-loop. Gate the fake so the probe is still in flight when the triggering call
+        // returns: PendingProbe must be non-null and NOT complete (the call did NOT block), and the
+        // status shows the in-progress "Testing…" message.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://feed.example.test\",\"Enabled\":true}]}}");
+        var gate = new TaskCompletionSource();
+        var probe = new FakeSkillFeedProbe(success: true) { Gate = gate };
+        using var vm = new SkillSourcesConfigViewModel(_paths, probe);
+
+        OpenRemoteDetail(vm, "custom-feed");
+        MoveToDetailAction(vm, SkillSourceDetailAction.TestConnection);
+        vm.ActivateSelected();              // kicks off the probe and returns WITHOUT blocking
+
+        Assert.NotNull(vm.PendingProbe);
+        Assert.False(vm.PendingProbe!.IsCompleted); // proof the call did not block the loop
+        Assert.Equal(ConfigStatusTone.Neutral, vm.Status.Value.Tone);
+        Assert.Contains("Testing skill server", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+
+        gate.SetResult();
+        await vm.PendingProbe!;
+
+        Assert.Equal(ConfigStatusTone.Success, vm.Status.Value.Tone);
+        Assert.Contains("reachable", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Probe_is_cancelled_on_dispose()
+    {
+        // Disposing the VM while a probe is in flight cancels it: the gated continuation must NOT
+        // apply its result (status stays on "Testing…") and awaiting the task must not throw.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://feed.example.test\",\"Enabled\":true}]}}");
+        var gate = new TaskCompletionSource();
+        var probe = new FakeSkillFeedProbe(success: true) { Gate = gate };
+        var vm = new SkillSourcesConfigViewModel(_paths, probe);
+
+        OpenRemoteDetail(vm, "custom-feed");
+        MoveToDetailAction(vm, SkillSourceDetailAction.TestConnection);
+        vm.ActivateSelected();              // probe in flight (gated)
+        var pending = vm.PendingProbe;
+        Assert.NotNull(pending);
+        // Snapshot the status before Dispose (Dispose disposes the R3 ReactiveProperty).
+        var statusBeforeDispose = vm.Status.Value;
+
+        vm.Dispose();                       // cancels the in-flight probe
+        gate.SetResult();                   // release the gate; cancellation should win
+        await pending!;                     // completes without throwing (cancellation swallowed)
+
+        // The continuation dropped the result quietly — the status was never advanced past "Testing…".
+        Assert.Equal(ConfigStatusTone.Neutral, statusBeforeDispose.Tone);
+        Assert.Contains("Testing skill server", statusBeforeDispose.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void BeginRotateToken(SkillSourcesConfigViewModel vm, string name)
     {
         OpenRemoteDetail(vm, name);
@@ -426,17 +495,22 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
     }
 
-    // Drives the probe-driven add flow for an auth-gated server: the URL probe returns 401
-    // and reveals the bearer-token field, the token re-probes successfully, then name → save.
-    // The vm must be constructed with a requiresAuth FakeSkillFeedProbe.
-    private static void AddRemoteServer(SkillSourcesConfigViewModel vm, string url, string token, string name)
+    // Drives the probe-driven add flow for an auth-gated server. The reachability probe now runs
+    // OFF the loop, so each probe is two-phase: the first ActivateSelected kicks it off (await
+    // PendingProbe), the second ActivateSelected acts on the completed result (reveal token / advance
+    // to name). The vm must be constructed with a requiresAuth FakeSkillFeedProbe.
+    private static async Task AddRemoteServer(SkillSourcesConfigViewModel vm, string url, string token, string name)
     {
         BeginAddRemoteServer(vm);
         vm.AppendText(url);
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // phase 1: no-auth probe -> 401
+        await vm.PendingProbe!;
+        vm.ActivateSelected();              // phase 2: RequiresAuth -> reveal token field
         Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
         vm.AppendText(token);
-        vm.ActivateSelected();
+        vm.ActivateSelected();              // phase 1: re-probe with token -> success
+        await vm.PendingProbe!;
+        vm.ActivateSelected();              // phase 2: success -> advance to name review
         Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
         ReplaceDraft(vm, name);
         vm.ActivateSelected();
@@ -516,8 +590,15 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     private sealed class FakeSkillFeedProbe(bool success, bool requiresAuth = false, bool failWithToken = false)
         : ISkillFeedReachabilityProbe
     {
-        public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+        // When set, ProbeAsync blocks on this gate before returning so tests can stage an in-flight
+        // probe (proving the call returned without blocking the loop, and that it is cancellable).
+        public TaskCompletionSource? Gate { get; set; }
+
+        public async Task<SkillFeedReachabilityResult> ProbeAsync(string baseUrl, string? apiKey, int timeoutSeconds, CancellationToken ct = default)
         {
+            if (Gate is not null)
+                await Gate.Task.WaitAsync(ct);
+
             // Simulate an auth-gated server: 401 (RequiresAuth) until a bearer token is
             // supplied. Drives the probe-driven token disclosure path. With a token the
             // re-probe either succeeds (default) or, when failWithToken is set, fails with a
@@ -542,12 +623,12 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     {
         public int ProbeCount { get; private set; }
 
-        public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+        public Task<SkillFeedReachabilityResult> ProbeAsync(string baseUrl, string? apiKey, int timeoutSeconds, CancellationToken ct = default)
         {
             ProbeCount++;
-            return success
+            return Task.FromResult(success
                 ? new SkillFeedReachabilityResult(true, "reachable")
-                : new SkillFeedReachabilityResult(false, "unreachable");
+                : new SkillFeedReachabilityResult(false, "unreachable"));
         }
     }
 }

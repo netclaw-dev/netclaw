@@ -198,15 +198,18 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     public async Task Skill_sources_remote_url_enter_accepts_valid_url_without_persisting_incomplete_flow()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        // Default probe reports success, so the no-auth probe advances straight to the
-        // name/review step (open servers never see the bearer-token field).
+        // Default probe reports success. The reachability probe now runs off-loop in two phases:
+        // the first Enter on AddRemoteUrl kicks it off (completes inline for the synchronous fake);
+        // the second Enter acts on the success result and advances to the name/review step (open
+        // servers never see the bearer-token field).
         var app = CreateSkillSourcesApp(out var input, out var vm);
 
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("https://");
         input.EnqueuePaste("skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // phase 1: kick off probe
+        input.EnqueueKey(ConsoleKey.Enter);     // phase 2: success -> AddRemoteName
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -289,29 +292,28 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_remote_token_dialog_back_to_edit_returns_to_token_entry()
+    public async Task Skill_sources_remote_token_commit_advances_to_name_without_blocking_on_reachability()
     {
-        // The token screen is reached via a 401 on the no-token URL probe. The token re-probe
-        // then fails with a non-auth error (failWithToken), which raises the override dialog.
+        // Persist-now, validate-async: committing a bearer token no longer runs a blocking probe
+        // (which froze the loop) and no longer raises an override dialog. The token screen is reached
+        // via a 401 on the off-loop no-token URL probe (two-phase); a structurally-valid token then
+        // advances straight to the name review. Reachability is validated later (Test action / review),
+        // so an unreachable token does NOT block here. Nothing is persisted until the name commits.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         var app = CreateSkillSourcesApp(out var input, out var vm,
             new FakeSkillFeedProbe(message: "probe failed", requiresAuth: true, failWithToken: true));
 
-        // URL + Enter -> 401 -> AddRemoteToken. Then type the token and commit (re-probe fails).
         BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);     // URL phase 2: RequiresAuth -> reveal token field
         input.EnqueueString("secret-token");
-        input.EnqueueKey(ConsoleKey.Enter);
-        // Dialog: Retry / Back to edit / Save anyway -> DownArrow once selects "Back to edit".
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // token commit -> advance to name (no block, no dialog)
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
         Assert.Null(vm.ActiveValidationDialog.Value);
-        Assert.Equal("secret-token", vm.Draft.Value);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
@@ -325,7 +327,10 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(true, "reachable"));
 
+        // Two-phase off-loop probe: BeginRemoteUrlEntry's Enter kicks it off (phase 1, completes
+        // inline for the synchronous fake); a second Enter advances to the name review (phase 2).
         BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);     // phase 2: success -> AddRemoteName
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -351,7 +356,10 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var app = CreateSkillSourcesApp(out var input, out var vm,
             new FakeSkillFeedProbe(message: "auth required", requiresAuth: true));
 
+        // Two-phase off-loop probe: the first Enter kicks off the no-auth probe (phase 1, 401);
+        // the second Enter acts on the RequiresAuth result and reveals the bearer-token field.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);     // phase 2: RequiresAuth -> reveal token field
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -364,46 +372,51 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_remote_token_enter_blocks_unreachable_probe_before_persistence_then_save_anyway_reviews_name()
+    public async Task Skill_sources_remote_unreachable_token_feed_can_still_be_added_and_persists()
     {
-        // Token screen reached via 401; the token re-probe fails with a non-auth error
-        // (failWithToken), raising the override dialog. "Save anyway" advances to the name
-        // review screen without persisting.
-        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        // Preserves the original intent (an unreachable auth feed can still be added) under the new
+        // persist-now/validate-async model: the token re-probe no longer blocks with an override
+        // dialog. The token screen is reached via the off-loop 401 URL probe (two-phase); a valid
+        // token advances to the name review even though the feed is unreachable (failWithToken), and
+        // committing the name persists the encrypted token.
         var app = CreateSkillSourcesApp(out var input, out var vm,
             new FakeSkillFeedProbe(message: "probe failed", requiresAuth: true, failWithToken: true));
 
-        // URL + Enter -> 401 -> AddRemoteToken. Type token, Enter -> re-probe fails -> dialog.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);     // URL phase 2: RequiresAuth -> reveal token field
         input.EnqueueString("secret-token");
-        input.EnqueueKey(ConsoleKey.Enter);
-        // Dialog: Retry / Back to edit / Save anyway -> two DownArrows select "Save anyway".
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // token commit -> advance to name (no block, no dialog)
+        input.EnqueueKey(ConsoleKey.Enter);     // name -> persist
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
         Assert.Null(vm.ActiveValidationDialog.Value);
-        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+        var contents = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("secret-token", contents, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(contents);
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.Equal("https://skills.example.test", feed.GetProperty("Url").GetString());
+        Assert.StartsWith("ENC:", feed.GetProperty("ApiKey").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Skill_sources_remote_bearer_name_enter_persists_encrypted_token_to_skill_feeds()
     {
         // requiresAuth probe: URL probe 401s and reveals the token field; the token re-probe
-        // succeeds, advances to name, and the entered token is persisted encrypted.
+        // succeeds, advances to name, and the entered token is persisted encrypted. Each off-loop
+        // probe is two-phase (kick off, then act on the inline-completed result on the next Enter).
         var app = CreateSkillSourcesApp(out var input, out var vm,
             new FakeSkillFeedProbe(message: "auth required", requiresAuth: true));
 
-        // URL + Enter -> 401 -> AddRemoteToken. Type token, Enter -> re-probe succeeds -> name.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);     // URL phase 2: RequiresAuth -> reveal token field
         input.EnqueueString("secret-token");
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // token phase 1: re-probe with token
+        input.EnqueueKey(ConsoleKey.Enter);     // token phase 2: success -> AddRemoteName
+        input.EnqueueKey(ConsoleKey.Enter);     // name -> persist
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -421,13 +434,14 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     [Fact]
     public async Task Skill_sources_remote_name_enter_persists_no_auth_source_to_skill_feeds()
     {
-        // Default probe reports success: the no-auth URL probe advances straight to the name
-        // screen (no token field), and Enter on the name persists an open feed with no ApiKey.
+        // Default probe reports success. The off-loop probe is two-phase: the URL Enter kicks it
+        // off, a second Enter advances to the name screen, and a third Enter on the name persists
+        // an open feed with no ApiKey.
         var app = CreateSkillSourcesApp(out var input, out var vm);
 
-        // URL + Enter (inside BeginRemoteUrlEntry) -> AddRemoteName; Enter saves the open feed.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);     // URL phase 2: success -> AddRemoteName
+        input.EnqueueKey(ConsoleKey.Enter);     // name -> persist
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -475,21 +489,21 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_remote_change_url_second_enter_saves_anyway_to_skill_feeds()
+    public async Task Skill_sources_remote_change_url_persists_immediately_even_when_unreachable()
     {
+        // Persist-now, validate-async: changing a remote feed URL no longer blocks on a "save anyway"
+        // override (the probe ran synchronously and froze the loop). The new URL is persisted on the
+        // first Enter and an off-loop warn-probe surfaces a non-blocking warning when unreachable.
         File.WriteAllText(_paths.NetclawConfigPath,
             "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
         var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
 
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);          // open the feed's detail
+        input.EnqueueKey(ConsoleKey.DownArrow);      // move to the Change Location action
+        input.EnqueueKey(ConsoleKey.Enter);          // open the URL editor
         EnqueueBackspaces(input, "https://old.example.test".Length);
         input.EnqueueString("https://new.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);          // persists now (unreachable warn-probe is off-loop)
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -776,7 +790,10 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
             _failWithToken = failWithToken;
         }
 
-        public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+        // Returns a synchronously-completed Task so RunProbeAsync runs inline on the loop thread
+        // (a completed-task await never suspends): the probe result is applied before the event
+        // loop pulls the next scripted key, keeping these full-loop tests deterministic.
+        public Task<SkillFeedReachabilityResult> ProbeAsync(string baseUrl, string? apiKey, int timeoutSeconds, CancellationToken ct = default)
         {
             // Simulate an auth-gated server: the no-token probe returns 401 (RequiresAuth),
             // which reveals the bearer-token field. This is the only way to reach the
@@ -786,14 +803,14 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
             if (_requiresAuth)
             {
                 if (string.IsNullOrEmpty(apiKey))
-                    return new SkillFeedReachabilityResult(false, _message, RequiresAuth: true);
+                    return Task.FromResult(new SkillFeedReachabilityResult(false, _message, RequiresAuth: true));
 
-                return _failWithToken
+                return Task.FromResult(_failWithToken
                     ? new SkillFeedReachabilityResult(false, _message)
-                    : new SkillFeedReachabilityResult(true, _message);
+                    : new SkillFeedReachabilityResult(true, _message));
             }
 
-            return new SkillFeedReachabilityResult(_success, _message);
+            return Task.FromResult(new SkillFeedReachabilityResult(_success, _message));
         }
     }
 

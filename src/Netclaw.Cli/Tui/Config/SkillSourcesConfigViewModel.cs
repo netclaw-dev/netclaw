@@ -21,17 +21,24 @@ internal sealed record SkillFeedReachabilityResult(bool Success, string Message,
 
 internal interface ISkillFeedReachabilityProbe
 {
-    SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds);
+    Task<SkillFeedReachabilityResult> ProbeAsync(string baseUrl, string? apiKey, int timeoutSeconds, CancellationToken ct = default);
 }
 
 internal sealed class SkillFeedReachabilityProbe : ISkillFeedReachabilityProbe
 {
-    public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+    public async Task<SkillFeedReachabilityResult> ProbeAsync(
+        string baseUrl,
+        string? apiKey,
+        int timeoutSeconds,
+        CancellationToken ct = default)
     {
         try
         {
             var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 10));
-            using var cts = new CancellationTokenSource(timeout);
+            // Link the caller's token to the per-probe timeout so a superseded/abandoned probe
+            // (caller cancels via ct) and a slow server (timeout) both unwind the same way.
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
             using var client = new HttpClient { Timeout = timeout };
             var root = baseUrl.EndsWith("/", StringComparison.Ordinal) ? baseUrl : baseUrl + "/";
             using var request = new HttpRequestMessage(
@@ -41,7 +48,7 @@ internal sealed class SkillFeedReachabilityProbe : ISkillFeedReachabilityProbe
             if (!string.IsNullOrWhiteSpace(apiKey))
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            using var response = client.Send(request, cts.Token);
+            using var response = await client.SendAsync(request, cts.Token);
             if (response.IsSuccessStatusCode)
                 return new SkillFeedReachabilityResult(true, "Skill feed discovery endpoint is reachable.");
 
@@ -50,8 +57,15 @@ internal sealed class SkillFeedReachabilityProbe : ISkillFeedReachabilityProbe
 
             return new SkillFeedReachabilityResult(false, $"Skill feed probe returned HTTP {(int)response.StatusCode}.");
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The CALLER cancelled (probe superseded or abandoned). Surface this to RunProbeAsync as
+            // a cancellation so it drops the result quietly, rather than masquerading as a failure.
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException)
         {
+            // Network/parse/timeout error (NOT caller cancellation): a real, reportable failure.
             return new SkillFeedReachabilityResult(false, $"Skill feed probe failed: {ex.Message}");
         }
     }
@@ -165,7 +179,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly ISkillFeedReachabilityProbe _probe;
     private readonly StringComparer _nameComparer = StringComparer.OrdinalIgnoreCase;
-    private string? _saveAnywayFingerprint;
+    private CancellationTokenSource? _probeCts;
+    private Task? _probeTask;
+    private SkillFeedReachabilityResult? _pendingRemoteProbeResult;
+    private string? _lastProbeFingerprint;
     private List<SkillSourceDisplay> _sources = [];
     private SkillSourceKind? _selectedKind;
     private string? _selectedName;
@@ -551,6 +568,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        // Cancel (but do not block-await) any in-flight off-loop probe: RunProbeAsync swallows the
+        // resulting OperationCanceledException, so there is no unobserved exception to worry about.
+        _probeCts?.Cancel();
+        _probeCts?.Dispose();
         Screen.Dispose();
         SelectedRow.Dispose();
         Draft.Dispose();
@@ -559,6 +580,53 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ActiveValidationDialog.Dispose();
         IsSaved.Dispose();
         base.Dispose();
+    }
+
+    // Exposes the in-flight off-loop reachability probe so tests can await it deterministically
+    // (no Task.Delay) instead of racing the thread-pool continuation.
+    internal Task? PendingProbe => _probeTask;
+
+    // Kicks off a reachability probe OFF the single-threaded TUI loop so a slow/unreachable feed
+    // never freezes input. The synchronous setup (status + redraw) runs on the loop thread; the
+    // continuation in RunProbeAsync resumes on the thread pool (no SyncContext here) and may ONLY
+    // mutate Status/probe-result fields and RequestRedraw — never navigate.
+    private void StartBackgroundProbe(
+        string url,
+        string? apiKey,
+        int timeoutSeconds,
+        string testingMessage,
+        Action<SkillFeedReachabilityResult> onResult)
+    {
+        _probeCts?.Cancel();
+        _probeCts?.Dispose();
+        _probeCts = new CancellationTokenSource();
+        SetStatus(testingMessage, ConfigStatusTone.Neutral);
+        RequestRedraw();
+        _probeTask = RunProbeAsync(url, apiKey, timeoutSeconds, _probeCts.Token, onResult);
+    }
+
+    private async Task RunProbeAsync(
+        string url,
+        string? apiKey,
+        int timeoutSeconds,
+        CancellationToken ct,
+        Action<SkillFeedReachabilityResult> onResult)
+    {
+        SkillFeedReachabilityResult result;
+        try
+        {
+            result = await _probe.ProbeAsync(url, apiKey, timeoutSeconds, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // superseded or abandoned probe — drop quietly
+        }
+
+        if (ct.IsCancellationRequested)
+            return;
+
+        onResult(result); // MUST be status-only (Status/fields), never navigation
+        RequestRedraw();
     }
 
     private void ActivateInventoryRow()
@@ -744,14 +812,9 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         ReplaceDraft(draft);
-        var probe = ValidateAddRemoteTokenReachabilityAsync(draft, CancellationToken.None)
-            .AsTask().GetAwaiter().GetResult();
-        if (!probe.Success)
-        {
-            ApplyCommitResult(probe);
-            return;
-        }
-
+        // Reachability is no longer gated here (a blocking probe froze the loop). The add-remote
+        // review step (ProbePendingRemoteThenReview) and the Test action validate reachability
+        // off-loop; advance now.
         CommitAddRemoteTokenDraft(draft);
     }
 
@@ -771,14 +834,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         ReplaceDraft(draft);
-        var probe = ValidateChangeLocationReachabilityAsync(draft, CancellationToken.None)
-            .AsTask().GetAwaiter().GetResult();
-        if (!probe.Success)
-        {
-            ApplyCommitResult(probe);
-            return;
-        }
 
+        // Persist now, validate reachability async: a blocking probe here froze the loop (deep-review
+        // finding). For a remote source the persist path (SaveRemoteUrlChange) already kicks off the
+        // off-loop warn-probe, so there is nothing to gate here — just commit.
         CommitChangeLocationDraft(draft);
     }
 
@@ -1011,10 +1070,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         // revealed only when the server actually requires auth (401/403); open targets
         // go straight to the name/review step and never see a secret field.
         //
-        // Do NOT reset _saveAnywayFingerprint here: ClearPendingFlow already clears it at
-        // flow start, and this method runs on every Enter on the URL screen — clearing it
-        // here would defeat "press Enter again to save anyway" for an unreachable open
-        // server (the second Enter must match the prior fingerprint and advance).
+        // Do NOT reset _lastProbeFingerprint / _pendingRemoteProbeResult here: this method runs on
+        // every Enter on the URL screen with the SAME URL, so the recomputed fingerprint matches the
+        // first probe's. Clearing them would re-arm phase 1 and defeat "press Enter again to save
+        // anyway" for an unreachable open server (the second Enter must act on the completed result).
         ProbePendingRemoteThenReview();
     }
 
@@ -1077,44 +1136,12 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             : SkillSourceCommitResult.Ok();
     }
 
-    internal ValueTask<SkillSourceCommitResult> ValidateAddRemoteTokenReachabilityAsync(
-        string value,
-        CancellationToken ct)
-    {
-        var token = value.Trim();
-        SkillFeedReachabilityResult result;
-        if (_editingAction == SkillSourceDetailAction.RotateToken)
-        {
-            if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer } source)
-                return ValueTask.FromResult(SkillSourceCommitResult.Failed("A remote skill server must be selected before rotating a token."));
-
-            var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
-            var feed = FindRemoteSource(feeds, source.Name);
-            if (feed is null)
-                return ValueTask.FromResult(SkillSourceCommitResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
-
-            result = _probe.Probe(feed.Url, token, feed.TimeoutSeconds);
-        }
-        else
-        {
-            if (_pendingRemoteUrl is null)
-                return ValueTask.FromResult(SkillSourceCommitResult.Failed("Skill server URL is required before adding a token."));
-
-            result = _probe.Probe(_pendingRemoteUrl, token, _pendingRemoteTimeoutSeconds);
-        }
-
-        _pendingRemoteProbeMessage = result.Message;
-        return ValueTask.FromResult(result.Success
-            ? SkillSourceCommitResult.Ok(result.Message)
-            : SkillSourceCommitResult.Warning(result.Message));
-    }
-
     internal void CommitAddRemoteTokenDraft(string value)
     {
         Draft.Value = value;
         if (_editingAction == SkillSourceDetailAction.RotateToken)
         {
-            SaveRotatedRemoteToken(probeBeforeSave: false);
+            SaveRotatedRemoteToken();
             return;
         }
 
@@ -1123,6 +1150,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(suggestedName));
     }
 
+    // Two-phase add-remote review. The reachability probe runs OFF the loop (StartBackgroundProbe),
+    // so this method must never navigate from a probe continuation. Instead it acts on a completed
+    // probe result on the NEXT loop-thread invocation (the next Enter), where navigation is safe:
+    //   Phase 1 (new fingerprint): kick off the probe, return. The background continuation only sets
+    //           _pendingRemoteProbeResult + Status.
+    //   Phase 2 (fingerprint matches, result present): ACT on the result here, on the loop thread —
+    //           reveal the token field (RequiresAuth), advance to the name screen (success), or
+    //           save-anyway to the name screen (a second Enter on a failure).
+    // Editing the URL or entering a token changes the fingerprint, which re-arms phase 1.
     private void ProbePendingRemoteThenReview()
     {
         if (_pendingRemoteUrl is null)
@@ -1133,33 +1169,61 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         var apiKey = _pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken ? _pendingRemoteApiKey : null;
         var fingerprint = $"{_pendingRemoteUrl}|{apiKey?.Length ?? 0}";
-        if (_saveAnywayFingerprint != fingerprint)
-        {
-            var result = _probe.Probe(_pendingRemoteUrl, apiKey, _pendingRemoteTimeoutSeconds);
-            _pendingRemoteProbeMessage = result.Message;
-            if (!result.Success)
-            {
-                // Probe-driven disclosure: a 401/403 with no bearer token means the
-                // server requires auth — reveal the token field and re-probe rather
-                // than offering "save anyway". Once a token is present (or the failure
-                // is not auth-related) fall through to the save-anyway override.
-                if (result.RequiresAuth && _pendingRemoteAuthMode != SkillSourceAuthMode.BearerToken)
-                {
-                    _pendingRemoteAuthMode = SkillSourceAuthMode.BearerToken;
-                    _saveAnywayFingerprint = null;
-                    ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
-                    SetStatus($"{result.Message} Enter a bearer token to continue.", ConfigStatusTone.Warning);
-                    return;
-                }
 
-                _saveAnywayFingerprint = fingerprint;
-                SetStatus($"{result.Message} Press Enter again to save anyway.", ConfigStatusTone.Warning);
+        if (_lastProbeFingerprint == fingerprint && _pendingRemoteProbeResult is { } done)
+        {
+            // Phase 2: a completed probe for this exact URL/token — navigate on the loop thread.
+            _pendingRemoteProbeResult = null;
+
+            if (done.Success)
+            {
+                ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(SuggestNameFromUrl(_pendingRemoteUrl)));
                 return;
             }
+
+            // Probe-driven disclosure: a 401/403 with no bearer token means the server requires
+            // auth — reveal the token field rather than offering "save anyway". Entering a token
+            // changes the fingerprint, which re-arms the probe.
+            if (done.RequiresAuth && _pendingRemoteAuthMode != SkillSourceAuthMode.BearerToken)
+            {
+                _pendingRemoteAuthMode = SkillSourceAuthMode.BearerToken;
+                ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
+                SetStatus($"{done.Message} Enter a bearer token to continue.", ConfigStatusTone.Warning);
+                return;
+            }
+
+            // Save-anyway: a second Enter on a (non-auth) failure proceeds to the name screen.
+            ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(SuggestNameFromUrl(_pendingRemoteUrl)));
+            return;
         }
 
-        var suggestedName = SuggestNameFromUrl(_pendingRemoteUrl);
-        ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(suggestedName));
+        if (_lastProbeFingerprint == fingerprint && _pendingRemoteProbeResult is null)
+        {
+            // Phase 1 probe still in flight — the user pressed Enter again before it returned.
+            SetStatus("Still testing skill server…", ConfigStatusTone.Neutral);
+            return;
+        }
+
+        // Phase 1: a new URL/token — kick off the off-loop probe. The continuation is status-only.
+        _lastProbeFingerprint = fingerprint;
+        _pendingRemoteProbeResult = null;
+        StartBackgroundProbe(
+            _pendingRemoteUrl,
+            apiKey,
+            _pendingRemoteTimeoutSeconds,
+            "Testing skill server…",
+            r =>
+            {
+                _pendingRemoteProbeResult = r;
+                _pendingRemoteProbeMessage = r.Message;
+                SetStatus(
+                    r.Success
+                        ? $"{r.Message} Press Enter to continue."
+                        : r.RequiresAuth && _pendingRemoteAuthMode != SkillSourceAuthMode.BearerToken
+                            ? $"{r.Message} Press Enter to add a bearer token."
+                            : $"{r.Message} Press Enter to save anyway.",
+                    r.Success ? ConfigStatusTone.Success : ConfigStatusTone.Warning);
+            });
     }
 
     private void SaveNewRemoteSource()
@@ -1329,8 +1393,12 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var result = _probe.Probe(feed.Url, apiKey, feed.TimeoutSeconds);
-        SetStatus(result.Message, result.Success ? ConfigStatusTone.Success : ConfigStatusTone.Warning);
+        StartBackgroundProbe(
+            feed.Url,
+            apiKey,
+            feed.TimeoutSeconds,
+            $"Testing skill server '{source.Name}'…",
+            r => SetStatus(r.Message, r.Success ? ConfigStatusTone.Success : ConfigStatusTone.Warning));
     }
 
     private void SaveRename()
@@ -1436,35 +1504,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             : SkillSourceCommitResult.Failed(urlError);
     }
 
-    internal ValueTask<SkillSourceCommitResult> ValidateChangeLocationReachabilityAsync(
-        string value,
-        CancellationToken ct)
-    {
-        if (SelectedSource is not { } source)
-            return ValueTask.FromResult(SkillSourceCommitResult.Failed("A skill source must be selected before changing location."));
-
-        if (source.Kind == SkillSourceKind.LocalFolder)
-            return ValueTask.FromResult(SkillSourceCommitResult.Ok());
-
-        if (!TryNormalizeFeedUrl(value.Trim(), out var url, out var error))
-            return ValueTask.FromResult(SkillSourceCommitResult.Failed(error));
-
-        var normalizedUrl = url ?? throw new InvalidOperationException("Validated skill server URL was null.");
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
-        var item = FindRemoteSource(feeds, source.Name);
-        if (item is null)
-            return ValueTask.FromResult(SkillSourceCommitResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
-
-        var apiKey = TryGetFeedApiKeyPlaintext(item, out var plaintext, out var decryptError) ? plaintext : null;
-        if (!string.IsNullOrWhiteSpace(decryptError))
-            return ValueTask.FromResult(SkillSourceCommitResult.Failed(decryptError));
-
-        var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
-        return ValueTask.FromResult(probeResult.Success
-            ? SkillSourceCommitResult.Ok(probeResult.Message)
-            : SkillSourceCommitResult.Warning(probeResult.Message));
-    }
-
     internal void CommitChangeLocationDraft(string value)
     {
         Draft.Value = value;
@@ -1480,7 +1519,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        SaveRemoteUrlChange(source, probeBeforeSave: false);
+        SaveRemoteUrlChange(source);
     }
 
     private void SaveLocalPathChange(SkillSourceDisplay source)
@@ -1512,7 +1551,9 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Local skill folder '{source.Name}' path saved.");
     }
 
-    private void SaveRemoteUrlChange(SkillSourceDisplay source, bool probeBeforeSave = true)
+    // Persist-now, validate-async: the URL change is saved immediately (a blocking probe froze the
+    // loop), then an off-loop warn-probe surfaces a non-blocking warning if the new URL is unreachable.
+    private void SaveRemoteUrlChange(SkillSourceDisplay source)
     {
         if (!TryNormalizeFeedUrl(Draft.Value.Trim(), out var url, out var error))
         {
@@ -1538,26 +1579,27 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var fingerprint = $"change-url|{source.Name}|{normalizedUrl}|{apiKey?.Length ?? 0}";
-        if (probeBeforeSave && _saveAnywayFingerprint != fingerprint)
-        {
-            var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
-            if (!probeResult.Success)
-            {
-                _saveAnywayFingerprint = fingerprint;
-                SetStatus($"{probeResult.Message} Press Enter again to save anyway.", ConfigStatusTone.Warning);
-                return;
-            }
-        }
-
+        var timeoutSeconds = item.TimeoutSeconds;
         item.Url = normalizedUrl;
         SaveSkillFeedsConfig(feeds);
-        _saveAnywayFingerprint = null;
         ReloadSources();
         ShowDetail($"Skill server '{source.Name}' URL saved.");
+
+        StartBackgroundProbe(
+            normalizedUrl,
+            apiKey,
+            timeoutSeconds,
+            "Verifying skill server…",
+            r => SetStatus(
+                r.Success
+                    ? $"Skill server '{source.Name}' URL saved (reachable)."
+                    : $"Saved, but the skill server is unreachable: {r.Message}",
+                r.Success ? ConfigStatusTone.Success : ConfigStatusTone.Warning));
     }
 
-    private void SaveRotatedRemoteToken(bool probeBeforeSave = true)
+    // Persist-now, validate-async: the rotated token is saved immediately, then an off-loop
+    // warn-probe surfaces a non-blocking warning if the feed is unreachable with the new token.
+    private void SaveRotatedRemoteToken()
     {
         if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer } source)
         {
@@ -1587,24 +1629,24 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var fingerprint = $"rotate-token|{source.Name}|{feed.Url}|{token.Length}";
-        if (probeBeforeSave && _saveAnywayFingerprint != fingerprint)
-        {
-            var probeResult = _probe.Probe(feed.Url, token, feed.TimeoutSeconds);
-            if (!probeResult.Success)
-            {
-                _saveAnywayFingerprint = fingerprint;
-                SetStatus($"{probeResult.Message} Press Enter again to save anyway.", ConfigStatusTone.Warning);
-                return;
-            }
-        }
-
+        var feedUrl = feed.Url;
+        var timeoutSeconds = feed.TimeoutSeconds;
         feed.ApiKey = ProtectApiKeyForConfig(_paths, token);
         SaveSkillFeedsConfig(feeds);
-        _saveAnywayFingerprint = null;
         _editingAction = null;
         ReloadSources();
         ShowDetail($"Skill server '{source.Name}' token rotated.");
+
+        StartBackgroundProbe(
+            feedUrl,
+            token,
+            timeoutSeconds,
+            "Verifying skill server…",
+            r => SetStatus(
+                r.Success
+                    ? $"Skill server '{source.Name}' token rotated (reachable)."
+                    : $"Saved, but the skill server is unreachable: {r.Message}",
+                r.Success ? ConfigStatusTone.Success : ConfigStatusTone.Warning));
     }
 
     private void RemoveRemoteToken(string name)
@@ -1854,7 +1896,9 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private void MarkDirty()
     {
         IsSaved.Value = false;
-        _saveAnywayFingerprint = null;
+        // Re-arm the add-remote review probe: a config edit invalidates any completed probe result.
+        _lastProbeFingerprint = null;
+        _pendingRemoteProbeResult = null;
         ActiveValidationDialog.Value = null;
         ClearStatus();
         RequestRedraw();
@@ -1882,7 +1926,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingRemoteApiKey = null;
         _pendingRemoteProbeMessage = null;
         _pendingRemoteTimeoutSeconds = DefaultFeedTimeoutSeconds;
-        _saveAnywayFingerprint = null;
+        _lastProbeFingerprint = null;
+        _pendingRemoteProbeResult = null;
         _editingAction = null;
         ActiveValidationDialog.Value = null;
         Draft.Value = string.Empty;
