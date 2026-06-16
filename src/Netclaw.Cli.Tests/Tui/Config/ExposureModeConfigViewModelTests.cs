@@ -293,6 +293,32 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Saving_when_registry_write_fails_surfaces_error_without_crashing_or_claiming_success()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": { "ExposureMode": "local" }
+            }
+            """);
+        // Force the auto-pair devices-registry access to throw the way a disk-full / permission
+        // failure would: ReadPairedDevices/WritePairedDevices cannot read or atomically replace a
+        // path that is a directory, raising IOException/UnauthorizedAccessException at the real
+        // call site. Before the guard, that exception escaped GoNext into the Termina event loop.
+        Directory.CreateDirectory(Context.Paths.DevicesPath);
+
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.TailscaleServe;
+
+        // Must not throw: the write failure has to be caught and surfaced, not crash the loop.
+        AdvanceTunnelModeToSave(vm);
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Contains("Failed to save exposure mode", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Saving_local_mode_preserves_reverse_proxy_values_for_reactivation()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,

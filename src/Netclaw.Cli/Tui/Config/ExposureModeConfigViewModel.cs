@@ -62,12 +62,24 @@ public sealed class ExposureModeConfigViewModel : ReactiveViewModel
             return;
         }
 
-        _orchestrator.WriteConfig();
+        try
+        {
+            _orchestrator.WriteConfig();
 
-        // Keep the configuring client authenticated after switching to a non-local mode. WriteConfig
-        // already auto-pairs a fully fresh install (the wizard bootstrap path); this also covers
-        // leftover/partial pairing state so `netclaw config` never locks the operator out of chat.
-        _step.EnsureCurrentClientPaired(_context.Paths);
+            // Keep the configuring client authenticated after switching to a non-local mode. WriteConfig
+            // already auto-pairs a fully fresh install (the wizard bootstrap path); this also covers
+            // leftover/partial pairing state so `netclaw config` never locks the operator out of chat.
+            _step.EnsureCurrentClientPaired(_context.Paths);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A disk-full / permission-denied / atomic-rename failure here must surface to the operator,
+            // not escalate as an unhandled exception that tears down the Termina event loop. Leave
+            // IsSaved false so the UI never claims a save that did not fully complete.
+            _context.StatusMessage.Value = $"Failed to save exposure mode: {ex.Message}";
+            NotifyContentChanged();
+            return;
+        }
 
         IsSaved.Value = true;
         _context.StatusMessage.Value = "Exposure mode saved.";
