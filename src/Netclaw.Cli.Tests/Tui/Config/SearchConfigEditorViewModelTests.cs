@@ -150,8 +150,15 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         using var vm = CreateBraveEditorWithSuccessfulProbe();
         ReplaceConfigFileWithDirectory();
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+        // The awaited path surfaces the persistence failure to the caller (unlike the from-input path,
+        // which catches it into a status). The exact type depends on the OS/write mechanism — the
+        // atomic write's File.Move onto a directory throws IOException, a denied open throws
+        // UnauthorizedAccessException — so accept either persistence-IO exception rather than pinning
+        // one, while still rejecting an unexpected exception.
+        var ex = await Assert.ThrowsAnyAsync<SystemException>(
             () => vm.SubmitCurrentConfigurationAsync(TestContext.Current.CancellationToken));
+        Assert.True(ex is IOException or UnauthorizedAccessException,
+            $"Expected a persistence IO exception, got {ex.GetType().Name}: {ex.Message}");
     }
 
     [Fact]
