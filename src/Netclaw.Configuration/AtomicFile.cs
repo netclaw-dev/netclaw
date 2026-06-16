@@ -50,18 +50,33 @@ public static class AtomicFile
         catch
         {
             // Failure before the rename leaves the destination untouched; clean up the temp so a
-            // partial write never lingers next to the real file.
-            try
-            {
-                if (File.Exists(temp))
-                    File.Delete(temp);
-            }
-            catch
-            {
-                // Best-effort cleanup; surfacing the cleanup error would mask the original failure.
-            }
-
+            // partial write never lingers next to the real file. Cleanup is best-effort — a delete
+            // failure must not mask the original write exception, which we rethrow.
+            TryDeleteTemp(temp);
             throw;
+        }
+    }
+
+    // Deletes a leftover temp file, returning whether it succeeded. The expected IO/access failures
+    // are turned into a false result rather than propagating, so a failed cleanup never masks a more
+    // important exception that is already in flight at the call site.
+    private static bool TryDeleteTemp(string temp)
+    {
+        if (!File.Exists(temp))
+            return true;
+
+        try
+        {
+            File.Delete(temp);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
