@@ -24,6 +24,13 @@ public sealed class FakeDiscordProbe : IDiscordProbe
 
     public TimeSpan? DelayBeforeResult { get; set; }
 
+    /// <summary>
+    /// Optional gate. When set, <see cref="ResolveChannelIdsAsync"/> blocks (observing the
+    /// cancellation token) until the gate is completed — used to stage an in-flight channel-name
+    /// prefetch for race/cancellation tests. Null (default) returns immediately.
+    /// </summary>
+    public TaskCompletionSource? ResolveGate { get; set; }
+
     public async Task<DiscordProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
@@ -39,6 +46,8 @@ public sealed class FakeDiscordProbe : IDiscordProbe
         ResolveCallCount++;
         LastBotToken = botToken;
         LastResolvedIds = channelIds;
+        if (ResolveGate is not null)
+            await ResolveGate.Task.WaitAsync(ct);
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);
         return NextResolutionResult;

@@ -240,6 +240,81 @@ public sealed class DiscordStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public async Task BackgroundChannelResolution_PublishesResult_AppliedOnLeaveWithoutRace()
+    {
+        _fakeProbe.NextResolutionResult = new DiscordChannelResolutionResult(
+            true, null,
+            [new ResolvedDiscordChannel("129847561203948576", "general", "MyServer")],
+            []);
+        _fakeProbe.ResolveGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Context.SelectedPosture = DeploymentPosture.Team;
+        using var step = new DiscordStepViewModel(_fakeProbe)
+        {
+            DiscordEnabled = true,
+            BotToken = "test-token",
+            ChannelIdsInput = "129847561203948576"
+        };
+        step.OnEnter(Context, NavigationDirection.Forward);
+
+        // Advance 0→1→2→3; the 2→3 transition kicks off the background channel-name prefetch.
+        Assert.True(step.TryAdvance());
+        Assert.True(step.TryAdvance());
+        Assert.True(step.TryAdvance());
+
+        var pending = step.PendingResolution;
+        Assert.NotNull(pending);
+        Assert.False(pending!.IsCompleted); // gated — still in flight, nothing published yet
+        Assert.Null(step.LastChannelResolution);
+
+        // Release the probe and await the tracked task (no Task.Delay/polling).
+        _fakeProbe.ResolveGate.SetResult();
+        await pending;
+
+        Assert.NotNull(step.LastChannelResolution);
+        Assert.True(step.LastChannelResolution!.Success);
+
+        // The loop thread owns ChannelEntries mutation; OnLeave applies the resolved display names.
+        step.OnLeave();
+        var channelEntry = Context.ChannelEntries[ChannelType.Discord].First(e => !e.IsDmRow);
+        Assert.Equal("MyServer / #general", channelEntry.DisplayName);
+    }
+
+    [Fact]
+    public async Task BackgroundChannelResolution_DisposedBeforeProbeReturns_DropsStaleResult()
+    {
+        _fakeProbe.NextResolutionResult = new DiscordChannelResolutionResult(
+            true, null,
+            [new ResolvedDiscordChannel("129847561203948576", "general", "MyServer")],
+            []);
+        _fakeProbe.ResolveGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Context.SelectedPosture = DeploymentPosture.Team;
+        var step = new DiscordStepViewModel(_fakeProbe)
+        {
+            DiscordEnabled = true,
+            BotToken = "test-token",
+            ChannelIdsInput = "129847561203948576"
+        };
+        step.OnEnter(Context, NavigationDirection.Forward);
+        Assert.True(step.TryAdvance());
+        Assert.True(step.TryAdvance());
+        Assert.True(step.TryAdvance());
+
+        var pending = step.PendingResolution;
+        Assert.NotNull(pending);
+
+        // User abandons the step before the probe returns; Dispose cancels the prefetch.
+        step.Dispose();
+
+        // Probe completes after cancellation — the token guard must drop the stale result.
+        _fakeProbe.ResolveGate.SetResult();
+        await pending!;
+
+        Assert.Null(step.LastChannelResolution);
+    }
+
+    [Fact]
     public async Task ContributeHealthChecks_PartialResolution_ReportsUnresolved()
     {
         _fakeProbe.NextResolutionResult = new DiscordChannelResolutionResult(

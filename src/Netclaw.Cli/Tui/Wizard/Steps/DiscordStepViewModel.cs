@@ -20,6 +20,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
     private int _highWaterSubStep;
     private WizardContext? _context;
     private CancellationTokenSource? _resolutionCts;
+    private Task? _resolutionTask;
 
     public DiscordStepViewModel(IDiscordProbe discordProbe)
     {
@@ -211,6 +212,12 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
 
     public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
+        // A background channel-name prefetch may still be in flight (kicked off when the user
+        // advanced past the channel-IDs sub-step). Await it first so its LastChannelResolution
+        // publish is observed here rather than racing the read below — and so its work is reused
+        // instead of re-resolved.
+        await AwaitPendingResolutionAsync();
+
         if (!runner.BeginAdapterCheck("Discord", DiscordEnabled, (BotToken, "bot token")))
             return;
 
@@ -293,36 +300,64 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         _resolutionCts?.Cancel();
         _resolutionCts?.Dispose();
         _resolutionCts = new CancellationTokenSource();
-        var ct = _resolutionCts.Token;
         var token = BotToken!;
         var context = _context;
 
-        _ = Task.Run(async () =>
+        // Track the prefetch instead of firing Task.Run-and-forget. The network probe runs off the
+        // loop, but its only published state is LastChannelResolution — an atomic reference write
+        // guarded by the cancellation token. ChannelEntry.DisplayName is NOT mutated from this
+        // background task; the resolved names are applied on the loop thread (OnLeave /
+        // ApplyResolvedDisplayNamesToContext), so the render thread never reads a ChannelEntry that
+        // a pool thread is concurrently mutating. The tracked task lets the health-check phase await
+        // the publish before reading it.
+        _resolutionTask = ResolveChannelLabelsAsync(token, channelIds, context, _resolutionCts.Token);
+    }
+
+    private async Task ResolveChannelLabelsAsync(
+        string token, IReadOnlyList<string> channelIds, WizardContext? context, CancellationToken ct)
+    {
+        try
         {
-            try
-            {
-                var result = await _discordProbe.ResolveChannelIdsAsync(token, channelIds, ct);
-                if (ct.IsCancellationRequested)
-                    return;
+            var result = await _discordProbe.ResolveChannelIdsAsync(token, channelIds, ct);
 
-                LastChannelResolution = result;
+            // Re-check cancellation right before the publish. This narrows — but cannot fully
+            // close — the window where a probe the user superseded (by editing the channel IDs
+            // and re-advancing) lands a stale result; a late publish here is at worst a
+            // cosmetically-wrong display name applied on the loop thread, never a crash, and the
+            // authoritative resolution in ContributeHealthChecksAsync re-resolves as the source
+            // of truth. Do not null out a prior result on cancellation/error below — a superseded
+            // probe must not clobber a still-valid resolution.
+            if (ct.IsCancellationRequested)
+                return;
 
-                if (context is not null &&
-                    context.ChannelEntries.TryGetValue(ChannelType.Discord, out var entries))
-                {
-                    ApplyResolvedDisplayNames(entries);
-                    context.RequestRedraw();
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                LastChannelResolution = null;
-            }
-            catch (HttpRequestException)
-            {
-                LastChannelResolution = null;
-            }
-        }, ct);
+            // Atomic reference publish; OnLeave / ContributeHealthChecksAsync apply the display
+            // names to ChannelEntries on the loop thread.
+            LastChannelResolution = result;
+            context?.RequestRedraw();
+        }
+        catch (Exception)
+        {
+            // Best-effort cosmetic prefetch: cancellation is expected on supersession, and a probe
+            // failure (network, or a non-JSON Discord error body that fails to parse) is a normal
+            // runtime condition that must never fault the loop or leave the tracked task faulted.
+            // The error surfaces with proper messaging when ContributeHealthChecksAsync re-resolves
+            // (LastChannelResolution stays unset). This is the justified best-effort swallow, not a
+            // silent fallback on a behavioral path.
+        }
+    }
+
+    // Exposes the in-flight background channel-name prefetch so the health-check phase can observe
+    // its publish on the loop thread, and so tests can await it without polling.
+    internal Task? PendingResolution => _resolutionTask;
+
+    // Awaits the in-flight prefetch (if any) so LastChannelResolution is published before a
+    // loop-thread reader inspects it. The prefetch swallows its own probe failures, so the awaited
+    // task always completes successfully — this never throws.
+    private async Task AwaitPendingResolutionAsync()
+    {
+        var inFlight = _resolutionTask;
+        if (inFlight is not null)
+            await inFlight;
     }
 
     private void ApplyResolvedDisplayNames(List<ChannelEntry> entries)
