@@ -56,7 +56,14 @@ public sealed class FakeProviderProbe : IProviderProbe
     /// </summary>
     public string? LastApiKey { get; private set; }
 
-    public Task<ProviderProbeResult> ProbeAsync(
+    /// <summary>
+    /// Optional gate. When set, <see cref="ProbeAsync(string, string?, string?, CancellationToken)"/>
+    /// blocks (observing the cancellation token) until the gate is completed — used to stage
+    /// in-flight probes for cancellation/concurrency tests. Null (default) returns immediately.
+    /// </summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public async Task<ProviderProbeResult> ProbeAsync(
         string providerType, string? endpoint, string? apiKey,
         CancellationToken ct = default)
     {
@@ -65,14 +72,15 @@ public sealed class FakeProviderProbe : IProviderProbe
         LastApiKey = apiKey;
         ProbedTypes.Add(providerType);
 
-        if (ExceptionToThrow is not null)
-            return Task.FromException<ProviderProbeResult>(ExceptionToThrow);
+        if (Gate is not null)
+            await Gate.Task.WaitAsync(ct);
 
-        var result = TypeResults.TryGetValue(providerType, out var typeResult)
+        if (ExceptionToThrow is not null)
+            throw ExceptionToThrow;
+
+        return TypeResults.TryGetValue(providerType, out var typeResult)
             ? typeResult
             : NextResult;
-
-        return Task.FromResult(result);
     }
 
     public Task<ProviderProbeResult> ProbeAsync(

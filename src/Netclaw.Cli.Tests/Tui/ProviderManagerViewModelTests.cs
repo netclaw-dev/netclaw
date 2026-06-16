@@ -413,6 +413,43 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Leaving_detail_view_cancels_in_flight_revalidation()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        vm.DetailProvider = vm.DisplayProviders.Single(p => p.IsConfigured);
+        var item = vm.DetailProvider;
+        _fakeProbe.Gate = new TaskCompletionSource();
+
+        vm.RevalidateDetailProvider(); // starts the revalidation — it blocks on the gated probe
+        Assert.NotNull(vm.RevalidateCompletion);
+        Assert.Equal(ProviderHealthStatus.Probing, item.Health);
+
+        // Operator leaves the detail view: the in-flight revalidation must be cancelled, not left
+        // running with CancellationToken.None to update health (or redraw) against an abandoned view.
+        vm.GoBackToList();
+
+        await vm.RevalidateCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // The cancelled revalidation did not update health (stayed Probing) and did not throw.
+        Assert.Equal(ProviderHealthStatus.Probing, item.Health);
+    }
+
+    [Fact]
     public async Task ActivateSelectedProvider_Healthy_TransitionsToDetails()
     {
         WriteConfig(new Dictionary<string, object>

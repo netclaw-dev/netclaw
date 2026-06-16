@@ -78,6 +78,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _probeCts;
+    private CancellationTokenSource? _revalidateCts;
 
     internal Action<string>? RouteRequested { get; set; }
 
@@ -146,6 +147,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     /// Completes when the eager probe finishes. Used for testing.
     /// </summary>
     internal Task? EagerProbeCompletion { get; private set; }
+
+    /// <summary>
+    /// Completes when the detail-provider revalidation finishes. Used for testing.
+    /// </summary>
+    internal Task? RevalidateCompletion { get; private set; }
 
     /// <summary>
     /// The provider descriptor registry. Exposed for use by the page.
@@ -718,25 +724,51 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         DetailProvider.Health = ProviderHealthStatus.Probing;
         NotifyStateChanged();
 
-        _ = RevalidateAsync(DetailProvider);
+        CancelRevalidate();
+        _revalidateCts = new CancellationTokenSource();
+        RevalidateCompletion = RevalidateAsync(DetailProvider, _revalidateCts.Token);
     }
 
-    private async Task RevalidateAsync(ProviderDisplayItem item)
+    // Cancel and dispose the in-flight detail-provider revalidation. Called when a newer revalidate
+    // starts, when the operator leaves the detail view, and on dispose — all on the UI thread.
+    private void CancelRevalidate()
+    {
+        if (_revalidateCts is not null)
+        {
+            _revalidateCts.Cancel();
+            _revalidateCts.Dispose();
+            _revalidateCts = null;
+        }
+    }
+
+    private async Task RevalidateAsync(ProviderDisplayItem item, CancellationToken ct)
     {
         try
         {
             var result = item.Entry is not null
-                ? await _probe.ProbeAsync(item.Entry, CancellationToken.None)
+                ? await _probe.ProbeAsync(item.Entry, ct)
                 : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
-                    GetProbeCredential(item.Entry), CancellationToken.None);
+                    GetProbeCredential(item.Entry), ct);
+
+            // Abandoned (operator left the detail view, or a newer revalidate started): do not
+            // update health or redraw against a stale/disposed view-model.
+            if (ct.IsCancellationRequested)
+                return;
 
             item.ProbeResult = result;
             item.Health = result.Success
                 ? ProviderHealthStatus.Healthy
                 : ProviderHealthStatus.Unhealthy;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
         catch
         {
+            if (ct.IsCancellationRequested)
+                return;
+
             item.Health = ProviderHealthStatus.Unhealthy;
         }
 
@@ -760,6 +792,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public void GoBackToList()
     {
         CancelProbe();
+        CancelRevalidate();
         ClearAddState();
         DetailProvider = null;
         IsFixFlow = false;
@@ -1094,6 +1127,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public override void Dispose()
     {
         CancelProbe();
+        CancelRevalidate();
         OAuth.Dispose();
         CurrentState.Dispose();
         StatusMessage.Dispose();
