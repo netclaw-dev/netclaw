@@ -287,6 +287,57 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.False(launched);
     }
 
+    [Fact]
+    public async Task RunWithOrchestrator_UnexpectedStepException_ReleasesWizardAndReportsError()
+    {
+        // An unexpected exception in a step's ContributeHealthChecksAsync must NOT leave the wizard
+        // wedged at IsRunning=true / IsComplete=false (GoNext gates on both being false, so the
+        // operator could neither advance, go back, nor see an error).
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System);
+        using var step = new HealthCheckStepViewModel(
+            daemonManager,
+            daemonApi: null,
+            navigationState: new ChatNavigationState());
+        using var throwingStep = new ThrowingHealthCheckStep();
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        using var orchestrator = new WizardOrchestrator([throwingStep, step], context);
+
+        // Must not throw — the catch-all handles it.
+        await step.RunWithOrchestrator(orchestrator);
+
+        Assert.False(step.IsRunning.Value);
+        Assert.True(step.IsComplete.Value);
+        Assert.Contains(step.Results, r => r.Passed == false && r.Label.Contains("Health check failed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Minimal wizard step whose health-check contribution throws an unexpected (non-cancellation)
+    // exception, to prove the orchestrator run releases the wizard instead of wedging it.
+    private sealed class ThrowingHealthCheckStep : IWizardStepViewModel
+    {
+        public string StepId => "throwing";
+        public string DisplayTitle => "Throwing";
+        public bool IsApplicable(WizardContext context) => true;
+        public int CurrentSubStep => 0;
+        public int SubStepCount => 1;
+        public string GetHelpText() => string.Empty;
+        public bool TryAdvance() => false;
+        public bool TryGoBack() => false;
+        public void OnEnter(WizardContext context, NavigationDirection direction) { }
+        public void OnLeave() { }
+        public void ContributeConfig(WizardConfigBuilder builder) { }
+        public void ContributeSecrets(WizardSecretsBuilder builder) { }
+        public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
+            => throw new InvalidOperationException("boom");
+        public void Dispose() { }
+    }
+
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
     {
         public bool IsExternallySupervised => supervised;

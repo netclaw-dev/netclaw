@@ -165,6 +165,19 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             if (_context is not null)
                 _context.StatusMessage.Value = "Setup timed out. Run `netclaw daemon start` to begin.";
         }
+        catch (Exception ex)
+        {
+            // Any unexpected failure in the health-check core (e.g. an IO error in a step's
+            // ContributeHealthChecksAsync) must still release the wizard. Leaving IsRunning=true /
+            // IsComplete=false permanently wedges the step — GoNext gates on !IsRunning &&
+            // !IsComplete, so the operator could neither advance, go back, nor see an error.
+            AddResult(new HealthCheckItem($"Health check failed: {ex.Message}", false));
+            IsRunning.Value = false;
+            IsComplete.Value = true;
+            NotifyChanged();
+            if (_context is not null)
+                _context.StatusMessage.Value = "Setup health check failed. Run `netclaw daemon start` to begin.";
+        }
     }
 
     private Task RunHealthCheckAsync()
