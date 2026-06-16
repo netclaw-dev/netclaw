@@ -62,32 +62,25 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.DoesNotContain("secret-token", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Save_rejects_url_as_external_directory_before_persistence()
+    // The picker can't produce these inputs, but CommitAddLocalPath still validates them: a URL is
+    // not a local path, and a bare name resolves to a well-formed but non-existent directory under
+    // the temp dir. Both must surface an error and persist nothing.
+    [Theory]
+    [InlineData("https://example.test/skills", "local filesystem path")]
+    [InlineData("missing-skills", "must already exist")]
+    public void Save_rejects_invalid_external_directory_before_persistence(string draftInput, string expectedError)
     {
+        var target = draftInput.Contains("://", StringComparison.Ordinal)
+            ? draftInput
+            : Path.Combine(_dir.Path, draftInput);
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
         BeginAddLocalFolder(vm);
-        // The picker can't produce these, but CommitAddLocalPath still validates its input.
-        vm.CommitAddLocalPath("https://example.test/skills");
+        vm.CommitAddLocalPath(target);
 
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("local filesystem path", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
-    }
-
-    [Fact]
-    public void Save_rejects_missing_external_directory_before_persistence()
-    {
-        var before = File.ReadAllText(_paths.NetclawConfigPath);
-        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
-
-        BeginAddLocalFolder(vm);
-        vm.CommitAddLocalPath(Path.Combine(_dir.Path, "missing-skills"));
-
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("must already exist", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(expectedError, vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 

@@ -111,7 +111,7 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             ["skill-sources"] = new(
                 nameof(SkillSourcesConfigViewModelTests),
                 StructuralValidationCoverage.Required(
-                    new ValidationConceptTest("path", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_missing_external_directory_before_persistence)),
+                    new ValidationConceptTest("path", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_invalid_external_directory_before_persistence)),
                     new ValidationConceptTest("uri", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_invalid_skill_feed_url_before_persistence)),
                     new ValidationConceptTest("auth", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_multiline_skill_feed_api_key_before_persistence))),
                 DynamicValidationCoverage.Required(
