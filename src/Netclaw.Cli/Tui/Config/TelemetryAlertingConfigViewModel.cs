@@ -332,20 +332,27 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-        root["Telemetry"] = new Dictionary<string, object>
-        {
-            ["Enabled"] = TelemetryEnabled.Value,
-            ["Otlp"] = new Dictionary<string, object>
+        return ConfigAutosave.Run(
+            () =>
             {
-                ["Endpoint"] = normalizedEndpoint!
-            }
-        };
+                var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+                root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+                root["Telemetry"] = new Dictionary<string, object>
+                {
+                    ["Enabled"] = TelemetryEnabled.Value,
+                    ["Otlp"] = new Dictionary<string, object>
+                    {
+                        ["Endpoint"] = normalizedEndpoint!
+                    }
+                };
 
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
-        ReloadState(successMessage);
-        return true;
+                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+                ReloadState(successMessage, resetOtlpDraft: true);
+                return true;
+            },
+            Status,
+            "Telemetry & Alerting save failed",
+            RequestRedraw);
     }
 
     /// <summary>
@@ -369,21 +376,34 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                 }
 
                 ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
-                ReloadState(successMessage);
+                ReloadState(successMessage, resetOtlpDraft: false);
                 return true;
             },
             Status,
             "Telemetry & Alerting autosave failed",
             RequestRedraw);
 
-    private void ReloadState(string successMessage)
+    private void ReloadState(string successMessage, bool resetOtlpDraft)
     {
         var state = LoadState(_paths);
         TelemetryEnabled.Value = state.TelemetryEnabled;
-        OtlpEndpointDraft.Value = state.OtlpEndpoint;
         _acceptedOtlpEndpoint = state.OtlpEndpoint;
         Webhooks.Value = state.Webhooks;
-        IsSaved.Value = true;
+
+        if (resetOtlpDraft)
+        {
+            // The OTLP endpoint was just persisted: sync the draft to it and mark fully saved.
+            OtlpEndpointDraft.Value = state.OtlpEndpoint;
+            IsSaved.Value = true;
+        }
+        else
+        {
+            // A different section (a webhook) was saved. Preserve any in-progress OTLP endpoint edit
+            // and report fully-saved only when that draft is not dirty — never discard the edit or
+            // falsely flip IsSaved=true over it.
+            IsSaved.Value = OtlpEndpointDraft.Value == state.OtlpEndpoint;
+        }
+
         Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
     }

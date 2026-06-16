@@ -69,6 +69,47 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Save_surfaces_write_failure_without_crashing_the_loop()
+    {
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+        vm.ToggleTelemetry();
+        vm.SelectedRow.Value = 1;
+        vm.AppendText("http://127.0.0.1:4318");
+
+        // Force the config write to fail like a disk-full / permission-denied failure would: AtomicFile
+        // cannot replace a path that is a directory. LoadJsonDict treats it as missing, so only the
+        // WriteConfigFile throws — which was previously unguarded on this direct Save() path.
+        File.Delete(_paths.NetclawConfigPath);
+        Directory.CreateDirectory(_paths.NetclawConfigPath);
+
+        // Must not throw into the Termina event loop: the write is now wrapped in ConfigAutosave.Run.
+        Assert.False(vm.Save());
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
+    public void Saving_a_webhook_preserves_an_in_progress_otlp_endpoint_draft()
+    {
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        // Type an OTLP endpoint but never save it — it stays an unsaved draft.
+        vm.SelectedRow.Value = 1;
+        vm.AppendText("http://unsaved.example.test:4318");
+
+        // Save a webhook (a different section). This used to ReloadState unconditionally, discarding
+        // the dirty OTLP draft and force-flipping IsSaved=true.
+        vm.BeginAddWebhook();
+        vm.WebhookNameDraft.Value = "ops";
+        vm.WebhookUrlDraft.Value = "https://alerts.example.test/hook";
+        vm.ActivateSelected();
+
+        Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
+        // The in-progress OTLP draft survives, and IsSaved reflects that it is still unsaved.
+        Assert.Equal("http://unsaved.example.test:4318", vm.OtlpEndpointDraft.Value);
+        Assert.False(vm.IsSaved.Value);
+    }
+
+    [Fact]
     public void Adding_a_webhook_persists_name_url_and_detected_slack_format()
     {
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
