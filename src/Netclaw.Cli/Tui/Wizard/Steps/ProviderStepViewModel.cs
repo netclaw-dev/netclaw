@@ -160,20 +160,20 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 
     public void CancelProbe()
     {
-        if (_probeCts is not null)
-        {
-            _probeCts.Cancel();
-            _probeCts.Dispose();
-            _probeCts = null;
-        }
+        // Atomically take ownership of the active CTS so a concurrently-completing probe's finally
+        // cannot also cancel/dispose it (double dispose, or cancelling a newer probe's live CTS).
+        var cts = Interlocked.Exchange(ref _probeCts, null);
+        cts?.Cancel();
+        cts?.Dispose();
     }
 
     internal Task? ProbeCompletion { get; private set; }
 
     internal async Task ProbeProviderAsync()
     {
-        _probeCts = new CancellationTokenSource();
-        var ct = _probeCts.Token;
+        var cts = new CancellationTokenSource();
+        _probeCts = cts;
+        var ct = cts.Token;
         var providerType = SelectedProviderType ?? "unknown";
         var probeEntry = BuildProbeEntry(providerType);
 
@@ -212,7 +212,14 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         }
         finally
         {
-            CancelProbe();
+            // Tear down only THIS probe's CTS, and only if it is still the active one. A newer probe
+            // (StartProbe → CancelProbe) may have already replaced and disposed it; claiming the field
+            // atomically stops this finally from cancelling/disposing the newer probe's live CTS.
+            if (Interlocked.CompareExchange(ref _probeCts, null, cts) == cts)
+            {
+                cts.Cancel();
+                cts.Dispose();
+            }
         }
 
         DiscoveredModels.Clear();

@@ -158,6 +158,34 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Superseded_probe_completion_does_not_cancel_the_replacement_probe()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        step.SelectedProviderType = "ollama";
+        step.EndpointInput = "http://localhost:11434";
+        _fakeProbe.Gate = new TaskCompletionSource();
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+            [new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("m") }]);
+
+        step.StartProbe();                  // probe A — blocks on the gate
+        var probeA = step.ProbeCompletion!;
+        step.StartProbe();                  // cancels A, starts probe B (also blocks on the gate)
+        var probeB = step.ProbeCompletion!;
+
+        // Probe A was cancelled by the second StartProbe; let its finally run. With the bug, that
+        // finally tore down the shared _probeCts field — which now holds probe B's live CTS.
+        await probeA.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+        // Releasing the gate, probe B must complete SUCCESSFULLY: its CTS was not cancelled or
+        // disposed by the superseded probe's finally.
+        _fakeProbe.Gate.SetResult();
+        await probeB.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+        Assert.True(step.ProbeResult.Value!.Success);
+    }
+
+    [Fact]
     public void ContributeConfig_SetsProviderAndModel()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);
@@ -245,6 +273,10 @@ public sealed class ProviderStepViewModelTests : IDisposable
         public string? LastProviderType { get; private set; }
         public string? LastApiKey { get; private set; }
 
+        // When set, the ProviderEntry probe blocks (observing the token) until completed — used to
+        // stage overlapping probes for the CTS-lifecycle race test. Null returns immediately.
+        public TaskCompletionSource? Gate { get; set; }
+
         public Task<ProviderProbeResult> ProbeAsync(
             string providerType, string? endpoint, string? apiKey,
             CancellationToken ct = default)
@@ -254,12 +286,14 @@ public sealed class ProviderStepViewModelTests : IDisposable
             return Task.FromResult(NextResult);
         }
 
-        public Task<ProviderProbeResult> ProbeAsync(
+        public async Task<ProviderProbeResult> ProbeAsync(
             ProviderEntry entry, CancellationToken ct = default)
         {
             LastProviderType = entry.Type;
             LastApiKey = entry.ApiKey?.Value ?? entry.OAuthAccessToken?.Value;
-            return Task.FromResult(NextResult);
+            if (Gate is not null)
+                await Gate.Task.WaitAsync(ct);
+            return NextResult;
         }
 
         public Task<ProviderProbeResult> ProbeAsync(
