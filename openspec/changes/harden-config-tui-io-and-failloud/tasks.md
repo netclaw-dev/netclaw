@@ -1,0 +1,45 @@
+<!-- Remediation of the deep C# review (docs/reviews/2026-06-config-tui-deep-review.md).
+Order: Section 0 (atomic write seam) first — everything depends on it — then Theme 1
+(concurrency), Theme 2 (fail-loud/deny-default), Theme 3 (targeted). One logical fix per
+commit; each fix gets a failing-first test (concurrency / fake-failure / round-trip).
+Cited file:line numbers are from the review doc and may drift as fixes land. -->
+
+## 0. Foundation — atomic write seam
+
+- [ ] 0.1 Add an atomic write helper to `ConfigFileHelper` (write sibling temp file → flush → `File.Move(overwrite:true)`) and route `WriteConfigFile`/`WriteSecretsFile` through it. Test: round-trip + a partial/interrupted-write test proving the prior file survives.
+- [ ] 0.2 Route the device-registry writer (`ExposureModeStepViewModel.WriteLocalDeviceTokenValue` / `WritePairedDevices`, review:392) through the shared atomic helper. Test: `devices.json` round-trip; no corruption on concurrent/interrupted write.
+
+## 1. Theme 1 — concurrency & background-task discipline
+
+- [ ] 1.1 `ChannelsConfigViewModel` (review:1094, :1042) — track the label-refresh `Task`+CTS; `CancelAndAwait` before `SaveAsync` writes; guard the post-probe continuation so a stale result cannot clobber reset state or persist a stale snapshot. Test: `ChannelsConfigViewModelTests` race — a probe straddling a save neither corrupts the file nor overwrites reloaded state.
+- [ ] 1.2 `ChannelsConfigViewModel.AutosaveCompletedAction` (review:1310) — remove the sync-over-async `.GetResult()`; make the autosave path async end-to-end. Test: autosave completes without blocking; existing autosave tests stay green.
+- [ ] 1.3 `ProviderStepViewModel` (review:173) — fix the CTS self-nulling race (`finally { CancelProbe(); }` disposing the CTS it is running on). Test: probe-cancellation test.
+- [ ] 1.4 `HealthCheckStepViewModel` (review:55) — synchronize the `Results` list across the async writer and the render thread (lock or marshal). Test: concurrent add/read does not throw or tear.
+- [ ] 1.5 `ProviderManagerViewModel.RevalidateAsync` (review:714) — track the `Task`, pass a real CTS, cancel on `GoBackToList`/`Dispose`, guard `NotifyStateChanged` after dispose. Test: revalidate is cancelled on back-out.
+- [ ] 1.6 `DiscordStepViewModel` (review:300) — remove the `Task.Run` data race on `LastChannelResolution`/`ChannelEntry.DisplayName` (await-able prefetch or marshal the mutation back to the loop). Test: resolution result is applied without a race.
+- [ ] 1.7 `SkillSourcesConfigViewModel` (review:29, :748) — make `ISkillFeedReachabilityProbe` truly async (and its impl + fakes), remove the blocking `.GetAwaiter().GetResult()`, run the probe off the loop. Test: input loop stays responsive during the probe; probe is cancellable.
+
+## 2. Theme 2 — fail-loud parsing, deny-by-default fallbacks
+
+- [ ] 2.1 `SecurityAccessViewModel` (review:634) — unparseable `DeploymentPosture` surfaces an error instead of silently defaulting to `Personal`. Test: fake-bad-posture config → error surfaced, no permissive assumption.
+- [ ] 2.2 `BrowserAutomationConfigViewModel.IsServerEnabled` (review:292) — return `false` for an unrecognized JSON shape (default-deny), not `true`. Test: unrecognized shape → disabled.
+- [ ] 2.3 `SkillSourcesConfigViewModel` (review:2111) — a stored plaintext API key surfaces a warning (and/or opportunistic re-encrypt), never silent acceptance. Test: plaintext key → warning raised.
+- [ ] 2.4 `SecurityAccessViewModel` (review:650 `ParseExposureMode`, :552 `ConvertConfigObject`) — guard parse/convert on render and mutation paths to surface a status instead of throwing into the loop. Test: malformed exposure/audience config → status, no crash.
+- [ ] 2.5 `ConfigDashboardViewModel` (review:245) — guard `LoadSection` in `SkillSourcesSummary`/`TelemetrySummary` so a malformed section renders a fallback string, not a layout-time crash. Test: malformed config → dashboard renders with an error indicator.
+- [ ] 2.6 `SkillSourcesConfigViewModel` (review:1935) — config-write exceptions are caught and surfaced, not propagated to the event loop. Test: fake write failure → status surfaced, loop survives.
+- [ ] 2.7 `HealthCheckStepViewModel` (review:115) — an unexpected exception in the health-check core reports and leaves the wizard interactive (no `IsRunning=true`/`IsComplete=false` wedge). Test: injected exception → wizard not wedged.
+
+## 3. Theme 3 — targeted correctness & secret-ordering
+
+- [ ] 3.1 `ChannelsConfigViewModel.ChangeSelectedChannelAudience` (review:489, :477) — autosave the ←/→ audience (ACL trust-tier) change like every other mutation. Test: cycle audience → navigate away → persisted (not reverted).
+- [ ] 3.2 `ProviderManagerViewModel` (review:519) — write the fixed credential to disk only after the probe succeeds; a failed probe preserves the prior secret. Test: probe-fail leaves the stored secret unchanged.
+- [ ] 3.3 `SlackStepViewModel.BuildChannelAudiences` (review:299) — do not write an unresolved channel name as an ACL key; omit/flag it (or block) so it grants nothing. Test: unresolved channel → no inert name key in `ChannelAudiences`.
+- [ ] 3.4 `ChannelsConfigViewModel.ApplyAddChannelAsync` (review:582) — replace `Single()` with a safe predicate so a resolved id of `"dm"` with DMs enabled does not throw. Test: add a `"dm"`-resolving channel → no exception.
+- [ ] 3.5 `TelemetryAlertingConfigViewModel` (review:289) — add an explicit gesture to clear a webhook auth header (blank-preserve still keeps it). Test: clear gesture removes the header; blank keeps it.
+- [ ] 3.6 `McpToolPermissionsViewModel.BuildAllowedServerList` (review:533) — operate on a copy, not the live in-memory profile object. Test: building the list does not mutate the source profile.
+
+## 4. Verification & close
+
+- [ ] 4.1 Per fix/batch: `dotnet build` + `dotnet test` (affected projects) + `dotnet slopwatch analyze` + `Add-FileHeaders.ps1 -Verify`; run the native smoke tape(s) for any touched TUI surface (config-channels, config-search, config-posture, config-exposure, init-wizard, etc.).
+- [ ] 4.2 `/opsx-verify` the change; full unit suite + `run-smoke.sh light` green before declaring the list complete.
+- [ ] 4.3 On merge with the implementation branch: `/opsx-sync` then `/opsx-archive` to fold `config-tui-resilience` into `openspec/specs/`.
