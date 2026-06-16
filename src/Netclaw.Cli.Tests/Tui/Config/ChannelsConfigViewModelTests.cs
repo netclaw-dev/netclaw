@@ -1015,6 +1015,34 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveAsync_cancels_and_awaits_in_flight_label_refresh_before_writing()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            // Block the resolve so the background refresh is genuinely in flight when we save.
+            DelayBeforeResult = TimeSpan.FromMinutes(5),
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("general", "C01")], []),
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem(); // starts the background label refresh — it blocks in the probe
+
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true); // background is in flight
+
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
+
+        // The save cancelled and awaited the blocked background refresh rather than racing its disk
+        // write or hanging for the 5-minute probe delay; the tracked task is unwound to null.
+        Assert.True(saved);
+        Assert.Null(vm.PendingLabelRefresh);
+    }
+
+    [Fact]
     public void Open_management_normalizes_resolved_slack_channel_name_to_id_and_persists()
     {
         // Bug C: a channel saved as a literal NAME (it did not resolve at first save) stays inert

@@ -41,6 +41,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private int _directMessagesRowIndex;
     private int _resetConfirmIndex;
     private CancellationTokenSource? _labelResolutionCts;
+    private Task? _labelRefreshTask;
 
     public ChannelsConfigViewModel(
         NetclawPaths paths,
@@ -162,6 +163,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private async Task<bool> SaveAsync(string successMessage, CancellationToken ct = default)
     {
+        // A background channel-label refresh may be in flight; cancel and await it before we
+        // validate, write, or reset adapter state so it cannot race this save.
+        await CancelAndAwaitLabelRefreshAsync();
+
         var validation = ValidateCurrentStep();
         if (validation.HasErrors)
         {
@@ -1630,7 +1635,34 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _labelResolutionCts?.Cancel();
         _labelResolutionCts?.Dispose();
         _labelResolutionCts = new CancellationTokenSource();
-        _ = RefreshChannelLabelsAsync(type, _labelResolutionCts.Token);
+        _labelRefreshTask = RefreshChannelLabelsAsync(type, _labelResolutionCts.Token);
+    }
+
+    // Exposes the in-flight background label refresh for tests asserting save/dispose serialization.
+    internal Task? PendingLabelRefresh => _labelRefreshTask;
+
+    // Stop the in-flight background label refresh (if any) and wait for it to unwind before the
+    // caller validates, persists, or resets channel state. Without this, a probe that resumes after
+    // a save could clobber the just-reloaded view-model state or write a stale snapshot over the
+    // save — the two HIGH races in the deep review (background normalizer vs SaveAsync).
+    private async Task CancelAndAwaitLabelRefreshAsync()
+    {
+        _labelResolutionCts?.Cancel();
+        var inFlight = _labelRefreshTask;
+        if (inFlight is null)
+            return;
+
+        // RefreshChannelLabelsAsync swallows its own OperationCanceledException, so awaiting the
+        // tracked task observes completion without throwing; the catch is defensive only.
+        try
+        {
+            await inFlight;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        _labelRefreshTask = null;
     }
 
     private static DeploymentPosture LoadDeploymentPosture(NetclawPaths paths)
