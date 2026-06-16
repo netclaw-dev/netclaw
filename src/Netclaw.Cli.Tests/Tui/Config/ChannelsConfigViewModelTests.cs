@@ -583,6 +583,34 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Add_channel_resolving_to_dm_with_dms_enabled_does_not_throw()
+    {
+        WriteChannelConfig(); // Slack has AllowDirectMessages: true, so a DM row (Id="dm") exists.
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("dm-collision", "dm")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "dm-collision";
+
+        // The resolved id "dm" collides with the DM row's Id; this previously threw from Single().
+        vm.ApplyAddChannel();
+
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+        // The newly-added channel row (id "dm", NOT the DM row) is focused.
+        var focused = vm.GetChannelRows()[vm.ChannelRowIndex];
+        Assert.Equal("dm", focused.Id);
+        Assert.False(focused.IsDirectMessage);
+    }
+
+    [Fact]
     public void Add_channel_that_does_not_resolve_is_not_added_and_keeps_the_add_screen()
     {
         WriteChannelConfig();

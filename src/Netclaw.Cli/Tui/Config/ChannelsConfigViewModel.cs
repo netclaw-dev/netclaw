@@ -598,10 +598,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetChannelIds(_activeAdapterType, [.. existing, channelId]);
         SetChannelAudience(_activeAdapterType, channelId, DefaultChannelAudience());
         UpdateAdapterPickerSummary(_activeAdapterType);
-        _channelRowIndex = GetChannelRows()
+        // Focus the newly-added channel row. Match only real channel rows: a resolved id of exactly
+        // "dm" with DMs enabled would otherwise collide with the DM row (also Id="dm") and make a
+        // Single() throw. Guard against not-found rather than assuming the row is always present.
+        var added = GetChannelRows()
             .Select((row, index) => (row, index))
-            .Single(entry => string.Equals(entry.row.Id, channelId, StringComparison.Ordinal))
-            .index;
+            .FirstOrDefault(entry => !entry.row.IsDirectMessage && !entry.row.IsAction
+                && string.Equals(entry.row.Id, channelId, StringComparison.Ordinal));
+        if (added.row is not null)
+            _channelRowIndex = added.index;
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
         AutosaveCompletedAction($"Added {channelId} at the {DefaultChannelAudience()} default and saved.");
         NotifyContentChanged();
