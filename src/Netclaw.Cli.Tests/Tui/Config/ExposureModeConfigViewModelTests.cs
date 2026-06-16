@@ -18,6 +18,18 @@ namespace Netclaw.Cli.Tests.Tui.Config;
 public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
 {
     [Fact]
+    public void Constructor_with_malformed_config_does_not_throw_and_surfaces_error()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, "{ not valid json ");
+
+        // Must not throw from the constructor (which would make the Exposure page inaccessible); it
+        // degrades to no existing config and surfaces the read error.
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+
+        Assert.Contains("Could not read", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Constructor_prefills_existing_exposure_mode()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,

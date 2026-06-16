@@ -20,9 +20,24 @@ internal sealed class WorkspacesConfigViewModel : ReactiveViewModel
     {
         _paths = paths;
         FileSystemProvider = fileSystemProvider ?? new DefaultFileSystemProvider();
-        CurrentDirectory = new ReactiveProperty<string>(LoadCurrentDirectory());
+        // Degrade to no current directory on a malformed/unreadable netclaw.json rather than throwing
+        // from the constructor (which would make the Workspaces page permanently inaccessible).
+        string? loadError = null;
+        string currentDirectory;
+        try
+        {
+            currentDirectory = LoadCurrentDirectory();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            currentDirectory = string.Empty;
+            loadError = $"Could not read netclaw.json: {ex.Message}";
+        }
+        CurrentDirectory = new ReactiveProperty<string>(currentDirectory);
         DirectoryDraft = new ReactiveProperty<string>(string.Empty);
-        Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
+        Status = new ReactiveProperty<ConfigStatusMessage>(loadError is null
+            ? new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral)
+            : new ConfigStatusMessage(loadError, ConfigStatusTone.Error));
         IsSaved = new ReactiveProperty<bool>(false);
     }
 

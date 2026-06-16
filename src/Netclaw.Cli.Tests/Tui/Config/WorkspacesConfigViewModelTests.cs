@@ -59,6 +59,17 @@ public sealed class WorkspacesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_with_malformed_config_does_not_throw_and_surfaces_error()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ not valid json ");
+
+        // Must not throw from the constructor (which would make the page permanently inaccessible).
+        using var vm = new WorkspacesConfigViewModel(_paths);
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_rejects_url_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);

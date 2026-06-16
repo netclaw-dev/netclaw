@@ -22,13 +22,18 @@ public sealed class ExposureModeConfigViewModel : ReactiveViewModel
     public ExposureModeConfigViewModel(NetclawPaths paths)
     {
         _step = new ExposureModeStepViewModel(includeWebhookToggle: false);
+        // Degrade to "no existing config" on a malformed/unreadable netclaw.json rather than throwing
+        // from the constructor (which would make the Exposure page permanently inaccessible).
+        var existingConfig = ConfigFileHelper.TryLoadJsonDictOrNull(paths.NetclawConfigPath, out var loadError);
         _context = new WizardContext
         {
             Paths = paths,
             Registry = new ProviderDescriptorRegistry([]),
             RequestRedraw = RequestRedraw,
-            ExistingConfig = ConfigFileHelper.LoadJsonDictOrNull(paths.NetclawConfigPath)
+            ExistingConfig = existingConfig
         };
+        if (loadError is not null)
+            _context.StatusMessage.Value = loadError;
         _orchestrator = new WizardOrchestrator([_step], _context, singleStepMode: true);
     }
 

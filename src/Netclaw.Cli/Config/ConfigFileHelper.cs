@@ -57,6 +57,27 @@ internal static class ConfigFileHelper
     }
 
     /// <summary>
+    /// Like <see cref="LoadJsonDictOrNull"/> but never throws on an unreadable / malformed file:
+    /// returns the parsed dict (or <c>null</c> when missing/empty/unreadable) and, via
+    /// <paramref name="error"/>, a human-readable reason when the file existed but could not be read.
+    /// Lets a view-model constructor degrade to a safe default and surface the error instead of
+    /// crashing the page on open when netclaw.json is hand-corrupted or its keys directory is gone.
+    /// </summary>
+    internal static Dictionary<string, object>? TryLoadJsonDictOrNull(string path, out string? error)
+    {
+        error = null;
+        try
+        {
+            return LoadJsonDictOrNull(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            error = $"Could not read {Path.GetFileName(path)}: {ex.Message}";
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Get or create a nested dictionary section. Handles JsonElement deserialization
     /// when the section was loaded from a file.
     /// </summary>

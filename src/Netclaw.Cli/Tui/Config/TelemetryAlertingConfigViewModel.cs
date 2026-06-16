@@ -48,7 +48,19 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
     public TelemetryAlertingConfigViewModel(NetclawPaths paths)
     {
         _paths = paths;
-        var state = LoadState(paths);
+        // Degrade to default telemetry state on a malformed/unreadable netclaw.json rather than
+        // throwing from the constructor (which would make the Telemetry page permanently inaccessible).
+        string? loadError = null;
+        (bool TelemetryEnabled, string OtlpEndpoint, IReadOnlyList<TelemetryWebhookRow> Webhooks) state;
+        try
+        {
+            state = LoadState(paths);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            state = (false, DefaultOtlpEndpoint, []);
+            loadError = $"Could not read netclaw.json: {ex.Message}";
+        }
         TelemetryEnabled = new ReactiveProperty<bool>(state.TelemetryEnabled);
         OtlpEndpointDraft = new ReactiveProperty<string>(state.OtlpEndpoint);
         _acceptedOtlpEndpoint = state.OtlpEndpoint;
@@ -60,7 +72,9 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         WebhookUrlDraft = new ReactiveProperty<string>(string.Empty);
         WebhookAuthHeaderDraft = new ReactiveProperty<string>(string.Empty);
         EditingHasPersistedAuthHeader = new ReactiveProperty<bool>(false);
-        Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
+        Status = new ReactiveProperty<ConfigStatusMessage>(loadError is null
+            ? new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral)
+            : new ConfigStatusMessage(loadError, ConfigStatusTone.Error));
         IsSaved = new ReactiveProperty<bool>(false);
     }
 

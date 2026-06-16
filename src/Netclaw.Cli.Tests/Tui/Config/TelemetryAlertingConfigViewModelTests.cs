@@ -39,6 +39,17 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_with_malformed_config_does_not_throw_and_surfaces_error()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ not valid json ");
+
+        // Must not throw from the constructor (which would make the page permanently inaccessible).
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_persists_telemetry_otlp_endpoint_for_runtime_binding()
     {
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
