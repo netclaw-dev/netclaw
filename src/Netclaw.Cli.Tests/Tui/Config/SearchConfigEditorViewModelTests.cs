@@ -175,6 +175,41 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void NavigateBack_with_malformed_config_surfaces_error_without_crashing()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+        vm.SelectBackendForEditing("brave");
+
+        // Corrupt the config so the nav-back reload (_mapper.Load -> deserialize) throws JsonException
+        // — previously unguarded in ReloadPersistedDraft.
+        File.WriteAllText(_paths.NetclawConfigPath, "{ not valid json ");
+
+        vm.NavigateBack(); // must not throw into the Termina event loop
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
+    public async Task NavigateBack_during_validation_abandons_the_stale_probe_result()
+    {
+        var gate = new TaskCompletionSource();
+        using var vm = new SearchConfigEditorViewModel(_paths, new GatedHttpClientFactory(gate.Task));
+        vm.SelectBackendForEditing("searxng");
+        vm.SetFieldValue("Search.SearXngEndpoint", "https://search.test.local");
+
+        // Start validation; the probe blocks in the gated handler, so it is genuinely in flight.
+        var validation = vm.SubmitCurrentConfigurationFromInputAsync(TestContext.Current.CancellationToken);
+
+        // Navigate away while the probe is in flight: the owned CTS is cancelled, the probe is
+        // abandoned, and its stale result must not overwrite the navigated-to screen.
+        vm.NavigateBack();
+        await validation;
+        gate.SetResult();
+
+        Assert.Equal(SearchConfigEditorScreen.ProviderSelection, vm.CurrentScreen.Value);
+    }
+
+    [Fact]
     public void Save_anyway_persists_config_and_secret_semantically()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
@@ -431,5 +466,24 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(handler(request));
+    }
+
+    // Blocks the probe in an awaited send until the gate completes (or the request is cancelled), so a
+    // test can navigate away while the probe is genuinely in flight.
+    private sealed class GatedHttpClientFactory(Task gate) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new GatedHttpMessageHandler(gate));
+    }
+
+    private sealed class GatedHttpMessageHandler(Task gate) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await gate.WaitAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }

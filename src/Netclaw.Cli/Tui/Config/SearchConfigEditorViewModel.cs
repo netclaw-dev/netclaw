@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text.Json;
 using System.Threading;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
@@ -48,6 +50,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private SearchEditorModel _model;
     private SearchEditorValidationResult _validation = SearchEditorValidationResult.Empty;
     private SearchProbeResult? _lastProbeResult;
+    // Owned lifetime for the in-flight reachability probe so a navigation/dispose can cancel it and
+    // its stale result cannot overwrite the reloaded state (the page passed CancellationToken.None).
+    private CancellationTokenSource? _probeCts;
 
     public IReadOnlyList<ProjectedConfigField> Fields => _spec.Fields;
 
@@ -119,6 +124,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        _probeCts?.Cancel();
+        _probeCts?.Dispose();
+
         foreach (var value in FieldValues.Values)
             value.Dispose();
 
@@ -328,7 +336,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         }
 
         _mapper.Save(_paths, _model);
-        ReloadPersistedDraft();
+        if (!ReloadPersistedDraft())
+            return;
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.Saved;
         Status.Value = new ConfigStatusMessage("Saved Search settings.", ConfigStatusTone.Success);
@@ -337,14 +346,16 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void ResetDraft()
     {
-        ReloadPersistedDraft();
+        if (!ReloadPersistedDraft())
+            return;
         Status.Value = new ConfigStatusMessage("Reverted unsaved Search edits.", ConfigStatusTone.Neutral);
         RequestRedraw();
     }
 
     public void NavigateBack()
     {
-        ReloadPersistedDraft();
+        if (!ReloadPersistedDraft())
+            return;
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
@@ -423,24 +434,55 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
             SyncFieldValue(field.Path);
     }
 
-    private void ReloadPersistedDraft()
+    // Returns false when the reload failed, so callers do not navigate / clear status / claim success
+    // over a faulted state.
+    private bool ReloadPersistedDraft()
     {
-        _model = _mapper.Load(_paths);
+        // Abandon any in-flight validation probe so its stale result cannot overwrite the reloaded state.
+        _probeCts?.Cancel();
+
+        try
+        {
+            _model = _mapper.Load(_paths);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or CryptographicException)
+        {
+            // A malformed config or an unavailable/rotated DataProtection key ring (the mapper
+            // decrypts the persisted Brave key) must not crash nav-back or the Save-Anyway path. Keep
+            // the prior in-memory model and surface the error so the operator can repair it.
+            Status.Value = new ConfigStatusMessage($"Could not reload search config: {ex.Message}", ConfigStatusTone.Error);
+            RequestRedraw();
+            return false;
+        }
+
         SyncAllFieldValues();
         _lastProbeResult = null;
         Revalidate();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
+        return true;
     }
 
     private async Task<bool> RunDynamicValidationAsync(bool persistOnSuccess, CancellationToken ct)
     {
+        _probeCts?.Cancel();
+        _probeCts?.Dispose();
+        _probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var probeToken = _probeCts.Token;
+
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.Validating;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RequestRedraw();
 
-        _lastProbeResult = await ProbeAsync(ct);
+        var probeResult = await ProbeAsync(probeToken);
+
+        // If a navigation/dispose cancelled this run while the probe was in flight, abandon it rather
+        // than overwriting the now-current screen/model state with a stale result.
+        if (probeToken.IsCancellationRequested)
+            return false;
+
+        _lastProbeResult = probeResult;
         if (!_lastProbeResult.Success)
         {
             CurrentScreen.Value = SearchConfigEditorScreen.Entry;
