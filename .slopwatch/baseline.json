@@ -144,8 +144,8 @@
       "ruleId": "SW001",
       "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherMultilineTests.cs",
       "lineNumber": 30,
-      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
-      "message": "Test method 'ExtractPatterns_multiline_command_splits_one_unit_per_statement' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only \u2014 matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'ExtractPatterns_multiline_command_splits_one_unit_per_statement' is disabled: POSIX-only \u2014 matcher routes through BashParser on POSIX",
       "baselinedAt": "2026-05-16T00:00:00+00:00"
     },
     {
@@ -162,8 +162,8 @@
       "ruleId": "SW001",
       "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherTests.cs",
       "lineNumber": 111,
-      "codeSnippet": "Theory(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
-      "message": "Test method 'ExtractCandidateVerbs_strips_trailing_version_token' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "codeSnippet": "Theory(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only \u2014 matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'ExtractCandidateVerbs_strips_trailing_version_token' is disabled: POSIX-only \u2014 matcher routes through BashParser on POSIX",
       "baselinedAt": "2026-06-10T19:44:08.3078562+00:00"
     },
     {
@@ -171,9 +171,18 @@
       "ruleId": "SW001",
       "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherTests.cs",
       "lineNumber": 136,
-      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
-      "message": "Test method 'IsApproved_git_tag_grant_matches_both_version_forms' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only \u2014 matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'IsApproved_git_tag_grant_matches_both_version_forms' is disabled: POSIX-only \u2014 matcher routes through BashParser on POSIX",
       "baselinedAt": "2026-06-10T19:44:08.3092375+00:00"
+    },
+    {
+      "hash": "ea5c3b9c508278ed",
+      "ruleId": "SW003",
+      "filePath": "src/Netclaw.Configuration/AtomicFile.cs",
+      "lineNumber": 59,
+      "codeSnippet": "catch\n            {\n                // Best-effort cleanup; surfacing the cleanup error would mask the original failure.\n            }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-06-16T14:38:53.9920742+00:00"
     }
   ]
 }

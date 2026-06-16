@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Actors.Channels;
 using Netclaw.Cli.Discord;
 using Netclaw.Configuration;
@@ -335,14 +336,17 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
             LastChannelResolution = result;
             context?.RequestRedraw();
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or JsonException)
         {
-            // Best-effort cosmetic prefetch: cancellation is expected on supersession, and a probe
-            // failure (network, or a non-JSON Discord error body that fails to parse) is a normal
-            // runtime condition that must never fault the loop or leave the tracked task faulted.
-            // The error surfaces with proper messaging when ContributeHealthChecksAsync re-resolves
-            // (LastChannelResolution stays unset). This is the justified best-effort swallow, not a
-            // silent fallback on a behavioral path.
+            // Best-effort cosmetic prefetch: cancellation/supersession and a probe failure (network,
+            // or a non-JSON Discord error body that fails to parse) are normal runtime conditions that
+            // must never fault the loop. Only the EXPECTED probe exceptions are caught here — an
+            // unexpected fault still surfaces (via the tracked task / health-check re-resolve) rather
+            // than being silently swallowed. On a genuine failure of the *current* probe clear our
+            // stale state so a later read re-resolves; on cancellation leave any newer result intact
+            // (a superseded probe must not clobber a still-valid resolution).
+            if (!ct.IsCancellationRequested)
+                LastChannelResolution = null;
         }
     }
 

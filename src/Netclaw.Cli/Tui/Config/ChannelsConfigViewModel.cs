@@ -326,14 +326,14 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                     break;
             }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Background label refresh was superseded (a newer resolution started) or
-            // the user navigated away — abandon it quietly. Cancellation is not a
-            // lookup failure, so it must not fall through to the warning status below.
-        }
         catch (Exception ex)
         {
+            // A superseded background refresh (a newer resolution started, or the user navigated
+            // away) cancels via ct — that is not a lookup failure, so abandon it quietly rather than
+            // surfacing a warning. Any other failure surfaces the warning status.
+            if (ex is OperationCanceledException && ct.IsCancellationRequested)
+                return;
+
             Status.Value = new ConfigStatusMessage(
                 $"{GetAdapterDisplayName(type)} channel label lookup failed: {ex.Message}",
                 ConfigStatusTone.Warning);
@@ -1674,15 +1674,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (inFlight is null)
             return;
 
-        // RefreshChannelLabelsAsync swallows its own OperationCanceledException, so awaiting the
-        // tracked task observes completion without throwing; the catch is defensive only.
-        try
-        {
-            await inFlight;
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        // RefreshChannelLabelsAsync catches all of its own exceptions (cancellation is abandoned
+        // quietly, any other failure surfaces a warning status), so awaiting the tracked task here
+        // observes completion without throwing.
+        await inFlight;
 
         _labelRefreshTask = null;
     }
