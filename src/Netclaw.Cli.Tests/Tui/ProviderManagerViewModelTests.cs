@@ -555,6 +555,54 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task FixCredentials_ProbeFailure_LeavesStoredSecretUnchanged()
+    {
+        // An unhealthy provider with an existing, working secret on disk.
+        _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(false, "Unauthorized", []);
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old-working-key" }
+            }
+        });
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var idx = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.SelectedProviderIndex = idx;
+        vm.ActivateSelectedProvider();
+        Assert.Equal(ProviderManagerState.FixCredentials, vm.CurrentState.Value);
+
+        // Submit a NEW (bad) key — the probe still fails.
+        vm.FixApiKey = "sk-bad-new-key";
+        vm.SubmitFixCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(vm.ProbeResult.Value);
+        Assert.False(vm.ProbeResult.Value!.Success);
+        // The failed fix must NOT clobber the working secret: the file is byte-for-byte unchanged and
+        // the bad key was never written.
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+        Assert.DoesNotContain("sk-bad-new-key", File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Details_RemoveAction_TransitionsToRemoveConfirm()
     {
         WriteConfig(new Dictionary<string, object>

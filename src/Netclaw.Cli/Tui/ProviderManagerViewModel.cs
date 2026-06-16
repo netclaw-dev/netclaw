@@ -536,35 +536,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return;
         }
 
-        // Write updated credentials
-        if (DetailProvider.ConfiguredName is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(FixApiKey))
-            {
-                var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
-                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-                secretProviders[DetailProvider.ConfiguredName] = new Dictionary<string, object>
-                {
-                    ["ApiKey"] = FixApiKey
-                };
-                ConfigFileHelper.WriteSecretsFile(_paths, secrets);
-            }
-
-            if (FixEndpoint is not null && DetailProvider.Entry is not null
-                && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
-            {
-                var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
-                var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
-                if (providers.TryGetValue(DetailProvider.ConfiguredName, out var existing) &&
-                    existing is Dictionary<string, object> providerDict)
-                {
-                    providerDict["Endpoint"] = FixEndpoint;
-                    ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
-                }
-            }
-        }
-
-        // Set up probe using fix credentials
+        // Do NOT write the new credential yet: defer the secrets/config write to the probe-success
+        // branch (WriteFixedCredentials) so a bad API key or endpoint never clobbers the working one
+        // on disk with no rollback. The normal add flow defers its write identically.
         NewProviderType = type;
         NewEndpoint = FixEndpoint;
         NewApiKey = FixApiKey
@@ -575,6 +549,39 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         CurrentState.Value = ProviderManagerState.AddValidating;
         NotifyStateChanged();
         StartProbe();
+    }
+
+    // Persists the fixed API key (to secrets.json) and endpoint (to netclaw.json) for the provider
+    // being repaired. Called only from the probe-success branch so an invalid new credential never
+    // overwrites the working one. Updates the existing provider entry keyed by ConfiguredName.
+    private void WriteFixedCredentials()
+    {
+        if (DetailProvider?.ConfiguredName is not { } name)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(FixApiKey))
+        {
+            var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
+            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+            secretProviders[name] = new Dictionary<string, object>
+            {
+                ["ApiKey"] = FixApiKey
+            };
+            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+        }
+
+        if (FixEndpoint is not null && DetailProvider.Entry is not null
+            && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
+        {
+            var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+            var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
+            if (providers.TryGetValue(name, out var existing) &&
+                existing is Dictionary<string, object> providerDict)
+            {
+                providerDict["Endpoint"] = FixEndpoint;
+                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            }
+        }
     }
 
     /// <summary>
@@ -989,6 +996,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 {
                     WriteProviderConfig();
                     _newProviderPersisted = true;
+                }
+                else
+                {
+                    // API-key / endpoint fix: persist only now that the probe succeeded, so a typo
+                    // in the new credential leaves the prior working secret untouched on disk.
+                    WriteFixedCredentials();
                 }
 
                 // Fix flow: re-probe all providers so list shows fresh health
