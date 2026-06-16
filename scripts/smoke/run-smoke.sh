@@ -82,9 +82,9 @@ SHOT_FRAMES=(
   provider-manager-empty
   mcp-permissions-server-list
   mcp-permissions-tool-grid
-  config-search-matrix
-  config-search-brave
-  config-search-searxng-edit
+  config-search-selection
+  config-search-brave-entry
+  config-search-saved
 )
 
 usage() {

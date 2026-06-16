@@ -58,6 +58,24 @@ Wait+Screen@45s /Select a model/
 Down
 Enter
 
+# ─── Identity (navigated through, not screenshotted) ─────────────────
+# Identity immediately follows Provider in the current bootstrap flow, so its four
+# substeps must be walked to reach the posture screen. These frames are deliberately
+# NOT screenshotted — the text-input caret blink makes them non-byte-stable (see the
+# header). Navigation + anchors mirror tapes/init-wizard.tape.
+Wait+Screen@10s /Agent name:/
+Enter
+
+Wait+Screen@10s /Communication style:/
+Enter
+
+Wait+Screen@10s /Your name:/
+Type "SmokeTester"
+Enter
+
+Wait+Screen@10s /Your timezone:/
+Enter
+
 # ─── Frame 2: Security posture ───────────────────────────────────────
 Wait+Screen@10s /Who will interact with this Netclaw instance/
 Sleep 1s
