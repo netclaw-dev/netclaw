@@ -1010,7 +1010,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var external = LoadExternalConfig();
+        if (!TryLoadExternalConfig(out var external)) return;
         external.Sources.Add(new ExternalSkillSource
         {
             Name = name,
@@ -1246,7 +1246,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         feeds.Feeds.Add(new SkillFeedConfigEntry
         {
             Name = name,
@@ -1288,7 +1288,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         if (kind == SkillSourceKind.LocalFolder)
         {
-            var external = LoadExternalConfig();
+            if (!TryLoadExternalConfig(out var external)) return;
             var source = FindLocalSource(external, name);
             if (source is null)
             {
@@ -1305,7 +1305,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var feed = FindRemoteSource(feeds, name);
         if (feed is null)
         {
@@ -1323,7 +1323,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private void ToggleLocalSymlinks(string name)
     {
-        var external = LoadExternalConfig();
+        if (!TryLoadExternalConfig(out var external)) return;
         var source = FindLocalSource(external, name);
         if (source is null)
         {
@@ -1341,7 +1341,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private void CycleRemoteSyncInterval(string name)
     {
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var feed = FindRemoteSource(feeds, name);
         if (feed is null)
         {
@@ -1387,7 +1387,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var feed = FindRemoteSource(feeds, source.Name);
         if (feed is null)
         {
@@ -1428,7 +1428,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         if (source.Kind == SkillSourceKind.LocalFolder)
         {
-            var external = LoadExternalConfig();
+            if (!TryLoadExternalConfig(out var external)) return;
             var item = FindLocalSource(external, source.Name);
             if (item is null)
             {
@@ -1443,7 +1443,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
         else
         {
-            var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+            if (!TryLoadSkillFeeds(out var feeds)) return;
             var item = FindRemoteSource(feeds, source.Name);
             if (item is null)
             {
@@ -1548,7 +1548,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var external = LoadExternalConfig();
+        if (!TryLoadExternalConfig(out var external)) return;
         var item = FindLocalSource(external, source.Name);
         if (item is null)
         {
@@ -1576,7 +1576,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         var normalizedUrl = url ?? throw new InvalidOperationException("Validated skill server URL was null.");
 
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var item = FindRemoteSource(feeds, source.Name);
         if (item is null)
         {
@@ -1634,7 +1634,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var feed = FindRemoteSource(feeds, source.Name);
         if (feed is null)
         {
@@ -1666,7 +1666,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private void RemoveRemoteToken(string name)
     {
-        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        if (!TryLoadSkillFeeds(out var feeds)) return;
         var feed = FindRemoteSource(feeds, name);
         if (feed is null)
         {
@@ -1716,14 +1716,14 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         if (kind == SkillSourceKind.LocalFolder)
         {
-            var external = LoadExternalConfig();
+            if (!TryLoadExternalConfig(out var external)) return;
             external.Sources.RemoveAll(s => _nameComparer.Equals(s.Name, name));
             if (!SaveExternalConfig(external))
                 return;
         }
         else
         {
-            var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+            if (!TryLoadSkillFeeds(out var feeds)) return;
             feeds.Feeds.RemoveAll(f => _nameComparer.Equals(f.Name, name));
             if (!SaveSkillFeedsConfig(feeds))
                 return;
@@ -1808,11 +1808,21 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private void ReloadSources()
     {
-        var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        var external = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(root, "ExternalSkills");
-        var feeds = LoadSkillFeedsSection(root);
-        _sources = BuildSources(external, feeds).ToList();
-        Version.Value++;
+        try
+        {
+            var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+            var external = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(root, "ExternalSkills");
+            var feeds = LoadSkillFeedsSection(root);
+            _sources = BuildSources(external, feeds).ToList();
+            Version.Value++;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // A malformed / unreadable netclaw.json must not crash the page or its constructor (this
+            // runs from both). Keep the prior _sources snapshot (empty on first load) and surface the
+            // error so the operator can repair the file instead of facing a dead page.
+            SetStatus($"Could not read skill sources config: {ex.Message}", ConfigStatusTone.Error);
+        }
     }
 
     private IEnumerable<SkillSourceDisplay> BuildSources(ExternalSkillsConfig external, SkillFeedsConfigDocument feeds)
@@ -1991,6 +2001,42 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private ExternalSkillsConfig LoadExternalConfig()
         => ConfigFileHelper.LoadSection<ExternalSkillsConfig>(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), "ExternalSkills");
+
+    // Guarded pre-save reads. Every mutation handler reads the current config (LoadJsonDict ->
+    // deserialize -> typed LoadSection) BEFORE handing the result to TryEditConfig for the write.
+    // That read sits outside TryEditConfig's guard, so a malformed / partially-written netclaw.json
+    // (JsonException) or a disk/permission error would escape into the Termina event loop on every
+    // add/toggle/rename/remove. Route those reads through these so a read failure surfaces via Status
+    // and the handler early-returns, exactly as the write path does.
+    private bool TryLoadExternalConfig(out ExternalSkillsConfig external)
+    {
+        try
+        {
+            external = LoadExternalConfig();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            external = new ExternalSkillsConfig();
+            SetStatus($"Could not read skill sources config: {ex.Message}", ConfigStatusTone.Error);
+            return false;
+        }
+    }
+
+    private bool TryLoadSkillFeeds(out SkillFeedsConfigDocument feeds)
+    {
+        try
+        {
+            feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            feeds = new SkillFeedsConfigDocument();
+            SetStatus($"Could not read skill feeds config: {ex.Message}", ConfigStatusTone.Error);
+            return false;
+        }
+    }
 
     private bool SaveExternalConfig(ExternalSkillsConfig external)
         => TryEditConfig(root =>

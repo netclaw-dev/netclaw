@@ -111,6 +111,29 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Malformed_config_does_not_crash_construction_or_a_source_mutation()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ this is not valid json ");
+
+        // Construction (ReloadSources) must not throw on a malformed config — it degrades to an empty
+        // source list with an error Status instead of leaving the page permanently inaccessible.
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        Assert.Empty(vm.Sources);
+
+        // A mutation's pre-save read (LoadExternalConfig, now guarded by TryLoadExternalConfig) must
+        // likewise surface an error rather than throwing into the Termina event loop.
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        BeginAddLocalFolder(vm);
+        vm.CommitAddLocalPath(externalDir);
+        vm.ActivateSelected();
+        ReplaceDraft(vm, "team-skills");
+        vm.ActivateSelected();
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+    }
+
+    [Fact]
     public void Save_external_directory_does_not_decrypt_unedited_feed_api_key()
     {
         File.WriteAllText(_paths.NetclawConfigPath,
