@@ -1024,11 +1024,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}"));
 
-        // Fail loud: an id that does not resolve to a real channel the bot can see is an inert
+        // Fail loud: a reference that does not resolve to a real channel the bot can see is an inert
         // allow-list entry the runtime ACL can never match, so block the save rather than persist a
         // dead entry.
         if (result.Unresolved.Count > 0)
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, BuildUnresolvedChannelMessage(result.Unresolved)));
+
+        // All references resolved: map any names to their channel ids and persist the ids (the
+        // runtime ACL matches ids, not names). Mirrors the Slack validator.
+        SetResolvedChannels(ChannelType.Discord, channelIds, result.Resolved.Select(c => (c.ChannelId, c.ChannelName)));
         return ChannelAccessOutcome.None;
     }
 
@@ -1058,12 +1062,50 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}"));
 
-        // Fail loud: an id that does not resolve to a real channel the bot can see is an inert
+        // Fail loud: a reference that does not resolve to a real channel the bot can see is an inert
         // allow-list entry the runtime ACL can never match, so block the save rather than persist a
         // dead entry.
         if (result.Unresolved.Count > 0)
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, BuildUnresolvedChannelMessage(result.Unresolved)));
+
+        // All references resolved: map any names to their channel ids and persist the ids (the
+        // runtime ACL matches ids, not names). Mirrors the Slack validator.
+        SetResolvedChannels(ChannelType.Mattermost, channelIds, result.Resolved.Select(c => (c.ChannelId, c.ChannelName)));
         return ChannelAccessOutcome.None;
+    }
+
+    // Shared name→id remap for Discord/Mattermost: each configured reference is either already a
+    // resolved channel id (kept as-is) or a name that resolves to one (replaced by the id and remapped
+    // in ChannelAudiences). Unresolved references are blocked before this runs, so every reference maps.
+    private void SetResolvedChannels(
+        ChannelType type, IReadOnlyList<string> references, IEnumerable<(string Id, string Name)> resolved)
+    {
+        var byId = new HashSet<string>(StringComparer.Ordinal);
+        var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, name) in resolved)
+        {
+            byId.Add(id);
+            byName.TryAdd(name, id);
+        }
+
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var resolvedChannels = new List<string>();
+        foreach (var reference in references)
+        {
+            if (byId.Contains(reference))
+            {
+                resolvedChannels.Add(reference);
+            }
+            else if (byName.TryGetValue(reference, out var id))
+            {
+                resolvedChannels.Add(id);
+                remap[reference] = id;
+            }
+        }
+
+        SetChannelIds(type, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
+        RemapChannelAudiences(type, remap);
+        UpdateAdapterPickerSummary(type);
     }
 
     private async Task RefreshSlackChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)

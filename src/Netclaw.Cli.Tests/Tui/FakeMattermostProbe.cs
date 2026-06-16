@@ -18,7 +18,9 @@ public sealed class FakeMattermostProbe : IMattermostProbe
 
     public string? LastBotToken { get; private set; }
 
-    public MattermostChannelResolutionResult NextResolutionResult { get; set; } = new(true, null, [], []);
+    // When null (default), ResolveChannelIdsAsync echoes every input as a resolved channel (mimics
+    // "all valid ids/names resolve"). Set it to stage a specific resolved/unresolved outcome.
+    public MattermostChannelResolutionResult? NextResolutionResult { get; set; }
 
     public int ResolveCallCount { get; private set; }
 
@@ -45,6 +47,10 @@ public sealed class FakeMattermostProbe : IMattermostProbe
         LastResolvedIds = channelIds;
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);
-        return NextResolutionResult;
+        return NextResolutionResult ?? new MattermostChannelResolutionResult(
+            true,
+            null,
+            [.. channelIds.Select(id => new ResolvedMattermostChannel(id, id, id))],
+            []);
     }
 }

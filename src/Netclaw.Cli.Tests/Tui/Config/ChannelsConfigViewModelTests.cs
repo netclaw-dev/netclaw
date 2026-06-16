@@ -840,6 +840,52 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Save_resolves_discord_channel_name_to_id()
+    {
+        // The operator entered a display name; the probe resolves it to the channel id, and the id
+        // (not the name) is what persists — so the runtime ACL can match it.
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true, null,
+                [new ResolvedDiscordChannel("111222333", "ops", "Stannard Labs")],
+                [])
+        };
+        using var vm = CreateViewModel(discordProbe: discordProbe);
+        vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "ops";
+
+        Assert.True(vm.Save());
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["111222333"], ToStringArray(channelsRaw));
+    }
+
+    [Fact]
+    public void Save_resolves_mattermost_channel_name_to_id()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var mattermostProbe = new FakeMattermostProbe
+        {
+            NextResolutionResult = new MattermostChannelResolutionResult(
+                true, null,
+                [new ResolvedMattermostChannel("ttttttttttttttttttttttttab", "town-square", "Town Square")],
+                [])
+        };
+        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
+        vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "town-square";
+
+        Assert.True(vm.Save());
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["ttttttttttttttttttttttttab"], ToStringArray(channelsRaw));
+    }
+
+    [Fact]
     public void Save_blocks_when_slack_channel_name_unresolved_and_persists_nothing()
     {
         // The probe's API call worked (ErrorMessage null) but one name did not resolve. Per the

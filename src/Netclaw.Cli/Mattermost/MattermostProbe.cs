@@ -87,12 +87,16 @@ public sealed class MattermostProbe : IMattermostProbe
         }
     }
 
+    // Accepts channel IDs (26-char) OR names/display-names (#town-square). Enumerates the bot's team
+    // channels once and matches each reference by id, url slug name, or human display name, so
+    // operators can enter readable names instead of opaque ids (the resolved id is what the runtime
+    // ACL matches).
     public async Task<MattermostChannelResolutionResult> ResolveChannelIdsAsync(
-        string serverUrl, string botToken, IReadOnlyList<string> channelIds, CancellationToken ct = default)
+        string serverUrl, string botToken, IReadOnlyList<string> channelRefs, CancellationToken ct = default)
     {
-        var normalized = channelIds
-            .Select(static id => id.Trim())
-            .Where(static id => !string.IsNullOrWhiteSpace(id))
+        var normalized = channelRefs
+            .Select(static reference => reference.Trim().TrimStart('#'))
+            .Where(static reference => !string.IsNullOrWhiteSpace(reference))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -104,23 +108,32 @@ public sealed class MattermostProbe : IMattermostProbe
 
         try
         {
-            var resolved = new List<ResolvedMattermostChannel>();
-            var unresolved = new List<string>();
-
-            foreach (var channelId in normalized)
+            var byId = new Dictionary<string, ResolvedMattermostChannel>(StringComparer.Ordinal);
+            var byName = new Dictionary<string, ResolvedMattermostChannel>(StringComparer.OrdinalIgnoreCase);
+            foreach (var teamId in await FetchBotTeamIdsAsync(serverUrl, botToken, timeoutCts.Token))
             {
-                var result = await FetchChannelAsync(serverUrl, botToken, channelId, timeoutCts.Token);
-                if (result is null)
+                foreach (var channel in await FetchTeamChannelsAsync(serverUrl, botToken, teamId, timeoutCts.Token))
                 {
-                    unresolved.Add(channelId);
-                    continue;
+                    byId[channel.ChannelId] = channel;
+                    // Match either the url slug or the human display name; first match wins.
+                    byName.TryAdd(channel.ChannelName, channel);
+                    byName.TryAdd(channel.DisplayName, channel);
                 }
-
-                resolved.Add(result);
             }
 
-            return new MattermostChannelResolutionResult(
-                unresolved.Count == 0, null, resolved, unresolved);
+            var resolved = new List<ResolvedMattermostChannel>();
+            var unresolved = new List<string>();
+            foreach (var reference in normalized)
+            {
+                if (byId.TryGetValue(reference, out var idMatch))
+                    resolved.Add(idMatch);
+                else if (byName.TryGetValue(reference, out var nameMatch))
+                    resolved.Add(nameMatch);
+                else
+                    unresolved.Add(reference);
+            }
+
+            return new MattermostChannelResolutionResult(unresolved.Count == 0, null, resolved, unresolved);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -143,37 +156,46 @@ public sealed class MattermostProbe : IMattermostProbe
         }
     }
 
-    private async Task<ResolvedMattermostChannel?> FetchChannelAsync(
-        string serverUrl, string botToken, string channelId, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> FetchBotTeamIdsAsync(string serverUrl, string botToken, CancellationToken ct)
     {
-        using var request = CreateRequest(
-            HttpMethod.Get,
-            serverUrl,
-            $"/api/v4/channels/{Uri.EscapeDataString(channelId)}",
-            botToken);
+        using var request = CreateRequest(HttpMethod.Get, serverUrl, "/api/v4/users/me/teams", botToken);
         using var response = await _httpClient.SendAsync(request, ct);
-
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
-
         if (!response.IsSuccessStatusCode)
-        {
-            var body = await response.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException(MapHttpError(response.StatusCode, body));
-        }
+            throw new HttpRequestException(MapHttpError(response.StatusCode, await response.Content.ReadAsStringAsync(ct)));
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        var id = root.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-        var name = root.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
-        var displayName = root.TryGetProperty("display_name", out var displayNameProp)
-            ? displayNameProp.GetString()
-            : null;
+        var teamIds = new List<string>();
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            if (element.TryGetProperty("id", out var idProp) && idProp.GetString() is { } id)
+                teamIds.Add(id);
+        }
 
-        return id is null
-            ? null
-            : new ResolvedMattermostChannel(id, name ?? id, displayName ?? name ?? id);
+        return teamIds;
+    }
+
+    private async Task<IReadOnlyList<ResolvedMattermostChannel>> FetchTeamChannelsAsync(string serverUrl, string botToken, string teamId, CancellationToken ct)
+    {
+        using var request = CreateRequest(HttpMethod.Get, serverUrl,
+            $"/api/v4/users/me/teams/{Uri.EscapeDataString(teamId)}/channels", botToken);
+        using var response = await _httpClient.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            return []; // a team whose channels we cannot list is skipped, not fatal
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(json);
+        var channels = new List<ResolvedMattermostChannel>();
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            var id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+            var name = element.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+            var displayName = element.TryGetProperty("display_name", out var displayProp) ? displayProp.GetString() : null;
+            if (id is not null)
+                channels.Add(new ResolvedMattermostChannel(id, name ?? id, displayName ?? name ?? id));
+        }
+
+        return channels;
     }
 
     private static HttpRequestMessage CreateRequest(HttpMethod method, string serverUrl, string path, string botToken)
