@@ -307,21 +307,40 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in slackEntries)
-            audiences[ResolveChannelAudienceKey(entry)] = entry.Audience.ToWireValue();
+        {
+            // Only write an audience under a canonical key the Slack runtime ACL can match — a
+            // resolved channel ID, or the literal "dm" DM key. An unresolved channel NAME is a dead
+            // key the runtime never matches, so omit it instead of silently writing inert ACL config
+            // (a no-silent-fallback violation on a security path). The health-check phase already
+            // surfaces unresolved channels to the operator.
+            if (TryResolveChannelAudienceKey(entry, out var key))
+                audiences[key] = entry.Audience.ToWireValue();
+        }
 
         return audiences.Count > 0 ? audiences : null;
     }
 
-    private string ResolveChannelAudienceKey(ChannelEntry entry)
+    private bool TryResolveChannelAudienceKey(ChannelEntry entry, out string key)
     {
-        if (entry.IsDmRow || LastChannelResolution is null)
-            return entry.Id;
+        if (entry.IsDmRow)
+        {
+            key = entry.Id; // canonical DM key ("dm")
+            return true;
+        }
+
+        key = string.Empty;
+        if (LastChannelResolution is null)
+            return false;
 
         var resolved = LastChannelResolution.Resolved.FirstOrDefault(channel =>
             string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(channel.Id, entry.Id, StringComparison.Ordinal));
 
-        return string.IsNullOrWhiteSpace(resolved?.Id) ? entry.Id : resolved.Id;
+        if (string.IsNullOrWhiteSpace(resolved?.Id))
+            return false;
+
+        key = resolved.Id;
+        return true;
     }
 
     internal static IReadOnlyList<string> ParseChannelNames(string? input)

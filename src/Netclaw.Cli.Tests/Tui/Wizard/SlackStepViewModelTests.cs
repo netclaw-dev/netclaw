@@ -278,6 +278,38 @@ public sealed class SlackStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void ContributeConfig_OmitsUnresolvedChannelNameFromAudiences_KeepsResolvedById()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe)
+        {
+            SlackEnabled = true,
+            ChannelNamesInput = "general, ghost-channel",
+            LastChannelResolution = new SlackChannelResolutionResult(
+                false,
+                null,
+                [new ResolvedSlackChannel("general", "C01GENERAL")],
+                ["ghost-channel"])
+        };
+
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.OnLeave();
+
+        foreach (var entry in Context.ChannelEntries[ChannelType.Slack])
+            entry.Audience = TrustAudience.Team;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Slack);
+        var audiences = builder.Slack!.ChannelAudiences;
+        Assert.NotNull(audiences);
+        // The resolved channel is keyed by its canonical Slack ID...
+        Assert.True(audiences!.ContainsKey("C01GENERAL"));
+        // ...and the unresolved channel NAME is NOT written as a dead ACL key the runtime can't match.
+        Assert.DoesNotContain("ghost-channel", audiences.Keys);
+    }
+
+    [Fact]
     public void ContributeSecrets_AddsTokens()
     {
         using var step = new SlackStepViewModel(_fakeProbe);
