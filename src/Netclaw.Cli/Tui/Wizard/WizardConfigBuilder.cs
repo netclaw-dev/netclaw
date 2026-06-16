@@ -12,6 +12,7 @@ using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Tui.Wizard;
 
@@ -535,8 +536,13 @@ public sealed class WizardSecretsBuilder
 
         if (hasDirectSecrets || contributionChanged && (_secretsFileExists || HasUserSecretData(merged)))
         {
+            // Encrypt with the protector for THIS config's keys directory (the same one the
+            // read/decrypt path derives) rather than the process-wide SensitiveStringTypeConverter
+            // .Protector static — that global is an ambient hook for the framework-instantiated
+            // converters only; reaching for it here as a service locator is what let a parallel test
+            // leak a foreign protector and break the encrypt/decrypt round-trip.
             SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
-                protector: SensitiveStringTypeConverter.Protector);
+                protector: SecretsProtection.CreateProtector(_paths));
         }
     }
 

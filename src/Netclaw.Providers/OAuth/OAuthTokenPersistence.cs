@@ -130,8 +130,10 @@ public static class OAuthTokenPersistence
         if (string.IsNullOrWhiteSpace(accessTokenStr))
             return null;
 
-        // Transparent decrypt via SensitiveStringTypeConverter.Protector
-        var protector = SensitiveStringTypeConverter.Protector;
+        // Decrypt with the protector for this config's keys directory rather than the process-wide
+        // SensitiveStringTypeConverter.Protector static (an ambient hook reserved for the
+        // framework-instantiated converters, not a general service locator).
+        ISecretsProtector? protector = SecretsProtection.CreateProtector(paths);
         if (protector is not null && ISecretsProtector.IsEncrypted(accessTokenStr))
             accessTokenStr = protector.Unprotect(accessTokenStr);
 
