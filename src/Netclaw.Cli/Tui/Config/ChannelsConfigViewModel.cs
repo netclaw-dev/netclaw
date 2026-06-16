@@ -503,7 +503,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var currentIndex = AudienceIndex(row.Audience);
         var next = AudienceOptions[Wrap(currentIndex + delta, AudienceOptions.Count)];
         SetChannelAudience(_activeAdapterType, row.Id, next);
-        NotifyContentChanged();
+        // Autosave like every other ChannelPermissions mutation (RemoveSelectedChannel,
+        // ApplyAddChannel): this ←/→ toggle sets a security-relevant ACL trust tier, and without an
+        // immediate save an Esc would silently discard it (the next load resets from disk).
+        AutosaveCompletedAction($"{row.DisplayName} audience set to {next} and saved.");
     }
 
     internal void RemoveSelectedChannel()

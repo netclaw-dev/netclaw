@@ -31,7 +31,7 @@ Cited file:line numbers are from the review doc and may drift as fixes land. -->
 
 ## 3. Theme 3 — targeted correctness & secret-ordering
 
-- [ ] 3.1 `ChannelsConfigViewModel.ChangeSelectedChannelAudience` (review:489, :477) — autosave the ←/→ audience (ACL trust-tier) change like every other mutation. Test: cycle audience → navigate away → persisted (not reverted).
+- [x] 3.1 `ChannelsConfigViewModel.ChangeSelectedChannelAudience` (review:489, :477) — autosave the ←/→ audience (ACL trust-tier) change like every other mutation. Test: cycle audience → navigate away → persisted (not reverted). — The ←/→ toggle was the only ChannelPermissions mutation that called `NotifyContentChanged()` instead of `AutosaveCompletedAction(...)`, so the security-relevant trust-tier edit was silently discarded on Esc (next load reset from disk). Now autosaves like `RemoveSelectedChannel`/`ApplyAddChannel`. New `Cycling_channel_audience_autosaves_without_an_explicit_save` (C01 Team→Public persists with no `Save()`).
 - [ ] 3.2 `ProviderManagerViewModel` (review:519) — write the fixed credential to disk only after the probe succeeds; a failed probe preserves the prior secret. Test: probe-fail leaves the stored secret unchanged.
 - [ ] 3.3 `SlackStepViewModel.BuildChannelAudiences` (review:299) — do not write an unresolved channel name as an ACL key; omit/flag it (or block) so it grants nothing. Test: unresolved channel → no inert name key in `ChannelAudiences`.
 - [ ] 3.4 `ChannelsConfigViewModel.ApplyAddChannelAsync` (review:582) — replace `Single()` with a safe predicate so a resolved id of `"dm"` with DMs enabled does not throw. Test: add a `"dm"`-resolving channel → no exception.

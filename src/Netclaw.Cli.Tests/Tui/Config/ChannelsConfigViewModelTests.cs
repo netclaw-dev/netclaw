@@ -629,6 +629,28 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Cycling_channel_audience_autosaves_without_an_explicit_save()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Slack);
+
+        // The ←/→ audience toggle on the focused channel row (C01, Team). It sets a security-relevant
+        // ACL trust tier and must autosave like every other ChannelPermissions mutation — previously
+        // it only mutated in-memory state and was silently discarded on Esc.
+        var focused = vm.GetChannelRows()[vm.ChannelRowIndex];
+        Assert.Equal("C01", focused.Id);
+
+        vm.ChangeSelectedChannelAudience(1); // Team -> Public
+
+        // No explicit Save(): the toggle persisted on its own.
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
+        Assert.Equal("public", ToStringDictionary(audiencesRaw)["C01"]);
+    }
+
+    [Fact]
     public void Direct_message_audience_is_saved_without_touching_channels()
     {
         WriteChannelConfig();
