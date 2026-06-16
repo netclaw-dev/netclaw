@@ -159,9 +159,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         => SaveAsync().GetAwaiter().GetResult();
 
     public async Task<bool> SaveAsync(CancellationToken ct = default)
-        => await SaveAsync("Channels saved.", ct);
+        => await SaveAsync("Channels saved.", probeChannelAccess: true, ct);
 
-    private async Task<bool> SaveAsync(string successMessage, CancellationToken ct = default)
+    private async Task<bool> SaveAsync(string successMessage, bool probeChannelAccess, CancellationToken ct = default)
     {
         // A background channel-label refresh may be in flight; cancel and await it before we
         // validate, write, or reset adapter state so it cannot race this save.
@@ -175,19 +175,30 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        Status.Value = new ConfigStatusMessage("Validating channel access...", ConfigStatusTone.Neutral);
-        RequestRedraw();
-
-        var dynamicValidation = await ValidateChannelAccessAsync(ct);
-        if (dynamicValidation.Result.HasErrors)
+        // Autosave of a completed action persists immediately and does NOT block the UI loop on a
+        // network channel-access probe: the action that triggered it was already validated (add
+        // resolves before adding; toggle/remove/audience do not introduce a channel), unresolved
+        // names stay inert in the ACL, and the background label refresh re-validates asynchronously.
+        // Only an explicit Save runs the probe and may block on a genuine probe failure.
+        IReadOnlyList<string> unresolved = [];
+        if (probeChannelAccess)
         {
-            // Only a genuine probe failure (bad token / unreachable, surfaced as an
-            // ErrorMessage) blocks here — we could not validate at all, so persisting
-            // nothing is correct. Merely-unresolved channel names are NOT errors: they
-            // persist verbatim and are flagged non-blockingly (see ValidateChannelAccessAsync).
-            Status.Value = BuildValidationErrorStatus(dynamicValidation.Result, "Fix channel validation errors before saving.");
+            Status.Value = new ConfigStatusMessage("Validating channel access...", ConfigStatusTone.Neutral);
             RequestRedraw();
-            return false;
+
+            var dynamicValidation = await ValidateChannelAccessAsync(ct);
+            if (dynamicValidation.Result.HasErrors)
+            {
+                // Only a genuine probe failure (bad token / unreachable, surfaced as an
+                // ErrorMessage) blocks here — we could not validate at all, so persisting
+                // nothing is correct. Merely-unresolved channel names are NOT errors: they
+                // persist verbatim and are flagged non-blockingly (see ValidateChannelAccessAsync).
+                Status.Value = BuildValidationErrorStatus(dynamicValidation.Result, "Fix channel validation errors before saving.");
+                RequestRedraw();
+                return false;
+            }
+
+            unresolved = dynamicValidation.Unresolved;
         }
 
         WriteChannelConfigToDisk();
@@ -201,7 +212,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Step.OnEnter(_context, NavigationDirection.Forward);
         _mapper.ApplyToStep(Step, savedDraft);
         IsSaved.Value = true;
-        Status.Value = BuildSaveStatus(successMessage, dynamicValidation.Unresolved);
+        Status.Value = BuildSaveStatus(successMessage, unresolved);
         NotifyContentChanged();
         return true;
     }
@@ -234,7 +245,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal async Task<bool> SaveFromInputAsync(CancellationToken ct = default)
         => await ConfigAutosave.RunAsync(
-            token => SaveAsync("Channels saved.", token),
+            token => SaveAsync("Channels saved.", probeChannelAccess: true, token),
             Status,
             "Channel settings save failed",
             RequestRedraw,
@@ -1314,7 +1325,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private bool AutosaveCompletedAction(string successMessage)
         => ConfigAutosave.Run(
-            () => SaveAsync(successMessage).GetAwaiter().GetResult(),
+            // Autosave persists synchronously without the blocking network channel-access probe
+            // (validation runs in the background); the remaining await is the fast label-refresh
+            // cancellation, not a network round-trip.
+            () => SaveAsync(successMessage, probeChannelAccess: false).GetAwaiter().GetResult(),
             Status,
             "Channel settings save failed",
             RequestRedraw);

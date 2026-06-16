@@ -1043,6 +1043,26 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Autosave_of_a_completed_action_does_not_run_the_network_channel_probe()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe();
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem(); // enters Manage Channels; the background label refresh probes once
+        var probesBeforeAutosave = slackProbe.ResolveCallCount;
+
+        // Removing a channel is a completed action that autosaves. With the fix the autosave
+        // persists immediately and does NOT block the loop on a fresh channel-access probe.
+        vm.RemoveSelectedChannel();
+
+        Assert.True(vm.IsSaved.Value);
+        Assert.Equal(probesBeforeAutosave, slackProbe.ResolveCallCount);
+    }
+
+    [Fact]
     public void Open_management_normalizes_resolved_slack_channel_name_to_id_and_persists()
     {
         // Bug C: a channel saved as a literal NAME (it did not resolve at first save) stays inert
