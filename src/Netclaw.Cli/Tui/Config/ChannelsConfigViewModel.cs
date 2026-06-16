@@ -1682,16 +1682,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _labelRefreshTask = null;
     }
 
+    // Fail CLOSED to Public on a corrupt posture via the shared reader rather than throwing into this
+    // view-model's constructor. The Security editor (the posture's owner) surfaces the corruption;
+    // Channels only consumes posture for channel/DM audience ACL defaults, where Public is the safe
+    // restrictive default. Throwing here previously made the entire Channels page inaccessible on a
+    // value the Security page reads without crashing.
     private static DeploymentPosture LoadDeploymentPosture(NetclawPaths paths)
     {
-        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-        if (!ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value))
-            return DeploymentPosture.Personal;
-
-        if (Enum.TryParse<DeploymentPosture>(value?.ToString(), ignoreCase: true, out var posture))
-            return posture;
-
-        throw new InvalidOperationException($"Configuration value 'Security.DeploymentPosture' is not a valid deployment posture: {value}.");
+        DeploymentPostureReader.TryRead(ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath), out var posture, out _);
+        return posture;
     }
 }
 

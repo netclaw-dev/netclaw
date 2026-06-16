@@ -56,6 +56,22 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_with_unparseable_posture_fails_closed_without_throwing()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            { "configVersion": 1, "Security": { "DeploymentPosture": "NotARealPosture" } }
+            """);
+
+        // Before the fix LoadDeploymentPosture threw InvalidOperationException, making the entire
+        // Channels page inaccessible on a value the Security page reads without crashing. It now fails
+        // closed to Public via the shared DeploymentPostureReader instead of throwing at construction.
+        var exception = Record.Exception(() => CreateViewModel().Dispose());
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void Channels_editor_validator_maps_static_errors_to_fields()
     {
         var model = new ChannelsEditorModel

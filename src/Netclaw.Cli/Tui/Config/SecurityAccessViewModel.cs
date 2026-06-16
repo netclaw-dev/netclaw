@@ -705,32 +705,11 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         return !JsonEquivalent(current, defaults);
     }
 
-    // Reads the configured deployment posture and reports a misconfiguration. A MISSING key is the
-    // normal "not yet configured" state and defaults to Personal. A PRESENT but unrecognized value
-    // (renamed enum member, stale numeric, hand-edited typo) is a misconfiguration: fail CLOSED to
-    // Public — the most restrictive posture, matching the daemon's TrustContextPolicy fallback — and
-    // report the raw value. CLAUDE.md forbids silent fallbacks on security paths; the prior code
-    // silently treated a corrupt posture as the permissive Personal default, which both hid the
-    // error and disagreed with the fail-closed runtime, so re-saving could lock in the widest access.
+    // Posture reads route through the shared DeploymentPostureReader (fail-closed-to-Public on a
+    // present-but-unparseable value) so the Security and Channels editors treat the same stored value
+    // identically — see that type for the fail-closed rationale.
     private static bool TryReadPosture(Dictionary<string, object> config, out DeploymentPosture posture, out string? invalidValue)
-    {
-        invalidValue = null;
-        if (!ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value))
-        {
-            posture = DeploymentPosture.Personal;
-            return true;
-        }
-
-        if (value is string text && Enum.TryParse<DeploymentPosture>(text, ignoreCase: true, out var parsed))
-        {
-            posture = parsed;
-            return true;
-        }
-
-        posture = DeploymentPosture.Public;
-        invalidValue = value?.ToString() ?? "(null)";
-        return false;
-    }
+        => DeploymentPostureReader.TryRead(config, out posture, out invalidValue);
 
     private static DeploymentPosture ReadPosture(Dictionary<string, object> config)
     {
