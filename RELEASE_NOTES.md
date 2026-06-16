@@ -1,3 +1,35 @@
+#### 0.24.0-beta.5 2026-06-16 ####
+
+Netclaw v0.24.0-beta.5 — Background job streaming, tool argument validation, and dependency updates
+
+**Features**
+
+* **Background jobs as detached processes** — background jobs now run as detached processes with live log streaming, no default kill timer, and automatic reaping on passivation. ([#1405](https://github.com/netclaw-dev/netclaw/pull/1405))
+
+* **Loud tool-argument validation** — eliminated silent discard/degradation of LLM tool arguments; invalid arguments are now surfaced explicitly instead of being silently dropped. ([#1398](https://github.com/netclaw-dev/netclaw/pull/1398))
+
+**Bug Fixes**
+
+* **Flaky actor-startup tests fixed with deterministic readiness barriers** — actor startup now uses deterministic readiness checks instead of relying on timing assumptions. ([#1410](https://github.com/netclaw-dev/netclaw/pull/1410), [#1378](https://github.com/netclaw-dev/netclaw/pull/1378))
+
+* **Removed skills pruned from server feeds** — skills that have been deleted are now properly removed from the server's skill feed to avoid stale references. ([#1408](https://github.com/netclaw-dev/netclaw/pull/1408))
+
+* **Approval patterns now terminate at multi-line arguments** — multi-line shell arguments are now properly terminated in approval matching, and the display text includes a summary of the matched patterns. ([#1407](https://github.com/netclaw-dev/netclaw/pull/1407))
+
+**Dependencies**
+
+* **Microsoft.AspNetCore.DataProtection bumped to 10.0.9** — security and bug fixes. ([#1404](https://github.com/netclaw-dev/netclaw/pull/1404))
+
+* **Google.Protobuf bumped to 3.35.1** — protobuf runtime update. ([#1399](https://github.com/netclaw-dev/netclaw/pull/1399))
+
+* **Grpc.Tools bumped to 2.81.1** — gRPC tooling update. ([#1400](https://github.com/netclaw-dev/netclaw/pull/1400))
+
+* **OpenTelemetry bumped to 1.16.0** — observability runtime update. ([#1392](https://github.com/netclaw-dev/netclaw/pull/1392))
+
+* **Termina bumped to 0.12.1** — terminal emulation updates. ([#1393](https://github.com/netclaw-dev/netclaw/pull/1393))
+
+---
+
 #### 0.24.0-beta.4 2026-06-11 ####
 
 Netclaw v0.24.0-beta.4 — Reminder delivery fixes and shell approval normalization
