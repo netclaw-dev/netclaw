@@ -840,15 +840,16 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_persists_and_flags_unresolved_slack_channel_name()
+    public void Save_blocks_when_slack_channel_name_unresolved_and_persists_nothing()
     {
-        // The probe's API call worked (ErrorMessage is null) but Success is false because
-        // one name did not resolve — the real SlackProbe sets Success = (every name
-        // resolved), so any unresolved name makes Success false. The whole adapter must
-        // still persist (token + resolved channels + the unresolved name kept as-is),
-        // Save() returns true, and the status is a non-blocking warning.
+        // The probe's API call worked (ErrorMessage null) but one name did not resolve. Per the
+        // fail-loud decision, an unresolvable channel is an inert allow-list entry the runtime ACL
+        // can never match, so the save BLOCKS and persists nothing — not even the resolved channel
+        // or token — rather than keeping a dead name. The operator must fix or remove it.
         WriteChannelConfig();
         WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var slackProbe = new FakeSlackProbe
         {
             NextResolutionResult = new SlackChannelResolutionResult(
@@ -863,26 +864,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         var saved = vm.Save();
 
-        Assert.True(saved);
-        Assert.True(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.False(saved);
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("#fake-channel", vm.Status.Value.Text);
+        Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, slackProbe.ResolveCallCount);
-
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
-        // Resolved name mapped to its ID; the unresolved name kept verbatim.
-        Assert.Equal(["C99", "fake-channel"], ToStringArray(channelsRaw));
-
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var botToken));
-        Assert.Equal("xoxb-test", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
-
-        // The unresolved row is flagged for the red-flag renderer.
-        var unresolvedRow = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "fake-channel");
-        Assert.True(unresolvedRow.IsUnresolved);
-        var resolvedRow = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "C99");
-        Assert.False(resolvedRow.IsUnresolved);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -961,14 +950,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_persists_and_flags_unresolved_discord_channel_id()
+    public void Save_blocks_when_discord_channel_id_unresolved_and_persists_nothing()
     {
-        // The probe's API call worked (ErrorMessage is null) but Success is false because
-        // one id did not resolve — the real DiscordProbe sets Success = (every id resolved).
-        // The whole Discord adapter persists (token + resolved + unresolved id kept), Save()
-        // returns true, status is warning.
+        // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
+        // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var discordProbe = new FakeDiscordProbe
         {
             NextResolutionResult = new DiscordChannelResolutionResult(
@@ -982,27 +971,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         var saved = vm.Save();
 
-        Assert.True(saved);
-        Assert.True(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.False(saved);
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("#987654321", vm.Status.Value.Text);
+        Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, discordProbe.ResolveCallCount);
-        Assert.Equal("discord-token", discordProbe.LastBotToken);
-
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.Enabled", out var enabled));
-        Assert.True(Assert.IsType<bool>(enabled));
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var channelsRaw));
-        Assert.Equal(["123456789", "987654321"], ToStringArray(channelsRaw));
-
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Discord.BotToken", out var botToken));
-        Assert.Equal("discord-token", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
-
-        // Switch the editor to Discord so GetChannelRows reads the Discord resolution.
-        vm.OpenAdapterManagement(ChannelType.Discord);
-        var unresolvedRow = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "987654321");
-        Assert.True(unresolvedRow.IsUnresolved);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -1289,14 +1265,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_persists_and_flags_unresolved_mattermost_channel_id()
+    public void Save_blocks_when_mattermost_channel_id_unresolved_and_persists_nothing()
     {
-        // The probe's API call worked (ErrorMessage is null) but Success is false because
-        // one id did not resolve — the real MattermostProbe sets Success = (every id
-        // resolved). The whole Mattermost adapter persists (token + resolved + unresolved
-        // id kept), Save() returns true.
+        // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
+        // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var mattermostProbe = new FakeMattermostProbe
         {
             NextResolutionResult = new MattermostChannelResolutionResult(
@@ -1310,28 +1286,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         var saved = vm.Save();
 
-        Assert.True(saved);
-        Assert.True(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.False(saved);
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("#bogus", vm.Status.Value.Text);
+        Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, mattermostProbe.ResolveCallCount);
-        Assert.Equal("https://mattermost.example.com", mattermostProbe.LastServerUrl);
-        Assert.Equal("mattermost-token", mattermostProbe.LastBotToken);
-
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.Enabled", out var enabled));
-        Assert.True(Assert.IsType<bool>(enabled));
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.AllowedChannelIds", out var channelsRaw));
-        Assert.Equal(["town-square", "bogus"], ToStringArray(channelsRaw));
-
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Mattermost.BotToken", out var botToken));
-        Assert.Equal("mattermost-token", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
-
-        // Switch the editor to Mattermost so GetChannelRows reads the Mattermost resolution.
-        vm.OpenAdapterManagement(ChannelType.Mattermost);
-        var unresolvedRow = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "bogus");
-        Assert.True(unresolvedRow.IsUnresolved);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -1401,21 +1363,19 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_with_mix_of_resolvable_and_unresolvable_channels_persists_everything()
+    public void Save_blocks_when_any_channel_unresolvable_and_persists_nothing()
     {
-        // HARD invariant guarding the confirmed data-loss bug: the operator entered
-        // three channel NAMES where only one resolves. Before the fix, the unresolved
-        // names made ValidateSlackChannelsAsync return an Error, SaveAsync returned
-        // false, and NOTHING persisted — not the valid channel, not the bot token. The
-        // whole adapter must now persist: Enabled=true, the bot token in secrets.json,
-        // the resolved channel mapped to its ID, AND the unresolved names kept as-is.
+        // Fail-loud invariant (operator decision): the operator entered three channel NAMES where
+        // only one resolves. Rather than persisting the unresolvable names as inert allow-list
+        // entries that silently grant nothing (the prior behavior that shipped a dead allow-list and
+        // bit a live deployment), the save BLOCKS and persists nothing — not the valid channel, not
+        // the bot token — until the bad names are fixed or removed.
         WriteChannelConfig();
         WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var slackProbe = new FakeSlackProbe
         {
-            // Only "openclaw" is real; the other two are flagged but not blocked. Success
-            // is false because not every name resolved (the real probe's semantics), yet
-            // the save must still persist everything — that is the invariant under test.
             NextResolutionResult = new SlackChannelResolutionResult(
                 false,
                 null,
@@ -1429,22 +1389,13 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         var saved = vm.Save();
 
-        Assert.True(saved);
-        Assert.True(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.False(saved);
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("#netclaw-test", vm.Status.Value.Text);
         Assert.Contains("#fake-channel", vm.Status.Value.Text);
-
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.Enabled", out var enabled));
-        Assert.True(Assert.IsType<bool>(enabled));
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
-        // Resolved name -> ID, unresolved names kept verbatim (order preserved).
-        Assert.Equal(["netclaw-test", "C77", "fake-channel"], ToStringArray(channelsRaw));
-
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var botToken));
-        Assert.Equal("xoxb-test", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     private ChannelsConfigViewModel CreateViewModel(

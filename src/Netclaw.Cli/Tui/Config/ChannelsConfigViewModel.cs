@@ -920,6 +920,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     // Result of probing one adapter's channels: a blocking issue only when the probe
     // itself failed, plus the names/ids that the probe could not resolve (non-blocking).
+    // The operator chose fail-loud (no inert allow-list entries): a channel that cannot be resolved
+    // to an id the runtime ACL will match blocks the save with this message until it is fixed/removed.
+    private static string BuildUnresolvedChannelMessage(IReadOnlyList<string> unresolved)
+        => $"Could not resolve {string.Join(", ", unresolved.Select(static channel => $"#{channel}"))} to a channel the bot can see — fix or remove before saving (an unmatchable channel grants nothing).";
+
     private readonly record struct ChannelAccessOutcome(
         ChannelsEditorValidationIssue? BlockingIssue,
         IReadOnlyList<string> Unresolved)
@@ -959,8 +964,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel lookup failed: {result.ErrorMessage}"));
 
-        // Probe reachable. Map resolved names to IDs and keep unresolved names as-is so the
-        // whole adapter still persists; the unresolved names are flagged, not blocked.
+        // Probe reachable. Map resolved names to IDs.
         var resolvedByName = result.Resolved.ToDictionary(
             static channel => channel.Name,
             static channel => channel.Id,
@@ -980,18 +984,22 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             {
                 resolvedChannels.Add(channelId);
                 remap[channel] = channelId;
-                continue;
             }
 
-            // Unresolved name: keep it verbatim in the allow-list (inert until the
-            // channel exists) so a single bad name never drops the whole adapter.
-            resolvedChannels.Add(channel);
+            // Unresolved names are intentionally NOT added — see the fail-loud block below.
         }
+
+        // Fail loud: a name that does not resolve to a real channel id is an inert allow-list entry
+        // that the runtime ACL (SlackAclPolicy, ordinal id match) can never match, so it would
+        // silently grant nothing. Block the save and make the operator fix or remove it rather than
+        // persisting a dead entry. Do not mutate the draft on a blocked save.
+        if (result.Unresolved.Count > 0)
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, BuildUnresolvedChannelMessage(result.Unresolved)));
 
         SetChannelIds(ChannelType.Slack, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
         RemapChannelAudiences(ChannelType.Slack, remap);
         UpdateAdapterPickerSummary(ChannelType.Slack);
-        return ChannelAccessOutcome.Flagged(result.Unresolved);
+        return ChannelAccessOutcome.None;
     }
 
     private async Task<ChannelAccessOutcome> ValidateDiscordChannelsAsync(CancellationToken ct)
@@ -1016,9 +1024,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}"));
 
-        // Discord allow-list already stores raw IDs, so unresolved IDs persist as-is;
-        // they are flagged but not blocked.
-        return ChannelAccessOutcome.Flagged(result.Unresolved);
+        // Fail loud: an id that does not resolve to a real channel the bot can see is an inert
+        // allow-list entry the runtime ACL can never match, so block the save rather than persist a
+        // dead entry.
+        if (result.Unresolved.Count > 0)
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, BuildUnresolvedChannelMessage(result.Unresolved)));
+        return ChannelAccessOutcome.None;
     }
 
     private async Task<ChannelAccessOutcome> ValidateMattermostChannelsAsync(CancellationToken ct)
@@ -1047,9 +1058,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}"));
 
-        // Mattermost allow-list stores raw IDs, so unresolved IDs persist as-is and are
-        // flagged but not blocked.
-        return ChannelAccessOutcome.Flagged(result.Unresolved);
+        // Fail loud: an id that does not resolve to a real channel the bot can see is an inert
+        // allow-list entry the runtime ACL can never match, so block the save rather than persist a
+        // dead entry.
+        if (result.Unresolved.Count > 0)
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, BuildUnresolvedChannelMessage(result.Unresolved)));
+        return ChannelAccessOutcome.None;
     }
 
     private async Task RefreshSlackChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
