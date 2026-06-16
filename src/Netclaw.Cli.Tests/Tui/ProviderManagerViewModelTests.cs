@@ -839,19 +839,28 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
-    public void GoBack_FromList_ShutdownSignal()
+    public void GoBack_FromList_DoesNotNavigateWhenStandalone()
     {
+        // Standalone `netclaw provider` host: IsEmbeddedInConfig stays false (no
+        // EmbeddedConfigHostMarker in DI). Backing out past the root must NOT navigate to /config
+        // (not registered standalone); it exits the app. The previous code both navigated and
+        // Shutdown(), which in the embedded host dropped the queued nav and quit the config app.
         using var vm = CreateViewModel();
+        Assert.False(vm.IsEmbeddedInConfig);
         vm.CurrentState.Value = ProviderManagerState.List;
-        // GoBack from list should call Shutdown (which we can't easily test without a host,
-        // but we can verify it doesn't crash)
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
         vm.GoBack();
+
+        Assert.Null(route);
     }
 
     [Fact]
     public void GoBack_FromList_NavigatesToConfigWhenEmbedded()
     {
         using var vm = CreateViewModel();
+        vm.IsEmbeddedInConfig = true;
         vm.CurrentState.Value = ProviderManagerState.List;
         string? route = null;
         vm.RouteRequested = r => route = r;

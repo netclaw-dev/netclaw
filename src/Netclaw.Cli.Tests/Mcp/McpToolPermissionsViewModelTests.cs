@@ -57,6 +57,22 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
             vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" }));
     }
 
+    [Fact]
+    public async Task LoadServers_NonObjectDaemonBody_SurfacesStatusInsteadOfThrowing()
+    {
+        // A 200 whose body is a JSON array (not the expected object map) makes EnumerateObject()
+        // throw. LoadServersAsync runs fire-and-forget from OnActivated, so an unhandled throw
+        // would fault page activation; the VM must instead surface a status message and not throw.
+        var configuration = new ConfigurationBuilder().Build();
+        var daemonApi = new DaemonApi(new StubStatusesHttpClientFactory("[]"), configuration, _paths);
+        var vm = new McpToolPermissionsViewModel(_paths, daemonApi, navigationState: null);
+
+        await vm.LoadServersAsync();
+
+        Assert.Empty(vm.Servers);
+        Assert.Contains("Could not read MCP server statuses", vm.StatusMessage.Value);
+    }
+
     public static TheoryData<bool, ToolApprovalMode[]> ServerDefaultCycles => new()
     {
         { false, [ToolApprovalMode.Approval, ToolApprovalMode.Deny, ToolApprovalMode.Auto] },
@@ -342,5 +358,19 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     private sealed class NoopHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new();
+    }
+
+    // Returns a 200 with a fixed body for every request, so the daemon-statuses call succeeds and
+    // the VM exercises its response-shape handling rather than a connection failure.
+    private sealed class StubStatusesHttpClientFactory(string body) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new StubHandler(body));
+
+        private sealed class StubHandler(string body) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken)
+                => Task.FromResult(new HttpResponseMessage { Content = new StringContent(body) });
+        }
     }
 }

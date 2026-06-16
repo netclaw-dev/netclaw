@@ -95,7 +95,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             Paths = paths,
             Registry = registry,
             RequestRedraw = RequestRedraw,
-            ExistingConfig = LoadExistingConfig(paths)
+            ExistingConfig = ConfigFileHelper.LoadJsonDictOrNull(paths.NetclawConfigPath)
         };
 
         // Create step VMs in the canonical bootstrap order (simplify-netclaw-init):
@@ -212,15 +212,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _orchestrator.Dispose();
         _context.Dispose();
         base.Dispose();
-    }
-
-    private static Dictionary<string, object>? LoadExistingConfig(NetclawPaths paths)
-    {
-        if (!File.Exists(paths.NetclawConfigPath))
-            return null;
-
-        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-        return config.Count == 0 ? null : config;
     }
 }
 

@@ -104,7 +104,10 @@ public sealed class DiscordStepViewModelTests : WizardStepTestBase
         var entries = Context.ChannelEntries[ChannelType.Discord];
         Assert.Equal(3, entries.Count);
         Assert.True(entries[0].IsDmRow);
+        // Team posture, no single allow-listed user → DMs and channels both default to Team.
+        Assert.Equal(TrustAudience.Team, entries[0].Audience);
         Assert.Equal("129847561203948576", entries[1].Id);
+        Assert.Equal(TrustAudience.Team, entries[1].Audience);
     }
 
     [Fact]

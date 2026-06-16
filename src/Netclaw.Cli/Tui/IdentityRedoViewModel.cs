@@ -36,7 +36,7 @@ public sealed class IdentityRedoViewModel : ReactiveViewModel
             Paths = paths,
             Registry = new ProviderDescriptorRegistry([]),
             RequestRedraw = RequestRedraw,
-            ExistingConfig = LoadExistingConfig(paths),
+            ExistingConfig = ConfigFileHelper.LoadJsonDictOrNull(paths.NetclawConfigPath),
         };
         _orchestrator = new WizardOrchestrator([_step], _context, singleStepMode: true);
     }
@@ -103,14 +103,5 @@ public sealed class IdentityRedoViewModel : ReactiveViewModel
         _orchestrator.Dispose();
         _context.Dispose();
         base.Dispose();
-    }
-
-    private static Dictionary<string, object>? LoadExistingConfig(NetclawPaths paths)
-    {
-        if (!File.Exists(paths.NetclawConfigPath))
-            return null;
-
-        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-        return config.Count == 0 ? null : config;
     }
 }

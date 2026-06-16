@@ -349,7 +349,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             {
                 var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
                 root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-                var notifications = LoadSection<NotificationsConfig>(root, "Notifications");
+                var notifications = ConfigFileHelper.LoadSection<NotificationsConfig>(root, "Notifications");
                 mutate(notifications.Webhooks);
 
                 if (notifications.Webhooks.Count > 0
@@ -490,7 +490,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                 ? endpointText
                 : DefaultOtlpEndpoint;
 
-        var notifications = LoadSection<NotificationsConfig>(root, "Notifications");
+        var notifications = ConfigFileHelper.LoadSection<NotificationsConfig>(root, "Notifications");
         var rows = notifications.Webhooks
             .Select(static webhook => new TelemetryWebhookRow(
                 string.IsNullOrWhiteSpace(webhook.Name) ? "(unnamed)" : webhook.Name,
@@ -511,17 +511,6 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             return JsonSerializer.Deserialize<Dictionary<string, object>>(element.GetRawText(), JsonDefaults.ConfigRead) ?? [];
 
         return raw as Dictionary<string, object> ?? [];
-    }
-
-    private static T LoadSection<T>(Dictionary<string, object> root, string sectionName) where T : new()
-    {
-        if (!root.TryGetValue(sectionName, out var raw) || raw is null)
-            return new T();
-
-        var json = raw is JsonElement element
-            ? element.GetRawText()
-            : JsonSerializer.Serialize(raw, JsonDefaults.ConfigFile);
-        return JsonSerializer.Deserialize<T>(json, JsonDefaults.ConfigRead) ?? new T();
     }
 
     private static Dictionary<string, object> BuildNotificationsSection(NotificationsConfig config)

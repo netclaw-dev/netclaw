@@ -853,10 +853,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     {
         try
         {
-            var json = value is JsonElement element
-                ? element.GetRawText()
-                : JsonSerializer.Serialize(value, JsonDefaults.ConfigFile);
-            return JsonSerializer.Deserialize<T>(json, JsonDefaults.ConfigRead)
+            return ConfigFileHelper.DeserializeSection<T>(value)
                    ?? throw new InvalidOperationException($"{path} was empty.");
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)

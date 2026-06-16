@@ -164,19 +164,11 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
             if (AllowDirectMessages)
             {
                 var allowedUsers = ParseUserIds(AllowedUserIdsInput);
-                var dmAudience = allowedUsers.Count == 1
-                    ? TrustAudience.Personal
-                    : posture == DeploymentPosture.Personal
-                        ? TrustAudience.Personal
-                        : posture == DeploymentPosture.Team
-                            ? TrustAudience.Team
-                            : TrustAudience.Public;
+                var dmAudience = ChannelAudienceDefaults.ForDirectMessage(posture, allowedUsers.Count);
                 entries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
             }
 
-            var channelAudience = posture == DeploymentPosture.Public
-                ? TrustAudience.Public
-                : TrustAudience.Team;
+            var channelAudience = ChannelAudienceDefaults.ForChannel(posture);
 
             if (!string.IsNullOrWhiteSpace(ChannelNamesInput))
             {
@@ -233,19 +225,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
 
     public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        runner.Add(new HealthCheckItem("Slack configuration", null));
-
-        if (!SlackEnabled)
-        {
-            runner.UpdateLast(new HealthCheckItem("Slack configuration (disabled)", true));
+        if (!runner.BeginAdapterCheck("Slack", SlackEnabled, (BotToken, "bot token")))
             return;
-        }
-
-        if (string.IsNullOrWhiteSpace(BotToken))
-        {
-            runner.UpdateLast(new HealthCheckItem("Slack configuration (bot token missing)", false));
-            return;
-        }
 
         // Probe Slack auth
         bool slackAuthOk;

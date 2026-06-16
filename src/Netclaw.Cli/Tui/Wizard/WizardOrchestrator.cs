@@ -166,6 +166,12 @@ public sealed class WizardOrchestrator : IDisposable
 
         foreach (var step in _activeSteps)
         {
+            // Two-phase emission. ContributeConfig populates the typed section objects (the base
+            // section shape, also covered directly by WizardConfigBuilder tests). Then — for steps
+            // that are ISectionEditor — BuildContribution's field actions are applied LAST and win
+            // for every key they set, so BuildContribution is authoritative for those keys. The two
+            // must stay in agreement (e.g. via the shared helpers in SecurityPostureStepViewModel)
+            // so the clobbered typed write is a genuine no-op rather than a silent divergence.
             step.ContributeConfig(configBuilder);
             step.ContributeSecrets(secretsBuilder);
 

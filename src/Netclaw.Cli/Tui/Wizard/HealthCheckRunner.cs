@@ -44,6 +44,35 @@ public sealed class HealthCheckRunner
     }
 
     /// <summary>
+    /// Emit the standard channel-adapter pre-flight: an in-progress "<paramref name="name"/>
+    /// configuration" row, then short-circuit to a passed "(disabled)" row when the adapter is
+    /// off, or a failed "(&lt;label&gt; missing)" row for the first blank required credential
+    /// (checked in the order given). Returns <c>true</c> only when the adapter is enabled and
+    /// every required credential is present, i.e. the caller should continue probing.
+    /// </summary>
+    public bool BeginAdapterCheck(string name, bool enabled, params (string? value, string label)[] requiredCredentials)
+    {
+        Add(new HealthCheckItem($"{name} configuration", null));
+
+        if (!enabled)
+        {
+            UpdateLast(new HealthCheckItem($"{name} configuration (disabled)", true));
+            return false;
+        }
+
+        foreach (var (value, label) in requiredCredentials)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                UpdateLast(new HealthCheckItem($"{name} configuration ({label} missing)", false));
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Add a placeholder "in progress" item, then update it with the final result.
     /// </summary>
     public async Task RunCheckAsync(string label, Func<CancellationToken, Task<HealthCheckItem>> check, CancellationToken ct)

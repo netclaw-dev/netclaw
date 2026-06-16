@@ -356,17 +356,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
     }
 
     private static string? ReadLocalDeviceTokenValue(NetclawPaths paths)
-    {
-        if (!File.Exists(paths.SecretsPath))
-            return null;
-
-        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
-        if (!secrets.TryGetValue("DeviceToken", out var rawValue))
-            return null;
-
-        var token = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
-        return ConfigFileHelper.DecryptIfEncrypted(paths, token);
-    }
+        => ConfigFileHelper.ReadDecryptedSecret(paths, "DeviceToken");
 
     private static void WriteLocalDeviceTokenValue(NetclawPaths paths, string rawToken)
     {

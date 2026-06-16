@@ -1744,7 +1744,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private void ReloadSources()
     {
         var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        var external = LoadSection<ExternalSkillsConfig>(root, "ExternalSkills");
+        var external = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(root, "ExternalSkills");
         var feeds = LoadSkillFeedsSection(root);
         _sources = BuildSources(external, feeds).ToList();
         Version.Value++;
@@ -1921,7 +1921,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     }
 
     private ExternalSkillsConfig LoadExternalConfig()
-        => LoadSection<ExternalSkillsConfig>(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), "ExternalSkills");
+        => ConfigFileHelper.LoadSection<ExternalSkillsConfig>(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath), "ExternalSkills");
 
     private void SaveExternalConfig(ExternalSkillsConfig external)
     {
@@ -2074,17 +2074,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         return true;
-    }
-
-    private static T LoadSection<T>(Dictionary<string, object> root, string sectionName) where T : new()
-    {
-        if (!root.TryGetValue(sectionName, out var raw) || raw is null)
-            return new T();
-
-        var json = raw is JsonElement element
-            ? element.GetRawText()
-            : JsonSerializer.Serialize(raw, JsonDefaults.ConfigFile);
-        return JsonSerializer.Deserialize<T>(json, JsonDefaults.ConfigRead) ?? new T();
     }
 
     private static Dictionary<string, object> BuildExternalSkillsSection(ExternalSkillsConfig config)

@@ -163,19 +163,11 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         if (AllowDirectMessages)
         {
             var allowedUsers = ParseUserIds(AllowedUserIdsInput);
-            var dmAudience = allowedUsers.Count == 1
-                ? TrustAudience.Personal
-                : posture == DeploymentPosture.Personal
-                    ? TrustAudience.Personal
-                    : posture == DeploymentPosture.Team
-                        ? TrustAudience.Team
-                        : TrustAudience.Public;
+            var dmAudience = ChannelAudienceDefaults.ForDirectMessage(posture, allowedUsers.Count);
             entries.Add(new ChannelEntry("Discord DMs", "dm", dmAudience, isDmRow: true));
         }
 
-        var channelAudience = posture == DeploymentPosture.Public
-            ? TrustAudience.Public
-            : TrustAudience.Team;
+        var channelAudience = ChannelAudienceDefaults.ForChannel(posture);
 
         var channelIds = ParseChannelIds(ChannelIdsInput);
         foreach (var channelId in channelIds)
@@ -219,19 +211,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
 
     public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        runner.Add(new HealthCheckItem("Discord configuration", null));
-
-        if (!DiscordEnabled)
-        {
-            runner.UpdateLast(new HealthCheckItem("Discord configuration (disabled)", true));
+        if (!runner.BeginAdapterCheck("Discord", DiscordEnabled, (BotToken, "bot token")))
             return;
-        }
-
-        if (string.IsNullOrWhiteSpace(BotToken))
-        {
-            runner.UpdateLast(new HealthCheckItem("Discord configuration (bot token missing)", false));
-            return;
-        }
 
         bool discordAuthOk;
         try

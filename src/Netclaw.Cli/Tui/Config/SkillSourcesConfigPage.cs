@@ -456,22 +456,12 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 return;
 
             _pickerSubscriptions.Clear();
-            _directoryPicker = Layouts.FilePicker(ViewModel.BrowseStartPath)
-                .WithMode(FilePickerMode.Directories)
-                .WithSelectionMode(FilePickerSelectionMode.Single)
-                .WithFillHeight(true)
-                .WithFileSystemProvider(ViewModel.FileSystemProvider);
-            _directoryPicker.OnFocused();
-            _directoryPicker.SelectionConfirmed
-                .Subscribe(paths =>
-                {
-                    if (paths.Count > 0)
-                        ViewModel.CommitAddLocalPath(paths[0]);
-                })
-                .DisposeWith(_pickerSubscriptions);
-            _directoryPicker.Cancelled
-                .Subscribe(_ => ViewModel.GoBack())
-                .DisposeWith(_pickerSubscriptions);
+            _directoryPicker = DirectoryPickerFactory.Build(
+                ViewModel.BrowseStartPath,
+                ViewModel.FileSystemProvider,
+                _pickerSubscriptions,
+                ViewModel.CommitAddLocalPath,
+                ViewModel.GoBack);
         }
         else if (_directoryPicker is not null)
         {
@@ -699,4 +689,39 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             ConfigStatusTone.Error => Color.Red,
             _ => Color.Gray,
         };
+}
+
+/// <summary>
+/// Builds the single-selection directory <see cref="FilePickerNode"/> shared by the Skill Sources
+/// and Workspaces config pages: identical mode/selection/fill/provider/focus wiring, with each page
+/// supplying the start path and the confirm/cancel callbacks. Centralizing it keeps the two pickers
+/// behaviorally identical — a change to picker configuration lands in both at once.
+/// </summary>
+internal static class DirectoryPickerFactory
+{
+    internal static FilePickerNode Build(
+        string startPath,
+        IFileSystemProvider fileSystemProvider,
+        CompositeDisposable subscriptions,
+        Action<string> onConfirm,
+        Action onCancel)
+    {
+        var picker = Layouts.FilePicker(startPath)
+            .WithMode(FilePickerMode.Directories)
+            .WithSelectionMode(FilePickerSelectionMode.Single)
+            .WithFillHeight(true)
+            .WithFileSystemProvider(fileSystemProvider);
+        picker.OnFocused();
+        picker.SelectionConfirmed
+            .Subscribe(paths =>
+            {
+                if (paths.Count > 0)
+                    onConfirm(paths[0]);
+            })
+            .DisposeWith(subscriptions);
+        picker.Cancelled
+            .Subscribe(_ => onCancel())
+            .DisposeWith(subscriptions);
+        return picker;
+    }
 }

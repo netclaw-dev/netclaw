@@ -70,7 +70,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             Paths = paths,
             Registry = new ProviderDescriptorRegistry([]),
             RequestRedraw = RequestRedraw,
-            ExistingConfig = LoadExistingConfig(paths),
+            ExistingConfig = ConfigFileHelper.LoadJsonDictOrNull(paths.NetclawConfigPath),
             SelectedPosture = LoadDeploymentPosture(paths)
         };
 
@@ -697,7 +697,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal void BeginAllowedUsers()
     {
-        AllowedUsersInput = JoinOrNull(GetAllowedUserIds(_activeAdapterType));
+        AllowedUsersInput = ChannelCsv.JoinOrNull(GetAllowedUserIds(_activeAdapterType));
         Screen.Value = ChannelsConfigScreen.AllowedUsers;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         NotifyContentChanged();
@@ -705,7 +705,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal void ApplyAllowedUsers()
     {
-        var userIds = ParseCsv(AllowedUsersInput, trimHash: false);
+        var userIds = ChannelCsv.ParseCsv(AllowedUsersInput, trimHash: false);
         SetAllowedUserIds(_activeAdapterType, userIds);
         UpdateAdapterPickerSummary(_activeAdapterType);
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
@@ -911,7 +911,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return ChannelAccessOutcome.None;
 
         var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-        var configuredChannels = ParseCsv(slack.ChannelNamesInput, trimHash: true);
+        var configuredChannels = ChannelCsv.ParseCsv(slack.ChannelNamesInput, trimHash: true);
         var namesToResolve = configuredChannels
             .Where(static channel => !IsSlackChannelId(channel))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -976,7 +976,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return ChannelAccessOutcome.None;
 
         var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-        var channelIds = ParseCsv(discord.ChannelIdsInput, trimHash: true);
+        var channelIds = ChannelCsv.ParseCsv(discord.ChannelIdsInput, trimHash: true);
         if (channelIds.Count == 0)
             return ChannelAccessOutcome.None;
 
@@ -1003,7 +1003,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return ChannelAccessOutcome.None;
 
         var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-        var channelIds = ParseCsv(mattermost.ChannelIdsInput, trimHash: true);
+        var channelIds = ChannelCsv.ParseCsv(mattermost.ChannelIdsInput, trimHash: true);
         if (channelIds.Count == 0)
             return ChannelAccessOutcome.None;
 
@@ -1142,10 +1142,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (!hasPersistedSecret)
             return null;
 
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        return ConfigFileHelper.TryGetPathValue(secrets, path, out var value)
-            ? Normalize(ConfigFileHelper.DecryptIfEncrypted(_paths, value?.ToString()))
-            : null;
+        return Normalize(ConfigFileHelper.ReadDecryptedSecret(_paths, path));
     }
 
     private void RemapChannelAudiences(ChannelType type, IReadOnlyDictionary<string, string> remap)
@@ -1379,35 +1376,24 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     }
 
     private TrustAudience DefaultChannelAudience()
-        => (_context.SelectedPosture ?? DeploymentPosture.Personal) == DeploymentPosture.Public
-            ? TrustAudience.Public
-            : TrustAudience.Team;
+        => ChannelAudienceDefaults.ForChannel(_context.SelectedPosture ?? DeploymentPosture.Personal);
 
     private TrustAudience DefaultDirectMessageAudience()
-    {
-        var posture = _context.SelectedPosture ?? DeploymentPosture.Personal;
-        var allowedUsers = GetAllowedUserIds(_activeAdapterType);
-        return allowedUsers.Count == 1
-            ? TrustAudience.Personal
-            : posture switch
-            {
-                DeploymentPosture.Public => TrustAudience.Public,
-                DeploymentPosture.Team => TrustAudience.Team,
-                _ => TrustAudience.Personal
-            };
-    }
+        => ChannelAudienceDefaults.ForDirectMessage(
+            _context.SelectedPosture ?? DeploymentPosture.Personal,
+            GetAllowedUserIds(_activeAdapterType).Count);
 
     private IReadOnlyList<string> GetChannelIds(ChannelType type) => type switch
     {
-        ChannelType.Slack => ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).ChannelNamesInput, trimHash: true),
-        ChannelType.Discord => ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput, trimHash: true),
-        ChannelType.Mattermost => ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput, trimHash: true),
+        ChannelType.Slack => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).ChannelNamesInput, trimHash: true),
+        ChannelType.Discord => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput, trimHash: true),
+        ChannelType.Mattermost => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput, trimHash: true),
         _ => []
     };
 
     private void SetChannelIds(ChannelType type, IReadOnlyList<string> channelIds)
     {
-        var value = JoinOrNull(channelIds);
+        var value = ChannelCsv.JoinOrNull(channelIds);
         switch (type)
         {
             case ChannelType.Slack:
@@ -1424,15 +1410,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private IReadOnlyList<string> GetAllowedUserIds(ChannelType type) => type switch
     {
-        ChannelType.Slack => ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).AllowedUserIdsInput, trimHash: false),
-        ChannelType.Discord => ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).AllowedUserIdsInput, trimHash: false),
-        ChannelType.Mattermost => ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).AllowedUserIdsInput, trimHash: false),
+        ChannelType.Slack => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).AllowedUserIdsInput, trimHash: false),
+        ChannelType.Discord => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).AllowedUserIdsInput, trimHash: false),
+        ChannelType.Mattermost => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).AllowedUserIdsInput, trimHash: false),
         _ => []
     };
 
     private void SetAllowedUserIds(ChannelType type, IReadOnlyList<string> userIds)
     {
-        var value = JoinOrNull(userIds);
+        var value = ChannelCsv.JoinOrNull(userIds);
         switch (type)
         {
             case ChannelType.Slack:
@@ -1586,19 +1572,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         return 0;
     }
 
-    private static List<string> ParseCsv(string? input, bool trimHash)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return [];
-
-        return [.. input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(value => trimHash ? value.Trim().TrimStart('#') : value.Trim())
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.Ordinal)];
-    }
-
-    private static string? JoinOrNull(IReadOnlyList<string> values)
-        => values.Count == 0 ? null : string.Join(", ", values);
 
     private static string? NormalizeChannelId(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimStart('#');
@@ -1658,15 +1631,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _labelResolutionCts?.Dispose();
         _labelResolutionCts = new CancellationTokenSource();
         _ = RefreshChannelLabelsAsync(type, _labelResolutionCts.Token);
-    }
-
-    private static Dictionary<string, object>? LoadExistingConfig(NetclawPaths paths)
-    {
-        if (!File.Exists(paths.NetclawConfigPath))
-            return null;
-
-        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-        return config.Count == 0 ? null : config;
     }
 
     private static DeploymentPosture LoadDeploymentPosture(NetclawPaths paths)
@@ -1911,10 +1875,10 @@ internal sealed class ChannelsConfigPersistenceMapper
         vm.AppToken = null;
         vm.HasPersistedBotToken = draft.HasPersistedBotToken;
         vm.HasPersistedAppToken = draft.HasPersistedAppToken;
-        vm.ChannelNamesInput = JoinOrNull(draft.ChannelIds);
+        vm.ChannelNamesInput = ChannelCsv.JoinOrNull(draft.ChannelIds);
         vm.AllowDirectMessages = draft.AllowDirectMessages;
         vm.RestrictToSpecificUsers = draft.AllowedUserIds.Count > 0;
-        vm.AllowedUserIdsInput = JoinOrNull(draft.AllowedUserIds);
+        vm.AllowedUserIdsInput = ChannelCsv.JoinOrNull(draft.AllowedUserIds);
     }
 
     private static void ApplyDiscord(DiscordStepViewModel vm, DiscordChannelDraft draft)
@@ -1922,10 +1886,10 @@ internal sealed class ChannelsConfigPersistenceMapper
         vm.DiscordEnabled = draft.Enabled;
         vm.BotToken = null;
         vm.HasPersistedBotToken = draft.HasPersistedBotToken;
-        vm.ChannelIdsInput = JoinOrNull(draft.ChannelIds);
+        vm.ChannelIdsInput = ChannelCsv.JoinOrNull(draft.ChannelIds);
         vm.AllowDirectMessages = draft.AllowDirectMessages;
         vm.RestrictToSpecificUsers = draft.AllowedUserIds.Count > 0;
-        vm.AllowedUserIdsInput = JoinOrNull(draft.AllowedUserIds);
+        vm.AllowedUserIdsInput = ChannelCsv.JoinOrNull(draft.AllowedUserIds);
     }
 
     private static void ApplyMattermost(MattermostStepViewModel vm, MattermostChannelDraft draft)
@@ -1934,10 +1898,10 @@ internal sealed class ChannelsConfigPersistenceMapper
         vm.ServerUrl = draft.ServerUrl;
         vm.BotToken = null;
         vm.HasPersistedBotToken = draft.HasPersistedBotToken;
-        vm.ChannelIdsInput = JoinOrNull(draft.ChannelIds);
+        vm.ChannelIdsInput = ChannelCsv.JoinOrNull(draft.ChannelIds);
         vm.AllowDirectMessages = draft.AllowDirectMessages;
         vm.RestrictToSpecificUsers = draft.AllowedUserIds.Count > 0;
-        vm.AllowedUserIdsInput = JoinOrNull(draft.AllowedUserIds);
+        vm.AllowedUserIdsInput = ChannelCsv.JoinOrNull(draft.AllowedUserIds);
         vm.CallbackUrl = draft.CallbackUrl;
     }
 
@@ -1959,8 +1923,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             return;
         }
 
-        var channelIds = ParseCsv(vm.ChannelNamesInput, trimHash: true);
-        var userIds = vm.RestrictToSpecificUsers ? ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
+        var channelIds = ChannelCsv.ParseCsv(vm.ChannelNamesInput, trimHash: true);
+        var userIds = vm.RestrictToSpecificUsers ? ChannelCsv.ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
 
         fields.Add(new SectionFieldAction("Slack.Enabled", SectionFieldActionKind.Set, true));
         fields.Add(new SectionFieldAction("Slack.SocketMode", SectionFieldActionKind.Set, true));
@@ -1991,8 +1955,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             return;
         }
 
-        var channelIds = ParseCsv(vm.ChannelIdsInput, trimHash: true);
-        var userIds = vm.RestrictToSpecificUsers ? ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
+        var channelIds = ChannelCsv.ParseCsv(vm.ChannelIdsInput, trimHash: true);
+        var userIds = vm.RestrictToSpecificUsers ? ChannelCsv.ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
 
         fields.Add(new SectionFieldAction("Discord.Enabled", SectionFieldActionKind.Set, true));
         fields.Add(new SectionFieldAction("Discord.AllowDirectMessages", SectionFieldActionKind.Set, vm.AllowDirectMessages));
@@ -2020,8 +1984,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             return;
         }
 
-        var channelIds = ParseCsv(vm.ChannelIdsInput, trimHash: true);
-        var userIds = vm.RestrictToSpecificUsers ? ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
+        var channelIds = ChannelCsv.ParseCsv(vm.ChannelIdsInput, trimHash: true);
+        var userIds = vm.RestrictToSpecificUsers ? ChannelCsv.ParseCsv(vm.AllowedUserIdsInput, trimHash: false) : [];
 
         fields.Add(new SectionFieldAction("Mattermost.Enabled", SectionFieldActionKind.Set, true));
         fields.Add(new SectionFieldAction("Mattermost.AllowDirectMessages", SectionFieldActionKind.Set, vm.AllowDirectMessages));
@@ -2107,7 +2071,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         {
             var audience = explicitAudiences is not null && explicitAudiences.TryGetValue(channelId, out var explicitAudience)
                 ? explicitAudience
-                : DefaultChannelAudience(posture);
+                : ChannelAudienceDefaults.ForChannel(posture);
             map[channelId] = audience.ToWireValue();
         }
 
@@ -2117,24 +2081,11 @@ internal sealed class ChannelsConfigPersistenceMapper
         }
         else if (allowDirectMessages)
         {
-            map["dm"] = DefaultDirectMessageAudience(posture, userIds).ToWireValue();
+            map["dm"] = ChannelAudienceDefaults.ForDirectMessage(posture, userIds.Count).ToWireValue();
         }
 
         return map;
     }
-
-    private static TrustAudience DefaultChannelAudience(DeploymentPosture posture)
-        => posture == DeploymentPosture.Public ? TrustAudience.Public : TrustAudience.Team;
-
-    private static TrustAudience DefaultDirectMessageAudience(DeploymentPosture posture, IReadOnlyList<string> userIds)
-        => userIds.Count == 1
-            ? TrustAudience.Personal
-            : posture switch
-            {
-                DeploymentPosture.Public => TrustAudience.Public,
-                DeploymentPosture.Team => TrustAudience.Team,
-                _ => TrustAudience.Personal
-            };
 
     private static bool GetBool(Dictionary<string, object> config, string path, bool defaultValue)
     {
@@ -2264,19 +2215,6 @@ internal sealed class ChannelsConfigPersistenceMapper
             knownProviders.Add(type);
     }
 
-    private static List<string> ParseCsv(string? input, bool trimHash)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return [];
-
-        return [.. input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(value => trimHash ? value.Trim().TrimStart('#') : value.Trim())
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.Ordinal)];
-    }
-
-    private static string? JoinOrNull(IReadOnlyList<string> values)
-        => values.Count == 0 ? null : string.Join(", ", values);
 
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -2319,4 +2257,26 @@ internal sealed class MattermostChannelDraft : ChannelProviderDraft
     public string? ServerUrl { get; init; }
     public bool HasPersistedBotToken { get; init; }
     public string? CallbackUrl { get; init; }
+}
+
+/// <summary>
+/// Shared parsing for the comma-separated channel/user lists in the Channels editor. One copy
+/// feeds the display/read path and one feeds the persistence-mapper write path — keeping them
+/// here guarantees a channel list is canonicalized identically in both directions.
+/// </summary>
+internal static class ChannelCsv
+{
+    internal static List<string> ParseCsv(string? input, bool trimHash)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return [];
+
+        return [.. input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => trimHash ? value.Trim().TrimStart('#') : value.Trim())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)];
+    }
+
+    internal static string? JoinOrNull(IReadOnlyList<string> values)
+        => values.Count == 0 ? null : string.Join(", ", values);
 }

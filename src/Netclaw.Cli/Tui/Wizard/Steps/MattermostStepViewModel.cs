@@ -202,19 +202,11 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         if (AllowDirectMessages)
         {
             var allowedUsers = ParseUserIds(AllowedUserIdsInput);
-            var dmAudience = allowedUsers.Count == 1
-                ? TrustAudience.Personal
-                : posture == DeploymentPosture.Personal
-                    ? TrustAudience.Personal
-                    : posture == DeploymentPosture.Team
-                        ? TrustAudience.Team
-                        : TrustAudience.Public;
+            var dmAudience = ChannelAudienceDefaults.ForDirectMessage(posture, allowedUsers.Count);
             entries.Add(new ChannelEntry("Mattermost DMs", "dm", dmAudience, isDmRow: true));
         }
 
-        var channelAudience = posture == DeploymentPosture.Public
-            ? TrustAudience.Public
-            : TrustAudience.Team;
+        var channelAudience = ChannelAudienceDefaults.ForChannel(posture);
 
         var channelIds = ParseChannelIds(ChannelIdsInput);
         foreach (var channelId in channelIds)
@@ -257,25 +249,8 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        runner.Add(new HealthCheckItem("Mattermost configuration", null));
-
-        if (!MattermostEnabled)
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (disabled)", true));
+        if (!runner.BeginAdapterCheck("Mattermost", MattermostEnabled, (ServerUrl, "server URL"), (BotToken, "bot token")))
             return Task.CompletedTask;
-        }
-
-        if (string.IsNullOrWhiteSpace(ServerUrl))
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (server URL missing)", false));
-            return Task.CompletedTask;
-        }
-
-        if (string.IsNullOrWhiteSpace(BotToken))
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (bot token missing)", false));
-            return Task.CompletedTask;
-        }
 
         // Mattermost is self-hosted with no first-party auth-probe API; the daemon
         // verifies connectivity on startup. The wizard validates configuration locally.

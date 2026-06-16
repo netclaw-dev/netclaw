@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
@@ -140,6 +141,31 @@ public sealed class ConfigEditorSessionTests : IDisposable
         Assert.Equal("keep-search", ConfigFileHelper.DecryptIfEncrypted(_paths, otherSecret?.ToString()));
         Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var slackToken));
         Assert.Equal("stored-slack-token", ConfigFileHelper.DecryptIfEncrypted(_paths, slackToken?.ToString()));
+    }
+
+    [Fact]
+    public void Apply_SecretSetThroughScalarIntermediate_RejectsMalformedSecrets()
+    {
+        // secrets.json has "Search" as a scalar string, not an object. ConfigEditorSession
+        // deliberately refuses to traverse INTO a scalar at an intermediate path segment, rejecting
+        // the write rather than silently overwriting the scalar. (SecretsJsonUpdater, the
+        // JsonObject-based engine the wizard uses, instead overwrites.) This pins ConfigEditorSession's
+        // stricter behavior so any future consolidation onto that engine is a conscious change.
+        File.WriteAllText(_paths.SecretsPath,
+            """
+            {
+              "configVersion": 1,
+              "Search": "not-an-object"
+            }
+            """);
+
+        var session = new ConfigEditorSession(_paths);
+
+        Assert.ThrowsAny<JsonException>(() => session.Apply(new SectionContribution(
+            SecretActions:
+            [
+                new SectionSecretAction("Search.BraveApiKey", SectionSecretActionKind.Set, new SensitiveString("new-brave-key"))
+            ])));
     }
 
     [Fact]

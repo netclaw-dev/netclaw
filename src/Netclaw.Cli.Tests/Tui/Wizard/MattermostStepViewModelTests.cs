@@ -128,7 +128,10 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
         var entries = Context.ChannelEntries[ChannelType.Mattermost];
         Assert.Equal(3, entries.Count);
         Assert.True(entries[0].IsDmRow);
+        // Team posture, no single allow-listed user → DMs and channels both default to Team.
+        Assert.Equal(TrustAudience.Team, entries[0].Audience);
         Assert.Equal("4xp9p3onpins8", entries[1].Id);
+        Assert.Equal(TrustAudience.Team, entries[1].Audience);
     }
 
     [Fact]

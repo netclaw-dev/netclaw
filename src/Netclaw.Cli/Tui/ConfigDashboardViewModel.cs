@@ -22,6 +22,17 @@ public sealed class ConfigDashboardNavigationState
     public ConfigDashboardAction PendingAction { get; set; }
 }
 
+/// <summary>
+/// Marker service registered only by the embedded <c>netclaw config</c> host. Its presence in DI
+/// tells the routed Provider/Model managers they were reached from the config dashboard, so backing
+/// out past their root navigates back to the dashboard instead of exiting the process. The
+/// standalone <c>netclaw provider</c>/<c>netclaw model</c> hosts do not register it, leaving those
+/// managers in their default "exit on back-out" behavior.
+/// </summary>
+public sealed class EmbeddedConfigHostMarker
+{
+}
+
 public sealed record ConfigDashboardItem(string Label, string Description, string? Route = null, bool IsTerminal = false);
 
 /// <summary>
@@ -233,8 +244,8 @@ internal sealed class ConfigDashboardStatusReader
 
     private string SkillSourcesSummary(Dictionary<string, object> config)
     {
-        var dirs = LoadSection<ExternalSkillsConfig>(config, "ExternalSkills").Sources.Count;
-        var feeds = LoadSection<SkillFeedsConfig>(config, "SkillFeeds").Feeds.Count;
+        var dirs = ConfigFileHelper.LoadSection<ExternalSkillsConfig>(config, "ExternalSkills").Sources.Count;
+        var feeds = ConfigFileHelper.LoadSection<SkillFeedsConfig>(config, "SkillFeeds").Feeds.Count;
         return $"{dirs} {(dirs == 1 ? "dir" : "dirs")} · {feeds} {(feeds == 1 ? "feed" : "feeds")}";
     }
 
@@ -258,7 +269,7 @@ internal sealed class ConfigDashboardStatusReader
     private string TelemetrySummary(Dictionary<string, object> config)
     {
         var otlp = BoolAt(config, "Telemetry.Enabled") ? "on" : "off";
-        var webhooks = LoadSection<NotificationsConfig>(config, "Notifications").Webhooks.Count;
+        var webhooks = ConfigFileHelper.LoadSection<NotificationsConfig>(config, "Notifications").Webhooks.Count;
         return $"OTLP {otlp} · {Pluralize(webhooks, "webhook", "webhooks")}";
     }
 
@@ -304,15 +315,4 @@ internal sealed class ConfigDashboardStatusReader
 
     private static string Pluralize(int count, string singular, string plural)
         => $"{count} {(count == 1 ? singular : plural)}";
-
-    private static T LoadSection<T>(Dictionary<string, object> root, string sectionName) where T : new()
-    {
-        if (!root.TryGetValue(sectionName, out var raw) || raw is null)
-            return new T();
-
-        var json = raw is System.Text.Json.JsonElement element
-            ? element.GetRawText()
-            : System.Text.Json.JsonSerializer.Serialize(raw, Json.JsonDefaults.ConfigFile);
-        return System.Text.Json.JsonSerializer.Deserialize<T>(json, Json.JsonDefaults.ConfigRead) ?? new T();
-    }
 }

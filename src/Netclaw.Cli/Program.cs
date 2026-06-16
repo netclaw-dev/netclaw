@@ -1129,6 +1129,9 @@ static async Task RunConfigEditorAsync(string[] args)
     // ensured on disk), so no separate paths registration is needed here.
     ConfigureConfigServices(builder.Services, builder.Configuration);
     builder.Services.AddSingleton(new ConfigDashboardNavigationState());
+    // Marks this as the embedded config host so the routed Provider/Model managers navigate back
+    // to the dashboard (rather than exiting) when backed out — the standalone hosts omit it.
+    builder.Services.AddSingleton(new EmbeddedConfigHostMarker());
     builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
     builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
     builder.Services.AddSingleton<ISkillFeedReachabilityProbe, SkillFeedReachabilityProbe>();

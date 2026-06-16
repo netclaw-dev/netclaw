@@ -501,10 +501,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         if (!string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft))
             return _model.Brave.ApiKeyDraft;
 
-        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        return ConfigFileHelper.TryGetPathValue(secrets, "Search.BraveApiKey", out var braveRaw)
-            ? ConfigFileHelper.DecryptIfEncrypted(_paths, braveRaw?.ToString()) ?? string.Empty
-            : string.Empty;
+        return ConfigFileHelper.ReadDecryptedSecret(_paths, "Search.BraveApiKey") ?? string.Empty;
     }
 
     private bool HasEffectiveBraveKey()

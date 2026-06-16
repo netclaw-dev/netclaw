@@ -63,9 +63,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
     public void ContributeConfig(WizardConfigBuilder builder)
     {
         var posture = SelectedPosture ?? DeploymentPosture.Personal;
-        var shellMode = posture == DeploymentPosture.Personal
-            ? ShellExecutionMode.HostAllowed
-            : ShellExecutionMode.Off;
+        var shellMode = ShellModeFor(posture);
 
         builder.Security = new SecurityConfigSection
         {
@@ -73,25 +71,10 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
             ShellExecutionMode = shellMode
         };
 
-        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
-
-        // Personal posture: enable approval gates for shell by default.
-        // The operator can override this in config if they want unrestricted shell.
-        if (posture == DeploymentPosture.Personal)
-        {
-            profiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-            {
-                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-                {
-                    ["shell_execute"] = ToolApprovalMode.Approval
-                }
-            };
-        }
-
         builder.Tools = new ToolConfig
         {
             ShellMode = shellMode,
-            AudienceProfiles = profiles
+            AudienceProfiles = BuildAudienceProfiles(posture)
         };
     }
 
@@ -127,9 +110,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
     {
         var vm = (SecurityPostureStepViewModel)editor;
         var posture = vm.SelectedPosture ?? DeploymentPosture.Personal;
-        var shellMode = posture == DeploymentPosture.Personal
-            ? ShellExecutionMode.HostAllowed
-            : ShellExecutionMode.Off;
+        var shellMode = ShellModeFor(posture);
 
         return new SectionContribution(
         [
@@ -154,6 +135,19 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
     }
 
     private static Dictionary<string, object> BuildToolsDictionary(DeploymentPosture posture, ShellExecutionMode shellMode)
+        => new()
+        {
+            ["ShellMode"] = shellMode.ToString(),
+            ["AudienceProfiles"] = BuildAudienceProfiles(posture)
+        };
+
+    private static ShellExecutionMode ShellModeFor(DeploymentPosture posture)
+        => posture == DeploymentPosture.Personal ? ShellExecutionMode.HostAllowed : ShellExecutionMode.Off;
+
+    // Personal posture gates shell behind an approval prompt by default; the operator can override
+    // this in config for unrestricted shell. Shared by the typed (ContributeConfig) and section
+    // (BuildContribution) emission paths so they cannot drift on this default-deny security default.
+    private static ToolAudienceProfiles BuildAudienceProfiles(DeploymentPosture posture)
     {
         var profiles = ToolAudienceProfileDefaults.CreateProfiles();
         if (posture == DeploymentPosture.Personal)
@@ -167,11 +161,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
             };
         }
 
-        return new Dictionary<string, object>
-        {
-            ["ShellMode"] = shellMode.ToString(),
-            ["AudienceProfiles"] = profiles
-        };
+        return profiles;
     }
 
     public void Dispose()

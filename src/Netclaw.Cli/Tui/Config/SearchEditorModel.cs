@@ -50,7 +50,7 @@ internal sealed class SearchEditorValidator : IValidateOptions<SearchEditorModel
             {
                 errors.Add("SearXNG requires an endpoint URL.");
             }
-            else if (!IsHttpUrl(options.SearXng.Endpoint))
+            else if (!ChannelsEditorValidator.IsHttpUrl(options.SearXng.Endpoint))
             {
                 errors.Add("SearXNG endpoint must be an absolute http:// or https:// URL.");
             }
@@ -61,9 +61,6 @@ internal sealed class SearchEditorValidator : IValidateOptions<SearchEditorModel
             : ValidateOptionsResult.Success;
     }
 
-    private static bool IsHttpUrl(string value)
-        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
-           && uri.Scheme is "http" or "https";
 }
 
 internal sealed class SearchEditorPersistenceMapper
@@ -71,7 +68,6 @@ internal sealed class SearchEditorPersistenceMapper
     internal SearchEditorModel Load(NetclawPaths paths)
     {
         var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
 
         var backend = ConfigFileHelper.TryGetPathValue(config, "Search.Backend", out var backendRaw)
             ? ParseBackend(backendRaw?.ToString())
@@ -81,9 +77,7 @@ internal sealed class SearchEditorPersistenceMapper
             ? endpointRaw?.ToString()
             : null;
 
-        var persistedBraveKey = ConfigFileHelper.TryGetPathValue(secrets, "Search.BraveApiKey", out var braveRaw)
-            ? ConfigFileHelper.DecryptIfEncrypted(paths, braveRaw?.ToString())
-            : null;
+        var persistedBraveKey = ConfigFileHelper.ReadDecryptedSecret(paths, "Search.BraveApiKey");
 
         return new SearchEditorModel
         {

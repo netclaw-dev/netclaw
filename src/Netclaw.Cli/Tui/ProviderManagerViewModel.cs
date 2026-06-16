@@ -81,6 +81,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     internal Action<string>? RouteRequested { get; set; }
 
+    /// <summary>
+    /// True when this manager is hosted inside <c>netclaw config</c> (reached from the dashboard).
+    /// Set by the embedded host registration; left false for the standalone <c>netclaw provider</c>
+    /// host. Controls whether backing out past the root navigates to the dashboard or exits the app.
+    /// </summary>
+    internal bool IsEmbeddedInConfig { get; set; }
+
     public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<string> ErrorMessage { get; } = new("");
@@ -146,18 +153,21 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ProviderDescriptorRegistry Registry => _registry;
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry,
-        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
-        : this(paths, registry, registry, oauthFactory, daemonApi)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
+        EmbeddedConfigHostMarker? embeddedHost = null)
+        : this(paths, registry, registry, oauthFactory, daemonApi, embeddedHost)
     {
     }
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe,
-        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
+        EmbeddedConfigHostMarker? embeddedHost = null)
     {
         _paths = paths;
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
+        IsEmbeddedInConfig = embeddedHost is not null;
         OAuth = new OAuthFlowCoordinator(
             registry,
             oauthFactory,
@@ -817,10 +827,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 CancelRename();
                 break;
             default:
-                RouteRequested?.Invoke("/config");
-                Navigate?.Invoke("/config");
-                if (RouteRequested is null)
+                if (IsEmbeddedInConfig)
+                {
+                    // Embedded in `netclaw config`: return to the dashboard. We must NOT Shutdown
+                    // here — Shutdown cancels the run loop's token before the queued navigation is
+                    // processed, dropping the nav and quitting the entire config app.
+                    RouteRequested?.Invoke("/config");
+                    Navigate?.Invoke("/config");
+                }
+                else
+                {
+                    // Standalone `netclaw provider`: backing out past the root exits the app.
                     Shutdown();
+                }
+
                 break;
         }
     }

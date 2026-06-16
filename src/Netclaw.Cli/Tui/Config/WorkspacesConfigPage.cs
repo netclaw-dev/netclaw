@@ -161,22 +161,12 @@ internal sealed class WorkspacesConfigPage : ReactivePage<WorkspacesConfigViewMo
     private void RecreatePickerAt(string path)
     {
         _pickerSubscriptions.Clear();
-        _directoryPicker = Layouts.FilePicker(path)
-            .WithMode(FilePickerMode.Directories)
-            .WithSelectionMode(FilePickerSelectionMode.Single)
-            .WithFillHeight(true)
-            .WithFileSystemProvider(ViewModel.FileSystemProvider);
-        _directoryPicker.OnFocused();
-        _directoryPicker.SelectionConfirmed
-            .Subscribe(paths =>
-            {
-                if (paths.Count > 0)
-                    ViewModel.ApplyPickedDirectory(paths[0]);
-            })
-            .DisposeWith(_pickerSubscriptions);
-        _directoryPicker.Cancelled
-            .Subscribe(_ => ViewModel.GoBack())
-            .DisposeWith(_pickerSubscriptions);
+        _directoryPicker = DirectoryPickerFactory.Build(
+            path,
+            ViewModel.FileSystemProvider,
+            _pickerSubscriptions,
+            ViewModel.ApplyPickedDirectory,
+            ViewModel.GoBack);
     }
 
     private void BeginNewFolder()

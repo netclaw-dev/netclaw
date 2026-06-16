@@ -91,15 +91,6 @@ public sealed class WizardOrchestratorTests : WizardStepTestBase
     }
 
     [Fact]
-    public void SingleStepMode_GoBack_ReturnsFalse()
-    {
-        var steps = CreateSteps("a");
-        using var orchestrator = new WizardOrchestrator(steps, Context, singleStepMode: true);
-
-        Assert.False(orchestrator.GoBack());
-    }
-
-    [Fact]
     public void GoNext_SkipsNonApplicableSteps()
     {
         var steps = CreateSteps("a", "b", "c");

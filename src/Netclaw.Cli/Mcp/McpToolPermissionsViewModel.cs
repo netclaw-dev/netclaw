@@ -83,7 +83,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         _ = LoadServersAsync();
     }
 
-    private async Task LoadServersAsync()
+    internal async Task LoadServersAsync()
     {
         StatusMessage.Value = "Loading MCP server statuses...";
 
@@ -101,11 +101,25 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         Servers.Clear();
 
-        foreach (var prop in statuses.EnumerateObject())
+        // A 200 response whose body is not the expected object shape (or a server entry missing
+        // its "state") would otherwise throw out of this fire-and-forget task. Surface it as a
+        // status message like the daemon-call path does, rather than crashing page activation.
+        try
         {
-            var state = prop.Value.GetProperty("state").GetString() ?? "unknown";
-            var toolCount = prop.Value.TryGetProperty("toolCount", out var tc) ? tc.GetInt32() : 0;
-            Servers.Add((prop.Name, state, toolCount));
+            foreach (var prop in statuses.EnumerateObject())
+            {
+                var state = prop.Value.TryGetProperty("state", out var stateEl)
+                    ? stateEl.GetString() ?? "unknown"
+                    : "unknown";
+                var toolCount = prop.Value.TryGetProperty("toolCount", out var tc) ? tc.GetInt32() : 0;
+                Servers.Add((prop.Name, state, toolCount));
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage.Value = $"Could not read MCP server statuses: {ex.Message}";
+            NotifyStateChanged();
+            return;
         }
 
         try

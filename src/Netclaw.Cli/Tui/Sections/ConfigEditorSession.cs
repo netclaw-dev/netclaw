@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Secrets;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Sections;
@@ -104,9 +105,15 @@ internal sealed class ConfigEditorSession
     private static bool HasUserSecretData(Dictionary<string, object> secrets)
         => secrets.Keys.Any(static key => !string.Equals(key, "configVersion", StringComparison.Ordinal));
 
+    // Mirrors SecretsJsonUpdater's path-merge (colon-collision cleanup + nested upsert), but over the
+    // Dictionary<string, object> shape ConfigFileHelper loads rather than a JsonObject. The two share
+    // ParseKeyPath; keep the collision cleanup below in sync with
+    // SecretsJsonUpdater.RemoveLiteralCollisionKeys. Note one deliberate difference: this engine
+    // rejects a scalar at an intermediate segment (GetOrCreateSection throws) instead of overwriting
+    // it the way SecretsJsonUpdater does — see ConfigEditorSessionTests for the pinned behavior.
     private static void SetSecretPathValue(Dictionary<string, object> secrets, string path, object value)
     {
-        var segments = ParseSecretPath(path);
+        var segments = SecretsJsonUpdater.ParseKeyPath(path);
         RemoveLiteralCollisionKeys(secrets, segments);
 
         var current = secrets;
@@ -118,24 +125,10 @@ internal sealed class ConfigEditorSession
 
     private static bool RemoveSecretPath(Dictionary<string, object> secrets, string path)
     {
-        var segments = ParseSecretPath(path);
+        var segments = SecretsJsonUpdater.ParseKeyPath(path);
         var changed = RemovePathBySegments(secrets, segments);
         changed |= RemoveLiteralCollisionKeys(secrets, segments);
         return changed;
-    }
-
-    private static string[] ParseSecretPath(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var segments = path.Split(['.', ':'], StringSplitOptions.None)
-            .Select(static segment => segment.Trim())
-            .ToArray();
-
-        if (segments.Length == 0 || segments.Any(string.IsNullOrWhiteSpace))
-            throw new InvalidOperationException("Secret path must be a non-empty dot or colon-delimited path.");
-
-        return segments;
     }
 
     private static bool RemovePathBySegments(Dictionary<string, object> root, IReadOnlyList<string> segments)
