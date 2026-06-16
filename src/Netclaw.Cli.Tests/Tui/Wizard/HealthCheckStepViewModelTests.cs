@@ -113,6 +113,14 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
                 runner.Add(new HealthCheckItem("probe", true));
         }, TestContext.Current.CancellationToken);
 
+        // Wait (bounded) for the writer to start producing before the read loop, so the reads
+        // genuinely race concurrent Adds AND the final non-empty assertion is deterministic. On a
+        // contended CI scheduler the Task.Run writer may not run before cts.Cancel(), which left
+        // Results empty and failed the assertion intermittently.
+        Assert.True(
+            SpinWait.SpinUntil(() => step.ResultsSnapshot().Count > 0, TimeSpan.FromSeconds(10)),
+            "Writer task did not start adding results within 10s.");
+
         // Read snapshots while the writer mutates Results off-thread. Without the synchronized
         // snapshot, ToArray throws "Collection was modified" during a concurrent Add.
         for (var i = 0; i < 50_000; i++)
