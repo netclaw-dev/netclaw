@@ -138,12 +138,7 @@ internal static class ConfigFileHelper
     /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
     /// </summary>
     internal static void WriteConfigFile(string path, Dictionary<string, object> data)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (dir is not null)
-            Directory.CreateDirectory(dir);
-        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
-    }
+        => AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
 
     /// <summary>
     /// Serialize and write secrets.json using hardened permissions and encryption-at-rest.
