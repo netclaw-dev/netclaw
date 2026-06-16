@@ -39,6 +39,19 @@ public sealed class BrowserAutomationConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Server_entry_without_explicit_Enabled_flag_is_treated_as_disabled()
+    {
+        // Default-deny: a browser MCP server entry that exists but omits the `Enabled` field (a
+        // hand-edited or externally synthesized config) must NOT be treated as enabled. The prior
+        // code fell back to enabled=true, silently activating the server.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"McpServers\":{\"browser_playwright\":{\"Transport\":\"stdio\",\"Command\":\"npx\"}}}");
+        using var vm = new BrowserAutomationConfigViewModel(_paths, new FakeProbe(true));
+
+        Assert.False(vm.Enabled.Value);
+    }
+
+    [Fact]
     public void Save_refuses_enablement_when_prerequisites_are_missing()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);

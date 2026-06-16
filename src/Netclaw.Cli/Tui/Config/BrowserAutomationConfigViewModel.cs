@@ -290,10 +290,13 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
                 return enabledProp.GetBoolean();
             }
 
-            return true;
+            // Default-deny: an entry that exists but omits an explicit boolean `Enabled` is NOT
+            // enabled. A hand-edited or externally synthesized config without `Enabled` must never
+            // silently activate a browser MCP server (CLAUDE.md no-silent-fallback + default-deny).
+            return false;
         }
 
-        return true;
+        return false;
     }
 
     private static Dictionary<string, object?> ToDictionary(McpServerEntry entry)
