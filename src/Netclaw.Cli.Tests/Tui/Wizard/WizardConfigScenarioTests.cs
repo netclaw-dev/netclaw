@@ -32,14 +32,12 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.Brave);
         ConfigureIdentity(steps, "Netclaw", "America/Chicago");
 
         var config = AssembleConfig(steps);
 
         AssertPosture(config, "Personal");
         AssertShellMode(config, "HostAllowed");
-        AssertSearchBackend(config, "brave");
         Assert.False(config.ContainsKey("Daemon"));
 
         // The bug: Personal posture must not inject Enabled:false for any feature
@@ -52,7 +50,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Team);
         EnterFeatureSelection(steps);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
         ConfigureIdentity(steps, "TeamBot", "UTC");
 
         var config = AssembleConfig(steps);
@@ -82,7 +79,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.ToggleFeature(1); // Search
         featureStep.OnLeave();
 
-        ConfigureSearch(steps, SearchBackend.SearXng, searXngEndpoint: "https://search.example.com");
         ConfigureIdentity(steps, "PublicBot", "Europe/London");
 
         var config = AssembleConfig(steps);
@@ -94,10 +90,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         AssertSectionEnabled(config, "Scheduling", false);
         AssertSectionEnabled(config, "SubAgents", false);
         AssertSectionEnabled(config, "Webhooks", false);
-
-        var search = GetSection(config, "Search");
-        Assert.Equal("searxng", search["Backend"]);
-        Assert.Equal("https://search.example.com", search["SearXngEndpoint"]);
 
         Assert.False(config.ContainsKey("Daemon"));
     }
@@ -115,7 +107,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.ToggleFeature(3); // Scheduling OFF
         featureStep.OnLeave();
 
-        ConfigureSearch(steps, SearchBackend.Brave);
         ConfigureIdentity(steps, "Netclaw", "America/New_York");
 
         var config = AssembleConfig(steps);
@@ -133,8 +124,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-
         var identityStep = GetStep<IdentityStepViewModel>(steps);
         identityStep.AgentName = "Jarvis";
         identityStep.UserName = "Aaron";
@@ -151,7 +140,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     }
 
     [Fact]
-    public void ExistingConfig_SearchEdit_PreservesUnrelatedSections()
+    public void ExistingConfig_PostureEdit_PreservesUnrelatedSections()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
             """
@@ -174,7 +163,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
 
         var steps = new List<IWizardStepViewModel>
         {
-            new SearchStepViewModel { SelectedBackend = SearchBackend.Brave }
+            new SecurityPostureStepViewModel { SelectedPosture = DeploymentPosture.Team }
         };
 
         using var orchestrator = new WizardOrchestrator(steps, context, singleStepMode: true);
@@ -183,7 +172,8 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         var config = LoadWrittenConfig();
         Assert.True(config.ContainsKey("Slack"));
         Assert.True(config.ContainsKey("Daemon"));
-        Assert.Equal("brave", GetSection(config, "Search")["Backend"]);
+        Assert.True(config.ContainsKey("Search"));
+        Assert.Equal("Team", GetSection(config, "Security")["DeploymentPosture"]);
     }
 
     [Fact]
@@ -212,7 +202,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         [
             new SecurityPostureStepViewModel(),
             new FeatureSelectionStepViewModel(),
-            new SearchStepViewModel(),
             new IdentityStepViewModel()
         ];
     }
@@ -233,15 +222,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
             return;
         step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
-    }
-
-    private static void ConfigureSearch(List<IWizardStepViewModel> steps, SearchBackend backend,
-        string? searXngEndpoint = null)
-    {
-        var step = GetStep<SearchStepViewModel>(steps);
-        step.SelectedBackend = backend;
-        if (searXngEndpoint is not null)
-            step.SearXngEndpoint = searXngEndpoint;
     }
 
     private static void ConfigureIdentity(List<IWizardStepViewModel> steps, string name, string timezone)
@@ -303,12 +283,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         var security = GetSection(config, "Security");
         Assert.Equal(expected, security["ShellExecutionMode"]);
-    }
-
-    private static void AssertSearchBackend(Dictionary<string, object> config, string expected)
-    {
-        var search = GetSection(config, "Search");
-        Assert.Equal(expected, search["Backend"]);
     }
 
     private static void AssertNoDisabledFeatureFlags(Dictionary<string, object> config)
