@@ -509,35 +509,34 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     private void SaveServerAccess(Dictionary<string, object> config, Dictionary<string, object> profilesSection)
     {
         var knownServers = GetKnownMcpServers(config);
+
+        // Accumulate per-audience working lists WITHOUT mutating the live in-memory profile objects
+        // (Profiles.Public/Team/Personal back the runtime ACL queries — IsServerAllowed, etc. — so
+        // coercing them here would leave the ACL in a post-save state if Save throws before the file
+        // write). Seed each audience's working list from its ORIGINAL profile the first time it is
+        // touched; later changes for the same audience build on the working list rather than re-reading
+        // a profile that an earlier iteration would have coerced.
+        var workingLists = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var ((audienceName, serverName), allowed) in _pendingServerAccess)
         {
             var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-            var profile = ResolveProfile(AudienceFromName(audienceName));
-            var serverList = BuildAllowedServerList(profile, knownServers, serverName, allowed);
+            if (!workingLists.TryGetValue(audienceName, out var serverList))
+            {
+                var profile = ResolveProfile(AudienceFromName(audienceName));
+                serverList = profile.McpServersMode == ToolProfileMode.All
+                    ? knownServers.ToList()
+                    : profile.AllowedMcpServers.ToList();
+                workingLists[audienceName] = serverList;
+            }
 
-            audienceSection["McpServersMode"] = profile.McpServersMode.ToString();
+            if (allowed)
+                AddServer(serverList, serverName);
+            else
+                serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
+
+            audienceSection["McpServersMode"] = ToolProfileMode.Allowlist.ToString();
             audienceSection["AllowedMcpServers"] = serverList;
         }
-    }
-
-    private List<string> BuildAllowedServerList(
-        ToolAudienceProfile profile,
-        IReadOnlyList<string> knownServers,
-        string serverName,
-        bool allowed)
-    {
-        var serverList = profile.McpServersMode == ToolProfileMode.All
-            ? knownServers.ToList()
-            : profile.AllowedMcpServers.ToList();
-
-        profile.McpServersMode = ToolProfileMode.Allowlist;
-        if (allowed)
-            AddServer(serverList, serverName);
-        else
-            serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
-
-        profile.AllowedMcpServers = serverList;
-        return serverList;
     }
 
     private IReadOnlyList<string> GetKnownMcpServers(Dictionary<string, object> config)
