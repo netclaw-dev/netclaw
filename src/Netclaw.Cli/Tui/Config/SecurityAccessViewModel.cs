@@ -560,13 +560,27 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     private ToolAudienceProfile GetSelectedProfile()
         => GetProfile(LoadAudienceProfiles(), SelectedAudience);
 
-    private ToolAudienceProfiles LoadAudienceProfiles()
+    private ToolAudienceProfiles LoadAudienceProfiles() => LoadAudienceProfiles(out _);
+
+    // Reads stored audience profiles, falling back to the posture baseline when the stored JSON is
+    // malformed (e.g. a migration changed the shape) so a corrupt Tools.AudienceProfiles cannot throw
+    // into the render path or the per-keystroke mutation handlers. `malformed` is true on a fallback.
+    private ToolAudienceProfiles LoadAudienceProfiles(out bool malformed)
     {
+        malformed = false;
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
             return BuildPostureProfiles(ReadPosture(config));
 
-        return ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        try
+        {
+            return ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        }
+        catch (InvalidOperationException)
+        {
+            malformed = true;
+            return BuildPostureProfiles(ReadPosture(config));
+        }
     }
 
     private bool AudienceProfilesCustomized()
@@ -575,7 +589,17 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
             return false;
 
-        var existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        ToolAudienceProfiles existing;
+        try
+        {
+            existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        }
+        catch (InvalidOperationException)
+        {
+            // Unreadable stored profiles: treat as uncustomised rather than throwing on render.
+            return false;
+        }
+
         var defaults = BuildPostureProfiles(ReadPosture(config));
         return !JsonEquivalent(existing, defaults);
     }
@@ -632,7 +656,17 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
             return "No overrides";
 
-        var existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        ToolAudienceProfiles existing;
+        try
+        {
+            existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+        }
+        catch (InvalidOperationException)
+        {
+            // Malformed stored profiles (e.g. a migration changed the shape) must not crash the render.
+            return "Unreadable — re-save to repair";
+        }
+
         var defaults = BuildPostureProfiles(ReadPosture(config));
         return JsonEquivalent(existing, defaults) ? "No overrides" : "Customized";
     }
@@ -680,9 +714,21 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private static string ReadExposureModeSummary(Dictionary<string, object> config)
     {
-        var mode = ExposureMode.Local;
-        if (ConfigFileHelper.TryGetPathValue(config, "Daemon.ExposureMode", out var value))
+        if (!ConfigFileHelper.TryGetPathValue(config, "Daemon.ExposureMode", out var value))
+            return "Local";
+
+        ExposureMode mode;
+        try
+        {
             mode = DaemonConfig.ParseExposureMode(value?.ToString());
+        }
+        catch (InvalidOperationException)
+        {
+            // ParseExposureMode throws on an unrecognized string. The Items property is read on every
+            // render frame, so a hand-edited/migrated ExposureMode must degrade to the raw value here
+            // rather than crashing the Security & Access page permanently.
+            return $"Unknown ('{value}')";
+        }
 
         return mode switch
         {

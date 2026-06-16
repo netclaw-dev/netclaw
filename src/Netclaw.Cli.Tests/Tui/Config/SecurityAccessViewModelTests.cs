@@ -57,6 +57,31 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Malformed_exposure_and_audience_config_render_a_status_without_crashing()
+    {
+        // A hand-edited/migrated config with an unsupported ExposureMode or a malformed
+        // Tools.AudienceProfiles blob must not throw on the render path (Items is read every frame)
+        // or on the audience-profile load path — it degrades to a visible status instead.
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": { "ExposureMode": "WormHole" },
+              "Tools": { "AudienceProfiles": "not-an-object" }
+            }
+            """);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        var items = vm.Items; // render path — must not throw
+        Assert.Contains("WormHole", items.Single(static i => i.Label == "Exposure Mode").Summary, StringComparison.Ordinal);
+        Assert.Contains("Unreadable", items.Single(static i => i.Label == "Audience Profiles").Summary, StringComparison.Ordinal);
+
+        // Audience-profile load path (used by mutation handlers + override-status reads) must not throw.
+        var status = vm.SelectedAudienceOverrideStatus;
+        Assert.False(string.IsNullOrEmpty(status));
+    }
+
+    [Fact]
     public void Exposure_mode_routes_to_exposure_editor()
     {
         using var vm = new SecurityAccessViewModel(Context.Paths);

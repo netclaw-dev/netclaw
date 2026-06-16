@@ -550,7 +550,16 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
             return ExposureMode.Local;
         }
 
-        return DaemonConfig.ParseExposureMode(modeValue?.ToString());
+        try
+        {
+            return DaemonConfig.ParseExposureMode(modeValue?.ToString());
+        }
+        catch (InvalidOperationException)
+        {
+            // A migrated/hand-edited config with an unsupported ExposureMode must not crash wizard
+            // prefill or the mode label render; fall back to the most restrictive Local default.
+            return ExposureMode.Local;
+        }
     }
 
     private static IReadOnlyList<string> ReadTrustedProxies(object? value)

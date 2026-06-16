@@ -11,12 +11,34 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
+using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
 {
+    [Fact]
+    public void Prefill_from_unparseable_exposure_mode_falls_back_to_local_without_throwing()
+    {
+        // A migrated/hand-edited config with an unsupported ExposureMode must not crash wizard
+        // prefill; it degrades to the most restrictive Local (local-only) default.
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { },
+            ExistingConfig = new Dictionary<string, object>
+            {
+                ["Daemon"] = new Dictionary<string, object> { ["ExposureMode"] = "WormHole" },
+            },
+        };
+        using var step = new ExposureModeStepViewModel();
+
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        Assert.Equal(ExposureMode.Local, step.SelectedMode);
+    }
 
     // ── ContributeConfig ──────────────────────────────────────────────────────
 
