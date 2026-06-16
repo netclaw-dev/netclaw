@@ -317,9 +317,14 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var index = SelectedFeatureIndex.Value;
         _enabledFeatures[index] = !_enabledFeatures[index];
 
-        var session = new ConfigEditorSession(_paths);
-        session.Apply(BuildFeatureContribution());
-        session.Save();
+        if (!TryApplyAndSave(BuildFeatureContribution(), "enabled features"))
+        {
+            // Roll the in-memory flip back so a failed save leaves the toggle state and disk in
+            // agreement — BuildFeatureContribution serializes the whole array, so a toggle that
+            // never reached disk must not "stick" in memory.
+            _enabledFeatures[index] = !_enabledFeatures[index];
+            return;
+        }
 
         var state = _enabledFeatures[index] ? "enabled" : "disabled";
         StatusMessage.Value = $"{FeatureNames[index]} {state}. Saved.";
@@ -492,9 +497,8 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         if (overwriteProfiles)
             fieldActions.Add(new SectionFieldAction("Tools.AudienceProfiles", SectionFieldActionKind.Set, BuildPostureProfiles(posture)));
 
-        var session = new ConfigEditorSession(_paths);
-        session.Apply(new SectionContribution(fieldActions));
-        session.Save();
+        if (!TryApplyAndSave(new SectionContribution(fieldActions), "security posture"))
+            return;
 
         _pendingPosture = null;
         StatusMessage.Value = overwriteProfiles
@@ -518,7 +522,8 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         else
             AddTools(profile.AllowedTools, tools);
 
-        SaveAudienceProfile(profile);
+        if (!SaveAudienceProfile(profile))
+            return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} {AudienceRows.Single(row => row.Kind == kind).Label} {(enabled ? "disabled" : "enabled")}. Saved.";
         RequestRedraw();
     }
@@ -530,7 +535,8 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var next = CycleValue(CurrentFilesystemLevel(profile), FilesystemLevelsFor(SelectedAudience), direction);
 
         ApplyFilesystemLevel(profile, next);
-        SaveAudienceProfile(profile);
+        if (!SaveAudienceProfile(profile))
+            return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} file access set to {DescribeFilesystem(profile)}. Saved.";
         RequestRedraw();
     }
@@ -542,19 +548,39 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var next = CycleValue(CurrentAttachmentLevel(profile.ChannelAttachments), AttachmentLevels, direction);
 
         profile.ChannelAttachments = BuildAttachmentPolicy(next);
-        SaveAudienceProfile(profile);
+        if (!SaveAudienceProfile(profile))
+            return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} attachments set to {DescribeAttachments(profile.ChannelAttachments)}. Saved.";
         RequestRedraw();
     }
 
-    private void SaveAudienceProfile(ToolAudienceProfile profile)
+    private bool SaveAudienceProfile(ToolAudienceProfile profile)
+        => TryApplyAndSave(
+            new SectionContribution(
+            [
+                new SectionFieldAction($"Tools.AudienceProfiles.{AudienceConfigName(SelectedAudience)}", SectionFieldActionKind.Set, profile)
+            ]),
+            "audience profile");
+
+    // All ConfigEditorSession writes in this view-model funnel through here so a disk-full /
+    // permission-denied / atomic-rename / malformed-config failure surfaces to the operator instead
+    // of escalating as an unhandled exception that tears down the Termina event loop. Callers MUST
+    // NOT advance their "Saved." status (or commit in-memory state) when this returns false.
+    private bool TryApplyAndSave(SectionContribution contribution, string failureContext)
     {
-        var session = new ConfigEditorSession(_paths);
-        session.Apply(new SectionContribution(
-        [
-            new SectionFieldAction($"Tools.AudienceProfiles.{AudienceConfigName(SelectedAudience)}", SectionFieldActionKind.Set, profile)
-        ]));
-        session.Save();
+        try
+        {
+            var session = new ConfigEditorSession(_paths);
+            session.Apply(contribution);
+            session.Save();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            StatusMessage.Value = $"Failed to save {failureContext}: {ex.Message}";
+            RequestRedraw();
+            return false;
+        }
     }
 
     private ToolAudienceProfile GetSelectedProfile()

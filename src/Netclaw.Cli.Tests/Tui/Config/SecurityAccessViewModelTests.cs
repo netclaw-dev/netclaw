@@ -379,6 +379,36 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Toggle_selected_feature_surfaces_save_failure_and_rolls_back_without_crashing()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" },
+              "Search": { "Enabled": false }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedFeatureIndex.Value = 1;
+        var before = vm.IsFeatureEnabled(1);
+
+        // Force the ConfigEditorSession write to fail the way a disk-full / permission-denied failure
+        // would: AtomicFile cannot replace a path that is a directory. LoadJsonDict treats the
+        // directory as "missing" (File.Exists is false), so only the Save() write throws — matching
+        // the real bug where the toggle's session.Save() was unguarded.
+        ReplaceConfigFileWithDirectory();
+
+        // Must not throw into the Termina event loop.
+        vm.ToggleSelectedFeature();
+
+        Assert.Contains("Failed to save", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+        // The in-memory flip rolled back: a toggle that never reached disk must not stick.
+        Assert.Equal(before, vm.IsFeatureEnabled(1));
+    }
+
+    [Fact]
     public void Exposure_summary_reads_existing_daemon_mode()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
@@ -393,6 +423,13 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
 
         var exposure = vm.Items.Single(static item => item.Label == "Exposure Mode");
         Assert.Equal("Cloudflare Tunnel", exposure.Summary);
+    }
+
+    private void ReplaceConfigFileWithDirectory()
+    {
+        if (File.Exists(Context.Paths.NetclawConfigPath))
+            File.Delete(Context.Paths.NetclawConfigPath);
+        Directory.CreateDirectory(Context.Paths.NetclawConfigPath);
     }
 
     private sealed class SecurityAccessConfigRoot
