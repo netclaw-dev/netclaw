@@ -73,12 +73,13 @@ FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 # may emit several `Screenshot "/tmp/shot-<frame>.png"` directives. SHOT_FRAMES
 # is the full set of frame names the harness compares against baselines — it
 # MUST stay in sync with the Screenshot paths in those tapes.
-SHOT_TAPES=(help wizard-screens provider-manager)
+SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions)
 SHOT_FRAMES=(
   help
   wizard-provider-picker
   wizard-security-posture
   provider-manager-empty
+  mcp-permissions-loading
 )
 
 usage() {
