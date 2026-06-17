@@ -65,8 +65,26 @@ internal sealed class SingleThreadSynchronizationContext : SynchronizationContex
     {
         SetSynchronizationContext(this);
         foreach (var (callback, state) in _queue.GetConsumingEnumerable())
-            callback(state);
+        {
+            try
+            {
+                callback(state);
+            }
+            catch (Exception ex)
+            {
+                // Keep the single worker alive if a posted continuation throws. The Run() entry point
+                // already funnels its scenario's exceptions to a TaskCompletionSource (so the test sees
+                // the real failure); letting one stray continuation kill the worker here would drain no
+                // further callbacks and make every awaiting test look like a generic deadlock instead.
+                _lastError ??= ex;
+            }
+        }
     }
+
+    /// <summary>The first exception thrown by a posted continuation, if any — for test diagnostics.</summary>
+    public Exception? LastError => _lastError;
+
+    private volatile Exception? _lastError;
 
     public void Dispose() => _queue.CompleteAdding();
 }

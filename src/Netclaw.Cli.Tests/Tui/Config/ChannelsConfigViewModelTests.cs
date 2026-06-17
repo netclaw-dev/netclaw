@@ -1291,28 +1291,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     [Fact]
     public async Task ApplyResetConfirmation_cancels_and_awaits_in_flight_label_refresh_before_writing()
     {
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var slackProbe = new FakeSlackProbe
-        {
-            // Block the resolve so the background refresh is genuinely in flight during the reset.
-            DelayBeforeResult = TimeSpan.FromMinutes(5),
-            NextResolutionResult = new SlackChannelResolutionResult(
-                true, null, [new ResolvedSlackChannel("general", "C01")], []),
-        };
-        using var vm = CreateViewModel(slackProbe: slackProbe);
-
-        // Enter Manage Channels to start the background label refresh, then leave it in flight.
-        vm.OpenAdapterManagement(ChannelType.Slack);
-        MoveToManagementAction(vm, ChannelsManagementAction.ManageChannels);
-        vm.ActivateManagementMenuItem();
-        Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true); // background is in flight
-
-        // Drive the reset confirmation (which bypasses SaveAsync) while the refresh is still running.
-        vm.GoBack();
-        MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
-        vm.ActivateManagementMenuItem();
-        vm.MoveResetConfirmation(1);
+        using var vm = ArrangeSlackResetWithLabelRefreshInFlight();
 
         await vm.ApplyResetConfirmationAsync(TestContext.Current.CancellationToken);
 
@@ -1334,32 +1313,12 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         // deterministically: it drives the whole reset-with-in-flight-refresh scenario on a context
         // with exactly ONE worker, so a reintroduced sync-over-async bridge hangs the worker and trips
         // the watchdog instead of completing.
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var slackProbe = new FakeSlackProbe
-        {
-            // Keep the background refresh genuinely in flight while the reset runs.
-            DelayBeforeResult = TimeSpan.FromMinutes(5),
-            NextResolutionResult = new SlackChannelResolutionResult(
-                true, null, [new ResolvedSlackChannel("general", "C01")], []),
-        };
-
         using var context = new SingleThreadSynchronizationContext();
         var scenario = context.Run(async () =>
         {
-            using var vm = CreateViewModel(slackProbe: slackProbe);
-
-            // Start the background label refresh and leave it in flight. Its continuation captures THIS
-            // single-worker context — exactly the condition that deadlocked the old blocking reset.
-            vm.OpenAdapterManagement(ChannelType.Slack);
-            MoveToManagementAction(vm, ChannelsManagementAction.ManageChannels);
-            vm.ActivateManagementMenuItem();
-            Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true);
-
-            vm.GoBack();
-            MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
-            vm.ActivateManagementMenuItem();
-            vm.MoveResetConfirmation(1);
+            // Arrange on the single-worker context so the background refresh's continuation captures
+            // THIS context — exactly the condition that deadlocked the old blocking reset.
+            using var vm = ArrangeSlackResetWithLabelRefreshInFlight();
 
             // Fire-and-forget exactly like the Termina key handler, then await the serialized write.
             _ = vm.ResetConfirmationFromInputAsync();
@@ -1375,6 +1334,39 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             ReferenceEquals(completed, scenario),
             "Reset deadlocked under a single-worker SynchronizationContext — a sync-over-async bridge was reintroduced.");
         await scenario; // re-throw any assertion failure raised on the worker thread
+    }
+
+    [Fact]
+    public async Task Disposing_editor_cancels_and_drains_an_in_flight_config_write()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            // Hold the add's label-resolve open so the config write is genuinely in flight at Dispose.
+            DelayBeforeResult = TimeSpan.FromMinutes(5),
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("c-09", "C09")], []),
+        };
+        var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "c-09";
+
+        // Dispatch the add fire-and-forget exactly like the key handler; it blocks on the 5-minute resolve.
+        var write = vm.AddChannelFromInputAsync();
+        Assert.False(write.IsCompleted); // in flight, blocked on the label resolve
+
+        // Dispose must cancel the in-flight write via the lifetime token and drain it before returning —
+        // not hang for the 5-minute probe, and not let the write resume on a thread-pool continuation and
+        // mutate disposed reactive state. Run Dispose off the xunit synchronization context so the
+        // in-flight write's continuations can drain on the test context while Dispose waits.
+        var dispose = Task.Run(vm.Dispose, TestContext.Current.CancellationToken);
+        var finished = await Task.WhenAny(
+            dispose, Task.Delay(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+        Assert.True(ReferenceEquals(finished, dispose), "Dispose did not drain the cancelled in-flight write promptly.");
+        await dispose;  // surface any teardown exception
+        await write;    // the cancelled add unwound without surfacing out
     }
 
     [Fact]
@@ -1829,6 +1821,35 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             .itemIndex;
 
         vm.MoveManagementMenu(index);
+    }
+
+    // Arranges a Slack adapter parked on the reset-confirmation screen with a background label refresh
+    // genuinely in flight (a 5-minute probe delay holds it open). Shared by the reset tests that verify
+    // the reset cancels-and-awaits that refresh without racing its write or deadlocking. The caller owns
+    // disposal of the returned view-model.
+    private ChannelsConfigViewModel ArrangeSlackResetWithLabelRefreshInFlight()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            DelayBeforeResult = TimeSpan.FromMinutes(5),
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("general", "C01")], []),
+        };
+        var vm = CreateViewModel(slackProbe: slackProbe);
+
+        // Enter Manage Channels to start the background label refresh, then leave it in flight.
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        MoveToManagementAction(vm, ChannelsManagementAction.ManageChannels);
+        vm.ActivateManagementMenuItem();
+        Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true); // background is in flight
+
+        vm.GoBack();
+        MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
+        vm.ActivateManagementMenuItem();
+        vm.MoveResetConfirmation(1);
+        return vm;
     }
 
     private static int GetAdapterIndex(ChannelsConfigViewModel vm, ChannelType type)

@@ -309,17 +309,36 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public async Task SaveAsync(CancellationToken ct = default)
         => await SubmitCurrentConfigurationAsync(ct);
 
-    internal async Task SubmitCurrentConfigurationFromInputAsync(CancellationToken ct = default)
+    // Guards against a second Enter (or Enter while a probe is still running) launching an overlapping
+    // submit. The dispatch is fire-and-forget from the synchronous key handler, so without this two
+    // rapid submits would race the same network probe and disk write (the same hazard Channels solved
+    // with its config-write chain). The in-flight task is read/written only on the loop thread (the
+    // synchronous prefix before the first await), so it needs no synchronization. Exposed as
+    // PendingSubmit so tests can await completion deterministically.
+    private Task? _pendingSubmit;
+
+    internal Task? PendingSubmit => _pendingSubmit;
+
+    internal Task SubmitCurrentConfigurationFromInputAsync(CancellationToken ct = default)
     {
-        try
+        if (_pendingSubmit is { IsCompleted: false })
+            return _pendingSubmit;
+
+        _pendingSubmit = RunAsync();
+        return _pendingSubmit;
+
+        async Task RunAsync()
         {
-            await SubmitCurrentConfigurationAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            CurrentScreen.Value = SearchConfigEditorScreen.Entry;
-            Status.Value = new ConfigStatusMessage($"Search settings save failed: {ex.Message}", ConfigStatusTone.Error);
-            RequestRedraw();
+            try
+            {
+                await SubmitCurrentConfigurationAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+                Status.Value = new ConfigStatusMessage($"Search settings save failed: {ex.Message}", ConfigStatusTone.Error);
+                RequestRedraw();
+            }
         }
     }
 

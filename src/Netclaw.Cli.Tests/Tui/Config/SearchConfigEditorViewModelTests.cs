@@ -210,6 +210,27 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Re_entrant_submit_while_a_probe_is_in_flight_is_ignored()
+    {
+        var gate = new TaskCompletionSource();
+        using var vm = new SearchConfigEditorViewModel(_paths, new GatedHttpClientFactory(gate.Task));
+        vm.SelectBackendForEditing("searxng");
+        vm.SetFieldValue("Search.SearXngEndpoint", "https://search.test.local");
+
+        // First submit starts a probe that blocks in the gated handler.
+        var first = vm.SubmitCurrentConfigurationFromInputAsync(TestContext.Current.CancellationToken);
+        Assert.False(first.IsCompleted);
+
+        // A second Enter while the first is still validating must NOT launch an overlapping probe + disk
+        // write (two would race the same config file). The guard returns the same in-flight task.
+        var second = vm.SubmitCurrentConfigurationFromInputAsync(TestContext.Current.CancellationToken);
+        Assert.Same(first, second);
+
+        gate.SetResult();
+        await first;
+    }
+
+    [Fact]
     public void Save_anyway_persists_config_and_secret_semantically()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);

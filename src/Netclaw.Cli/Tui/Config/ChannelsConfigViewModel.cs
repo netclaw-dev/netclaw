@@ -43,6 +43,13 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private CancellationTokenSource? _labelResolutionCts;
     private Task? _labelRefreshTask;
 
+    // Cancels every input-triggered config write (and its channel-access probe) when the editor is
+    // torn down. Fire-and-forget writes resume on thread-pool continuations (the loop has no
+    // SynchronizationContext), so without a lifetime token a write started just before disposal would
+    // run its probe to completion and then mutate already-disposed reactive state. Threaded into the
+    // FromInput entry points; cancelled and drained in Dispose.
+    private readonly CancellationTokenSource _lifetimeCts = new();
+
     public ChannelsConfigViewModel(
         NetclawPaths paths,
         ISlackProbe slackProbe,
@@ -248,13 +255,19 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 $"Saved. Could not resolve: {string.Join(", ", unresolved.Select(static name => $"#{name}"))} — flagged below; fix or remove them.",
                 ConfigStatusTone.Warning);
 
-    internal async Task<bool> SaveFromInputAsync(CancellationToken ct = default)
-        => await ConfigAutosave.RunAsync(
-            token => SaveAsync("Channels saved.", probeChannelAccess: true, token),
+    // Single autosave wrapper for both the explicit save (probe on) and the completed-action autosaves
+    // (probe off, via SaveCompletedAsync). ConfigAutosave.RunAsync catches any failure and surfaces it
+    // as an Error status; this returns whether the save succeeded.
+    private Task<bool> SaveViaAutosaveAsync(string successMessage, bool probeChannelAccess, CancellationToken ct)
+        => ConfigAutosave.RunAsync(
+            token => SaveAsync(successMessage, probeChannelAccess, token),
             Status,
             "Channel settings save failed",
             RequestRedraw,
             ct);
+
+    internal Task<bool> SaveFromInputAsync(CancellationToken ct = default)
+        => SaveViaAutosaveAsync("Channels saved.", probeChannelAccess: true, ct);
 
     // Input-triggered config writes (autosave, add-channel, reset) run async OFF the Termina loop so
     // they never freeze input/rendering on a probe or disk write. The sync .GetAwaiter().GetResult()
@@ -290,10 +303,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     // while the add resolves channels against the platform API; the write itself is serialized behind
     // any prior config write by EnqueueConfigWriteAsync.
     internal Task AddChannelFromInputAsync()
-        => EnqueueConfigWriteAsync(() => ApplyAddChannelAsync());
+        => EnqueueConfigWriteAsync(() => ApplyAddChannelAsync(_lifetimeCts.Token));
 
     internal Task ResetConfirmationFromInputAsync()
-        => EnqueueConfigWriteAsync(() => ApplyResetConfirmationAsync());
+        => EnqueueConfigWriteAsync(() => ApplyResetConfirmationAsync(_lifetimeCts.Token));
 
     internal bool TryOpenSelectedAdapterManagement()
     {
@@ -1349,6 +1362,16 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             // SaveAsync, so it carries its own equivalent guard.
             Status.Value = new ConfigStatusMessage($"Could not save reset: {ex.Message}", ConfigStatusTone.Error);
         }
+        catch (Exception ex)
+        {
+            // Fail LOUD on any other error (e.g. a type-malformed but JSON-valid config surfacing as
+            // InvalidOperationException from the reload's deserialization). This runs as a fire-and-forget
+            // chained write whose ChainAsync swallows a faulted prior task, so an unsurfaced throw here
+            // would vanish with no operator feedback — exactly the silent fallback to avoid. Surface it
+            // and stay on the confirmation screen for retry; catching here also keeps the chained task
+            // from faulting, so subsequent writes are unaffected.
+            Status.Value = new ConfigStatusMessage($"Could not reset {resetName}: {ex.Message}", ConfigStatusTone.Error);
+        }
 
         NotifyContentChanged();
     }
@@ -1361,8 +1384,27 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        // Cancel any in-flight config write / label refresh, then DRAIN them before disposing the
+        // reactive state they publish to. A fire-and-forget write resumes on a thread-pool continuation
+        // (the loop has no SynchronizationContext), so without this a write could mutate a disposed
+        // ReactiveProperty / Step after teardown. Cancellation makes the in-flight probe abort promptly;
+        // the bounded Wait is a last-resort backstop so Dispose can never block the loop indefinitely on
+        // a wedged probe (it returns false on timeout rather than throwing or hanging).
+        _lifetimeCts.Cancel();
         _labelResolutionCts?.Cancel();
+        try
+        {
+            Task.WhenAll(_pendingConfigWrite, _labelRefreshTask ?? Task.CompletedTask)
+                .Wait(TimeSpan.FromSeconds(5));
+        }
+        catch
+        {
+            // A faulted/cancelled in-flight write has already surfaced its own status (autosave/reset
+            // both catch and report); swallow here so teardown completes regardless.
+        }
+
         _labelResolutionCts?.Dispose();
+        _lifetimeCts.Dispose();
         IsSaved.Dispose();
         Screen.Dispose();
         Status.Dispose();
@@ -1407,17 +1449,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     // is serialized behind any in-flight write and never blocks the loop. Autosave skips the blocking
     // channel-access probe (the background label refresh re-validates instead).
     private void AutosaveCompletedAction(string successMessage)
-        => _ = EnqueueConfigWriteAsync(() => SaveCompletedAsync(successMessage));
+        => _ = EnqueueConfigWriteAsync(() => SaveCompletedAsync(successMessage, _lifetimeCts.Token));
 
     // Awaitable autosave for callers already running inside an enqueued write (ApplyAddChannelAsync),
     // where re-enqueueing would deadlock the op behind itself. Returns whether the save succeeded.
     private Task<bool> SaveCompletedAsync(string successMessage, CancellationToken ct = default)
-        => ConfigAutosave.RunAsync(
-            token => SaveAsync(successMessage, probeChannelAccess: false, token),
-            Status,
-            "Channel settings save failed",
-            RequestRedraw,
-            ct);
+        => SaveViaAutosaveAsync(successMessage, probeChannelAccess: false, ct);
 
     private int GetAdapterIndex(ChannelType type)
         => Step.Adapters
