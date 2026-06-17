@@ -118,7 +118,14 @@ public sealed class DiscordStepViewModelTests : WizardStepTestBase
             DiscordEnabled = true,
             AllowDirectMessages = true,
             ChannelIdsInput = "129847561203948576",
-            AllowedUserIdsInput = "130111223344556677"
+            AllowedUserIdsInput = "130111223344556677",
+            // Health check resolves the channel reference to its canonical id; ContributeConfig
+            // persists only resolved ids (here id == input, so the assertions are unchanged).
+            LastChannelResolution = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("129847561203948576", "general", "Test Guild")],
+                [])
         };
 
         step.OnEnter(Context, NavigationDirection.Forward);
@@ -132,6 +139,42 @@ public sealed class DiscordStepViewModelTests : WizardStepTestBase
         Assert.Equal("129847561203948576", builder.Discord.DefaultChannelId);
         Assert.True(builder.Discord.AllowDirectMessages);
         Assert.Equal("130111223344556677", Assert.Single(builder.Discord.AllowedUserIds!));
+    }
+
+    [Fact]
+    public void ContributeConfig_PersistsResolvedId_NotTypedName_AndOmitsUnresolvedFromAudiences()
+    {
+        using var step = new DiscordStepViewModel(_fakeProbe)
+        {
+            DiscordEnabled = true,
+            ChannelIdsInput = "general, ghost-channel",
+            // The bot can see "general" → canonical id "129847561203948576"; "ghost-channel" is unresolved.
+            LastChannelResolution = new DiscordChannelResolutionResult(
+                false,
+                null,
+                [new ResolvedDiscordChannel("129847561203948576", "general", "Test Guild")],
+                ["ghost-channel"])
+        };
+
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.OnLeave();
+
+        foreach (var entry in Context.ChannelEntries[ChannelType.Discord])
+            entry.Audience = TrustAudience.Team;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Discord);
+        // The resolved channel persists by its canonical id, never the typed name...
+        Assert.Equal("129847561203948576", Assert.Single(builder.Discord!.AllowedChannelIds!));
+
+        var audiences = builder.Discord.ChannelAudiences;
+        Assert.NotNull(audiences);
+        Assert.True(audiences!.ContainsKey("129847561203948576"));
+        // ...and the unresolved channel NAME is NOT written as a dead ACL key the runtime can't match.
+        Assert.DoesNotContain("ghost-channel", audiences.Keys);
+        Assert.DoesNotContain("general", audiences.Keys);
     }
 
     [Fact]

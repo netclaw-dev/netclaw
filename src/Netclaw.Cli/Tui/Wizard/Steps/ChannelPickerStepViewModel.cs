@@ -6,6 +6,7 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Discord;
+using Netclaw.Cli.Mattermost;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
@@ -33,11 +34,11 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     private readonly Dictionary<ChannelType, string> _summaries = [];
     private readonly HashSet<ChannelType> _knownAdapters = [];
 
-    public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe)
+    public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe, IMattermostProbe mattermostProbe)
     {
         var slackVm = new SlackStepViewModel(slackProbe) { SkipEnableSubStep = true };
         var discordVm = new DiscordStepViewModel(discordProbe) { SkipEnableSubStep = true };
-        var mattermostVm = new MattermostStepViewModel { SkipEnableSubStep = true };
+        var mattermostVm = new MattermostStepViewModel(mattermostProbe) { SkipEnableSubStep = true };
 
         _adapters =
         [

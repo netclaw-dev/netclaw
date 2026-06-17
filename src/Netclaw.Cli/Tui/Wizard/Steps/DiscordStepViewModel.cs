@@ -186,14 +186,20 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         if (!DiscordEnabled)
             return;
 
-        var channelIds = ParseChannelIds(ChannelIdsInput);
         var userIds = ParseUserIds(AllowedUserIdsInput);
+
+        // Persist only canonical channel IDs the runtime ACL can match. An unresolved channel
+        // reference (a name/id the bot can't see) is omitted, not written verbatim — an
+        // unmatchable entry in AllowedChannelIds is inert and grants nothing. Mirrors Slack/Mattermost.
+        var resolvedChannelIds = LastChannelResolution is { Resolved.Count: > 0 } resolution
+            ? resolution.Resolved.Select(channel => channel.ChannelId).ToList()
+            : new List<string>();
 
         builder.Discord = new DiscordConfigSection
         {
             Enabled = true,
-            DefaultChannelId = channelIds.FirstOrDefault(),
-            AllowedChannelIds = channelIds.Count > 0 ? channelIds : null,
+            DefaultChannelId = resolvedChannelIds.FirstOrDefault(),
+            AllowedChannelIds = resolvedChannelIds.Count > 0 ? resolvedChannelIds : null,
             AllowDirectMessages = AllowDirectMessages,
             AllowedUserIds = userIds.Count > 0 ? userIds : null,
             ChannelAudiences = BuildChannelAudiences()
@@ -398,9 +404,39 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in entries)
-            audiences[entry.Id] = entry.Audience.ToWireValue();
+        {
+            // Only write an audience under a key the runtime ACL can match — a resolved channel ID
+            // or the literal "dm" DM key. An unresolved channel reference is a dead key the runtime
+            // never matches, so omit it instead of silently writing inert ACL config (a
+            // no-silent-fallback violation on a security path). Mirrors Slack/Mattermost.
+            if (TryResolveChannelAudienceKey(entry, out var key))
+                audiences[key] = entry.Audience.ToWireValue();
+        }
 
         return audiences.Count > 0 ? audiences : null;
+    }
+
+    private bool TryResolveChannelAudienceKey(ChannelEntry entry, out string key)
+    {
+        if (entry.IsDmRow)
+        {
+            key = entry.Id; // canonical DM key ("dm")
+            return true;
+        }
+
+        key = string.Empty;
+        if (LastChannelResolution is null)
+            return false;
+
+        var resolved = LastChannelResolution.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.ChannelName, entry.Id, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(channel.ChannelId, entry.Id, StringComparison.Ordinal));
+
+        if (string.IsNullOrWhiteSpace(resolved?.ChannelId))
+            return false;
+
+        key = resolved.ChannelId;
+        return true;
     }
 
     internal static List<string> ParseChannelIds(string? input)

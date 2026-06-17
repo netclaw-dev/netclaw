@@ -56,7 +56,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _mattermostProbe = mattermostProbe;
         _navigation = navigation;
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
-        Step = new ChannelPickerStepViewModel(slackProbe, discordProbe)
+        Step = new ChannelPickerStepViewModel(slackProbe, discordProbe, mattermostProbe)
         {
             DoneActionText = "return to Settings Areas",
             DoneKeyActionLabel = "Done",

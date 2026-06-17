@@ -18,25 +18,26 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
 {
     private readonly FakeSlackProbe _fakeProbe = new();
     private readonly FakeDiscordProbe _fakeDiscordProbe = new();
+    private readonly FakeMattermostProbe _fakeMattermostProbe = new();
 
     [Fact]
     public void StepId_IsChannelPicker()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         Assert.Equal("channel-picker", picker.StepId);
     }
 
     [Fact]
     public void IsApplicable_AlwaysTrue()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         Assert.True(picker.IsApplicable(Context));
     }
 
     [Fact]
     public void PickerMode_TryAdvance_ReturnsFalse()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         Assert.True(picker.IsInPickerMode);
@@ -46,7 +47,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void PickerMode_TryGoBack_ReturnsFalse()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         Assert.False(picker.TryGoBack());
@@ -55,7 +56,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ToggleOn_EntersSubFlow()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Toggle Slack on
@@ -68,7 +69,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_TryAdvance_DelegatesToChild()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Slack sub-flow starts at sub-step 1 (bot token)
@@ -82,7 +83,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_Complete_ReturnsToPicker_WithSummary()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Slack sub-flow
@@ -107,7 +108,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_TryGoBack_AtFirstSubStep_ReturnsToPicker()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Slack sub-flow at sub-step 1
@@ -123,7 +124,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_TryGoBack_InMiddle_DelegatesToChild()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Slack sub-flow at sub-step 1
@@ -137,7 +138,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ToggleOff_ClearsConfig()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Complete a full Slack sub-flow
@@ -156,7 +157,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void EditAdapter_ReEntersSubFlow()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Complete Slack sub-flow first
@@ -172,7 +173,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void OnLeave_SetsAnyChatServicesEnabled()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Complete Slack sub-flow
@@ -188,7 +189,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void OnLeave_NoneEnabled_AnyChatServicesDisabled()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.OnLeave();
@@ -199,7 +200,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void OnEnter_Back_ResumesPickerMode()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Complete Slack sub-flow and leave
@@ -217,7 +218,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeConfig_DelegatesToAllAdapters()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Configure Slack with a bot token
@@ -240,7 +241,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeConfig_DisabledAdapters_DoNotPolluteConfig()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Neither Slack nor Discord enabled — ContributeConfig delegates to both adapters
@@ -259,7 +260,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void GetHelpText_PickerMode_ReturnsPickerHelp()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         Assert.Contains("channel", picker.GetHelpText(), StringComparison.OrdinalIgnoreCase);
@@ -268,7 +269,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void GetHelpText_SubFlowMode_DelegatesToChild()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(0); // Slack sub-flow
@@ -280,7 +281,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void CancelSubFlow_OnEdit_PreservesEnabled()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         // Complete Slack sub-flow
@@ -302,7 +303,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void Adapters_IncludeMattermost()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
 
         Assert.Equal(3, picker.Adapters.Count);
         Assert.Contains(picker.Adapters, a => a.Type == ChannelType.Mattermost);
@@ -312,7 +313,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ToggleMattermost_EntersSubFlow_AndCompletes()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(2); // Toggle Mattermost on — enters sub-flow at server URL
@@ -335,7 +336,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeConfig_Mattermost_WritesMattermostSection()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         picker.OnEnter(Context, NavigationDirection.Forward);
 
         picker.ToggleAdapter(2);
@@ -372,7 +373,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_BuildContent_ClearsSubscriptionsOnReRender()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         var view = new ChannelPickerStepView();
         using var subs = new CompositeDisposable();
         var callbacks = CreateTestCallbacks(subs);
@@ -393,7 +394,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_BuildContent_ClearsSubscriptionsAcrossSubStepTransitions()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         var view = new ChannelPickerStepView();
         using var subs = new CompositeDisposable();
         var callbacks = CreateTestCallbacks(subs);
@@ -418,7 +419,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void Picker_DoneRow_EnterAdvancesWithoutTogglingAdapter()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe)
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe)
         {
             ShowDoneAction = false,
             ShowDonePickerRow = true,
@@ -444,7 +445,7 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     [Fact]
     public void SubFlow_PastedSlackBotTokenSurvivesReRenderBeforeSubmit()
     {
-        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
         var view = new ChannelPickerStepView();
         using var subs = new CompositeDisposable();
         var status = "not-cleared";
