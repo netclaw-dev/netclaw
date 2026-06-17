@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -64,9 +64,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly int _maxToolIterations;
     private readonly ToolRegistry _toolRegistry;
     private IReadOnlyList<AITool> _aiTools = [];
-    private readonly ILoggingAdapter _log;
+    private ILoggingAdapter _log;
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
+
+    // Stopwatch tracking the total wall-clock duration of the sub-agent run.
+    // Used for the summary log on completion (ProcessingWatchdog is only a
+    // timer scheduler — it doesn't track elapsed time itself).
+    private readonly Stopwatch _runStopwatch = Stopwatch.StartNew();
 
     // Conversation state (not persisted — ephemeral)
     private readonly List<AiChatMessage> _history = [];
@@ -142,6 +147,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _approvalService = approvalService;
         _maxToolIterations = maxToolIterations;
         _log = Context.GetLogger();
+
+        // Enrich logger with SessionId so sub-agent events appear in session-scoped
+        // queries. We don't have a SessionId yet — it comes in OnRunSubAgent.
+        // The _diagnosticsScope will be set there.
 
         // Build a private ToolRegistry for this subagent's tool subset
         _toolRegistry = new ToolRegistry();
@@ -246,6 +255,23 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _externalCts = new CancellationTokenSource();
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
+
+            // Enrich logger with SessionId so sub-agent events appear in session-scoped
+            // queries in Seq. The scopeId contains the parent session ID before the
+            // "/subagent/..." suffix, so normalize it back to extract the parent.
+            // We use Context.GetLogger().WithContext() to create a logger with the
+            // SessionId property attached — all logs from this logger will include it.
+            var parentSessionId = SessionDiagnosticsContext.NormalizeSessionId(scopeId);
+            _log = string.IsNullOrWhiteSpace(parentSessionId)
+                ? _log
+                : Context.GetLogger().WithContext("SessionId", parentSessionId);
+
+            // Arm OpenTelemetry trace correlation so sub-agent events link back to parent.
+            // Create a child activity linked to the parent session's current trace.
+            var otelActivity = new Activity("netclaw.subagent.run");
+            if (Activity.Current != null)
+                otelActivity.SetParentId(Activity.Current.Context.TraceId, Activity.Current.Context.SpanId, Activity.Current.Context.TraceFlags);
+            otelActivity.SetTag("subagent.name", _definition.Name.Value);
 
             // The run is bounded by a two-phase inactivity watchdog re-armed on
             // every progress event (LLM response, tool batch, streaming delta,
@@ -595,6 +621,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ? JsonSerializer.Serialize(toolCall.Arguments)
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
+
+            // Log tool START event so tool execution spans are visible in Seq
+            // (previously only tool results were logged, making it impossible to
+            // correlate tool start with tool end when tools take a long time).
+            _log.Info("SubAgent [{AgentName}] tool start callId={ToolCallId} name={ToolName}",
+                _definition.Name, toolCall.CallId ?? "unknown", toolCall.Name);
         }
 
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
@@ -688,6 +720,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         _log.Info("SubAgent [{AgentName}] completed (success={Success}, output={OutputLength} chars, iterations={Iterations})",
             _definition.Name, success, output.Length, _turnState.ToolIterationCount);
+
+        // Log cumulative stats for observability — total LLM calls, tool usage, etc.
+        // This gives operators a single summary line for sub-agent duration analysis.
+        _log.Info(
+            "SubAgent [{AgentName}] summary: success={Success}, totalToolCalls={TotalToolCalls}, "
+            + "iterations={Iterations}, duration={Duration}s",
+            _definition.Name, success, _turnState.ToolCallCount,
+            _turnState.ToolIterationCount,
+            _runStopwatch.Elapsed.TotalSeconds);
 
         var findings = success && _definition.EmitStructuredFindings
             ? BuildFindings(output, _toolExecutionContext.SessionId)
