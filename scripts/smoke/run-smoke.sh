@@ -79,7 +79,8 @@ SHOT_FRAMES=(
   wizard-provider-picker
   wizard-security-posture
   provider-manager-empty
-  mcp-permissions-loading
+  mcp-permissions-server-list
+  mcp-permissions-tool-grid
 )
 
 usage() {

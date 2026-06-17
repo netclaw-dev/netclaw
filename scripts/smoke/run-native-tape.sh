@@ -116,19 +116,16 @@ collect_failure_artifacts() {
   echo "    artifacts: $(ls "${ARTIFACT_DIR}" 2>/dev/null | tr '\n' ' ')"
 }
 
-# Substitute placeholders in preamble. Sed delimiter is '|' since paths
-# contain '/'. The substituted values are paths set by us, so escaping
-# is minimal.
-sed \
+# Substitute placeholders in both preamble and body. Sed delimiter is '|'
+# since paths contain '/'. Concatenating both files before the sed pass
+# means body tapes can use any token, not just the preamble.
+cat "$preamble" "$body" | sed \
   -e "s|__NETCLAW_HOME__|${NETCLAW_HOME}|g" \
   -e "s|__NETCLAW_BIN_DIR__|${NETCLAW_BIN_DIR}|g" \
   -e "s|__NETCLAW_DAEMON__|${NETCLAW_SMOKE_DAEMON}|g" \
   -e "s|__TAPE_NAME__|${TAPE_NAME}|g" \
-  "$preamble" > "$combined"
-
-# Append body. The body declares its own `Output ...`; last-write-wins
-# on Output is fine in vhs.
-cat "$body" >> "$combined"
+  -e "s|__NETCLAW_SMOKE_MCP_SERVER__|${NETCLAW_SMOKE_MCP_SERVER:-}|g" \
+  > "$combined"
 
 echo "==> Running native tape: ${TAPE_NAME} (timeout=${TAPE_TIMEOUT_S}s)"
 echo "    NETCLAW_BIN_DIR=${NETCLAW_BIN_DIR}"
