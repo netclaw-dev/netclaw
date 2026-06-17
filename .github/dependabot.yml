@@ -36,3 +36,6 @@ updates:
       patterns:
         - "Akka.*"
         - "Aaron.Akka.*"
+  ignore:
+    - dependency-name: "JsonSchema.Net"
+      # Moved to commercial license (v8+), keeping v7.x — no further updates desired
