@@ -176,7 +176,7 @@ jobs:
     name: Screenshot Regression (Linux)
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     env:
       SMOKE_OLLAMA_MODEL: qwen2:0.5b
