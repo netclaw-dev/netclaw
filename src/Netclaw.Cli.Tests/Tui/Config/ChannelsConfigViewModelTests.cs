@@ -467,6 +467,83 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(["555000111"], ToStringArray(discordChannelsFinal));
     }
 
+    // ── Definitive behavior: the persisted allow-list key is the platform's IMMUTABLE channel id.
+    // The background resolution (the label-refresh, off the loop thread — never blocking) canonicalizes
+    // the editor's channel references to ids: a display name that maps to an id is stored as the id; a
+    // display name that maps to NOTHING is never persisted; an id is always kept. This holds for all
+    // three adapters. The display name itself is resolved dynamically for rendering and never stored. ──
+
+    [Theory]
+    [InlineData(ChannelType.Slack)]
+    [InlineData(ChannelType.Discord)]
+    [InlineData(ChannelType.Mattermost)]
+    public async Task Background_resolution_persists_the_resolved_id_not_the_typed_display_name(ChannelType type)
+    {
+        WriteFreshConfig();
+        using var vm = ViewModelResolving(type, "town-hall", id: "CANONICAL00000000000000000");
+
+        await StageAndRefreshAsync(vm, type, channelInput: "town-hall");
+
+        // The typed display name is gone; the immutable id is what reached disk.
+        Assert.Equal(["CANONICAL00000000000000000"], PersistedChannels(type));
+    }
+
+    [Theory]
+    [InlineData(ChannelType.Slack)]
+    [InlineData(ChannelType.Discord)]
+    [InlineData(ChannelType.Mattermost)]
+    public async Task Background_resolution_does_not_persist_a_display_name_with_no_channel_id(ChannelType type)
+    {
+        WriteFreshConfig();
+        using var vm = ViewModelUnresolved(type, "ghost-channel");
+
+        await StageAndRefreshAsync(vm, type, channelInput: "ghost-channel");
+
+        // A display name the bot can't map to a real channel id is inert in the ACL — it is not saved...
+        Assert.Empty(PersistedChannels(type));
+        // ...and the operator is told, loudly, exactly what was dropped.
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("ghost-channel", vm.Status.Value.Text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ChannelType.Slack)]
+    [InlineData(ChannelType.Discord)]
+    [InlineData(ChannelType.Mattermost)]
+    public async Task Background_resolution_does_not_persist_names_when_the_bot_lacks_read_scope(ChannelType type)
+    {
+        // The exact missing-channels:read case: the probe errors, so nothing maps. A typed display name
+        // must not survive as an inert allow-list entry, and the underlying reason is surfaced.
+        WriteFreshConfig();
+        using var vm = ViewModelProbeError(type, "netclaw-test", "Bot token lacks channels:read scope.");
+
+        await StageAndRefreshAsync(vm, type, channelInput: "netclaw-test");
+
+        Assert.Empty(PersistedChannels(type));
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("channels:read", vm.Status.Value.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Background_resolution_keeps_a_real_id_even_when_the_bot_cannot_enumerate_it()
+    {
+        // A real channel id is the stable ACL key. If the probe can't currently see it (private channel,
+        // bot not yet a member), a transient display-name miss must NOT delete it.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            { "configVersion": 1, "Slack": { "Enabled": true, "AllowedChannelIds": ["C0B9JCJASP3"] } }
+            """);
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(false, null, [], ["C0B9JCJASP3"])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        await vm.RefreshChannelLabelsAsync(ChannelType.Slack, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["C0B9JCJASP3"], PersistedChannels(ChannelType.Slack));
+    }
+
     [Fact]
     public void Discord_add_then_slack_disable_then_escape_preserves_provider_config()
     {
@@ -1452,6 +1529,101 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             slackProbe ?? new FakeSlackProbe(),
             discordProbe ?? new FakeDiscordProbe(),
             mattermostProbe ?? new FakeMattermostProbe());
+
+    private void WriteFreshConfig()
+        => File.WriteAllText(_paths.NetclawConfigPath, """{ "configVersion": 1 }""");
+
+    private string[] PersistedChannels(ChannelType type)
+    {
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        return ConfigFileHelper.TryGetPathValue(config, $"{type}.AllowedChannelIds", out var raw)
+            ? ToStringArray(raw)
+            : [];
+    }
+
+    // A VM whose probe resolves `name` -> `id` for the given adapter.
+    private ChannelsConfigViewModel ViewModelResolving(ChannelType type, string name, string id) => type switch
+    {
+        ChannelType.Slack => CreateViewModel(slackProbe: new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(true, null, [new ResolvedSlackChannel(name, id)], [])
+        }),
+        ChannelType.Discord => CreateViewModel(discordProbe: new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(true, null, [new ResolvedDiscordChannel(id, name, "Guild")], [])
+        }),
+        ChannelType.Mattermost => CreateViewModel(mattermostProbe: new FakeMattermostProbe
+        {
+            NextResolutionResult = new MattermostChannelResolutionResult(true, null, [new ResolvedMattermostChannel(id, name, name)], [])
+        }),
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
+
+    // A VM whose probe is reachable but reports `name` as not found (no such channel the bot can see).
+    private ChannelsConfigViewModel ViewModelUnresolved(ChannelType type, string name) => type switch
+    {
+        ChannelType.Slack => CreateViewModel(slackProbe: new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(false, null, [], [name])
+        }),
+        ChannelType.Discord => CreateViewModel(discordProbe: new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(false, null, [], [name])
+        }),
+        ChannelType.Mattermost => CreateViewModel(mattermostProbe: new FakeMattermostProbe
+        {
+            NextResolutionResult = new MattermostChannelResolutionResult(false, null, [], [name])
+        }),
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
+
+    // A VM whose probe fails outright (auth/scope/network) and so maps nothing.
+    private ChannelsConfigViewModel ViewModelProbeError(ChannelType type, string name, string error) => type switch
+    {
+        ChannelType.Slack => CreateViewModel(slackProbe: new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(false, error, [], [name])
+        }),
+        ChannelType.Discord => CreateViewModel(discordProbe: new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(false, error, [], [name])
+        }),
+        ChannelType.Mattermost => CreateViewModel(mattermostProbe: new FakeMattermostProbe
+        {
+            NextResolutionResult = new MattermostChannelResolutionResult(false, error, [], [name])
+        }),
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
+
+    // Stages an enabled adapter carrying `channelInput` in its channel field, then runs the background
+    // resolution that canonicalizes it (the path the sub-flow completion triggers, exercised directly).
+    private static async Task StageAndRefreshAsync(ChannelsConfigViewModel vm, ChannelType type, string channelInput)
+    {
+        vm.Step.LoadAdapterState(type, enabled: true, summary: "configured", adapter =>
+        {
+            switch (adapter)
+            {
+                case SlackStepViewModel slack:
+                    slack.SlackEnabled = true;
+                    slack.BotToken = "xoxb-test";
+                    slack.ChannelNamesInput = channelInput;
+                    break;
+                case DiscordStepViewModel discord:
+                    discord.DiscordEnabled = true;
+                    discord.BotToken = "discord-token";
+                    discord.ChannelIdsInput = channelInput;
+                    break;
+                case MattermostStepViewModel mattermost:
+                    mattermost.MattermostEnabled = true;
+                    mattermost.ServerUrl = "https://mm.example.com";
+                    mattermost.BotToken = "mm-token";
+                    mattermost.ChannelIdsInput = channelInput;
+                    break;
+            }
+        });
+
+        await vm.RefreshChannelLabelsAsync(type, TestContext.Current.CancellationToken);
+    }
 
     // Drives the real picker-driven entry flow for a brand-new adapter: select its
     // row in the picker, toggle it on (which enters the credential/channel sub-flow),

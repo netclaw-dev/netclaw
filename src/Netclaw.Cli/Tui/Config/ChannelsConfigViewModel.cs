@@ -324,6 +324,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 case ChannelType.Discord:
                     await RefreshDiscordChannelLabelsAsync(channelIds, ct);
                     break;
+                case ChannelType.Mattermost:
+                    await RefreshMattermostChannelLabelsAsync(channelIds, ct);
+                    break;
             }
         }
         catch (Exception ex)
@@ -1120,60 +1123,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         slack.LastChannelResolution = result;
-        ApplyChannelLabelResolutionStatus(ChannelType.Slack, result.ErrorMessage, result.Unresolved);
-
-        // A channel saved as a literal NAME (because it didn't resolve when first saved) stays
-        // inert in the runtime ACL — SlackAclPolicy matches AllowedChannelIds against the Slack
-        // channel ID, not the name. Once the bot can see the channel, rewrite the stored name to
-        // its canonical ID and persist so the ACL actually matches and the row renders #name.
-        var normalized = NormalizeSlackChannelNamesToIds(channelIds, result);
-        if (normalized > 0 && string.IsNullOrWhiteSpace(result.ErrorMessage) && result.Unresolved.Count == 0)
-            Status.Value = new ConfigStatusMessage(
-                $"Updated {Pluralize(normalized, "channel", "channels")} to canonical IDs and saved.",
-                ConfigStatusTone.Neutral);
-
+        ReconcileResolvedChannels(
+            ChannelType.Slack, channelIds, result.ErrorMessage,
+            result.Resolved.Select(static c => (c.Id, c.Name)));
         NotifyContentChanged();
-    }
-
-    /// <summary>
-    /// Rewrites Slack allow-list entries stored as channel NAMES that now resolve to a canonical
-    /// channel ID, then persists. Names only enter the allow-list when a channel could not be
-    /// resolved at save time (the "save all, flag invalid" path); once the bot can see the channel
-    /// the stored name must become its ID or the runtime ACL never matches it. Returns the count
-    /// normalized (0 means nothing changed, so nothing is written).
-    /// </summary>
-    private int NormalizeSlackChannelNamesToIds(IReadOnlyList<string> storedChannels, SlackChannelResolutionResult result)
-    {
-        var resolvedByName = result.Resolved.ToDictionary(
-            static channel => channel.Name,
-            static channel => channel.Id,
-            StringComparer.OrdinalIgnoreCase);
-
-        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
-        var normalized = new List<string>(storedChannels.Count);
-        foreach (var channel in storedChannels)
-        {
-            if (!IsSlackChannelId(channel)
-                && resolvedByName.TryGetValue(channel, out var channelId)
-                && !string.Equals(channel, channelId, StringComparison.Ordinal))
-            {
-                normalized.Add(channelId);
-                remap[channel] = channelId;
-            }
-            else
-            {
-                normalized.Add(channel);
-            }
-        }
-
-        if (remap.Count == 0)
-            return 0;
-
-        SetChannelIds(ChannelType.Slack, [.. normalized.Distinct(StringComparer.Ordinal)]);
-        RemapChannelAudiences(ChannelType.Slack, remap);
-        WriteChannelConfigToDisk();
-        IsSaved.Value = true;
-        return remap.Count;
     }
 
     private async Task RefreshDiscordChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
@@ -1188,27 +1141,129 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         discord.LastChannelResolution = result;
-        ApplyChannelLabelResolutionStatus(ChannelType.Discord, result.ErrorMessage, result.Unresolved);
+        ReconcileResolvedChannels(
+            ChannelType.Discord, channelIds, result.ErrorMessage,
+            result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
         NotifyContentChanged();
     }
 
-    private void ApplyChannelLabelResolutionStatus(ChannelType type, string? errorMessage, IReadOnlyList<string> unresolved)
+    private async Task RefreshMattermostChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(errorMessage))
-        {
-            Status.Value = new ConfigStatusMessage(
-                $"{GetAdapterDisplayName(type)} channel label lookup failed: {errorMessage}",
-                ConfigStatusTone.Warning);
+        var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+        var serverUrl = Normalize(mattermost.ServerUrl);
+        var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(botToken))
             return;
+
+        var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
+        if (ct.IsCancellationRequested)
+            return;
+
+        mattermost.LastChannelResolution = result;
+        ReconcileResolvedChannels(
+            ChannelType.Mattermost, channelIds, result.ErrorMessage,
+            result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+        NotifyContentChanged();
+    }
+
+    // Canonicalize the persisted allow-list against a completed channel resolution. The stored ACL key
+    // is the platform's IMMUTABLE channel id (what the runtime matches); a human display name is mutable
+    // and resolved dynamically for rendering only — it is NEVER the stored key. So, per reference:
+    //   - already a channel id  -> keep it (it IS the stable key; never dropped, even when the bot can't
+    //     currently fetch its display label — a transient display miss must not delete a real ACL entry)
+    //   - a display name that maps to an id -> store the id (and remap its audience key)
+    //   - a display name with NO id mapping -> drop it: we do not persist a display name we can't map to
+    //     a real channel id (it would be an inert allow-list entry that silently grants nothing). Fail loud.
+    // A probe failure (auth/scope/network) produces no id mapping for the typed display names, so by the
+    // same rule they are not persisted — only id-shaped references survive it — and the underlying reason
+    // is surfaced. This runs off the loop thread: it only mutates view-model/status state and persists,
+    // then NotifyContentChanged posts the redraw (see the termina-tui-patterns skill); never blocks the loop.
+    private void ReconcileResolvedChannels(
+        ChannelType type,
+        IReadOnlyList<string> stored,
+        string? errorMessage,
+        IEnumerable<(string Id, string Name)> resolved)
+    {
+        var byId = new HashSet<string>(StringComparer.Ordinal);
+        var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, name) in resolved)
+        {
+            byId.Add(id);
+            byName.TryAdd(name, id);
         }
 
-        if (unresolved.Count > 0)
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var canonical = new List<string>(stored.Count);
+        var dropped = new List<string>();
+        foreach (var reference in stored)
         {
+            if (byId.Contains(reference))
+                canonical.Add(reference);                 // probe confirmed it as a channel id — keep
+            else if (byName.TryGetValue(reference, out var id))
+            {
+                canonical.Add(id);                        // display name → its channel id
+                remap[reference] = id;
+            }
+            else if (IsChannelId(type, reference))
+                canonical.Add(reference);                 // id-shaped but the bot can't enumerate it now —
+                                                          // keep: a real id is the stable key, never dropped
+            else
+                dropped.Add(reference);                   // a display name with no id mapping — fail loud
+        }
+
+        canonical = [.. canonical.Distinct(StringComparer.Ordinal)];
+        var changed = !stored.SequenceEqual(canonical, StringComparer.Ordinal);
+        if (changed)
+        {
+            SetChannelIds(type, canonical);
+            RemapChannelAudiences(type, remap);
+            UpdateAdapterPickerSummary(type);
+            WriteChannelConfigToDisk();
+            IsSaved.Value = true;
+        }
+
+        // Fail loud, in human terms (the stored id is not readable). On a probe failure, surface the
+        // underlying reason (and which unverified channels were not saved); otherwise name exactly which
+        // channels were removed and why.
+        if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            var suffix = dropped.Count > 0
+                ? $" Unverified channel(s) not saved: {string.Join(", ", dropped.Select(static c => $"#{c}"))}."
+                : string.Empty;
             Status.Value = new ConfigStatusMessage(
-                $"{GetAdapterDisplayName(type)} channel labels not found: {string.Join(", ", unresolved)}",
+                $"{GetAdapterDisplayName(type)} channel lookup failed: {errorMessage}{suffix}",
                 ConfigStatusTone.Warning);
         }
+        else if (dropped.Count > 0)
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"Removed {GetAdapterDisplayName(type)} channel(s) the bot can't see: {string.Join(", ", dropped.Select(static c => $"#{c}"))} — check the name, that the bot is invited, and that it has channel-read scope.",
+                ConfigStatusTone.Warning);
+        }
+        else if (changed)
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"Resolved {GetAdapterDisplayName(type)} channels to canonical IDs and saved.",
+                ConfigStatusTone.Neutral);
+        }
     }
+
+    // Whether a typed reference is already the platform's canonical channel id (the stable ACL key) as
+    // opposed to a human display name that must be resolved to one. Mirrors each platform's id format:
+    // Slack C…/G…; Discord numeric snowflake; Mattermost 26-char base-32.
+    private static bool IsChannelId(ChannelType type, string reference) => type switch
+    {
+        ChannelType.Slack => IsSlackChannelId(reference),
+        ChannelType.Discord => IsDiscordChannelId(reference),
+        ChannelType.Mattermost => IsMattermostChannelId(reference),
+        _ => false
+    };
+
+    private static bool IsDiscordChannelId(string value)
+        => value.Length is >= 17 and <= 20 && value.All(char.IsAsciiDigit);
+
+    private static bool IsMattermostChannelId(string value)
+        => value.Length == 26 && value.All(static c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c));
 
     private static ChannelsEditorValidationIssue Error(string fieldId, string message)
         => new(fieldId, message, ConfigValidationSeverity.Error);
@@ -1729,7 +1784,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private void StartChannelLabelResolution(ChannelType type)
     {
-        if (type is not (ChannelType.Slack or ChannelType.Discord))
+        if (type is not (ChannelType.Slack or ChannelType.Discord or ChannelType.Mattermost))
             return;
 
         _labelResolutionCts?.Cancel();
