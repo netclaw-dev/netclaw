@@ -148,10 +148,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _maxToolIterations = maxToolIterations;
         _log = Context.GetLogger();
 
-        // Enrich logger with SessionId so sub-agent events appear in session-scoped
-        // queries. We don't have a SessionId yet — it comes in OnRunSubAgent.
-        // The _diagnosticsScope will be set there.
-
         // Build a private ToolRegistry for this subagent's tool subset
         _toolRegistry = new ToolRegistry();
         foreach (var tool in definition.Tools)
@@ -256,22 +252,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
 
-            // Enrich logger with SessionId so sub-agent events appear in session-scoped
-            // queries in Seq. The scopeId contains the parent session ID before the
-            // "/subagent/..." suffix, so normalize it back to extract the parent.
-            // We use Context.GetLogger().WithContext() to create a logger with the
-            // SessionId property attached — all logs from this logger will include it.
+            // Enrich the logger so every sub-agent log line correlates back to the
+            // parent session (SessionId) and to this specific sub-agent run
+            // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
+            // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
+            // "/subagent/..." suffix to recover the parent. SessionId matches the key the
+            // session/channel actors already use (see SessionLoggingScope), so sub-agent
+            // and parent logs share one filterable attribute; SubSessionId isolates a
+            // single run within that session.
             var parentSessionId = SessionDiagnosticsContext.NormalizeSessionId(scopeId);
-            _log = string.IsNullOrWhiteSpace(parentSessionId)
-                ? _log
-                : Context.GetLogger().WithContext("SessionId", parentSessionId);
-
-            // Arm OpenTelemetry trace correlation so sub-agent events link back to parent.
-            // Create a child activity linked to the parent session's current trace.
-            var otelActivity = new Activity("netclaw.subagent.run");
-            if (Activity.Current != null)
-                otelActivity.SetParentId(Activity.Current.Context.TraceId, Activity.Current.Context.SpanId, Activity.Current.Context.TraceFlags);
-            otelActivity.SetTag("subagent.name", _definition.Name.Value);
+            var enrichedLog = Context.GetLogger();
+            if (!string.IsNullOrWhiteSpace(parentSessionId))
+                enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
+            if (!string.IsNullOrWhiteSpace(scopeId))
+                enrichedLog = enrichedLog.WithContext("SubSessionId", scopeId);
+            _log = enrichedLog;
 
             // The run is bounded by a two-phase inactivity watchdog re-armed on
             // every progress event (LLM response, tool batch, streaming delta,
@@ -604,7 +599,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _interDeltaBudget,
                 Timers);
 
-            EmitActivity("the model is responding");
+            // log: false — the SubAgentStreamPing handler above already logs this
+            // liveness at Debug; an Info line per streamed delta would flood Seq.
+            EmitActivity("the model is responding", log: false);
         });
     }
 
@@ -762,12 +759,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private void RestartWatchdog(TimeSpan budget)
         => _watchdog.Start(ProcessingWatchdog.LlmCall, budget, Timers);
 
-    /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
-    private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false)
-        => _activitySink?.TryWrite(new ToolActivityUpdate(phase)
+    /// <summary>
+    /// Emit a liveness/progress item to the spawning tool's stream (if any) and log
+    /// the phase so it is visible in Seq even on non-streaming spawn paths (where
+    /// <see cref="_activitySink"/> is null), correlated by SessionId/SubSessionId.
+    /// The per-delta streaming ping passes <paramref name="log"/> = false because the
+    /// <see cref="SubAgentStreamPing"/> handler already logs that liveness at Debug —
+    /// logging it here too would emit one Info line per streamed delta.
+    /// </summary>
+    private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false, bool log = true)
+    {
+        if (log)
+            _log.Info("SubAgent [{AgentName}] {Phase}", _definition.Name, phase);
+
+        _activitySink?.TryWrite(new ToolActivityUpdate(phase)
         {
             SuspendsInactivityWatchdog = suspendsInactivityWatchdog
         });
+    }
 
     /// <summary>
     /// Record forward progress in the tool loop / post-approval: re-baseline the

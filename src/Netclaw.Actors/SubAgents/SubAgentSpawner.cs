@@ -66,19 +66,10 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
-        // Create a mandatory activity sink for observability. For streaming paths
-        // the caller provides a real sink so parent's watchdog sees progress.
-        // For non-streaming paths (spawn_agent tool) we create a discard channel
-        // so the sub-agent's activity is still captured in Seq (otherwise all
-        // non-streaming sub-agents emit only start/complete logs, making it
-        // impossible to diagnose hangs or slow runs).
-        var discardChannel = Channel.CreateUnbounded<ToolActivityUpdate>();
-        var activitySinkToUse = activitySink ?? discardChannel.Writer;
-
         if (context.SpawnChildActor is null)
         {
             _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available", profile.Name);
-            activitySinkToUse?.TryComplete();
+            activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
@@ -93,7 +84,7 @@ public sealed class SubAgentSpawner
             _logger.LogWarning(
                 "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
                 profile.Name);
-            activitySinkToUse?.TryComplete();
+            activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
@@ -122,17 +113,6 @@ public sealed class SubAgentSpawner
             IsStarted = true,
             ToolCount = tools.Count
         });
-
-        // OpenTelemetry trace correlation: create a child activity linked to the
-        // parent session's current activity (if any). This lets Seq/Grafana show
-        // sub-agent events as spans child of the parent session's trace.
-        var otelActivity = new Activity("netclaw.subagent.spawn");
-        if (Activity.Current != null)
-            otelActivity.SetParentId(Activity.Current.Context.TraceId, Activity.Current.Context.SpanId, Activity.Current.Context.TraceFlags);
-        otelActivity.SetTag("subagent.name", definition.Name.Value);
-        otelActivity.SetTag("subagent.runId", runId);
-        otelActivity.SetTag("subagent.tools", tools.Count);
-        otelActivity.Start();
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
@@ -176,13 +156,12 @@ public sealed class SubAgentSpawner
                     ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge,
-                    // Always pass the mandatory activity sink so the sub-agent's
-                    // progress events are captured even on non-streaming paths.
-                    // Streaming callers pass a real sink in `activitySink` that
-                    // feeds the parent's watchdog; non-streaming callers get a
-                    // discard channel here so the sub-agent still emits activity
-                    // logs in Seq for observability.
-                    ActivitySink = activitySinkToUse
+                    // Null for non-streaming callers such as routed skills and the
+                    // legacy ExecuteAsync path; the sub-agent surfaces its progress
+                    // through its own session-correlated logs regardless. Streaming
+                    // spawn_agent calls pass a real sink so the parent tool's
+                    // liveness watchdog sees progress.
+                    ActivitySink = activitySink
                 },
                 // No Ask timeout: a healthy run is bounded by the sub-agent's own
                 // watchdogs, not by wall-clock, so any finite ceiling here could
@@ -209,11 +188,6 @@ public sealed class SubAgentSpawner
                 Findings = result.Findings
             });
 
-            otelActivity?.SetTag("subagent.durationMs", sw.ElapsedMilliseconds);
-            otelActivity?.SetTag("subagent.success", result.Success);
-            otelActivity?.SetTag("subagent.findingsCount", result.Findings.Count);
-            otelActivity?.Stop();
-
             _logger.LogInformation(
                 "SubAgent [{AgentName}] completed (success={Success}, duration={Duration}ms)",
                 profile.Name, result.Success, sw.ElapsedMilliseconds);
@@ -235,11 +209,6 @@ public sealed class SubAgentSpawner
                 Duration = sw.Elapsed
             });
 
-            otelActivity?.SetTag("subagent.durationMs", sw.ElapsedMilliseconds);
-            otelActivity?.SetTag("subagent.success", false);
-            otelActivity?.SetTag("subagent.error", ex.Message);
-            otelActivity?.Stop();
-
             _logger.LogError(ex, "SubAgent [{AgentName}] spawn failed", profile.Name);
             return new SubAgentResult
             {
@@ -250,12 +219,8 @@ public sealed class SubAgentSpawner
         }
         finally
         {
-            // Complete the activity sink so the sub-agent stops emitting.
-            // For streaming callers this signals the parent's watchdog; for
-            // non-streaming callers it just closes the discard channel.
-            activitySinkToUse?.TryComplete();
-            otelActivity?.Dispose();
-            discardChannel.Writer?.TryComplete();
+            // Terminate the streaming caller's activity reader even on failure.
+            activitySink?.TryComplete();
         }
     }
 
