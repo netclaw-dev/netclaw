@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
@@ -294,7 +295,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             // The prior write already surfaced its own failure status via ConfigAutosave; swallowing
             // here only prevents one failed write from cancelling the writes queued behind it.
             try { await prior; }
-            catch { /* intentionally ignored — see comment above */ }
+            catch (Exception priorFailure)
+            {
+                // Defensive: every write is exception-safe (autosave via ConfigAutosave, reset/add via
+                // their own catches), so a faulted prior is not expected. Swallow it here only so one
+                // failed write can't cancel the writes queued behind it; the prior already surfaced its
+                // own status. Trace in case this path is ever hit.
+                Debug.WriteLine($"ChannelsConfig: prior config write faulted (already surfaced): {priorFailure.Message}");
+            }
+
             await write();
         }
     }
@@ -1397,10 +1406,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             Task.WhenAll(_pendingConfigWrite, _labelRefreshTask ?? Task.CompletedTask)
                 .Wait(TimeSpan.FromSeconds(5));
         }
-        catch
+        catch (Exception drainFailure)
         {
             // A faulted/cancelled in-flight write has already surfaced its own status (autosave/reset
-            // both catch and report); swallow here so teardown completes regardless.
+            // both catch and report); trace at debug level and let teardown complete regardless.
+            Debug.WriteLine($"ChannelsConfig: in-flight write drain on dispose faulted: {drainFailure.Message}");
         }
 
         _labelResolutionCts?.Dispose();
