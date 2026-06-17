@@ -545,6 +545,69 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Add_channel_field_accepts_a_comma_separated_list_and_resolves_each()
+    {
+        // Regression: "openclaw, netclaw-test" used to be treated as ONE bogus channel. The add field
+        // now uses the same CSV parser as the first-connect sub-flow and resolves each reference.
+        WriteFreshConfig();
+        var slackProbe = new FakeSlackProbe
+        {
+            ResolveByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["openclaw"] = "C01OPEN",
+                ["netclaw-test"] = "C02TEST",
+            }
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.Step.LoadAdapterState(ChannelType.Slack, enabled: true, summary: "configured", adapter =>
+        {
+            var slack = (SlackStepViewModel)adapter;
+            slack.SlackEnabled = true;
+            slack.BotToken = "xoxb-test";
+            slack.AppToken = "xapp-test";
+        });
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "openclaw, netclaw-test";
+
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["C01OPEN", "C02TEST"], PersistedChannels(ChannelType.Slack));
+    }
+
+    [Fact]
+    public async Task Add_channel_field_persists_the_resolved_and_reports_the_unresolved()
+    {
+        WriteFreshConfig();
+        var slackProbe = new FakeSlackProbe
+        {
+            ResolveByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["openclaw"] = "C01OPEN",
+                // "ghost" is intentionally absent — it won't resolve.
+            }
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.Step.LoadAdapterState(ChannelType.Slack, enabled: true, summary: "configured", adapter =>
+        {
+            var slack = (SlackStepViewModel)adapter;
+            slack.SlackEnabled = true;
+            slack.BotToken = "xoxb-test";
+            slack.AppToken = "xapp-test";
+        });
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "openclaw, ghost";
+
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+
+        // The resolvable channel is saved as its id; the unresolvable one is not persisted but is flagged.
+        Assert.Equal(["C01OPEN"], PersistedChannels(ChannelType.Slack));
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("ghost", vm.Status.Value.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Discord_add_then_slack_disable_then_escape_preserves_provider_config()
     {
         WriteAllChannelConfig();

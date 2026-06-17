@@ -53,6 +53,14 @@ public sealed class FakeSlackProbe : ISlackProbe
 
     public Exception? ResolutionException { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="ResolveChannelNamesAsync"/> answers per-request: each requested name found
+    /// in this map resolves to its id, the rest come back unresolved. Lets a test exercise multi-channel
+    /// (CSV) input where each reference resolves distinctly. <see cref="NextResolutionResult"/> is used
+    /// when this is null.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ResolveByName { get; set; }
+
     public async Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
@@ -73,6 +81,20 @@ public sealed class FakeSlackProbe : ISlackProbe
 
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);
-        return NextResolutionResult;
+
+        if (ResolveByName is null)
+            return NextResolutionResult;
+
+        var resolved = new List<ResolvedSlackChannel>();
+        var unresolved = new List<string>();
+        foreach (var name in channelNames)
+        {
+            if (ResolveByName.TryGetValue(name, out var id))
+                resolved.Add(new ResolvedSlackChannel(name, id));
+            else
+                unresolved.Add(name);
+        }
+
+        return new SlackChannelResolutionResult(unresolved.Count == 0, null, resolved, unresolved);
     }
 }

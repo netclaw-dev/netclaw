@@ -558,60 +558,88 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     /// </summary>
     internal async Task ApplyAddChannelAsync(CancellationToken ct = default)
     {
-        var rawInput = NormalizeChannelId(AddChannelInput);
-        if (string.IsNullOrWhiteSpace(rawInput))
+        // The add-channel field accepts a comma-separated list, the same as the first-connect sub-flow
+        // (ChannelCsv is the one shared parser). Each reference is resolved to its canonical id before it
+        // is added; references that don't resolve are reported and never persisted. Adapter-agnostic via
+        // ResolveSingleChannelAsync(_activeAdapterType, …) — works for Slack, Discord, and Mattermost.
+        var references = ChannelCsv.ParseCsv(AddChannelInput, trimHash: true);
+        if (references.Count == 0)
         {
-            Status.Value = new ConfigStatusMessage("Channel ID is required.", ConfigStatusTone.Error);
+            Status.Value = new ConfigStatusMessage("At least one channel is required.", ConfigStatusTone.Error);
             NotifyContentChanged();
             return;
         }
 
         var existing = GetChannelIds(_activeAdapterType);
+        var seen = new HashSet<string>(existing, StringComparer.Ordinal);
 
-        Status.Value = new ConfigStatusMessage($"Resolving {rawInput} on {ActiveAdapterName}...", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage(
+            $"Resolving {Pluralize(references.Count, "channel", "channels")} on {ActiveAdapterName}...",
+            ConfigStatusTone.Neutral);
         RequestRedraw();
 
-        ChannelResolveOutcome resolved;
-        try
+        var added = new List<string>();
+        var unresolved = new List<string>();
+        string? firstError = null;
+        string? lastAdded = null;
+        foreach (var reference in references)
         {
-            resolved = await ResolveSingleChannelAsync(_activeAdapterType, rawInput, ct);
+            ChannelResolveOutcome outcome;
+            try
+            {
+                outcome = await ResolveSingleChannelAsync(_activeAdapterType, reference, ct);
+            }
+            catch (Exception ex)
+            {
+                // A genuine probe failure (network) means we can't validate at all — abort the batch and
+                // persist nothing rather than guess.
+                Status.Value = new ConfigStatusMessage($"{ActiveAdapterName} channel lookup failed: {ex.Message}", ConfigStatusTone.Error);
+                NotifyContentChanged();
+                return;
+            }
+
+            if (!outcome.Success)
+            {
+                unresolved.Add(reference);
+                firstError ??= outcome.ErrorMessage;
+                continue;
+            }
+
+            if (seen.Add(outcome.ChannelId!))
+            {
+                added.Add(outcome.ChannelId!);
+                SetChannelAudience(_activeAdapterType, outcome.ChannelId!, DefaultChannelAudience());
+                lastAdded = outcome.ChannelId;
+            }
         }
-        catch (Exception ex)
+
+        if (added.Count == 0)
         {
-            Status.Value = new ConfigStatusMessage($"{ActiveAdapterName} channel lookup failed: {ex.Message}", ConfigStatusTone.Error);
+            // Nothing resolved — stay on the add screen with the typed input and surface why.
+            Status.Value = new ConfigStatusMessage(firstError ?? "No channels could be resolved.", ConfigStatusTone.Error);
             NotifyContentChanged();
             return;
         }
 
-        if (!resolved.Success)
-        {
-            Status.Value = new ConfigStatusMessage(resolved.ErrorMessage!, ConfigStatusTone.Error);
-            NotifyContentChanged();
-            return;
-        }
-
-        var channelId = resolved.ChannelId!;
-        if (existing.Contains(channelId, StringComparer.Ordinal))
-        {
-            Status.Value = new ConfigStatusMessage($"{channelId} is already configured.", ConfigStatusTone.Error);
-            NotifyContentChanged();
-            return;
-        }
-
-        SetChannelIds(_activeAdapterType, [.. existing, channelId]);
-        SetChannelAudience(_activeAdapterType, channelId, DefaultChannelAudience());
+        SetChannelIds(_activeAdapterType, [.. existing, .. added]);
         UpdateAdapterPickerSummary(_activeAdapterType);
-        // Focus the newly-added channel row. Match only real channel rows: a resolved id of exactly
-        // "dm" with DMs enabled would otherwise collide with the DM row (also Id="dm") and make a
-        // Single() throw. Guard against not-found rather than assuming the row is always present.
-        var added = GetChannelRows()
+        // Focus the last-added channel row. Match only real channel rows: a resolved id of exactly "dm"
+        // with DMs enabled would otherwise collide with the DM row (also Id="dm") and make Single() throw.
+        var focus = GetChannelRows()
             .Select((row, index) => (row, index))
             .FirstOrDefault(entry => !entry.row.IsDirectMessage && !entry.row.IsAction
-                && string.Equals(entry.row.Id, channelId, StringComparison.Ordinal));
-        if (added.row is not null)
-            _channelRowIndex = added.index;
+                && string.Equals(entry.row.Id, lastAdded, StringComparison.Ordinal));
+        if (focus.row is not null)
+            _channelRowIndex = focus.index;
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        AutosaveCompletedAction($"Added {channelId} at the {DefaultChannelAudience()} default and saved.");
+
+        var saved = AutosaveCompletedAction(added.Count == 1
+            ? $"Added {added[0]} at the {DefaultChannelAudience()} default and saved."
+            : $"Added {Pluralize(added.Count, "channel", "channels")} and saved.");
+        if (saved && unresolved.Count > 0)
+            Status.Value = new ConfigStatusMessage(
+                $"Added {added.Count}; could not resolve {string.Join(", ", unresolved.Select(static c => $"#{c}"))} — check the name, membership, and read scope.",
+                ConfigStatusTone.Warning);
         NotifyContentChanged();
     }
 
@@ -1731,10 +1759,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         return 0;
     }
-
-
-    private static string? NormalizeChannelId(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimStart('#');
 
     private static bool IsSlackChannelId(string value)
         => value.Length > 1
