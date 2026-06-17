@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
-using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
@@ -81,7 +80,6 @@ public sealed class MenuRegistryAuditTests
         var services = new ServiceCollection();
         services.AddSingleton(new NetclawPaths());
         services.AddSingleton(ProviderCommand.CreateDefaultRegistry());
-        services.AddSingleton<TuiNavigation>();
         services.AddSingleton<IProviderProbe, FakeProviderProbe>();
         services
             .AddSectionEditor<ProviderStepViewModel>()

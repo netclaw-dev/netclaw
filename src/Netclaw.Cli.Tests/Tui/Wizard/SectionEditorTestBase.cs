@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
-using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -21,7 +20,6 @@ public abstract class SectionEditorTestBase<TEditor> : WizardStepTestBase
         var services = new ServiceCollection();
         services.AddSingleton(Context.Paths);
         services.AddSingleton(new ProviderDescriptorRegistry([]));
-        services.AddSingleton<TuiNavigation>();
         services.AddSingleton<IProviderProbe, FakeProviderProbe>();
         services.AddTransient<TEditor>();
         return services.BuildServiceProvider();

@@ -27,7 +27,6 @@ public sealed class OAuthFlowCoordinator : IDisposable
     private readonly DeviceFlowServiceFactory? _deviceFlowFactory;
     private readonly DaemonApi? _daemonApi;
     private readonly Action _requestRedraw;
-    private readonly Func<Action, Task> _publishUiAsync;
     private CancellationTokenSource? _cts;
 
     // Set during flow start to route SubmitRedirectUrlAsync to the correct callback
@@ -58,22 +57,14 @@ public sealed class OAuthFlowCoordinator : IDisposable
     public OAuthFlowCoordinator(
         ProviderDescriptorRegistry registry,
         DeviceFlowServiceFactory? deviceFlowFactory,
-        Func<Action, Task> publishUiAsync,
         DaemonApi? daemonApi = null,
         Action? requestRedraw = null)
     {
         _registry = registry;
         _deviceFlowFactory = deviceFlowFactory;
-        _publishUiAsync = publishUiAsync;
         _daemonApi = daemonApi;
         _requestRedraw = requestRedraw ?? (() => { });
     }
-
-    private Task PublishUiAsync(Action action)
-        => _publishUiAsync(action);
-
-    private void PublishUi(Action action)
-        => _ = _publishUiAsync(action);
 
     /// <summary>
     /// Start browser-based Authorization Code + PKCE flow for a provider.
@@ -152,24 +143,18 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 // (within ~2s) and properly set Result + FlowState + invoke
                 // the onSuccess callback with the token. Setting Succeeded
                 // here triggers UI subscriptions before the token is available.
-                await PublishUiAsync(_requestRedraw);
+                _requestRedraw();
             }
             else
             {
-                await PublishUiAsync(() =>
-                {
-                    ErrorMessage = "Token exchange failed. The authorization code may be expired.";
-                    _requestRedraw();
-                });
+                ErrorMessage = "Token exchange failed. The authorization code may be expired.";
+                _requestRedraw();
             }
         }
         catch (Exception ex)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = $"Failed to exchange code: {ex.Message}";
-                _requestRedraw();
-            });
+            ErrorMessage = $"Failed to exchange code: {ex.Message}";
+            _requestRedraw();
         }
     }
 
@@ -268,12 +253,9 @@ public sealed class OAuthFlowCoordinator : IDisposable
     {
         if (_daemonApi is null)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "Daemon API not available.";
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = "Daemon API not available.";
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
             return;
         }
 
@@ -285,12 +267,9 @@ public sealed class OAuthFlowCoordinator : IDisposable
             if (!startResponse.IsSuccessStatusCode)
             {
                 var errorBody = await startResponse.Content.ReadAsStringAsync(ct);
-                await PublishUiAsync(() =>
-                {
-                    ErrorMessage = $"Failed to start OAuth flow: {errorBody}";
-                    FlowState.Value = DeviceFlowState.Error;
-                    _requestRedraw();
-                });
+                ErrorMessage = $"Failed to start OAuth flow: {errorBody}";
+                FlowState.Value = DeviceFlowState.Error;
+                _requestRedraw();
                 return;
             }
 
@@ -299,16 +278,12 @@ public sealed class OAuthFlowCoordinator : IDisposable
             var flowState = startResult.GetProperty("state").GetString()!;
 
             // Step 2: Try to open browser (detect headless first)
-            var browserOpenFailed = !BrowserDetection.CanOpenBrowser();
-            await PublishUiAsync(() =>
-            {
-                VerificationUri = authUrl;
-                BrowserOpenFailed = browserOpenFailed;
-                FlowState.Value = DeviceFlowState.WaitingForUser;
-                _requestRedraw();
-            });
+            VerificationUri = authUrl;
+            BrowserOpenFailed = !BrowserDetection.CanOpenBrowser();
+            FlowState.Value = DeviceFlowState.WaitingForUser;
+            _requestRedraw();
 
-            if (!browserOpenFailed)
+            if (!BrowserOpenFailed)
             {
                 try
                 {
@@ -316,11 +291,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 }
                 catch
                 {
-                    await PublishUiAsync(() =>
-                    {
-                        BrowserOpenFailed = true;
-                        _requestRedraw();
-                    });
+                    BrowserOpenFailed = true;
+                    _requestRedraw();
                 }
             }
 
@@ -341,60 +313,42 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 if (status is "Completed")
                 {
                     var result = parseResult(statusResponse);
-                    await PublishUiAsync(() =>
-                    {
-                        Result = result;
-                        FlowState.Value = DeviceFlowState.Succeeded;
-                        _requestRedraw();
-                        onSuccess?.Invoke(result);
-                    });
+                    onSuccess?.Invoke(result);
+                    Result = result;
+                    FlowState.Value = DeviceFlowState.Succeeded;
+                    _requestRedraw();
                     return;
                 }
 
                 if (status is "Failed")
                 {
-                    await PublishUiAsync(() =>
-                    {
-                        ErrorMessage = "Authorization failed.";
-                        FlowState.Value = DeviceFlowState.Error;
-                        _requestRedraw();
-                    });
+                    ErrorMessage = "Authorization failed.";
+                    FlowState.Value = DeviceFlowState.Error;
+                    _requestRedraw();
                     return;
                 }
             }
 
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "Authorization timed out after 5 minutes.";
-                FlowState.Value = DeviceFlowState.Expired;
-                _requestRedraw();
-            });
+            ErrorMessage = "Authorization timed out after 5 minutes.";
+            FlowState.Value = DeviceFlowState.Expired;
+            _requestRedraw();
         }
         catch (OperationCanceledException)
         {
-            await PublishUiAsync(() =>
-            {
-                FlowState.Value = DeviceFlowState.Cancelled;
-                _requestRedraw();
-            });
+            FlowState.Value = DeviceFlowState.Cancelled;
+            _requestRedraw();
         }
         catch (HttpRequestException)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "Could not reach the daemon. Is it running?";
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = "Could not reach the daemon. Is it running?";
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
         }
         catch (Exception ex)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = ex.Message;
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = ex.Message;
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
         }
         finally
         {
@@ -409,12 +363,9 @@ public sealed class OAuthFlowCoordinator : IDisposable
     {
         if (_deviceFlowFactory is null)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "OAuth service not available.";
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = "OAuth service not available.";
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
             return;
         }
 
@@ -422,12 +373,9 @@ public sealed class OAuthFlowCoordinator : IDisposable
         var oauth = descriptor.Auth.GetOAuthConfig();
         if (oauth is null || oauth.DeviceEndpoint is null)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "Provider does not support OAuth device flow.";
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = "Provider does not support OAuth device flow.";
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
             return;
         }
 
@@ -438,14 +386,11 @@ public sealed class OAuthFlowCoordinator : IDisposable
         {
             // Step 1: Start device authorization
             var deviceAuth = await service.StartDeviceAuthorizationAsync(config, ct);
-            await PublishUiAsync(() =>
-            {
-                UserCode = deviceAuth.UserCode;
-                VerificationUri = deviceAuth.VerificationUri;
-                VerificationUriComplete = deviceAuth.VerificationUriComplete;
-                FlowState.Value = DeviceFlowState.WaitingForUser;
-                _requestRedraw();
-            });
+            UserCode = deviceAuth.UserCode;
+            VerificationUri = deviceAuth.VerificationUri;
+            VerificationUriComplete = deviceAuth.VerificationUriComplete;
+            FlowState.Value = DeviceFlowState.WaitingForUser;
+            _requestRedraw();
 
             // Step 2: Poll for token
             var result = await service.PollForTokenAsync(config, deviceAuth,
@@ -454,11 +399,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
                     if (state == DeviceFlowState.Succeeded)
                         return;
 
-                    PublishUi(() =>
-                    {
-                        FlowState.Value = state;
-                        _requestRedraw();
-                    });
+                    FlowState.Value = state;
+                    _requestRedraw();
                 }, ct);
 
             // Step 3: Store result.
@@ -467,48 +409,33 @@ public sealed class OAuthFlowCoordinator : IDisposable
             // We rely on the onSuccess callback below — NOT on subscribers — to
             // kick off the credential probe, so that the lifecycle of the probe
             // CTS doesn't get torpedoed by a duplicate StartProbe call.
-            await PublishUiAsync(() =>
-            {
-                Result = result;
-                FlowState.Value = DeviceFlowState.Succeeded;
-                _requestRedraw();
-                onSuccess?.Invoke(result);
-            });
+            Result = result;
+            FlowState.Value = DeviceFlowState.Succeeded;
+            _requestRedraw();
+            onSuccess?.Invoke(result);
         }
         catch (OAuthDeviceFlowDeniedException)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "Authorization was denied.";
-                FlowState.Value = DeviceFlowState.Denied;
-                _requestRedraw();
-            });
+            ErrorMessage = "Authorization was denied.";
+            FlowState.Value = DeviceFlowState.Denied;
+            _requestRedraw();
         }
         catch (OAuthDeviceFlowExpiredException)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = "The authorization code expired. Please try again.";
-                FlowState.Value = DeviceFlowState.Expired;
-                _requestRedraw();
-            });
+            ErrorMessage = "The authorization code expired. Please try again.";
+            FlowState.Value = DeviceFlowState.Expired;
+            _requestRedraw();
         }
         catch (OperationCanceledException)
         {
-            await PublishUiAsync(() =>
-            {
-                FlowState.Value = DeviceFlowState.Cancelled;
-                _requestRedraw();
-            });
+            FlowState.Value = DeviceFlowState.Cancelled;
+            _requestRedraw();
         }
         catch (Exception ex)
         {
-            await PublishUiAsync(() =>
-            {
-                ErrorMessage = ex.Message;
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-            });
+            ErrorMessage = ex.Message;
+            FlowState.Value = DeviceFlowState.Error;
+            _requestRedraw();
         }
         finally
         {

@@ -466,7 +466,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         });
 
         var registry = Netclaw.Cli.Provider.ProviderCommand.CreateDefaultRegistry();
-        using var vm = new ModelManagerViewModel(_paths, _fakeProbe, new TuiNavigation(), registry);
+        using var vm = new ModelManagerViewModel(_paths, _fakeProbe, registry);
         vm.Refresh();
 
         Assert.Single(vm.Providers);
@@ -499,7 +499,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
     private ModelManagerViewModel CreateViewModel()
     {
-        return new ModelManagerViewModel(_paths, _fakeProbe, new TuiNavigation());
+        return new ModelManagerViewModel(_paths, _fakeProbe);
     }
 
     private void WriteConfig(Dictionary<string, object> data)

@@ -27,7 +27,6 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
-    private readonly TuiNavigation _tuiNavigation;
     private CancellationTokenSource? _probeCts;
     private WizardContext? _context;
 
@@ -38,31 +37,13 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     public ProviderStepViewModel(
         ProviderDescriptorRegistry registry,
         IProviderProbe probe,
-        TuiNavigation tuiNavigation,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonApi? daemonApi = null)
     {
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
-        _tuiNavigation = tuiNavigation;
-        OAuth = new OAuthFlowCoordinator(
-            registry,
-            oauthFactory,
-            PublishUiAsync,
-            daemonApi,
-            () => _context?.RequestRedraw());
-    }
-
-    private Task PublishUiAsync(Action action)
-    {
-        if (!_tuiNavigation.IsAttached)
-        {
-            action();
-            return Task.CompletedTask;
-        }
-
-        return _tuiNavigation.PostAsync(action);
+        OAuth = new OAuthFlowCoordinator(registry, oauthFactory, daemonApi, () => { });
     }
 
     public string StepId => WizardStepIds.Provider;
@@ -203,7 +184,6 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         _ = RunProbeTimerAsync(ct);
 
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
-        var stillActiveProbe = false;
         try
         {
             // Outer wall-clock for the WHOLE probe. The descriptor's own per-request
@@ -237,24 +217,17 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             // atomically stops this finally from cancelling/disposing the newer probe's live CTS.
             if (Interlocked.CompareExchange(ref _probeCts, null, cts) == cts)
             {
-                stillActiveProbe = true;
                 cts.Cancel();
                 cts.Dispose();
             }
         }
 
-        if (!stillActiveProbe)
-            return;
+        DiscoveredModels.Clear();
+        if (result.Success)
+            DiscoveredModels.AddRange(result.Models);
 
-        await PublishUiAsync(() =>
-        {
-            DiscoveredModels.Clear();
-            if (result.Success)
-                DiscoveredModels.AddRange(result.Models);
-
-            IsProbing.Value = false;
-            ProbeResult.Value = result;
-        });
+        IsProbing.Value = false;
+        ProbeResult.Value = result;
     }
 
     // Drives only the cosmetic "(Ns)" elapsed counter now that the spinner glyph
@@ -266,7 +239,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            await PublishUiAsync(() => ProbeElapsedSeconds.Value++);
+            ProbeElapsedSeconds.Value++;
         }
     }
 

@@ -77,7 +77,6 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly ProviderDescriptorRegistry _registry;
     private readonly IProviderProbe _probe;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
-    private readonly TuiNavigation _tuiNavigation;
     private CancellationTokenSource? _probeCts;
     private CancellationTokenSource? _revalidateCts;
 
@@ -160,15 +159,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ProviderDescriptorRegistry Registry => _registry;
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry,
-        TuiNavigation tuiNavigation,
         DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
         EmbeddedConfigHostMarker? embeddedHost = null)
-        : this(paths, registry, registry, tuiNavigation, oauthFactory, daemonApi, embeddedHost)
+        : this(paths, registry, registry, oauthFactory, daemonApi, embeddedHost)
     {
     }
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe,
-        TuiNavigation tuiNavigation,
         DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
         EmbeddedConfigHostMarker? embeddedHost = null)
     {
@@ -176,33 +173,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
-        _tuiNavigation = tuiNavigation;
         IsEmbeddedInConfig = embeddedHost is not null;
         OAuth = new OAuthFlowCoordinator(
             registry,
             oauthFactory,
-            PublishUiAsync,
             daemonApi,
-            requestRedraw: NotifyStateChangedOnCurrentThread);
-    }
-
-    private Task PublishUiAsync(Action action)
-    {
-        if (!_tuiNavigation.IsAttached)
-        {
-            action();
-            return Task.CompletedTask;
-        }
-
-        return _tuiNavigation.PostAsync(action);
-    }
-
-    private void PublishUi(Action action)
-    {
-        if (!_tuiNavigation.IsAttached)
-            action();
-        else
-            _tuiNavigation.Post(action);
+            requestRedraw: () => NotifyStateChanged());
     }
 
     public override void OnActivated()
@@ -303,33 +279,24 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                     : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
                         GetProbeCredential(item.Entry), CancellationToken.None);
 
-                await PublishUiAsync(() =>
-                {
-                    item.ProbeResult = result;
-                    item.Health = result.Success
-                        ? ProviderHealthStatus.Healthy
-                        : ProviderHealthStatus.Unhealthy;
-                    NotifyStateChangedOnCurrentThread();
-                });
+                item.ProbeResult = result;
+                item.Health = result.Success
+                    ? ProviderHealthStatus.Healthy
+                    : ProviderHealthStatus.Unhealthy;
             }
             catch
             {
-                await PublishUiAsync(() =>
-                {
-                    item.Health = ProviderHealthStatus.Unhealthy;
-                    NotifyStateChangedOnCurrentThread();
-                });
+                item.Health = ProviderHealthStatus.Unhealthy;
             }
+
+            NotifyStateChanged();
         });
 
         await Task.WhenAll(probeTasks);
 
-        await PublishUiAsync(() =>
-        {
-            IsEagerProbing.Value = false;
-            CurrentState.Value = ProviderManagerState.List;
-            NotifyStateChangedOnCurrentThread();
-        });
+        IsEagerProbing.Value = false;
+        CurrentState.Value = ProviderManagerState.List;
+        NotifyStateChanged();
     }
 
     /// <summary>
@@ -795,13 +762,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             if (ct.IsCancellationRequested)
                 return;
 
-            await PublishUiAsync(() =>
-            {
-                item.ProbeResult = result;
-                item.Health = result.Success
-                    ? ProviderHealthStatus.Healthy
-                    : ProviderHealthStatus.Unhealthy;
-            });
+            item.ProbeResult = result;
+            item.Health = result.Success
+                ? ProviderHealthStatus.Healthy
+                : ProviderHealthStatus.Unhealthy;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -812,7 +776,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             if (ct.IsCancellationRequested)
                 return;
 
-            await PublishUiAsync(() => item.Health = ProviderHealthStatus.Unhealthy);
+            item.Health = ProviderHealthStatus.Unhealthy;
         }
 
         NotifyStateChanged();
@@ -826,12 +790,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         await OAuth.SubmitRedirectUrlAsync(pastedUrl);
         if (OAuth.FlowState.Value == DeviceFlowState.Succeeded)
         {
-            await PublishUiAsync(() =>
-            {
-                CurrentState.Value = ProviderManagerState.AddValidating;
-                NotifyStateChangedOnCurrentThread();
-                StartProbe();
-            });
+            CurrentState.Value = ProviderManagerState.AddValidating;
+            NotifyStateChanged();
+            StartProbe();
         }
     }
 
@@ -1024,43 +985,40 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 probeException);
         }
 
-        await PublishUiAsync(() =>
+        IsProbing.Value = false;
+        ProbeResult.Value = result;
+
+        if (result.Success)
         {
-            IsProbing.Value = false;
-            ProbeResult.Value = result;
-
-            if (result.Success)
+            if (IsFixFlow)
             {
-                if (IsFixFlow)
-                {
-                    if (NewProviderName is not null && OAuth.Result is not null)
-                    {
-                        WriteProviderConfig();
-                        _newProviderPersisted = true;
-                    }
-                    else
-                    {
-                        // API-key / endpoint fix: persist only now that the probe succeeded, so a typo
-                        // in the new credential leaves the prior working secret untouched on disk.
-                        WriteFixedCredentials();
-                    }
-
-                    // Fix flow: re-probe all providers so list shows fresh health
-                    IsFixFlow = false;
-                    StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
-                    RefreshAndProbeAll();
-                }
-                else
+                if (NewProviderName is not null && OAuth.Result is not null)
                 {
                     WriteProviderConfig();
                     _newProviderPersisted = true;
-                    StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
-                    CurrentState.Value = ProviderManagerState.AddComplete;
                 }
-            }
+                else
+                {
+                    // API-key / endpoint fix: persist only now that the probe succeeded, so a typo
+                    // in the new credential leaves the prior working secret untouched on disk.
+                    WriteFixedCredentials();
+                }
 
-            NotifyStateChangedOnCurrentThread();
-        });
+                // Fix flow: re-probe all providers so list shows fresh health
+                IsFixFlow = false;
+                StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
+                RefreshAndProbeAll();
+            }
+            else
+            {
+                WriteProviderConfig();
+                _newProviderPersisted = true;
+                StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
+                CurrentState.Value = ProviderManagerState.AddComplete;
+            }
+        }
+
+        NotifyStateChanged();
     }
 
     // Drives only the cosmetic "(Ns)" elapsed counter now that the spinner glyph
@@ -1072,7 +1030,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            await PublishUiAsync(() => ProbeElapsedSeconds.Value++);
+            ProbeElapsedSeconds.Value++;
         }
     }
 
@@ -1164,11 +1122,6 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     private void NotifyStateChanged()
-    {
-        PublishUi(NotifyStateChangedOnCurrentThread);
-    }
-
-    private void NotifyStateChangedOnCurrentThread()
     {
         StateVersion.Value++;
         RequestRedraw();

@@ -38,7 +38,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void SetSubStep_AdvancesToGivenStep()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SetSubStep(3);
         Assert.Equal(3, step.CurrentSubStep);
     }
@@ -46,7 +46,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void TryGoBack_FromValidation_GoesToCredentials()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedAuthMethod = AuthMethod.ApiKey;
         step.SetSubStep(3); // validation
 
@@ -57,7 +57,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void TryGoBack_FromValidation_WithOAuthDevice_GoesToOAuth()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedAuthMethod = AuthMethod.OAuthDevice;
         step.SetSubStep(3);
 
@@ -68,7 +68,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void TryGoBack_FromModelSelection_GoesToCredentials()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SetSubStep(4); // model selection
 
         Assert.True(step.TryGoBack());
@@ -78,7 +78,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void TryGoBack_FromOAuthDevice_GoesToAuth()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SetSubStep(5); // OAuth device
 
         Assert.True(step.TryGoBack());
@@ -88,14 +88,14 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void TryGoBack_FromFirstStep_ReturnsFalse()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         Assert.False(step.TryGoBack());
     }
 
     [Fact]
     public void OnEnter_Back_ResumesAtLastSubStep()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SetSubStep(4); // model selection
 
         step.OnEnter(_context, NavigationDirection.Back);
@@ -105,7 +105,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void ClearFromProvider_ResetsAllState()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "openai";
         step.SelectedAuthMethod = AuthMethod.ApiKey;
         step.ApiKeyInput = "sk-test";
@@ -124,7 +124,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public async Task ProbeProvider_StoresDiscoveredModels()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "ollama";
         step.EndpointInput = "http://localhost:11434";
 
@@ -144,7 +144,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public async Task ProbeProvider_ReportsFailure()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "openai";
         step.ApiKeyInput = "bad-key";
 
@@ -161,7 +161,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     public async Task Superseded_probe_completion_does_not_cancel_the_replacement_probe()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "ollama";
         step.EndpointInput = "http://localhost:11434";
         _fakeProbe.Gate = new TaskCompletionSource();
@@ -188,7 +188,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void ContributeConfig_SetsProviderAndModel()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "OpenAI";
         step.SelectedAuthMethod = AuthMethod.ApiKey;
         step.SelectedModelId = "gpt-4.1";
@@ -206,7 +206,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void ContributeConfig_SelectedDiscoveredModel_CarriesModelMetadata()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "OpenAI";
         step.SelectedAuthMethod = AuthMethod.OAuthDevice;
         step.SelectedModelId = "gpt-new-codex";
@@ -235,7 +235,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
         // discovered model leaves them unset. The wizard must NOT bake a guessed Text
         // into config — that override would beat real detection on every daemon boot
         // and silently demote a multimodal model to text-only (#1290).
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "openai-compatible";
         step.SelectedAuthMethod = AuthMethod.None;
         step.SelectedModelId = "qwen-vl";
@@ -257,7 +257,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     [Fact]
     public void ContributeConfig_NoProvider_NoSection()
     {
-        using var step = CreateStep();
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
 
         var builder = new WizardConfigBuilder(_context.Paths);
         step.ContributeConfig(builder);
@@ -265,8 +265,6 @@ public sealed class ProviderStepViewModelTests : IDisposable
         Assert.Null(builder.Provider);
         Assert.Null(builder.Model);
     }
-
-    private ProviderStepViewModel CreateStep() => new(_registry, _fakeProbe, new TuiNavigation());
 
     // Reuse the existing FakeProviderProbe from the monolith tests
     private sealed class FakeProviderProbe : IProviderProbe
