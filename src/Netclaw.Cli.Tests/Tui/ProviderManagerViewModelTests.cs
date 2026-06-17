@@ -1146,7 +1146,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
     private ProviderManagerViewModel CreateViewModel()
     {
-        return new ProviderManagerViewModel(_paths, ProviderCommand.CreateDefaultRegistry(), _fakeProbe);
+        return new ProviderManagerViewModel(_paths, ProviderCommand.CreateDefaultRegistry(), _fakeProbe, new TuiNavigation());
     }
 
     private void WriteConfig(Dictionary<string, object> data)

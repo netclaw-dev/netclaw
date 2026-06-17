@@ -36,6 +36,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry? _registry;
+    private readonly TuiNavigation _tuiNavigation;
     private CancellationTokenSource? _probeCts;
 
     internal Action<string>? RouteRequested { get; set; }
@@ -75,12 +76,33 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     internal Task? ProbeCompletion { get; private set; }
 
     public ModelManagerViewModel(NetclawPaths paths, IProviderProbe probe,
+        TuiNavigation tuiNavigation,
         ProviderDescriptorRegistry? registry = null, EmbeddedConfigHostMarker? embeddedHost = null)
     {
         _paths = paths;
         _probe = probe;
         _registry = registry;
+        _tuiNavigation = tuiNavigation;
         IsEmbeddedInConfig = embeddedHost is not null;
+    }
+
+    private Task PublishUiAsync(Action action)
+    {
+        if (!_tuiNavigation.IsAttached)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        return _tuiNavigation.PostAsync(action);
+    }
+
+    private void PublishUi(Action action)
+    {
+        if (!_tuiNavigation.IsAttached)
+            action();
+        else
+            _tuiNavigation.Post(action);
     }
 
     public override void OnActivated()
@@ -385,12 +407,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
                 probeException);
         }
 
-        if (result.Success)
-            DiscoveredModels.AddRange(result.Models.Take(MaxDisplayedModels));
+        await PublishUiAsync(() =>
+        {
+            if (result.Success)
+                DiscoveredModels.AddRange(result.Models.Take(MaxDisplayedModels));
 
-        IsProbing.Value = false;
-        ProbeResult.Value = result;
-        NotifyStateChanged();
+            IsProbing.Value = false;
+            ProbeResult.Value = result;
+            NotifyStateChangedOnCurrentThread();
+        });
     }
 
     private async Task RunProbeTimerAsync(CancellationToken ct)
@@ -400,8 +425,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            ProbeElapsedSeconds.Value++;
-            RequestRedraw();
+            await PublishUiAsync(() =>
+            {
+                ProbeElapsedSeconds.Value++;
+                RequestRedraw();
+            });
         }
     }
 
@@ -420,6 +448,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     }
 
     private void NotifyStateChanged()
+    {
+        PublishUi(NotifyStateChangedOnCurrentThread);
+    }
+
+    private void NotifyStateChangedOnCurrentThread()
     {
         StateVersion.Value++;
         RequestRedraw();

@@ -231,16 +231,40 @@ If a `ReactiveProperty<int>` is used only to wake page subscriptions, remember
 that `.Value++` synchronously runs those subscriptions on the publishing thread.
 Prefer a loop-owned invalidation path or a plain atomic version read by render.
 
+### Loop-owned action via `TuiNavigation`
+
+Use this when the continuation must set `ReactiveProperty` values that have page
+subscribers, invalidate `DynamicLayoutNode`, or navigate/focus. `TuiNavigation`
+is the repo-owned Termina loop ingress: it registers an `IInputSource`, posts a
+custom `IInputEvent`, and executes the action from Termina's input fan-out.
+
+```csharp
+private readonly TuiNavigation _tuiNavigation;
+
+private Task PublishUiAsync(Action action)
+{
+    if (!_tuiNavigation.IsAttached) // constructor/startup/unit-test path before RunAsync
+    {
+        action();
+        return Task.CompletedTask;
+    }
+
+    return _tuiNavigation.PostAsync(action);
+}
+```
+
+For production TUI view-models, require `TuiNavigation` in the constructor. Do not
+make it an optional/null dependency; a missing DI registration should fail loudly.
+
 ## Current audit flags
 
 These are not all necessarily bugs, but they are the fields/patterns that must be
 checked before further TUI async work is considered safe:
 
 - `HealthCheckStepViewModel`: `Results` is lock-synchronized; keep using
-  `ResultsSnapshot()`. `ResultVersion`, `IsRunning`, `IsComplete`, `Succeeded`,
-  `_context.StatusMessage`, and `LaunchChat()` are written from async health-check
-  continuations and should not synchronously drive Termina invalidation/navigation
-  off-loop.
+  `ResultsSnapshot()`. Async completion now routes `ResultVersion`, completion
+  flags, status message, and `LaunchChat()` through `TuiNavigation`; preserve that
+  pattern.
 - `ChannelsConfigViewModel`: `RefreshChannelLabelsAsync` / `ReconcileResolvedChannels`
   mutate `Step`, `_channelAudiences`, `Status`, `IsSaved`, and persisted config off-loop;
   page callbacks invalidate nodes inline. Either move reconciliation onto a loop-owned
@@ -248,10 +272,10 @@ checked before further TUI async work is considered safe:
 - `SkillSourcesConfigViewModel`: `RunProbeAsync` publishes `_pendingRemoteProbeResult`,
   `_pendingRemoteProbeMessage`, `Status`, and `IsSaved` from a background continuation;
   page subscriptions invalidate inline. Dispose cancels but does not drain `_probeTask`.
-- `ProviderManagerViewModel`: eager probes mutate `DisplayProviders` rows and reactive
-  state from background continuations; `StateVersion.Value++` drives inline invalidation;
-  `_probeCts` ownership should use the `Interlocked.CompareExchange` pattern from
-  `ProviderStepViewModel` to avoid one probe disposing a newer probe's CTS.
+- `ProviderStepViewModel`, `ProviderManagerViewModel`, `ModelManagerViewModel`, and
+  `OAuthFlowCoordinator`: async probe/OAuth completions should publish through
+  `TuiNavigation`; do not set probe result, elapsed timer, state-version, or OAuth
+  flow reactive properties directly from background continuations.
 - `ExposureModeStepViewModel`: currently appears loop-owned; do not add background
   readers/writers without one of the publication strategies above.
 

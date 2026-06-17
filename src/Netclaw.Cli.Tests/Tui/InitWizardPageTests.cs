@@ -61,6 +61,25 @@ public sealed class InitWizardPageTests : IDisposable
             "Expected step indicator 'Step 1 of' in terminal output");
     }
 
+    [Fact]
+    public async Task TuiNavigation_PostAsyncExecutesActionThroughTerminaInputLoop()
+    {
+        var (_, app, _, navigation) = CreateHeadlessAppWithNavigation(out _);
+        var ran = false;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var runTask = app.RunAsync(cts.Token);
+
+        await navigation.PostAsync(() =>
+        {
+            ran = true;
+            app.Shutdown();
+        });
+        await runTask;
+
+        Assert.True(ran);
+    }
+
     /// <summary>
     /// Verifies the keyboard input pipeline: Enter on the provider selection list
     /// routes through Termina's input -> page -> SelectionListNode -> ProviderStepViewModel.
@@ -214,14 +233,23 @@ public sealed class InitWizardPageTests : IDisposable
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
     {
+        var (terminal, app, vm, _) = CreateHeadlessAppWithNavigation(out input);
+        return (terminal, app, vm);
+    }
+
+    private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm, TuiNavigation Navigation)
+        CreateHeadlessAppWithNavigation(out VirtualInputSource input)
+    {
         var terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
+        var navigation = new TuiNavigation();
 
         InitWizardViewModel? capturedVm = null;
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);
+        services.AddSingleton(navigation);
         services.AddTerminaVirtualInput(virtualInput);
         services.AddTermina("/init", builder =>
         {
@@ -231,7 +259,8 @@ public sealed class InitWizardPageTests : IDisposable
                 _ =>
                 {
                     capturedVm = new InitWizardViewModel(
-                        _paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
+                        _paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe,
+                        tuiNavigation: navigation);
                     return capturedVm;
                 });
         });
@@ -240,7 +269,8 @@ public sealed class InitWizardPageTests : IDisposable
         // calls the factory above and wires the page to the ViewModel.
         var sp = services.BuildServiceProvider();
         var app = sp.GetRequiredService<TerminaApplication>();
+        navigation.Attach(app);
 
-        return (terminal, app, capturedVm!);
+        return (terminal, app, capturedVm!, navigation);
     }
 }

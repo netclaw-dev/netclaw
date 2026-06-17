@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Tui;
 using R3;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -27,9 +28,11 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     private readonly DaemonApi? _daemonApi;
     private readonly ChatNavigationState? _navigationState;
     private readonly TimeProvider _timeProvider;
+    private readonly TuiNavigation _tuiNavigation;
     private WizardContext? _context;
 
     public HealthCheckStepViewModel(
+        TuiNavigation tuiNavigation,
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
         ChatNavigationState? navigationState = null,
@@ -39,6 +42,26 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         _daemonApi = daemonApi;
         _navigationState = navigationState;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _tuiNavigation = tuiNavigation;
+    }
+
+    private Task PublishUiAsync(Action action)
+    {
+        if (!_tuiNavigation.IsAttached)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        return _tuiNavigation.PostAsync(action);
+    }
+
+    private void PublishUi(Action action)
+    {
+        if (!_tuiNavigation.IsAttached)
+            action();
+        else
+            _tuiNavigation.Post(action);
     }
 
     public string StepId => WizardStepIds.HealthCheck;
@@ -159,11 +182,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         catch (OperationCanceledException) when (overallCts.IsCancellationRequested)
         {
             AddResult(new HealthCheckItem("Health check timed out", false));
-            IsRunning.Value = false;
-            IsComplete.Value = true;
-            NotifyChanged();
-            if (_context is not null)
-                _context.StatusMessage.Value = "Setup timed out. Run `netclaw daemon start` to begin.";
+            await PublishUiAsync(() =>
+            {
+                IsRunning.Value = false;
+                IsComplete.Value = true;
+                NotifyChangedOnCurrentThread();
+                if (_context is not null)
+                    _context.StatusMessage.Value = "Setup timed out. Run `netclaw daemon start` to begin.";
+            });
         }
         catch (Exception ex)
         {
@@ -172,11 +198,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             // IsComplete=false permanently wedges the step — GoNext gates on !IsRunning &&
             // !IsComplete, so the operator could neither advance, go back, nor see an error.
             AddResult(new HealthCheckItem($"Health check failed: {ex.Message}", false));
-            IsRunning.Value = false;
-            IsComplete.Value = true;
-            NotifyChanged();
-            if (_context is not null)
-                _context.StatusMessage.Value = "Setup health check failed. Run `netclaw daemon start` to begin.";
+            await PublishUiAsync(() =>
+            {
+                IsRunning.Value = false;
+                IsComplete.Value = true;
+                NotifyChangedOnCurrentThread();
+                if (_context is not null)
+                    _context.StatusMessage.Value = "Setup health check failed. Run `netclaw daemon start` to begin.";
+            });
         }
     }
 
@@ -273,27 +302,32 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             }
         }
 
-        IsRunning.Value = false;
-        IsComplete.Value = true;
-        NotifyChanged();
+        await PublishUiAsync(() =>
+        {
+            IsRunning.Value = false;
+            IsComplete.Value = true;
+            NotifyChangedOnCurrentThread();
+        });
 
         allPassed = runner.AllPassed;
-        Succeeded.Value = allPassed;
-        if (allPassed)
+        await PublishUiAsync(() =>
         {
-            // Validation passed — launch chat automatically rather than gating on a second
-            // Enter. Mirrors the provider step's async-success auto-advance: this runs on
-            // the health-check task and drives navigation through the same wired Navigate
-            // delegate the Enter handler used (it sets the onboarding trigger first).
-            if (_context is not null)
-                _context.StatusMessage.Value = "✓ Netclaw is ready — starting chat…";
-            LaunchChat();
-        }
-        else if (_context is not null)
-        {
-            _context.StatusMessage.Value =
-                "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.";
-        }
+            Succeeded.Value = allPassed;
+            if (allPassed)
+            {
+                // Validation passed — launch chat automatically rather than gating on a second
+                // Enter. This mutates Termina navigation state, so async completions route
+                // through the TUI loop before invoking the navigation delegate.
+                if (_context is not null)
+                    _context.StatusMessage.Value = "✓ Netclaw is ready — starting chat…";
+                LaunchChat();
+            }
+            else if (_context is not null)
+            {
+                _context.StatusMessage.Value =
+                    "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.";
+            }
+        });
     }
 
     /// <summary>Launch the chat experience after a successful bootstrap. Routed through
@@ -429,6 +463,11 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         before is null || (current is { } now && now > before);
 
     private void NotifyChanged()
+    {
+        PublishUi(NotifyChangedOnCurrentThread);
+    }
+
+    private void NotifyChangedOnCurrentThread()
     {
         ResultVersion.Value++;
         _context?.RequestRedraw();

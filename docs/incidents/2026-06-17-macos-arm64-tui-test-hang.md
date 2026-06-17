@@ -1,6 +1,7 @@
 # Incident: `Test-macos-26` hangs in `Netclaw.Cli.Tests` (macOS / ARM64 only)
 
-- **Status:** ROOT CAUSE FOUND for CI hang; broader off-loop R3/Termina publication audit remains open.
+- **Status:** ROOT CAUSE FOUND for CI hang; init/provider/model off-loop R3 publication fixed;
+  broader config-editor publication audit remains open.
 - **Date opened:** 2026-06-17
 - **Affected:** PR #1368 (`docs/netclaw-validated-ui-components`), CI job `Test-macos-26` (`macos-26`, Apple Silicon / ARM64).
 - **Not affected:** `Test-ubuntu-latest`, `Test-windows-latest` (both x64), and local Linux x64 runs.
@@ -50,6 +51,12 @@ synchronously on the publishing thread, and several page subscriptions invalidat
 inline, so `RequestRedraw()` is not a general marshal to the Termina loop. The skill has been rewritten
 to require locked snapshots, immutable/atomic publication, or genuine loop-owned mutation for any state
 read by render/input.
+
+Follow-up production fix: `TuiNavigation` now exposes a repo-owned loop ingress (`Post`/`PostAsync`)
+implemented as a custom Termina `IInputSource`. Init/provider/model async completions now publish
+OAuth state, probe results, elapsed counters, health-check completion flags, and the post-bootstrap
+chat launch through that loop-owned action path. The config-editor surfaces called out below still need
+the same treatment in a separate sweep.
 
 ## Remaining hypothesis: macOS/ARM64 weak memory ordering (vs x64 TSO)
 

@@ -216,6 +216,7 @@ static async Task RunAsync(string[] args)
             });
 
             builder.Services.AddSingleton<InitNavigationState>();
+            builder.Services.AddSingleton<TuiNavigation>();
 
             // On an existing install, `netclaw init` opens an explicit action menu instead
             // of silently re-walking setup (simplify-netclaw-init). First run starts the
@@ -736,6 +737,7 @@ static async Task RunAsync(string[] args)
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
                     sp.GetService<TimeProvider>()));
             builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+            builder.Services.AddSingleton<TuiNavigation>();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
@@ -769,6 +771,7 @@ static async Task RunAsync(string[] args)
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Services.AddProviderDescriptors();
+            builder.Services.AddSingleton<TuiNavigation>();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 

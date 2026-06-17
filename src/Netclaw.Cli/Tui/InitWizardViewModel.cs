@@ -56,6 +56,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ProviderDescriptorRegistry registry,
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
+        TuiNavigation tuiNavigation,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
@@ -66,7 +67,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
         : this(paths, registry, registry, slackProbe, discordProbe,
             navigationState: navigationState,
             oauthFactory: oauthFactory, daemonManager: daemonManager, daemonApi: daemonApi,
-            clipboardService: clipboardService, timeProvider: timeProvider, sectionEditors: sectionEditors)
+            clipboardService: clipboardService, timeProvider: timeProvider, sectionEditors: sectionEditors,
+            tuiNavigation: tuiNavigation)
     {
     }
 
@@ -79,6 +81,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IProviderProbe probe,
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
+        TuiNavigation tuiNavigation,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
@@ -102,11 +105,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // provider -> identity -> security-posture -> feature-selection -> health-check.
         // Channels, Search, Browser Automation, and Skill Sources are no longer part of
         // first-run bootstrap; they moved to `netclaw config` (the post-install surface).
-        ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory, daemonApi);
+        ProviderStep = new ProviderStepViewModel(registry, probe, tuiNavigation, oauthFactory, daemonApi);
         var identityStep = new IdentityStepViewModel();
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
-        _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState, timeProvider);
+        _healthCheckStep = new HealthCheckStepViewModel(tuiNavigation, daemonManager, daemonApi, navigationState, timeProvider);
 
         var steps = new List<IWizardStepViewModel>
         {

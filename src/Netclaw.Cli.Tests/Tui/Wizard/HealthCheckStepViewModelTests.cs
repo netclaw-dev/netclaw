@@ -65,6 +65,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         var daemonManager = new DaemonManager(_paths, TimeProvider.System);
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager,
             daemonApi: null,
             navigationState: new ChatNavigationState());
@@ -103,6 +104,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
     {
         var daemonManager = new DaemonManager(_paths, TimeProvider.System);
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager, daemonApi: null, navigationState: new ChatNavigationState());
 
         var runner = new HealthCheckRunner(step.Results, () => { });
@@ -158,6 +160,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
     public async Task OnEnter_Forward_AfterFailedRun_ResetsStateForRetry()
     {
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager: null,
             daemonApi: null,
             navigationState: new ChatNavigationState());
@@ -227,6 +230,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         var daemonApi = new DaemonApi(new StubHttpClientFactory(handler), new ConfigurationBuilder().Build(), _paths);
 
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager,
             daemonApi,
             navigationState: new ChatNavigationState(),
@@ -287,6 +291,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         var daemonManager = new DaemonManager(_paths, TimeProvider.System, new FakeSupervisor(supervised: true));
 
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager,
             // No readiness probe → the poll loop is skipped and we fall straight through to
             // the timeout diagnostic, exercising the message path without a real wait.
@@ -325,6 +330,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         // operator could neither advance, go back, nor see an error).
         var daemonManager = new DaemonManager(_paths, TimeProvider.System);
         using var step = new HealthCheckStepViewModel(
+            new TuiNavigation(),
             daemonManager,
             daemonApi: null,
             navigationState: new ChatNavigationState());
