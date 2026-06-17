@@ -194,7 +194,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
 
     private ILayoutNode BuildAddChannel()
     {
-        var input = EnsureSingleInput(ChannelsConfigScreen.AddChannel, "channel", ViewModel.AddChannelInput, "channel IDs or #names, comma-separated");
+        var input = EnsureSingleInput(ChannelsConfigScreen.AddChannel, "channel", ViewModel.AddChannelInput, ViewModel.AddChannelPlaceholder);
         input.OnFocused();
 
         // Resolve-before-add: no audience picker here. The channel is resolved

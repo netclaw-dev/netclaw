@@ -94,6 +94,14 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal ChannelType ActiveAdapterType => _activeAdapterType;
     internal string ActiveAdapterName => GetAdapterDisplayName(_activeAdapterType);
+
+    // Matches the first-connect sub-flow's guidance per adapter. Discord/Mattermost display names rarely
+    // resolve from a name alone (server+channel ambiguity), so steer the operator to channel IDs there.
+    internal string AddChannelPlaceholder => _activeAdapterType switch
+    {
+        ChannelType.Slack => "channel names or IDs, comma-separated",
+        _ => "channel IDs, comma-separated"
+    };
     internal int ManagementMenuIndex => _managementMenuIndex;
     internal int ChannelRowIndex => _channelRowIndex;
     internal int AudienceSelectionIndex => _audienceSelectionIndex;
@@ -316,18 +324,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         try
         {
-            switch (type)
-            {
-                case ChannelType.Slack:
-                    await RefreshSlackChannelLabelsAsync(channelIds, ct);
-                    break;
-                case ChannelType.Discord:
-                    await RefreshDiscordChannelLabelsAsync(channelIds, ct);
-                    break;
-                case ChannelType.Mattermost:
-                    await RefreshMattermostChannelLabelsAsync(channelIds, ct);
-                    break;
-            }
+            var resolution = await ResolveChannelReferencesAsync(type, channelIds, ct);
+            if (resolution is null || ct.IsCancellationRequested)
+                return;
+
+            ReconcileResolvedChannels(type, channelIds, resolution.Value.Error, resolution.Value.Resolved);
+            NotifyContentChanged();
         }
         catch (Exception ex)
         {
@@ -548,20 +550,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         => ApplyAddChannelAsync().GetAwaiter().GetResult();
 
     /// <summary>
-    /// Resolves the typed channel against the active adapter (does it exist? can
-    /// the bot see it?) BEFORE adding it. On a resolve failure the channel is NOT
-    /// added and the operator stays on the add screen with an error. On success
-    /// the resolved channel ID is added at the system-default audience, its row is
-    /// focused, and the change is autosaved. The operator tunes the audience
-    /// afterward with ←/→ on the channel list — there is no audience picker during
-    /// add (matches the design prototype's resolve-before-add flow).
+    /// Appends the typed channel reference(s) to the active adapter, then canonicalizes them through the
+    /// SAME path the first-connect flow uses (<see cref="ReconcileResolvedChannels"/>): an id-shaped
+    /// reference is kept as the stable ACL key (even when the bot can't enumerate it — e.g. a Discord
+    /// channel id), a resolvable display name becomes its id, and anything that maps to no channel id is
+    /// dropped and flagged. Accepts a comma-separated list via the one shared <c>ChannelCsv</c> parser,
+    /// same as onboarding. Audiences are tuned afterward with ←/→ on the channel list.
     /// </summary>
     internal async Task ApplyAddChannelAsync(CancellationToken ct = default)
     {
-        // The add-channel field accepts a comma-separated list, the same as the first-connect sub-flow
-        // (ChannelCsv is the one shared parser). Each reference is resolved to its canonical id before it
-        // is added; references that don't resolve are reported and never persisted. Adapter-agnostic via
-        // ResolveSingleChannelAsync(_activeAdapterType, …) — works for Slack, Discord, and Mattermost.
         var references = ChannelCsv.ParseCsv(AddChannelInput, trimHash: true);
         if (references.Count == 0)
         {
@@ -571,155 +568,36 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         var existing = GetChannelIds(_activeAdapterType);
-        var seen = new HashSet<string>(existing, StringComparer.Ordinal);
-
-        Status.Value = new ConfigStatusMessage(
-            $"Resolving {Pluralize(references.Count, "channel", "channels")} on {ActiveAdapterName}...",
-            ConfigStatusTone.Neutral);
-        RequestRedraw();
-
-        var added = new List<string>();
-        var unresolved = new List<string>();
-        string? firstError = null;
-        string? lastAdded = null;
-        foreach (var reference in references)
+        var existingSet = new HashSet<string>(existing, StringComparer.Ordinal);
+        var fresh = references.Where(reference => existingSet.Add(reference)).ToList();
+        if (fresh.Count == 0)
         {
-            ChannelResolveOutcome outcome;
-            try
-            {
-                outcome = await ResolveSingleChannelAsync(_activeAdapterType, reference, ct);
-            }
-            catch (Exception ex)
-            {
-                // A genuine probe failure (network) means we can't validate at all — abort the batch and
-                // persist nothing rather than guess.
-                Status.Value = new ConfigStatusMessage($"{ActiveAdapterName} channel lookup failed: {ex.Message}", ConfigStatusTone.Error);
-                NotifyContentChanged();
-                return;
-            }
-
-            if (!outcome.Success)
-            {
-                unresolved.Add(reference);
-                firstError ??= outcome.ErrorMessage;
-                continue;
-            }
-
-            if (seen.Add(outcome.ChannelId!))
-            {
-                added.Add(outcome.ChannelId!);
-                SetChannelAudience(_activeAdapterType, outcome.ChannelId!, DefaultChannelAudience());
-                lastAdded = outcome.ChannelId;
-            }
-        }
-
-        if (added.Count == 0)
-        {
-            // Nothing resolved — stay on the add screen with the typed input and surface why.
-            Status.Value = new ConfigStatusMessage(firstError ?? "No channels could be resolved.", ConfigStatusTone.Error);
+            Status.Value = new ConfigStatusMessage("Those channels are already configured.", ConfigStatusTone.Neutral);
             NotifyContentChanged();
             return;
         }
 
-        SetChannelIds(_activeAdapterType, [.. existing, .. added]);
-        UpdateAdapterPickerSummary(_activeAdapterType);
-        // Focus the last-added channel row. Match only real channel rows: a resolved id of exactly "dm"
-        // with DMs enabled would otherwise collide with the DM row (also Id="dm") and make Single() throw.
-        var focus = GetChannelRows()
-            .Select((row, index) => (row, index))
-            .FirstOrDefault(entry => !entry.row.IsDirectMessage && !entry.row.IsAction
-                && string.Equals(entry.row.Id, lastAdded, StringComparison.Ordinal));
-        if (focus.row is not null)
-            _channelRowIndex = focus.index;
+        // Append the typed references with the default audience and move to the permissions list, exactly
+        // like completing the first-connect sub-flow.
+        SetChannelIds(_activeAdapterType, [.. existing, .. fresh]);
+        foreach (var reference in fresh)
+            SetChannelAudience(_activeAdapterType, reference, DefaultChannelAudience());
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
 
-        var saved = AutosaveCompletedAction(added.Count == 1
-            ? $"Added {added[0]} at the {DefaultChannelAudience()} default and saved."
-            : $"Added {Pluralize(added.Count, "channel", "channels")} and saved.");
-        if (saved && unresolved.Count > 0)
-            Status.Value = new ConfigStatusMessage(
-                $"Added {added.Count}; could not resolve {string.Join(", ", unresolved.Select(static c => $"#{c}"))} — check the name, membership, and read scope.",
-                ConfigStatusTone.Warning);
+        // Persist the appended list, then canonicalize through the shared reconcile — the front door. It
+        // resolves display names to ids, keeps id-shaped references the bot can't enumerate, drops the
+        // unmappable ones, and sets the final status. There is no bespoke single-channel resolver.
+        if (AutosaveCompletedAction(fresh.Count == 1
+                ? $"Added {fresh[0]} at the {DefaultChannelAudience()} default and saved."
+                : $"Added {Pluralize(fresh.Count, "channel", "channels")} and saved."))
+            await RefreshChannelLabelsAsync(_activeAdapterType, ct);
+
+        var lastRow = GetChannelRows()
+            .Select((row, index) => (row, index))
+            .LastOrDefault(entry => !entry.row.IsDirectMessage && !entry.row.IsAction);
+        if (lastRow.row is not null)
+            _channelRowIndex = lastRow.index;
         NotifyContentChanged();
-    }
-
-    /// <summary>
-    /// Resolves a single typed channel name/ID against the live adapter. Slack
-    /// channel IDs and Discord/Mattermost IDs are still probed for existence so a
-    /// non-resolving channel errors instead of being saved.
-    /// </summary>
-    private async Task<ChannelResolveOutcome> ResolveSingleChannelAsync(ChannelType type, string input, CancellationToken ct)
-    {
-        switch (type)
-        {
-            case ChannelType.Slack:
-            {
-                // An entered Slack channel ID needs no name lookup — add it directly.
-                if (IsSlackChannelId(input))
-                    return ChannelResolveOutcome.Ok(input);
-
-                var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-                var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(botToken))
-                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.SlackBotTokenRequired);
-
-                var result = await _slackProbe.ResolveChannelNamesAsync(botToken, [input], ct);
-                slack.LastChannelResolution = result; // feeds the channel-row display label.
-                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-                    return ChannelResolveOutcome.Fail($"Slack channel lookup failed: {result.ErrorMessage}");
-                if (result.Unresolved.Count > 0 || !result.Success)
-                    return ChannelResolveOutcome.Fail($"Slack channel not found: #{input}");
-
-                // Name resolved to an ID, or the probe accepted it without enriching.
-                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].Id : input);
-            }
-
-            case ChannelType.Discord:
-            {
-                var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-                var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(botToken))
-                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.DiscordBotTokenRequired);
-
-                var result = await _discordProbe.ResolveChannelIdsAsync(botToken, [input], ct);
-                discord.LastChannelResolution = result; // feeds the channel-row display label.
-                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-                    return ChannelResolveOutcome.Fail($"Discord channel lookup failed: {result.ErrorMessage}");
-                if (result.Unresolved.Count > 0 || !result.Success)
-                    return ChannelResolveOutcome.Fail($"Discord channel ID not found: {input}");
-
-                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].ChannelId : input);
-            }
-
-            case ChannelType.Mattermost:
-            {
-                var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-                var serverUrl = Normalize(mattermost.ServerUrl);
-                if (string.IsNullOrWhiteSpace(serverUrl))
-                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.MattermostServerUrlRequired);
-
-                var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(botToken))
-                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.MattermostBotTokenRequired);
-
-                var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, [input], ct);
-                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-                    return ChannelResolveOutcome.Fail($"Mattermost channel lookup failed: {result.ErrorMessage}");
-                if (result.Unresolved.Count > 0 || !result.Success)
-                    return ChannelResolveOutcome.Fail($"Mattermost channel ID not found: {input}");
-
-                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].ChannelId : input);
-            }
-
-            default:
-                return ChannelResolveOutcome.Fail("Unsupported adapter.");
-        }
-    }
-
-    private readonly record struct ChannelResolveOutcome(bool Success, string? ChannelId, string? ErrorMessage)
-    {
-        internal static ChannelResolveOutcome Ok(string channelId) => new(true, channelId, null);
-        internal static ChannelResolveOutcome Fail(string error) => new(false, null, error);
     }
 
     internal void FinishChannelPermissions()
@@ -1139,59 +1017,55 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(type);
     }
 
-    private async Task RefreshSlackChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
+    // The single place that knows each transport's probe shape: probe the live adapter for the given
+    // references and return (probe-error, resolved id/name pairs) — or null when the adapter's credentials
+    // aren't available. Everything downstream (ReconcileResolvedChannels) is transport-agnostic, so
+    // onboarding and the add-channel flow share one resolution path for every channel type.
+    private async Task<(string? Error, IEnumerable<(string Id, string Name)> Resolved)?> ResolveChannelReferencesAsync(
+        ChannelType type, IReadOnlyList<string> channelIds, CancellationToken ct)
     {
-        var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-        var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
-        if (string.IsNullOrWhiteSpace(botToken))
-            return;
+        switch (type)
+        {
+            case ChannelType.Slack:
+            {
+                var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+                var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(botToken))
+                    return null;
 
-        var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
-        if (ct.IsCancellationRequested)
-            return;
+                var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
+                slack.LastChannelResolution = result;
+                return (result.ErrorMessage, result.Resolved.Select(static c => (c.Id, c.Name)));
+            }
 
-        slack.LastChannelResolution = result;
-        ReconcileResolvedChannels(
-            ChannelType.Slack, channelIds, result.ErrorMessage,
-            result.Resolved.Select(static c => (c.Id, c.Name)));
-        NotifyContentChanged();
-    }
+            case ChannelType.Discord:
+            {
+                var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+                var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(botToken))
+                    return null;
 
-    private async Task RefreshDiscordChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
-    {
-        var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-        var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
-        if (string.IsNullOrWhiteSpace(botToken))
-            return;
+                var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
+                discord.LastChannelResolution = result;
+                return (result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+            }
 
-        var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
-        if (ct.IsCancellationRequested)
-            return;
+            case ChannelType.Mattermost:
+            {
+                var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+                var serverUrl = Normalize(mattermost.ServerUrl);
+                var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(botToken))
+                    return null;
 
-        discord.LastChannelResolution = result;
-        ReconcileResolvedChannels(
-            ChannelType.Discord, channelIds, result.ErrorMessage,
-            result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
-        NotifyContentChanged();
-    }
+                var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
+                mattermost.LastChannelResolution = result;
+                return (result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+            }
 
-    private async Task RefreshMattermostChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
-    {
-        var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-        var serverUrl = Normalize(mattermost.ServerUrl);
-        var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
-        if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(botToken))
-            return;
-
-        var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
-        if (ct.IsCancellationRequested)
-            return;
-
-        mattermost.LastChannelResolution = result;
-        ReconcileResolvedChannels(
-            ChannelType.Mattermost, channelIds, result.ErrorMessage,
-            result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
-        NotifyContentChanged();
+            default:
+                return null;
+        }
     }
 
     // Canonicalize the persisted allow-list against a completed channel resolution. The stored ACL key
@@ -1250,22 +1124,18 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             IsSaved.Value = true;
         }
 
-        // Fail loud, in human terms (the stored id is not readable). On a probe failure, surface the
-        // underlying reason (and which unverified channels were not saved); otherwise name exactly which
-        // channels were removed and why.
-        if (!string.IsNullOrWhiteSpace(errorMessage))
+        // Fail loud only when something is actually lost. A drop is the meaningful failure: name the
+        // dropped channels and the reason — the probe error if there was one, else the usual checklist.
+        // A probe error that dropped NOTHING (every reference is an id-shaped key the bot just couldn't
+        // enrich with a display label) is benign: leave the prior status (e.g. the add's "Added …")
+        // intact rather than masking a successful add with a lookup failure.
+        if (dropped.Count > 0)
         {
-            var suffix = dropped.Count > 0
-                ? $" Unverified channel(s) not saved: {string.Join(", ", dropped.Select(static c => $"#{c}"))}."
-                : string.Empty;
+            var reason = string.IsNullOrWhiteSpace(errorMessage)
+                ? "check the name, that the bot is invited, and that it has channel-read scope"
+                : errorMessage;
             Status.Value = new ConfigStatusMessage(
-                $"{GetAdapterDisplayName(type)} channel lookup failed: {errorMessage}{suffix}",
-                ConfigStatusTone.Warning);
-        }
-        else if (dropped.Count > 0)
-        {
-            Status.Value = new ConfigStatusMessage(
-                $"Removed {GetAdapterDisplayName(type)} channel(s) the bot can't see: {string.Join(", ", dropped.Select(static c => $"#{c}"))} — check the name, that the bot is invited, and that it has channel-read scope.",
+                $"Dropped {string.Join(", ", dropped.Select(static c => $"#{c}"))} — {reason}",
                 ConfigStatusTone.Warning);
         }
         else if (changed)

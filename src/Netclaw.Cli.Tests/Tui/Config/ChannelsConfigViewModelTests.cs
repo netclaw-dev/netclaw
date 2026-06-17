@@ -731,7 +731,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         // The resolve ran with the bot token, the resolved ID was added, and we
         // advanced to the channel list with the new row focused.
         Assert.Equal(1, slackProbe.ResolveCallCount);
-        Assert.Equal(["netclaw-support"], slackProbe.LastResolvedNames);
+        Assert.Contains("netclaw-support", slackProbe.LastResolvedNames!);
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
         Assert.True(vm.IsSaved.Value);
         var focusedRow = vm.GetChannelRows()[vm.ChannelRowIndex];
@@ -767,11 +767,10 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_that_does_not_resolve_is_not_added_and_keeps_the_add_screen()
+    public void Add_channel_that_does_not_resolve_is_dropped_with_a_warning()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
         var slackProbe = new FakeSlackProbe
         {
             NextResolutionResult = new SlackChannelResolutionResult(false, null, [], ["ghost"])
@@ -783,15 +782,15 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.ApplyAddChannel();
 
-        Assert.Equal(1, slackProbe.ResolveCallCount);
-        Assert.Equal(ChannelsConfigScreen.AddChannel, vm.Screen.Value);
-        Assert.Equal("Slack channel not found: #ghost", vm.Status.Value.Text);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        // The channel was never added to the in-memory list nor persisted.
+        // Unified with the first-connect front door: the typed reference is canonicalized through the
+        // shared reconcile. A display name that maps to no channel id is dropped (never persisted) and
+        // flagged on the permissions screen — not left inert in the ACL.
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("ghost", vm.Status.Value.Text, StringComparison.Ordinal);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
         Assert.Equal(["C01", "C02", "C03"], ToStringArray(channelsRaw));
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
@@ -965,7 +964,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         Assert.Equal(1, slackProbe.ResolveCallCount);
         Assert.Equal("xoxb-test", slackProbe.LastBotToken);
-        Assert.Equal(["netclaw-support"], slackProbe.LastResolvedNames);
+        Assert.Contains("netclaw-support", slackProbe.LastResolvedNames!);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
         Assert.Equal(["C01", "C02", "C03", "C09"], ToStringArray(channelsRaw));
