@@ -40,6 +40,6 @@ Cited file:line numbers are from the review doc and may drift as fixes land. -->
 
 ## 4. Verification & close
 
-- [ ] 4.1 Per fix/batch: `dotnet build` + `dotnet test` (affected projects) + `dotnet slopwatch analyze` + `Add-FileHeaders.ps1 -Verify`; run the native smoke tape(s) for any touched TUI surface (config-channels, config-search, config-posture, config-exposure, init-wizard, etc.).
-- [ ] 4.2 `/opsx-verify` the change; full unit suite + `run-smoke.sh light` green before declaring the list complete.
-- [ ] 4.3 On merge with the implementation branch: `/opsx-sync` then `/opsx-archive` to fold `config-tui-resilience` into `openspec/specs/`.
+- [x] 4.1 Per fix/batch: `dotnet build` + `dotnet test` (affected projects) + `dotnet slopwatch analyze` + `Add-FileHeaders.ps1 -Verify`; run the native smoke tape(s) for any touched TUI surface (config-channels, config-search, config-posture, config-exposure, init-wizard, etc.).
+- [x] 4.2 `/opsx-verify` the change; full unit suite + `run-smoke.sh light` green before declaring the list complete.
+- [x] 4.3 On merge with the implementation branch: `/opsx-sync` then `/opsx-archive` to fold `config-tui-resilience` into `openspec/specs/`.

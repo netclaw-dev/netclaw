@@ -57,11 +57,18 @@ to `netclaw config`.
 The wizard SHALL continue to write `SOUL.md` and `TOOLING.md`. Identity
 remains init-owned in this branch.
 
+The bootstrap wizard SHALL consist of exactly **5 steps** in canonical order:
+Provider → Identity → Security Posture → Enabled Features → Health Check.
+`TotalSteps` is **5** for `Team`/`Public` postures and **4** for `Personal`
+posture (Enabled Features is omitted). Step-progress indicators SHALL reflect
+the dynamic count.
+
 #### Scenario: Personal posture skips enabled-features bootstrap step
 
 - **GIVEN** the operator selected `Personal`
 - **WHEN** the posture step completes
 - **THEN** init does not open an Enabled Features step
+- **AND** the wizard proceeds directly to Health Check (step 4 of 4)
 
 #### Scenario: Team posture continues into enabled-features bootstrap step
 
@@ -75,40 +82,60 @@ remains init-owned in this branch.
 - **WHEN** the posture step completes
 - **THEN** init automatically continues into Enabled Features
 
+---
+
 ### Requirement: Phase 2 conversational personality bootstrap
 
 The system SHALL trigger a conversational personality bootstrap on the first
-conversation if personality files (PERSONALITY.md, INSTRUCTIONS.md, USER.md)
-do not exist. The bootstrap conversation SHALL ask the operator about
-communication preferences, tone, name preferences, and working style, then
-write the resulting soul files to the standard config directory.
+conversation if identity files (`SOUL.md`, `TOOLING.md`) do not already carry
+operator-enriched content. The bootstrap is delivered as an initial chat message
+injected by the init wizard's navigate callback when `LaunchChat()` fires. The
+bootstrap message SHALL ask the operator about communication preferences, tone,
+name preferences, and working style, then instruct the agent to update `SOUL.md`
+with what it learns. `AGENTS.md` is loaded from embedded resources at runtime
+and is NOT written to disk by the wizard.
 
 #### Scenario: First conversation triggers bootstrap
 
-- **GIVEN** no personality files exist in the config directory
-- **WHEN** the operator starts their first conversation with Netclaw
-- **THEN** the agent initiates a personality bootstrap conversation
-- **AND** asks about communication preferences and working style
+- **GIVEN** the operator completed the init wizard successfully
+- **WHEN** the health check step auto-launches chat via `LaunchChat()`
+- **THEN** the agent receives a pre-filled onboarding trigger message
+- **AND** the message instructs it to introduce itself, ask the operator about
+  their primary use case, ask about background and preferences, and then update
+  `SOUL.md` with the learned details
 
 #### Scenario: Bootstrap writes soul files
 
 - **GIVEN** the personality bootstrap conversation is complete
-- **WHEN** the operator has answered all preference questions
-- **THEN** the system writes PERSONALITY.md, INSTRUCTIONS.md, and USER.md to
-  the config directory
+- **WHEN** the operator has answered the agent's preference questions
+- **THEN** the agent updates `SOUL.md` in the config directory with what it
+  learned
+- **AND** `TOOLING.md` is already in place from the init wizard's
+  `WriteIdentityFiles` call
 
 #### Scenario: Bootstrap skipped when files exist
 
-- **GIVEN** personality files already exist in the config directory
+- **GIVEN** `SOUL.md` already exists in the config directory with enriched
+  content
 - **WHEN** a new conversation starts
-- **THEN** no personality bootstrap is triggered
-- **AND** the existing personality files are loaded normally
+- **THEN** no personality bootstrap trigger is injected
+- **AND** the existing `SOUL.md` is loaded normally
+
+---
 
 ### Requirement: Environment discovery during onboarding
 
-The system SHALL scan for installed tools and host capabilities as part of
-Phase 2 onboarding. Discovery results SHALL be persisted to the environment
-inventory file for use in session context and capability self-awareness.
+`netclaw init` SHALL NOT perform environment discovery in the shipped first-run flow (DEFERRED — unimplemented Phase 2 work).
+
+**[DEFERRED — not part of the shipped first-run flow.]** This requirement
+describes planned Phase 2 behavior that has not been implemented. Environment
+discovery does NOT run during `netclaw init` and is NOT triggered by the health
+check step. When implemented, it SHALL be gated by an explicit PRD update and
+SHALL NOT be silently enabled in the bootstrap wizard.
+
+The system SHALL scan for installed tools and host capabilities as part of Phase
+2 onboarding. Discovery results SHALL be persisted to the environment inventory
+file for use in session context and capability self-awareness.
 
 #### Scenario: Tool discovery during onboarding
 
@@ -125,7 +152,16 @@ inventory file for use in session context and capability self-awareness.
 - **THEN** the system checks reachability of each configured MCP server
 - **AND** records reachability status in the environment inventory
 
+---
+
 ### Requirement: Project registration during onboarding
+
+`netclaw init` SHALL NOT perform project registration in the shipped first-run flow (DEFERRED — unimplemented Phase 2 work).
+
+**[DEFERRED — not part of the shipped first-run flow.]** This requirement
+describes planned Phase 2 behavior that has not been implemented. Project
+registration does NOT occur during `netclaw init`. When implemented, it SHALL
+be gated by an explicit PRD update.
 
 The system SHALL ask the operator about repositories to register as part of
 Phase 2 onboarding. Registered projects are added to the project registry
@@ -143,53 +179,7 @@ with their paths, capabilities, and AGENTS.md locations.
 - **AND** the operator indicates no projects to register
 - **THEN** onboarding proceeds with an empty project registry
 
-### Requirement: Memory provider selection during onboarding
-
-The init wizard SHALL include a Memory step (step 6, after BrowserAutomation)
-that allows operators to choose between "Local files" (default) and
-"Memorizer" as the cross-session memory backend. The step SHALL always render
-and SHALL NOT be conditionally skipped. `TotalSteps` SHALL be 9.
-
-#### Scenario: Operator selects local files
-
-- **WHEN** the wizard reaches the Memory step
-- **AND** the operator selects "Local files (default)"
-- **THEN** the wizard writes `"Memory": { "Provider": "files" }` to
-  `netclaw.json`
-- **AND** advances to the next step without further substeps
-
-#### Scenario: Operator selects Memorizer
-
-- **WHEN** the wizard reaches the Memory step
-- **AND** the operator selects "Memorizer"
-- **THEN** the wizard advances to the Memorizer connection substep
-
-#### Scenario: Default selection is local files
-
-- **WHEN** the wizard reaches the Memory step
-- **THEN** "Local files (default)" is pre-selected
-
-### Requirement: Memorizer MCP connection configuration
-
-When the operator selects Memorizer, the wizard SHALL collect MCP server
-connection details: transport type (stdio or http) and the corresponding
-connection parameters (URL for http, command + arguments for stdio). The
-wizard SHALL write both `Memory.Provider` and a `McpServers.memorizer` entry
-to `netclaw.json`.
-
-#### Scenario: Configure HTTP transport
-
-- **GIVEN** the operator selected Memorizer
-- **WHEN** the wizard reaches the connection substep
-- **AND** the operator selects "HTTP" transport and enters a URL
-- **THEN** the wizard writes `"McpServers": { "memorizer": { "Transport": "http", "Url": "<url>", "Enabled": true } }`
-
-#### Scenario: Configure stdio transport
-
-- **GIVEN** the operator selected Memorizer
-- **WHEN** the wizard reaches the connection substep
-- **AND** the operator selects "stdio" transport and enters command + arguments
-- **THEN** the wizard writes the corresponding stdio MCP server entry
+---
 
 ### Requirement: Memorizer connectivity validation during onboarding
 
@@ -224,14 +214,17 @@ timeout. On failure, the wizard SHALL offer retry or fallback to local files.
 ### Requirement: TUI wizard delivery mechanism
 
 The `netclaw init` onboarding wizard SHALL be delivered through Termina TUI
-as an interactive 9-step wizard with progress indication, validation, and
-back-navigation.
+as an interactive wizard with progress indication, validation, and
+back-navigation. The wizard SHALL have **5 steps** for `Team`/`Public` posture
+and **4 steps** for `Personal` posture. Step-progress indicators (e.g.,
+"Step 2 of 5" or "Step 2 of 4") SHALL reflect the dynamic total. There is no
+fixed 9-step wizard.
 
 #### Scenario: Wizard renders in TUI
 
 - **WHEN** operator runs `netclaw init`
 - **THEN** a Termina TUI application launches
-- **AND** the wizard displays step progress (e.g., "Step 2 of 9")
+- **AND** the wizard displays step progress (e.g., "Step 2 of 5")
 - **AND** the wizard displays a progress bar
 
 #### Scenario: Step-specific components rendered
@@ -250,10 +243,12 @@ back-navigation.
 
 #### Scenario: Live validation during wizard
 
-- **GIVEN** the wizard is on the Memory step with Memorizer selected
-- **WHEN** the operator enters connection details
-- **THEN** the wizard validates connectivity with a SpinnerNode
+- **GIVEN** the wizard is on the Provider step
+- **WHEN** the operator enters provider credentials
+- **THEN** the wizard validates the credentials
 - **AND** displays success or failure before allowing progression
+
+---
 
 ### Requirement: Onboarding bootstrap aligns with daemon-owned first-launch bootstrap
 
@@ -378,4 +373,117 @@ if the serialized file text changes.
 - **WHEN** the operator leaves that field blank and saves
 - **THEN** the existing secret remains stored
 - **AND** no decrypted value is shown in the UI
+
+### Requirement: Identity step collects exactly four substeps
+
+The Identity wizard step SHALL collect exactly **4 substeps** in order:
+agent name → communication style → operator name → timezone. `SubStepCount`
+SHALL equal 4. The Identity step SHALL NOT collect a workspaces directory path
+or a notification-webhook URL; those are post-install settings owned by
+`netclaw config`.
+
+#### Scenario: Identity step has four substeps
+
+- **WHEN** the wizard enters the Identity step
+- **THEN** `SubStepCount` equals 4
+- **AND** the substeps are agent name (0), communication style (1), operator
+  name (2), and timezone (3)
+
+#### Scenario: Workspaces directory not collected in init
+
+- **WHEN** the operator completes the Identity step
+- **THEN** no workspaces directory is written to `netclaw.json`
+- **AND** `WizardConfigBuilder.Workspaces` is null after `ContributeConfig`
+
+#### Scenario: Notification webhook not collected in init
+
+- **WHEN** the operator completes the Identity step
+- **THEN** no notification webhook is written to `netclaw.json`
+- **AND** `WizardConfigBuilder.Notifications` is null after `ContributeConfig`
+
+#### Scenario: Identity step prefills from existing config on re-entry
+
+- **GIVEN** `netclaw.json` exists with `Identity.AgentName`, `Identity.CommunicationStyle`,
+  `Identity.UserName`, and `Identity.UserTimezone`
+- **WHEN** the operator re-enters the Identity step
+- **THEN** all four non-secret fields are prefilled from the existing config
+
+---
+
+### Requirement: Health check auto-launches chat on success
+
+The health check step SHALL launch `netclaw chat` automatically on a clean bootstrap.
+
+On a clean bootstrap (all health check probes passing), the health check step
+SHALL invoke `LaunchChat()` automatically without requiring a second Enter
+keypress. `LaunchChat()` SHALL route to `/chat` via the wired `Navigate`
+delegate. On warnings or failure the step SHALL remain on the summary and exit
+on Enter without routing to chat.
+
+#### Scenario: Clean bootstrap auto-launches chat
+
+- **GIVEN** all health-check probes passed
+- **WHEN** `RunHealthCheckCoreAsync` completes
+- **THEN** `LaunchChat()` is called automatically
+- **AND** the Navigate delegate receives `"/chat"`
+- **AND** `Succeeded` is `true`
+
+#### Scenario: Failed health check does not launch chat
+
+- **GIVEN** one or more health-check probes failed
+- **WHEN** `RunHealthCheckCoreAsync` completes
+- **THEN** `LaunchChat()` is NOT called
+- **AND** the step displays the failure summary
+- **AND** `Succeeded` is `false`
+
+#### Scenario: Failure summary status message
+
+- **GIVEN** the health check completed with at least one failure
+- **WHEN** the operator views the summary
+- **THEN** the status message reads: "Setup complete with warnings. Run
+  `netclaw daemon start`, then `netclaw chat`. Adjust settings with
+  `netclaw config`."
+
+---
+
+### Requirement: Health check surfaces container-supervisor deferral reason on timeout
+
+A health-check failure SHALL surface the container-supervisor deferral reason when the supervised daemon never arrives.
+
+When the daemon is externally supervised (`NETCLAW_CONTAINER_SUPERVISOR` marker
+set) but the supervisor never actually brings the daemon up within the readiness
+poll window, the health-check failure item SHALL surface the actionable
+container-supervisor deferral reason (including the hint that the marker may be
+set without a supervisor present) rather than the generic "Daemon did not become
+ready" message. When a startup-abort crash log is present, the failure message
+SHALL include both the abort reason and the crash-log path.
+
+#### Scenario: Supervisor marker set but daemon never starts — surfaces deferral reason
+
+- **GIVEN** `NETCLAW_CONTAINER_SUPERVISOR` is set (i.e., `IsExternallySupervised` is `true`)
+- **AND** no supervisor process actually starts the daemon (e.g., the image replaced
+  the entrypoint)
+- **AND** no `DaemonApi` is wired (poll loop is skipped)
+- **WHEN** `StartIfNeededAndPollAsync` times out
+- **THEN** the failing health-check item label contains "container supervisor"
+- **AND** contains "marker may be set without a supervisor present"
+- **AND** does NOT contain "Daemon did not become ready"
+- **AND** `Succeeded` is `false`
+
+#### Scenario: Startup-abort crash log surfaces specific failure message
+
+- **GIVEN** the daemon binary exits immediately (bad config or fatal startup error)
+- **AND** a crash log exists in the logs directory containing
+  "Daemon startup aborted: …"
+- **WHEN** `StartIfNeededAndPollAsync` detects the crash log
+- **THEN** the failing health-check item label contains the specific abort reason
+- **AND** contains the crash-log path
+- **AND** does NOT contain "Daemon did not become ready"
+
+#### Scenario: Generic not-ready message is suppressed when a diagnostic is available
+
+- **GIVEN** either a crash log or a supervisor deferral reason is available
+- **WHEN** the health-check step records the failure item
+- **THEN** the generic "Daemon did not become ready" string is absent from the
+  failure label
 

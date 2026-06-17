@@ -28,6 +28,8 @@ The root SHALL include:
   `Security & Access`
 - **AND** it does not render a flat dump of every registered leaf editor
 
+## ADDED Requirements
+
 ### Requirement: Channels area supports Slack, Discord, and Mattermost adapters
 
 The `Channels` domain area SHALL support three channel adapters: Slack,
@@ -42,8 +44,6 @@ configured, and managed from the same Channels editor.
   adapter entries
 - **AND** enabling Mattermost leads to credential entry (server URL and
   bot token) followed by channel resolution
-
-## ADDED Requirements
 
 ### Requirement: Directory pickers use an interactive file-picker widget
 

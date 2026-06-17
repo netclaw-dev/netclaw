@@ -34,4 +34,4 @@ cited code/tests) + sync, not new implementation. -->
 
 - [x] 5.1 `openspec validate reconcile-config-onboarding-specs --strict` passes (all deltas parse; MODIFIED headers match existing specs).
 - [x] 5.2 `/opsx-verify` — confirm each delta still matches the cited code/tests.
-- [ ] 5.3 On merge with the implementation branch, `/opsx-sync` then `/opsx-archive` to fold the deltas into `openspec/specs/`.
+- [x] 5.3 On merge with the implementation branch, `/opsx-sync` then `/opsx-archive` to fold the deltas into `openspec/specs/`.
