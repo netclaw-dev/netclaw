@@ -545,6 +545,25 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Mattermost_channel_row_shows_the_resolved_display_name_not_the_opaque_id()
+    {
+        // #1324: the stored ACL key is the opaque Mattermost channel id; the list view must render the
+        // resolved human display name (as Slack/Discord already do), not the id.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            { "configVersion": 1, "Mattermost": { "Enabled": true, "ServerUrl": "https://mm.example.com", "AllowedChannelIds": ["4xp9p3onpins8"] } }
+            """);
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Mattermost);
+        vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).LastChannelResolution =
+            new MattermostChannelResolutionResult(
+                true, null, [new ResolvedMattermostChannel("4xp9p3onpins8", "town-square", "Town Square")], []);
+
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), r => r.Id == "4xp9p3onpins8");
+        Assert.Equal("Town Square", row.DisplayName);
+    }
+
+    [Fact]
     public async Task Add_channel_field_accepts_a_comma_separated_list_and_resolves_each()
     {
         // Regression: "openclaw, netclaw-test" used to be treated as ONE bogus channel. The add field

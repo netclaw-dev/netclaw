@@ -1599,7 +1599,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             ChannelType.Slack => FormatSlackChannelLabel(channelId),
             ChannelType.Discord => FormatDiscordChannelLabel(channelId),
-            ChannelType.Mattermost => channelId,
+            ChannelType.Mattermost => FormatMattermostChannelLabel(channelId),
             _ => channelId
         };
 
@@ -1617,6 +1617,21 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         var resolved = discord.LastChannelResolution?.Resolved.FirstOrDefault(channel =>
             string.Equals(channel.ChannelId, channelId, StringComparison.Ordinal));
         return resolved?.ToDisplayName() ?? channelId;
+    }
+
+    private string FormatMattermostChannelLabel(string channelId)
+    {
+        var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+        var resolved = mattermost.LastChannelResolution?.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.ChannelId, channelId, StringComparison.Ordinal));
+        if (resolved is null)
+            return channelId;
+
+        // Mattermost exposes a human display name and a url slug; prefer the display name, fall back to
+        // the #slug, and only show the opaque id when neither resolved.
+        return !string.IsNullOrWhiteSpace(resolved.DisplayName)
+            ? resolved.DisplayName
+            : $"#{resolved.ChannelName}";
     }
 
     private static int AudienceIndex(TrustAudience audience)
