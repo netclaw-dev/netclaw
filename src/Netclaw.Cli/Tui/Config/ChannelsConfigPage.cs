@@ -539,7 +539,9 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         if (keyInfo.Key == ConsoleKey.Enter)
         {
             StageSingleInput();
-            ViewModel.ApplyAddChannel();
+            // Fire-and-forget: the add resolves channels against the platform API, so it runs async
+            // off the loop (ViewModel serializes the write). Blocking here would freeze the TUI.
+            _ = ViewModel.AddChannelFromInputAsync();
             return;
         }
 
@@ -621,7 +623,9 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 ViewModel.MoveResetConfirmation(1);
                 break;
             case ConsoleKey.Enter:
-                ViewModel.ApplyResetConfirmation();
+                // Fire-and-forget: the reset cancels-and-awaits any in-flight label refresh before
+                // writing, so it runs async off the loop (ViewModel serializes the write).
+                _ = ViewModel.ResetConfirmationFromInputAsync();
                 break;
         }
     }

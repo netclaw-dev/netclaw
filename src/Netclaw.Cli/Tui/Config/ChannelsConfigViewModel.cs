@@ -163,9 +163,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ReturnToDashboard();
     }
 
-    public bool Save()
-        => SaveAsync().GetAwaiter().GetResult();
-
     public async Task<bool> SaveAsync(CancellationToken ct = default)
         => await SaveAsync("Channels saved.", probeChannelAccess: true, ct);
 
@@ -258,6 +255,45 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             "Channel settings save failed",
             RequestRedraw,
             ct);
+
+    // Input-triggered config writes (autosave, add-channel, reset) run async OFF the Termina loop so
+    // they never freeze input/rendering on a probe or disk write. The sync .GetAwaiter().GetResult()
+    // bridges they replaced were implicitly serialized by the single-threaded loop — exactly one ran
+    // start-to-finish before the next input. Preserve that ordering explicitly by chaining each write
+    // behind the previous one, so two rapid mutations can't race the disk write + state reload. In the
+    // common case (no in-flight label refresh) the prior task is already complete, so the chain runs
+    // synchronously inline and adds no overhead. Touched only on the loop thread (and the test thread,
+    // also single-threaded), so the field assignment needs no synchronization. Exposed as
+    // PendingConfigWrite so tests await completion deterministically instead of sleeping.
+    private Task _pendingConfigWrite = Task.CompletedTask;
+
+    internal Task PendingConfigWrite => _pendingConfigWrite;
+
+    private Task EnqueueConfigWriteAsync(Func<Task> write)
+    {
+        var prior = _pendingConfigWrite;
+        var next = ChainAsync();
+        _pendingConfigWrite = next;
+        return next;
+
+        async Task ChainAsync()
+        {
+            // The prior write already surfaced its own failure status via ConfigAutosave; swallowing
+            // here only prevents one failed write from cancelling the writes queued behind it.
+            try { await prior; }
+            catch { /* intentionally ignored — see comment above */ }
+            await write();
+        }
+    }
+
+    // Dispatched fire-and-forget from the synchronous Termina key handler. The loop stays responsive
+    // while the add resolves channels against the platform API; the write itself is serialized behind
+    // any prior config write by EnqueueConfigWriteAsync.
+    internal Task AddChannelFromInputAsync()
+        => EnqueueConfigWriteAsync(() => ApplyAddChannelAsync());
+
+    internal Task ResetConfirmationFromInputAsync()
+        => EnqueueConfigWriteAsync(() => ApplyResetConfirmationAsync());
 
     internal bool TryOpenSelectedAdapterManagement()
     {
@@ -546,9 +582,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    internal void ApplyAddChannel()
-        => ApplyAddChannelAsync().GetAwaiter().GetResult();
-
     /// <summary>
     /// Appends the typed channel reference(s) to the active adapter, then canonicalizes them through the
     /// SAME path the first-connect flow uses (<see cref="ReconcileResolvedChannels"/>): an id-shaped
@@ -578,19 +611,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         // Append the typed references with the default audience and move to the permissions list, exactly
-        // like completing the first-connect sub-flow.
+        // like completing the first-connect sub-flow. Settle ALL on-loop UI state — the screen and the
+        // focus on the newly added row — synchronously, BEFORE the async persist. This runs fire-and-forget
+        // from the key handler, so a subsequent keypress must navigate from a deterministic position; the
+        // async tail below only updates status + labels (via RequestRedraw), never navigation or focus. The
+        // row index is computed from the in-memory append, which the save's reload preserves.
         SetChannelIds(_activeAdapterType, [.. existing, .. fresh]);
         foreach (var reference in fresh)
             SetChannelAudience(_activeAdapterType, reference, DefaultChannelAudience());
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-
-        // Persist the appended list, then canonicalize through the shared reconcile — the front door. It
-        // resolves display names to ids, keeps id-shaped references the bot can't enumerate, drops the
-        // unmappable ones, and sets the final status. There is no bespoke single-channel resolver.
-        if (AutosaveCompletedAction(fresh.Count == 1
-                ? $"Added {fresh[0]} at the {DefaultChannelAudience()} default and saved."
-                : $"Added {Pluralize(fresh.Count, "channel", "channels")} and saved."))
-            await RefreshChannelLabelsAsync(_activeAdapterType, ct);
 
         var lastRow = GetChannelRows()
             .Select((row, index) => (row, index))
@@ -598,6 +627,17 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (lastRow.row is not null)
             _channelRowIndex = lastRow.index;
         NotifyContentChanged();
+
+        // Persist the appended list, then canonicalize through the shared reconcile — the front door. It
+        // resolves display names to ids, keeps id-shaped references the bot can't enumerate, drops the
+        // unmappable ones, and sets the final status. There is no bespoke single-channel resolver.
+        // Already inside an enqueued config write (AddChannelFromInputAsync), so persist via the
+        // awaitable autosave directly rather than re-enqueueing — re-enqueue would deadlock the add
+        // behind itself. The bool gates the follow-up label refresh.
+        if (await SaveCompletedAsync(fresh.Count == 1
+                ? $"Added {fresh[0]} at the {DefaultChannelAudience()} default and saved."
+                : $"Added {Pluralize(fresh.Count, "channel", "channels")} and saved.", ct))
+            await RefreshChannelLabelsAsync(_activeAdapterType, ct);
     }
 
     internal void FinishChannelPermissions()
@@ -1261,7 +1301,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    internal void ApplyResetConfirmation()
+    internal async Task ApplyResetConfirmationAsync(CancellationToken ct = default)
     {
         if (_resetConfirmIndex == 0)
         {
@@ -1273,11 +1313,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         // Cancel and await any in-flight Slack label refresh before persisting the reset and
         // rebuilding view-model state. A live background normalizer would otherwise write a stale
         // snapshot over the reset's config file, or clobber the just-reloaded view-model state — the
-        // same race SaveAsync guards at its top (line 168). This path bypassed SaveAsync, so it needs
-        // the same guard. Bridged synchronously like the VM's other sync save entry points: Termina
-        // has no SynchronizationContext, so blocking the loop thread for the cancelled refresh's
-        // prompt completion cannot deadlock, and the reset stays synchronous as before.
-        CancelAndAwaitLabelRefreshAsync().GetAwaiter().GetResult();
+        // same race SaveAsync guards at its top. This path bypasses SaveAsync, so it needs the same
+        // guard. Awaited (not blocked via .GetResult()) so it never freezes the Termina loop and
+        // never deadlocks under a host that installs a SynchronizationContext (e.g. the xunit v3 test
+        // runner). Dispatched fire-and-forget via ResetConfirmationFromInputAsync.
+        await CancelAndAwaitLabelRefreshAsync();
 
         var resetType = _activeAdapterType;
         var resetName = ActiveAdapterName;
@@ -1304,9 +1344,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             // A disk-full / permission-denied write, or a malformed existing netclaw.json (the reload
             // deserializes it), must surface to the operator — not escape into the Termina event loop.
-            // Stay on the confirmation screen so the reset can be retried. Mirrors every other save
-            // path in this VM (ConfigAutosave.Run); this reset path bypasses SaveAsync, so it needs
-            // the same guard the cycle-1 race fix did not add.
+            // Stay on the confirmation screen so the reset can be retried. Mirrors the autosave paths,
+            // which catch the same way inside ConfigAutosave.RunAsync; this reset path bypasses
+            // SaveAsync, so it carries its own equivalent guard.
             Status.Value = new ConfigStatusMessage($"Could not save reset: {ex.Message}", ConfigStatusTone.Error);
         }
 
@@ -1362,15 +1402,22 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         AutosaveCompletedAction($"{ActiveAdapterName} {(enabled ? "enabled" : "disabled")} and saved.");
     }
 
-    private bool AutosaveCompletedAction(string successMessage)
-        => ConfigAutosave.Run(
-            // Autosave persists synchronously without the blocking network channel-access probe
-            // (validation runs in the background); the remaining await is the fast label-refresh
-            // cancellation, not a network round-trip.
-            () => SaveAsync(successMessage, probeChannelAccess: false).GetAwaiter().GetResult(),
+    // Fire-and-forget autosave from a synchronous Termina key handler: the calling handler already
+    // mutated VM state on the loop thread; this enqueues only the persist (disk write + reload) so it
+    // is serialized behind any in-flight write and never blocks the loop. Autosave skips the blocking
+    // channel-access probe (the background label refresh re-validates instead).
+    private void AutosaveCompletedAction(string successMessage)
+        => _ = EnqueueConfigWriteAsync(() => SaveCompletedAsync(successMessage));
+
+    // Awaitable autosave for callers already running inside an enqueued write (ApplyAddChannelAsync),
+    // where re-enqueueing would deadlock the op behind itself. Returns whether the save succeeded.
+    private Task<bool> SaveCompletedAsync(string successMessage, CancellationToken ct = default)
+        => ConfigAutosave.RunAsync(
+            token => SaveAsync(successMessage, probeChannelAccess: false, token),
             Status,
             "Channel settings save failed",
-            RequestRedraw);
+            RequestRedraw,
+            ct);
 
     private int GetAdapterIndex(ChannelType type)
         => Step.Adapters

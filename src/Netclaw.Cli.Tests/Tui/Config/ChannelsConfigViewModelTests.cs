@@ -116,7 +116,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_preserves_blank_existing_secrets_and_updates_config()
+    public async Task Save_preserves_blank_existing_secrets_and_updates_config()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -125,7 +125,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         slack.ChannelNamesInput = "C09";
         slack.AllowedUserIdsInput = "U09";
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
@@ -143,7 +143,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_sets_new_secret_without_serializing_plaintext()
+    public async Task Save_sets_new_secret_without_serializing_plaintext()
     {
         File.WriteAllText(_paths.NetclawConfigPath,
             """
@@ -160,7 +160,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             discord.ChannelIdsInput = "123456789";
         });
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var serializedSecrets = File.ReadAllText(_paths.SecretsPath);
         Assert.DoesNotContain("new-discord-token", serializedSecrets, StringComparison.Ordinal);
@@ -170,14 +170,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_disabled_existing_provider_preserves_dormant_fields_and_secrets()
+    public async Task Save_disabled_existing_provider_preserves_dormant_fields_and_secrets()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
         using var vm = CreateViewModel();
 
         vm.Step.ToggleAdapter(0);
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.Enabled", out var enabled));
@@ -191,7 +191,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_enabled_provider_with_missing_required_secret()
+    public async Task Save_blocks_enabled_provider_with_missing_required_secret()
     {
         File.WriteAllText(_paths.NetclawConfigPath,
             """
@@ -207,14 +207,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             slack.AppToken = "xapp-test";
         });
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal("Slack bot token is required.", vm.Status.Value.Text);
     }
 
     [Fact]
-    public void Save_blocks_invalid_slack_token_before_probe()
+    public async Task Save_blocks_invalid_slack_token_before_probe()
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
         var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
@@ -229,7 +229,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             slack.ChannelNamesInput = "netclaw-support";
         });
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal("Slack bot token must start with xoxb-.", vm.Status.Value.Text);
@@ -239,7 +239,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_invalid_mattermost_url_before_probe()
+    public async Task Save_blocks_invalid_mattermost_url_before_probe()
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
         var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
@@ -254,7 +254,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             mattermost.ChannelIdsInput = "town-square";
         });
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal("Mattermost server URL must be an absolute http:// or https:// URL.", vm.Status.Value.Text);
@@ -264,12 +264,12 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Back_from_saved_picker_returns_to_dashboard_or_quits()
+    public async Task Back_from_saved_picker_returns_to_dashboard_or_quits()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
         using var vm = CreateViewModel();
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         vm.GoBack();
 
@@ -330,7 +330,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Enable_slack_then_discord_with_channels_then_escape_preserves_both_sections()
+    public async Task Enable_slack_then_discord_with_channels_then_escape_preserves_both_sections()
     {
         // Reproduces the reported data-loss: a fresh config, enable Slack + add a
         // channel through the picker sub-flow, then enable Discord + add a channel,
@@ -359,7 +359,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         };
         using var vm = CreateViewModel(slackProbe: slackProbe, discordProbe: discordProbe);
 
-        EnableAdapterFromPickerWithChannel(vm, ChannelType.Slack, botToken: "xoxb-test", appToken: "xapp-test", channelInput: "general");
+        await EnableAdapterFromPickerWithChannel(vm, ChannelType.Slack, botToken: "xoxb-test", appToken: "xapp-test", channelInput: "general");
 
         // After Slack setup + add channel the config on disk must already carry Slack.
         var afterSlack = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
@@ -368,7 +368,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.True(ConfigFileHelper.TryGetPathValue(afterSlack, "Slack.AllowedChannelIds", out var slackChannelsEarly));
         Assert.Equal(["C100"], ToStringArray(slackChannelsEarly));
 
-        EnableAdapterFromPickerWithChannel(vm, ChannelType.Discord, botToken: "discord-token", appToken: null, channelInput: "555000111");
+        await EnableAdapterFromPickerWithChannel(vm, ChannelType.Discord, botToken: "discord-token", appToken: null, channelInput: "555000111");
 
         // After Discord setup both sections must be present on disk.
         var afterDiscord = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
@@ -627,7 +627,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Discord_add_then_slack_disable_then_escape_preserves_provider_config()
+    public async Task Discord_add_then_slack_disable_then_escape_preserves_provider_config()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -636,7 +636,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.BeginAddChannel();
         vm.AddChannelInput = "987654321";
 
-        vm.ApplyAddChannel();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
         vm.OpenAdapterManagement(ChannelType.Slack);
         MoveToManagementAction(vm, ChannelsManagementAction.ToggleEnabled);
         vm.ActivateManagementMenuItem();
@@ -699,7 +699,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_preserves_credentials_and_adds_at_system_default_audience()
+    public async Task Add_channel_preserves_credentials_and_adds_at_system_default_audience()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -710,8 +710,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         // default audience (no audience picker during add).
         vm.AddChannelInput = "C09";
 
-        vm.ApplyAddChannel();
-        vm.Save();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
@@ -728,7 +728,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_resolves_name_to_id_before_adding_and_focuses_the_new_row()
+    public async Task Add_channel_resolves_name_to_id_before_adding_and_focuses_the_new_row()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -745,7 +745,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.BeginAddChannel();
         vm.AddChannelInput = "netclaw-support";
 
-        vm.ApplyAddChannel();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
 
         // The resolve ran with the bot token, the resolved ID was added, and we
         // advanced to the channel list with the new row focused.
@@ -758,7 +758,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_resolving_to_dm_with_dms_enabled_does_not_throw()
+    public async Task Add_channel_resolving_to_dm_with_dms_enabled_does_not_throw()
     {
         WriteChannelConfig(); // Slack has AllowDirectMessages: true, so a DM row (Id="dm") exists.
         WriteChannelSecrets();
@@ -776,7 +776,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.AddChannelInput = "dm-collision";
 
         // The resolved id "dm" collides with the DM row's Id; this previously threw from Single().
-        vm.ApplyAddChannel();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
         // The newly-added channel row (id "dm", NOT the DM row) is focused.
@@ -786,7 +786,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_that_does_not_resolve_is_dropped_with_a_warning()
+    public async Task Add_channel_that_does_not_resolve_is_dropped_with_a_warning()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -799,7 +799,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.BeginAddChannel();
         vm.AddChannelInput = "ghost";
 
-        vm.ApplyAddChannel();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
 
         // Unified with the first-connect front door: the typed reference is canonicalized through the
         // shared reconcile. A display name that maps to no channel id is dropped (never persisted) and
@@ -813,7 +813,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Edit_channel_audience_writes_channel_audiences()
+    public async Task Edit_channel_audience_writes_channel_audiences()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -823,7 +823,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.OpenSelectedChannelAudience();
         vm.MoveAudienceSelection(1); // C01 Team -> Public.
         vm.ApplyAudienceSelection();
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
@@ -853,7 +853,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Direct_message_audience_is_saved_without_touching_channels()
+    public async Task Direct_message_audience_is_saved_without_touching_channels()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -863,7 +863,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.ChangeDirectMessageAudience(1); // Personal -> Team.
 
         vm.ApplyDirectMessages();
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowDirectMessages", out var allowDm));
@@ -873,7 +873,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Rotate_credentials_preserves_blank_secret_and_updates_nonblank_secret()
+    public async Task Rotate_credentials_preserves_blank_secret_and_updates_nonblank_secret()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -884,7 +884,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.AppTokenInput = string.Empty;
 
         vm.ApplyCredentials();
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var botToken));
@@ -895,7 +895,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
     [Theory]
     [MemberData(nameof(ResetConnectionCases))]
-    public void Reset_connection_deletes_config_section_and_secrets_immediately(
+    public async Task Reset_connection_deletes_config_section_and_secrets_immediately(
         ChannelType type,
         string configSection,
         string[] secretPaths)
@@ -904,7 +904,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         WriteAllChannelSecrets();
         using var vm = CreateViewModel();
 
-        ConfirmReset(vm, type);
+        await ConfirmReset(vm, type);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.False(ConfigFileHelper.TryGetPathValue(config, configSection, out _));
@@ -917,14 +917,14 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
     [Theory]
     [MemberData(nameof(ChannelTypes))]
-    public void Reset_connection_survives_reopening_channels_editor_without_outer_save(
+    public async Task Reset_connection_survives_reopening_channels_editor_without_outer_save(
         ChannelType type)
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
         using (var vm = CreateViewModel())
         {
-            ConfirmReset(vm, type);
+            await ConfirmReset(vm, type);
         }
 
         using var reopened = CreateViewModel();
@@ -937,7 +937,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     [Theory]
     [InlineData(ChannelType.Discord, "Discord.AllowedChannelIds", "Discord.ChannelAudiences", "987654321")]
     [InlineData(ChannelType.Mattermost, "Mattermost.AllowedChannelIds", "Mattermost.ChannelAudiences", "town-square-2")]
-    public void Add_channel_management_is_generic_for_discord_and_mattermost(
+    public async Task Add_channel_management_is_generic_for_discord_and_mattermost(
         ChannelType type,
         string channelsPath,
         string audiencesPath,
@@ -950,8 +950,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.BeginAddChannel();
         vm.AddChannelInput = newChannelId;
 
-        vm.ApplyAddChannel();
-        vm.Save();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, channelsPath, out var channelsRaw));
@@ -961,7 +961,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_resolves_slack_channel_names_to_ids_and_remaps_audiences()
+    public async Task Save_resolves_slack_channel_names_to_ids_and_remaps_audiences()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -978,8 +978,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.BeginAddChannel();
         vm.AddChannelInput = "netclaw-support";
 
-        vm.ApplyAddChannel();
-        vm.Save();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, slackProbe.ResolveCallCount);
         Assert.Equal("xoxb-test", slackProbe.LastBotToken);
@@ -998,7 +998,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_resolves_discord_channel_name_to_id()
+    public async Task Save_resolves_discord_channel_name_to_id()
     {
         // The operator entered a display name; the probe resolves it to the channel id, and the id
         // (not the name) is what persists — so the runtime ACL can match it.
@@ -1014,7 +1014,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(discordProbe: discordProbe);
         vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "ops";
 
-        Assert.True(vm.Save());
+        Assert.True(await vm.SaveAsync(TestContext.Current.CancellationToken));
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var channelsRaw));
@@ -1022,7 +1022,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_resolves_mattermost_channel_name_to_id()
+    public async Task Save_resolves_mattermost_channel_name_to_id()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1036,7 +1036,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
         vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "town-square";
 
-        Assert.True(vm.Save());
+        Assert.True(await vm.SaveAsync(TestContext.Current.CancellationToken));
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.AllowedChannelIds", out var channelsRaw));
@@ -1044,7 +1044,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_slack_channel_name_unresolved_and_persists_nothing()
+    public async Task Save_blocks_when_slack_channel_name_unresolved_and_persists_nothing()
     {
         // The probe's API call worked (ErrorMessage null) but one name did not resolve. Per the
         // fail-loud decision, an unresolvable channel is an inert allow-list entry the runtime ACL
@@ -1066,7 +1066,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
         slack.ChannelNamesInput = "openclaw, fake-channel";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1079,7 +1079,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_slack_probe_fails_and_persists_nothing()
+    public async Task Save_blocks_when_slack_probe_fails_and_persists_nothing()
     {
         // The probe itself failed (ErrorMessage set): we cannot validate, so the save
         // must block and persist nothing — not even the resolved channels or token.
@@ -1099,7 +1099,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
         slack.ChannelNamesInput = "openclaw";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1154,7 +1154,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_discord_channel_id_unresolved_and_persists_nothing()
+    public async Task Save_blocks_when_discord_channel_id_unresolved_and_persists_nothing()
     {
         // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
         // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
@@ -1173,7 +1173,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(discordProbe: discordProbe);
         vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "123456789, 987654321";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1186,7 +1186,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_discord_probe_fails_and_persists_nothing()
+    public async Task Save_blocks_when_discord_probe_fails_and_persists_nothing()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1203,7 +1203,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(discordProbe: discordProbe);
         vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "987654321";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1215,7 +1215,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_uses_resolved_discord_channel_names_in_management_rows()
+    public async Task Save_uses_resolved_discord_channel_names_in_management_rows()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1229,7 +1229,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         };
         using var vm = CreateViewModel(discordProbe: discordProbe);
 
-        vm.Save();
+        await vm.SaveAsync(TestContext.Current.CancellationToken);
         vm.OpenAdapterManagement(ChannelType.Discord);
 
         var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "123456789");
@@ -1289,7 +1289,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ApplyResetConfirmation_cancels_and_awaits_in_flight_label_refresh_before_writing()
+    public async Task ApplyResetConfirmation_cancels_and_awaits_in_flight_label_refresh_before_writing()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1314,7 +1314,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.ActivateManagementMenuItem();
         vm.MoveResetConfirmation(1);
 
-        vm.ApplyResetConfirmation();
+        await vm.ApplyResetConfirmationAsync(TestContext.Current.CancellationToken);
 
         // The reset cancelled and awaited the blocked refresh rather than racing its disk write or
         // rebuilding view-model state under it (and without hanging for the 5-minute probe delay);
@@ -1323,7 +1323,62 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ApplyResetConfirmation_surfaces_save_failure_without_crashing_the_loop()
+    public async Task Reset_with_in_flight_label_refresh_completes_under_a_single_worker_synchronization_context()
+    {
+        // Regression for the macOS CI deadlock. xunit v3 runs tests under a MaxConcurrencySyncContext
+        // whose worker pool is sized to the core count. The old reset path bridged async work to the
+        // synchronous Termina key handler via .GetAwaiter().GetResult(); on a bounded context that
+        // blocks the only free worker while the cancelled probe's continuation is posted back to that
+        // same context — a sync-over-async deadlock (it passed on many-core Linux/Windows and hung on
+        // macOS's smaller pool). The async migration removes the block. This test pins it
+        // deterministically: it drives the whole reset-with-in-flight-refresh scenario on a context
+        // with exactly ONE worker, so a reintroduced sync-over-async bridge hangs the worker and trips
+        // the watchdog instead of completing.
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            // Keep the background refresh genuinely in flight while the reset runs.
+            DelayBeforeResult = TimeSpan.FromMinutes(5),
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("general", "C01")], []),
+        };
+
+        using var context = new SingleThreadSynchronizationContext();
+        var scenario = context.Run(async () =>
+        {
+            using var vm = CreateViewModel(slackProbe: slackProbe);
+
+            // Start the background label refresh and leave it in flight. Its continuation captures THIS
+            // single-worker context — exactly the condition that deadlocked the old blocking reset.
+            vm.OpenAdapterManagement(ChannelType.Slack);
+            MoveToManagementAction(vm, ChannelsManagementAction.ManageChannels);
+            vm.ActivateManagementMenuItem();
+            Assert.False(vm.PendingLabelRefresh?.IsCompleted ?? true);
+
+            vm.GoBack();
+            MoveToManagementAction(vm, ChannelsManagementAction.ResetConnection);
+            vm.ActivateManagementMenuItem();
+            vm.MoveResetConfirmation(1);
+
+            // Fire-and-forget exactly like the Termina key handler, then await the serialized write.
+            _ = vm.ResetConfirmationFromInputAsync();
+            await vm.PendingConfigWrite;
+
+            Assert.Null(vm.PendingLabelRefresh);
+        });
+
+        var completed = await Task.WhenAny(
+            scenario,
+            Task.Delay(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        Assert.True(
+            ReferenceEquals(completed, scenario),
+            "Reset deadlocked under a single-worker SynchronizationContext — a sync-over-async bridge was reintroduced.");
+        await scenario; // re-throw any assertion failure raised on the worker thread
+    }
+
+    [Fact]
+    public async Task ApplyResetConfirmation_surfaces_save_failure_without_crashing_the_loop()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1340,7 +1395,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         File.Delete(_paths.NetclawConfigPath);
         Directory.CreateDirectory(_paths.NetclawConfigPath);
 
-        vm.ApplyResetConfirmation(); // must not throw into the Termina event loop
+        await vm.ApplyResetConfirmationAsync(TestContext.Current.CancellationToken); // must not throw into the Termina event loop
 
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         // Stayed on the confirmation screen instead of advancing as if the reset succeeded.
@@ -1469,7 +1524,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_mattermost_channel_id_unresolved_and_persists_nothing()
+    public async Task Save_blocks_when_mattermost_channel_id_unresolved_and_persists_nothing()
     {
         // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
         // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
@@ -1488,7 +1543,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
         vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "town-square, bogus";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1501,7 +1556,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_mattermost_probe_fails_and_persists_nothing()
+    public async Task Save_blocks_when_mattermost_probe_fails_and_persists_nothing()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1518,7 +1573,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
         vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "bogus";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1530,7 +1585,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_true_for_picker_enabled_adapter_persists_section_even_if_child_flag_desyncs()
+    public async Task Save_true_for_picker_enabled_adapter_persists_section_even_if_child_flag_desyncs()
     {
         // Regression for the confirmed data-loss: validation gates on the picker's
         // Step.IsAdapterEnabled while the contribution used to gate on the sub-VM's
@@ -1552,7 +1607,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         slack.SlackEnabled = false; // Desync: picker still enabled, child flag disabled.
         slack.ChannelNamesInput = "C01, C02, C03";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.True(saved);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
@@ -1567,7 +1622,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_when_any_channel_unresolvable_and_persists_nothing()
+    public async Task Save_blocks_when_any_channel_unresolvable_and_persists_nothing()
     {
         // Fail-loud invariant (operator decision): the operator entered three channel NAMES where
         // only one resolves. Rather than persisting the unresolvable names as inert allow-list
@@ -1591,7 +1646,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.True(vm.Step.IsAdapterEnabled(ChannelType.Slack));
         slack.ChannelNamesInput = "netclaw-test, openclaw, fake-channel";
 
-        var saved = vm.Save();
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
@@ -1710,7 +1765,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     // row in the picker, toggle it on (which enters the credential/channel sub-flow),
     // stage credentials + channel input on the step VM, step through the sub-flow to
     // completion (autosaves), then resolve+add one channel in the permissions screen.
-    private static void EnableAdapterFromPickerWithChannel(
+    private static async Task EnableAdapterFromPickerWithChannel(
         ChannelsConfigViewModel vm,
         ChannelType type,
         string botToken,
@@ -1744,7 +1799,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.BeginAddChannel();
         vm.AddChannelInput = channelInput;
-        vm.ApplyAddChannel();
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
 
         // Return to the picker, mirroring "Done adding channels" before switching adapters.
@@ -1753,7 +1808,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(ChannelsConfigScreen.Picker, vm.Screen.Value);
     }
 
-    private static void ConfirmReset(ChannelsConfigViewModel vm, ChannelType type)
+    private static async Task ConfirmReset(ChannelsConfigViewModel vm, ChannelType type)
     {
         vm.OpenAdapterManagement(type);
         var resetIndex = vm.GetManagementMenuItems()
@@ -1763,7 +1818,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.MoveManagementMenu(resetIndex);
         vm.ActivateManagementMenuItem();
         vm.MoveResetConfirmation(1);
-        vm.ApplyResetConfirmation();
+        await vm.ApplyResetConfirmationAsync(TestContext.Current.CancellationToken);
     }
 
     private static void MoveToManagementAction(ChannelsConfigViewModel vm, ChannelsManagementAction action)
