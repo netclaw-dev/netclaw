@@ -107,27 +107,49 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         var runner = new HealthCheckRunner(step.Results, () => { });
         using var cts = new CancellationTokenSource();
-        var writer = Task.Run(() =>
+        var writer = Task.Factory.StartNew(() =>
         {
+            var writeCount = 0;
             while (!cts.IsCancellationRequested)
+            {
                 runner.Add(new HealthCheckItem("probe", true));
-        }, TestContext.Current.CancellationToken);
 
-        // Wait (bounded) for the writer to start producing before the read loop, so the reads
-        // genuinely race concurrent Adds AND the final non-empty assertion is deterministic. On a
-        // contended CI scheduler the Task.Run writer may not run before cts.Cancel(), which left
-        // Results empty and failed the assertion intermittently.
-        Assert.True(
-            SpinWait.SpinUntil(() => step.ResultsSnapshot().Count > 0, TimeSpan.FromSeconds(10)),
-            "Writer task did not start adding results within 10s.");
+                if (++writeCount % 128 != 0)
+                    continue;
 
-        // Read snapshots while the writer mutates Results off-thread. Without the synchronized
-        // snapshot, ToArray throws "Collection was modified" during a concurrent Add.
-        for (var i = 0; i < 50_000; i++)
-            _ = step.ResultsSnapshot();
+                lock (step.Results)
+                {
+                    if (step.Results.Count > 256)
+                        step.Results.RemoveRange(0, step.Results.Count - 256);
+                }
 
-        cts.Cancel();
-        await writer;
+                Thread.Yield();
+            }
+        },
+        TestContext.Current.CancellationToken,
+        TaskCreationOptions.LongRunning,
+        TaskScheduler.Default);
+
+        try
+        {
+            // Wait (bounded) for the writer to start producing before the read loop, so the reads
+            // genuinely race concurrent Adds AND the final non-empty assertion is deterministic. On a
+            // contended CI scheduler the Task.Run writer may not run before cts.Cancel(), which left
+            // Results empty and failed the assertion intermittently.
+            Assert.True(
+                SpinWait.SpinUntil(() => step.ResultsSnapshot().Count > 0, TimeSpan.FromSeconds(10)),
+                "Writer task did not start adding results within 10s.");
+
+            // Read snapshots while the writer mutates Results off-thread. Without the synchronized
+            // snapshot, ToArray throws "Collection was modified" during a concurrent Add.
+            for (var i = 0; i < 50_000; i++)
+                _ = step.ResultsSnapshot();
+        }
+        finally
+        {
+            cts.Cancel();
+            await writer.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
 
         Assert.NotEmpty(step.ResultsSnapshot());
     }

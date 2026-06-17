@@ -1,6 +1,6 @@
 # Incident: `Test-macos-26` hangs in `Netclaw.Cli.Tests` (macOS / ARM64 only)
 
-- **Status:** OPEN — under investigation; needs a dedicated deep dive on Apple Silicon.
+- **Status:** ROOT CAUSE FOUND for CI hang; broader off-loop R3/Termina publication audit remains open.
 - **Date opened:** 2026-06-17
 - **Affected:** PR #1368 (`docs/netclaw-validated-ui-components`), CI job `Test-macos-26` (`macos-26`, Apple Silicon / ARM64).
 - **Not affected:** `Test-ubuntu-latest`, `Test-windows-latest` (both x64), and local Linux x64 runs.
@@ -18,7 +18,40 @@ macOS**.
 Because xunit waits for *all* tests in an assembly before reporting results, a **single** test that
 never completes stalls the whole assembly — this looks like one hung test, not broad slowness.
 
-## Leading hypothesis: macOS/ARM64 weak memory ordering (vs x64 TSO)
+## 2026-06-17 investigation result
+
+The instrumented PR run `27711731116` uploaded `test-hang-dump-macos-26` and a blame-hang sequence
+XML. Linux `dotnet-dump` cannot analyze the macOS ARM64 Mach-O dump, but the sequence XML names the
+active unfinished test directly:
+
+```xml
+<Test Name="Netclaw.Cli.Tests.Tui.Wizard.HealthCheckStepViewModelTests.ResultsSnapshot_is_safe_to_read_while_results_are_mutated_concurrently" Completed="False" />
+```
+
+That test is a new PR-side regression test for the `HealthCheckStepViewModel.ResultsSnapshot()` lock
+discipline. The production `Results` path uses one monitor consistently (`HealthCheckRunner.Add`,
+`UpdateLast`, `AllPassed`, and `HealthCheckStepViewModel.ResultsSnapshot()`), so the sequence does not
+prove a production Termina render-loop deadlock.
+
+The test itself was pathological on macOS ARM64 CI: it started an unbounded writer that appended to
+`Results` until cancellation, then performed 50,000 snapshots before canceling the writer. Since each
+snapshot copies the full list under the same lock, the work grows with every writer append and can turn
+into a CPU/memory/monitor-contention stress test. The uploaded artifact was ~1.8GB, consistent with a
+run that ballooned before blame-hang killed it.
+
+Fix: bound the writer-side list growth, run the writer as a dedicated long-running task, and await it
+with `WaitAsync` after cancellation. The test still races concurrent `HealthCheckRunner.Add()` calls
+against `ResultsSnapshot()`, but no longer creates an unbounded list-copy workload.
+
+Separate finding: the original weak-memory-ordering concern is still valid as a **guidance and audit**
+issue. `.claude/skills/termina-tui-patterns.md` incorrectly blessed background continuations mutating
+plain fields / `ReactiveProperty` values and then calling `RequestRedraw()`. R3 property setters fan out
+synchronously on the publishing thread, and several page subscriptions invalidate `DynamicLayoutNode`s
+inline, so `RequestRedraw()` is not a general marshal to the Termina loop. The skill has been rewritten
+to require locked snapshots, immutable/atomic publication, or genuine loop-owned mutation for any state
+read by render/input.
+
+## Remaining hypothesis: macOS/ARM64 weak memory ordering (vs x64 TSO)
 
 x86/x64 implements a strong memory model (Total Store Order): a write by one thread becomes visible
 to other threads in program order without explicit barriers. **ARM64 has a weak/relaxed memory
@@ -38,8 +71,9 @@ The Termina TUI view-models lean on a pattern that is *safe on x64 by accident o
 
 On x64 the stale-read window doesn't exist (TSO). On ARM64 the loop can read a **stale** field value
 — e.g. a "work done / task cleared / state ready" flag that was set by a pool-thread continuation but
-not yet visible — and **wait forever** for a condition that has, in fact, already occurred. That is a
-plausible mechanism for a hang that reproduces only on ARM64.
+not yet visible — and **wait forever** for a condition that has, in fact, already occurred. That remains
+a plausible mechanism for future ARM64-only TUI bugs, but it is not the proven root cause of the
+`27711731116` CI hang named above.
 
 > NOTE: `Task` completion/continuation handoff *is* memory-safe (the TPL inserts barriers), so
 > awaiting a `Task` across threads is fine. The risk is **plain non-`Task` fields / collections**

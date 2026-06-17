@@ -13,9 +13,10 @@ description: How to do async work correctly in the Termina TUI (R3 + single-thre
 **This is wrong, and it is the single most common mistake agents make in this
 codebase.** Blocking the loop thread on a network probe freezes input *and*
 rendering for the entire round-trip (the spinner stops spinning, keys queue up).
-"No SyncContext" does **not** mean "no async" — it means async continuations
-resume on the **thread pool**, which is fine, because Termina's marshaling
-primitive (`RequestRedraw`) is thread-safe and callable from any thread.
+"No SyncContext" does **not** mean "no async". It means async continuations
+resume on arbitrary thread-pool threads, so the continuation must publish its
+result through a thread-safe boundary before the Termina loop renders or handles
+input from that state.
 
 The whole TUI already runs async the right way: `netclaw chat` streams live LLM
 tokens to the screen, provider/search probes spin without blocking, and this
@@ -34,25 +35,38 @@ installed `SynchronizationContext`** (`TerminaHostedService` launches it via
 
 Three consequences that define every correct pattern:
 
-1. **`RequestRedraw()` is the only sanctioned hop onto the render loop.** It is
-   literally `_eventChannel.Writer.TryWrite(RedrawRequested.Instance)` — lock-free
-   and thread-safe. **Any thread may call it.** The loop later dequeues it and
-   re-renders, re-reading whatever view-model state you mutated.
+1. **`RequestRedraw()` is a redraw signal, not a general UI-thread marshal.** It
+   is literally `_eventChannel.Writer.TryWrite(RedrawRequested.Instance)` and is
+   safe to call from any thread. The loop later dequeues it and renders. That
+   does not make unrelated mutable fields, dictionaries, lists, `ReactiveProperty`
+   fan-out, focus changes, navigation, or `DynamicLayoutNode.Invalidate()` safe to
+   perform from a background continuation.
 2. **Input handlers run synchronously on the loop thread.** Input is delivered
    inside the loop via R3 `Subject.OnNext` (a synchronous in-line fan-out, no
    scheduler). So `Input.OfType<KeyPressed>().Subscribe(HandleKeyPress)` runs on
    the loop thread — the *synchronous prefix* of your handler is on-loop.
-3. **There is no R3 `FrameProvider`, no `ObserveOn`, no SyncContext.** You do not
-   marshal continuations back to the loop. You mutate `ReactiveProperty`/field
-   state from the thread-pool continuation, then `RequestRedraw()`. Cross-write
-   races are handled by **cancel-and-await of the background task**, not by locks
-   or marshaling (see the discipline below).
+3. **R3 `ReactiveProperty.Value = ...` is synchronous fan-out.** If a page
+   subscription invalidates a `DynamicLayoutNode`, changes focus, navigates, or
+   mutates Termina nodes, that work runs on the thread that set `.Value`. Setting
+   a reactive property from a background continuation is therefore an off-loop UI
+   mutation unless every subscriber is known to be thread-safe.
+4. **Every background-to-UI handoff needs an explicit publication strategy.** Use
+   one of these, and document which one applies: locked snapshots, immutable
+   replacement values, `Volatile`/`Interlocked` for scalar flags and counters, or
+   a genuine loop-owned action processed by a Termina input/redraw path. Canceling
+   and awaiting a background task prevents stale writers, but it is not a memory
+   barrier for fields concurrently read by render/input.
 
-## The one pattern to copy (async work → UI, non-blocking)
+On ARM64 this distinction matters. x64's stronger memory ordering can hide plain
+field races; Apple Silicon will not. A field written by a background continuation
+and read by render/input must be synchronized even if every local x64 test passes.
 
-Cleanest in-repo template: `SkillSourcesConfigViewModel.StartBackgroundProbe` /
-`RunProbeAsync` (`src/Netclaw.Cli/Tui/Config/SkillSourcesConfigViewModel.cs`).
-The label-refresh in `ChannelsConfigViewModel` is the same mechanics.
+## The async shape to copy (with synchronized publish)
+
+Use this control flow for probes and refreshes: synchronous loop-owned setup,
+tracked background task, cancellation check after the await, synchronized publish,
+then `RequestRedraw()`. Do not copy older examples that publish plain fields or
+reactive properties off-loop without auditing their subscribers.
 
 ```csharp
 private CancellationTokenSource? _probeCts;   // owned CTS
@@ -79,8 +93,8 @@ private async Task RunProbeAsync(CancellationToken ct)
 
     if (ct.IsCancellationRequested) return;              // 4. re-check before publishing
                                                          //    (a stale result must not clobber)
-    Status.Value = Describe(result);                     // 5. mutate ReactiveProperty/fields only
-    RequestRedraw();                                     // 6. schedule the re-read. NEVER navigate here.
+    PublishProbeResult(result);                          // 5. synchronized publish; see below
+    RequestRedraw();                                     // 6. schedule render. NEVER navigate here.
 }
 
 // Tests await this instead of Task.Delay / Thread.Sleep:
@@ -94,16 +108,24 @@ The rules baked into that shape:
 - **Own a `CancellationTokenSource`;** on restart, `Cancel()`+`Dispose()` the old
   one. Re-check `ct.IsCancellationRequested` *after* the await, before you publish —
   this is what stops a superseded probe from overwriting fresh state.
-- **The continuation may only mutate status/`ReactiveProperty`/VM fields and call
-  `RequestRedraw()`. It must NEVER navigate** (no screen/page changes) — navigation
-  off the loop thread races the renderer.
+- **The continuation may only publish through a synchronized boundary and call
+  `RequestRedraw()`. It must NEVER navigate, change focus, invalidate layout nodes,
+  or set `ReactiveProperty` values with UI-mutating subscribers** off the loop.
+- **If the published value is read by render/input, synchronize it.** Use a `lock`
+  around a mutable collection plus a snapshot method (copy `HealthCheckStepViewModel`
+  / `HealthCheckRunner`), replace the whole value with an immutable object, or use
+  `Volatile`/`Interlocked` for simple scalar state.
+- **Do not assume `RequestRedraw()` orders every later read.** Even if the channel
+  enqueue/dequeue gives the redraw event an ordering edge, input events, timer
+  invalidations, existing subscriptions, and current renders can read the same state
+  outside that edge.
 - **Expose the `Task`** (`PendingProbe`) so tests await it deterministically. No
   `Task.Delay`/`Thread.Sleep` in tests (see CLAUDE.md Testing Guidelines).
 
 ## The save-vs-background-write discipline
 
 When a background task can **write the same state** a save reads (e.g. the label
-refresh normalizes names→ids and persists), the save must cancel-and-await it
+refresh normalizes names->ids and persists), the save must cancel-and-await it
 first so it can't land a stale snapshot over the fresh save:
 
 ```csharp
@@ -122,6 +144,10 @@ Keep the *consumer* async too: the save path is an `async Task`, dispatched
 fire-and-forget from the handler (`_ = ViewModel.SaveFromInputAsync();`) or via
 `ConfigAutosave.RunAsync`. Do **not** re-block it with `.GetAwaiter().GetResult()`.
 
+This rule solves stale-writer ordering. It does **not** make the background task's
+ordinary field writes safe while render/input can read them concurrently. Those
+fields still need locks, immutable replacement, atomics, or loop-owned mutation.
+
 ## Streaming (the chat reference)
 
 `netclaw chat` is the proof that async-to-front-end works. The daemon's
@@ -133,7 +159,106 @@ is mapped onto an R3 `Subject`, and the page subscribes and appends:
 - `ChatPage.cs:78` — subscribe in `OnBound`; `ChatPage.cs:394-402` — append the delta to the
   `StreamingTextNode`; `ChatPage.cs:493` — `RequestRedraw()`.
 
-Same recipe: off-loop producer → mutate node/`ReactiveProperty` → `RequestRedraw()`.
+Do not generalize this into "any off-loop mutation is fine." Chat streaming is a
+dedicated push path whose page owns the append/redraw behavior. Before copying it,
+verify the target node or subscriber is thread-safe, or publish into synchronized
+state that the loop snapshots during render.
+
+## Publication patterns that are safe on ARM64
+
+### Locked mutable collection + snapshot
+
+Use this when a background task appends or replaces items and the render path
+enumerates them.
+
+```csharp
+private readonly List<HealthCheckItem> _results = [];
+
+private void AddResult(HealthCheckItem item)
+{
+    lock (_results)
+        _results.Add(item);
+    RequestRedraw();
+}
+
+internal IReadOnlyList<HealthCheckItem> ResultsSnapshot()
+{
+    lock (_results)
+        return _results.ToArray();
+}
+```
+
+All readers and writers must use the same lock. Do not expose the mutable list as
+the render surface unless callers are required to take the same lock.
+
+### Immutable replacement
+
+Use this when the background result is a complete value, not an incremental edit.
+Build the value off-loop, then publish one immutable object/array. If the value is
+read without a lock from another thread, publish/read via `Volatile` or another
+explicit synchronization edge.
+
+```csharp
+private ImmutableArray<Row> _rows = [];
+
+private void PublishRows(ImmutableArray<Row> rows)
+{
+    Volatile.Write(ref _rows, rows);
+    RequestRedraw();
+}
+
+internal ImmutableArray<Row> RowsSnapshot() => Volatile.Read(ref _rows);
+```
+
+### Atomic scalar state
+
+Use `Interlocked` for counters and task/CTS ownership; use `Volatile` for simple
+single-writer flags. Never use `x++` on a cross-thread reactive version counter.
+
+```csharp
+private int _version;
+
+private void PublishChanged()
+{
+    Interlocked.Increment(ref _version);
+    RequestRedraw();
+}
+
+internal int Version => Volatile.Read(ref _version);
+```
+
+If a `ReactiveProperty<int>` is used only to wake page subscriptions, remember
+that `.Value++` synchronously runs those subscriptions on the publishing thread.
+Prefer a loop-owned invalidation path or a plain atomic version read by render.
+
+## Current audit flags
+
+These are not all necessarily bugs, but they are the fields/patterns that must be
+checked before further TUI async work is considered safe:
+
+- `HealthCheckStepViewModel`: `Results` is lock-synchronized; keep using
+  `ResultsSnapshot()`. `ResultVersion`, `IsRunning`, `IsComplete`, `Succeeded`,
+  `_context.StatusMessage`, and `LaunchChat()` are written from async health-check
+  continuations and should not synchronously drive Termina invalidation/navigation
+  off-loop.
+- `ChannelsConfigViewModel`: `RefreshChannelLabelsAsync` / `ReconcileResolvedChannels`
+  mutate `Step`, `_channelAudiences`, `Status`, `IsSaved`, and persisted config off-loop;
+  page callbacks invalidate nodes inline. Either move reconciliation onto a loop-owned
+  action or protect the shared state with a documented lock/snapshot discipline.
+- `SkillSourcesConfigViewModel`: `RunProbeAsync` publishes `_pendingRemoteProbeResult`,
+  `_pendingRemoteProbeMessage`, `Status`, and `IsSaved` from a background continuation;
+  page subscriptions invalidate inline. Dispose cancels but does not drain `_probeTask`.
+- `ProviderManagerViewModel`: eager probes mutate `DisplayProviders` rows and reactive
+  state from background continuations; `StateVersion.Value++` drives inline invalidation;
+  `_probeCts` ownership should use the `Interlocked.CompareExchange` pattern from
+  `ProviderStepViewModel` to avoid one probe disposing a newer probe's CTS.
+- `ExposureModeStepViewModel`: currently appears loop-owned; do not add background
+  readers/writers without one of the publication strategies above.
+
+Tests for these paths must be bounded. Do not use an unbounded writer loop plus a
+large snapshot loop; that creates a CPU/memory stress test instead of a race test.
+Use finite handshakes, cancel in `finally`, and `WaitAsync` when awaiting background
+writers.
 
 ## Spinners and timers: let the node animate itself
 
@@ -151,25 +276,26 @@ deadlock because there's no SyncContext" argument is a red herring — no-deadlo
 is not the same as non-blocking. Every network-bound `GetResult()` on the loop is
 a bug to fix, not a pattern to copy.
 
-Known offenders to migrate (all in `ChannelsConfigViewModel.cs`): `Save()` (`:159`),
-`ApplyAddChannel()` (`:545`), the reset path (`:1327`), and `AutosaveCompletedAction`
-(`:1417`). The correct shape is already next door — `SaveFromInputAsync` uses the
-async `ConfigAutosave.RunAsync`. (`GetResult()` on a *fast local* op is tolerable
-but still better avoided; on a *network* op it is never acceptable.)
+If you find an old sync bridge in a TUI network/disk path, migrate it to the
+tracked-task shape above. A bounded synchronous wait during disposal is a teardown
+backstop, not an event-loop interaction pattern.
 
 ## Checklist before you write TUI async code
 
 - [ ] Am I about to type `.GetAwaiter().GetResult()`? Stop. Use the tracked-task pattern.
 - [ ] Is the network/disk await off-loop, with only the sync "working" setup on-loop?
 - [ ] Owned CTS, cancelled+disposed on restart, re-checked after the await?
-- [ ] Continuation mutates `ReactiveProperty`/fields + `RequestRedraw()` only — no navigation?
+- [ ] Continuation publishes through a lock/immutable/atomic/loop-owned boundary, not plain fields?
+- [ ] No off-loop `ReactiveProperty.Value` update has subscribers that touch Termina nodes?
+- [ ] `RequestRedraw()` is used only to schedule a render, not as the only synchronization mechanism?
+- [ ] No off-loop navigation, focus change, or `DynamicLayoutNode.Invalidate()`?
 - [ ] Background task tracked in a field, exposed as `PendingX` for deterministic tests?
 - [ ] Does any save read state this task writes? If so, cancel-and-await it before the save.
 
 ## Key reference files
 
-- `src/Netclaw.Cli/Tui/Config/SkillSourcesConfigViewModel.cs` — cleanest probe template (`StartBackgroundProbe`/`RunProbeAsync`, `PendingProbe`)
-- `src/Netclaw.Cli/Tui/Config/ChannelsConfigViewModel.cs` — label-refresh template (`RefreshSlackChannelLabelsAsync` `:1111`, `StartChannelLabelResolution` `:1730`, `CancelAndAwaitLabelRefreshAsync` `:1748`) **and** the `GetResult()` anti-patterns to avoid
+- `src/Netclaw.Cli/Tui/Config/SkillSourcesConfigViewModel.cs` — useful probe shape, but audit its off-loop publication before copying
+- `src/Netclaw.Cli/Tui/Config/ChannelsConfigViewModel.cs` — label-refresh/save ordering; do not copy its off-loop mutable-state publication without fixing synchronization
 - `src/Netclaw.Cli/Tui/Wizard/Steps/ProviderStepViewModel.cs` — probe + cosmetic timer (`StartProbe`, `:155-244`)
 - `src/Netclaw.Cli/Tui/Wizard/Steps/HealthCheckStepViewModel.cs` — streaming results into a locked list + version-counter redraw
 - `src/Netclaw.Cli/Tui/ChatPage.cs` / `ChatViewModel.cs` / `Daemon/DaemonClient.cs` — live streaming to the front end
