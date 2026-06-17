@@ -300,6 +300,34 @@ public sealed class McpToolPermissionsPageTests : IDisposable
         Assert.NotEqual(wasBefore, vm.IsServerAllowedForSelectedAudience());
     }
 
+    [Fact]
+    public async Task ToolGrid_ManyTools_HeaderRowsNotOverwrittenByScrollContent()
+    {
+        // Regression test for issue #1424: ScrollableContainerNode.Render ignores
+        // bounds.Y and writes at context (0,0). With enough tools the scroll container
+        // overwrites the server-info and audience rows. The fix wraps the container in
+        // a borderless PanelNode so it receives a properly-offset render context.
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // 15 tools: on a 40-row terminal the tool list starts at row ~10 without the
+        // bug fix; with the bug it writes at row 0 and overwrites every header row.
+        var tools = Enumerable.Range(1, 15).Select(i => $"tool-{i:00}").ToList();
+        vm.InitializeForTests(new McpServerName("notion"), tools);
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("MCP Permissions"),
+            $"Expected page header. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Audience"),
+            $"Expected 'Audience' row not overwritten by tool list. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Server default"),
+            $"Expected 'Server default' row not overwritten by tool list. Screen:\n{terminal}");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, McpToolPermissionsViewModel Vm)

@@ -177,7 +177,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithAutoScroll(AutoScrollPolicy.None)
             .WithContent(_toolRowsNode);
         _toolScrollNode.Fill();
-        layout = layout.WithChild(_toolScrollNode);
+        // ScrollableContainerNode.Render ignores bounds.Y and writes relative to the
+        // context's (0,0). Hosting it inside a borderless PanelNode ensures the
+        // PanelNode calls context.CreateSubContext(bounds) first, so the scroll
+        // container receives a context already offset to its actual screen position.
+        layout = layout.WithChild(
+            new PanelNode()
+                .WithBorder(BorderStyle.None)
+                .WithContent(_toolScrollNode)
+                .Fill());
 
         return layout;
     }
@@ -268,22 +276,22 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 if (ViewModel.HasSaveError)
                 {
                     return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Red));
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack).NoWrap())
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Red).WidthAuto());
                 }
 
                 if (ViewModel.HasUnsavedChanges)
                 {
                     return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack).NoWrap())
+                        .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow).WidthAuto());
                 }
 
                 if (hasStatus)
                 {
                     return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Green));
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack).NoWrap())
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Green).WidthAuto());
                 }
             }
 
