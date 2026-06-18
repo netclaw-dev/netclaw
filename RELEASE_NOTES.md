@@ -1,3 +1,28 @@
+#### 0.24.0-beta.6 2026-06-18 ####
+
+Netclaw v0.24.0-beta.6 — Simplified init/config TUI, sub-agent log observability, and scheduler race fix
+
+**Features**
+
+* **Simplified init wizard and rebuilt config TUI** — the init wizard has been streamlined and the configuration TUI rebuilt from scratch, with canonical channel-ID resolution for all gateway integrations. ([#1368](https://github.com/netclaw-dev/netclaw/pull/1368))
+
+**Bug Fixes**
+
+* **Sub-agent logs are now session-correlated** — sub-agent log output is now properly tagged with session context, making it easier to trace sub-agent activity back to its parent conversation. ([#1428](https://github.com/netclaw-dev/netclaw/pull/1428))
+
+* **MCP permissions render clipping fixed** — MCP permission entries in the config TUI no longer clip or overflow their containers. ([#1424](https://github.com/netclaw-dev/netclaw/pull/1425))
+
+* **BackgroundJobManagerActor startup race eliminated** — fixed a race condition in the scheduler's startup reconciliation logic that could cause jobs to be missed or duplicated during daemon initialization. ([#1417](https://github.com/netclaw-dev/netclaw/pull/1417))
+
+**Dependencies**
+
+* Bump slopwatch.cmd from 0.4.1 to 0.4.2 ([#1421](https://github.com/netclaw-dev/netclaw/pull/1421))
+* Bump Anthropic from 12.27.0 to 12.29.1 ([#1412](https://github.com/netclaw-dev/netclaw/pull/1412))
+* Bump Aspire.Hosting.AppHost from 13.4.3 to 13.4.4 ([#1413](https://github.com/netclaw-dev/netclaw/pull/1413))
+* Bump the akka group with 2 updates ([#1411](https://github.com/netclaw-dev/netclaw/pull/1411))
+
+---
+
 #### 0.24.0-beta.5 2026-06-16 ####
 
 Netclaw v0.24.0-beta.5 — Background job streaming, tool argument validation, and dependency updates
