@@ -25,7 +25,7 @@ reach for `GetResult()`.
 
 ## How Termina actually works (the mental model)
 
-Termina (package `Termina` 0.12.1, which pulls `R3` 1.3.1) runs **one** loop:
+Termina (package `Termina` 0.14.0-beta.1, which pulls `R3` 1.3.1) runs **one** loop:
 `TerminaApplication.RunAsync` does `await foreach` over an **unbounded
 `Channel<object>`**, and after every dequeued event calls `RenderCurrentPage()`.
 That loop is the single-threaded *serializer* — exactly one event is processed
@@ -51,11 +51,19 @@ Three consequences that define every correct pattern:
    a reactive property from a background continuation is therefore an off-loop UI
    mutation unless every subscriber is known to be thread-safe.
 4. **Every background-to-UI handoff needs an explicit publication strategy.** Use
-   one of these, and document which one applies: locked snapshots, immutable
-   replacement values, `Volatile`/`Interlocked` for scalar flags and counters, or
-   a genuine loop-owned action processed by a Termina input/redraw path. Canceling
-   and awaiting a background task prevents stale writers, but it is not a memory
-   barrier for fields concurrently read by render/input.
+   one of these, and document which one applies: a loop marshal (`Post`/`InvokeAsync`,
+   below — preferred when the continuation must *run code* on the loop), locked
+   snapshots, immutable replacement values, or `Volatile`/`Interlocked` for scalar
+   flags and counters. Canceling and awaiting a background task prevents stale
+   writers, but it is not a memory barrier for fields concurrently read by render/input.
+5. **Termina 0.14+ gives you a real loop-marshal primitive.** `ReactiveViewModel`
+   exposes `Post(Action)` and `InvokeAsync(Action, ct)` — they enqueue your action as
+   a `LoopWorkRequested` on the same event channel, so it runs **on the loop thread**,
+   serialized with render and input. `RenderFrameProvider` is the R3 `FrameProvider`
+   bound to the loop (`obs.ObserveOn(RenderFrameProvider)`). This is the blessed way
+   to get an off-loop *result* applied on-loop; you no longer have to hand-roll a
+   publish-cell + drain-at-chokepoint. (Unbound — i.e. a view-model not yet bound to a
+   page, as in unit tests — `Post` is a no-op and `InvokeAsync` runs inline; see below.)
 
 On ARM64 this distinction matters. x64's stronger memory ordering can hide plain
 field races; Apple Silicon will not. A field written by a background continuation
@@ -121,6 +129,51 @@ The rules baked into that shape:
   outside that edge.
 - **Expose the `Task`** (`PendingProbe`) so tests await it deterministically. No
   `Task.Delay`/`Thread.Sleep` in tests (see CLAUDE.md Testing Guidelines).
+
+## Marshal the apply onto the loop (the preferred handoff)
+
+When the continuation needs to **run code** that touches shared view-model state
+(`ReactiveProperty.Value` with UI subscribers, a mutable `Dictionary`, persisted
+config, navigation/focus), don't reconcile in the continuation and don't hand-roll a
+publish-cell + drain. Probe off-loop, then **marshal the apply onto the loop** with
+`InvokeAsync`. `ChannelsConfigViewModel.RefreshChannelLabelsInBackgroundAsync` is the
+reference (issue #1426):
+
+```csharp
+private async Task RunProbeAsync(CancellationToken ct)
+{
+    var pending = await ProbeAsync(ct);                  // pure probe, OFF-loop, no shared writes
+    if (pending is null || ct.IsCancellationRequested) return;
+
+    // Fire-and-forget the marshal — do NOT await it (see below). The apply runs ON the
+    // loop thread, serialized with render/input. The re-check skips a stale apply when a
+    // newer probe / a reset has already cancelled this ct before the loop reaches it.
+    _ = InvokeAsync(() =>
+    {
+        if (ct.IsCancellationRequested) return;
+        ApplyResult(pending);                            // mutate VM state / persist — on the loop
+        NotifyContentChanged();                          // RequestRedraw() inside
+    }, ct);
+}
+```
+
+Two non-obvious rules, both load-bearing:
+
+- **Do NOT `await` the marshal if a save/reset cancel-and-awaits this task.** Awaiting
+  `InvokeAsync` ties this task's completion to a *loop turn* — but a save runs its
+  `CancelAndAwaitLabelRefreshAsync` (which awaits this task) and then writes config
+  fire-and-forget. If the await blocks on the loop, the save is deferred and a fast
+  `Ctrl+Q` quits before its disk write lands — **lost data** (the #1426 follow-up
+  regression). Fire-and-forget the marshal so the tracked task completes as soon as the
+  *probe* unwinds; the apply still runs on the loop, and cancellation neuters a stale one.
+- **`InvokeAsync` is testable without a host.** Unbound (a `new`-ed view-model in a unit
+  test) its default runs the action **inline**, so after `await vm.PendingProbe` the
+  apply has already run — assert directly, no drain seam. `Post` is a *no-op* unbound, so
+  prefer `InvokeAsync` for anything a unit test must observe. The real loop-thread
+  marshaling is covered by the native smoke tapes, not xUnit.
+
+Use the snapshot/lock/atomic patterns below instead when you only need to **publish a
+value** for render to read (no code to run on the loop) — e.g. streaming row snapshots.
 
 ## The save-vs-background-write discipline
 
@@ -241,10 +294,11 @@ checked before further TUI async work is considered safe:
   `_context.StatusMessage`, and `LaunchChat()` are written from async health-check
   continuations and should not synchronously drive Termina invalidation/navigation
   off-loop.
-- `ChannelsConfigViewModel`: `RefreshChannelLabelsAsync` / `ReconcileResolvedChannels`
-  mutate `Step`, `_channelAudiences`, `Status`, `IsSaved`, and persisted config off-loop;
-  page callbacks invalidate nodes inline. Either move reconciliation onto a loop-owned
-  action or protect the shared state with a documented lock/snapshot discipline.
+- `ChannelsConfigViewModel`: **fixed (#1426) — now the reference for the loop marshal.**
+  The background label refresh probes off-loop, then marshals the reconcile (which mutates
+  `Step`, `_channelAudiences`, `Status`, `IsSaved`, and persisted config) onto the loop via
+  fire-and-forget `InvokeAsync`. The inline add path (`RefreshChannelLabelsAsync`) still
+  applies inline because it is awaited inside a serialized config write. Copy this shape.
 - `SkillSourcesConfigViewModel`: `RunProbeAsync` publishes `_pendingRemoteProbeResult`,
   `_pendingRemoteProbeMessage`, `Status`, and `IsSaved` from a background continuation;
   page subscriptions invalidate inline. Dispose cancels but does not drain `_probeTask`.
@@ -295,7 +349,7 @@ backstop, not an event-loop interaction pattern.
 ## Key reference files
 
 - `src/Netclaw.Cli/Tui/Config/SkillSourcesConfigViewModel.cs` — useful probe shape, but audit its off-loop publication before copying
-- `src/Netclaw.Cli/Tui/Config/ChannelsConfigViewModel.cs` — label-refresh/save ordering; do not copy its off-loop mutable-state publication without fixing synchronization
+- `src/Netclaw.Cli/Tui/Config/ChannelsConfigViewModel.cs` — **reference for the loop marshal** (#1426): probe off-loop, fire-and-forget `InvokeAsync` the reconcile onto the loop; label-refresh/save cancel-and-await ordering
 - `src/Netclaw.Cli/Tui/Wizard/Steps/ProviderStepViewModel.cs` — probe + cosmetic timer (`StartProbe`, `:155-244`)
 - `src/Netclaw.Cli/Tui/Wizard/Steps/HealthCheckStepViewModel.cs` — streaming results into a locked list + version-counter redraw
 - `src/Netclaw.Cli/Tui/ChatPage.cs` / `ChatViewModel.cs` / `Daemon/DaemonClient.cs` — live streaming to the front end

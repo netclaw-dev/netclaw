@@ -371,35 +371,136 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         StartChannelLabelResolution(type);
     }
 
+    // The inline, awaited label-resolution path used by ApplyAddChannelAsync (the add flow). It is part of
+    // one linear awaited write that is serialized behind any other config write by EnqueueConfigWriteAsync;
+    // the caller awaits it and then expects the canonical state settled, so the reconcile runs inline here
+    // rather than deferring to a loop-thread drain. (The fire-and-forget BACKGROUND refresh launched by
+    // StartChannelLabelResolution must NOT use this path — its continuation would reconcile off-loop,
+    // concurrently with render and the edit handlers. That path publishes via RefreshChannelLabelsInBackground
+    // and the loop thread drains it.)
     internal async Task RefreshChannelLabelsAsync(ChannelType type, CancellationToken ct = default)
     {
-        if (!Step.IsAdapterEnabled(type))
+        var pending = await ProbeChannelLabelsAsync(type, ct);
+        if (pending is null || ct.IsCancellationRequested)
             return;
+
+        ApplyChannelResolution(pending);
+        NotifyContentChanged();
+    }
+
+    // The fire-and-forget BACKGROUND refresh (StartChannelLabelResolution). It runs the pure async probe
+    // off-loop, then marshals the reconcile back onto the Termina loop thread via InvokeAsync — it must NOT
+    // reconcile, set LastChannelResolution, write config, or set IsSaved/Status off-loop, because render and
+    // the edit handlers touch that same state on the loop thread (and audiences are security-relevant ACL
+    // trust tiers). Tracked so the save/reset guard can cancel-and-await it.
+    private async Task RefreshChannelLabelsInBackgroundAsync(ChannelType type, CancellationToken ct)
+    {
+        var pending = await ProbeChannelLabelsAsync(type, ct);
+        if (pending is null || ct.IsCancellationRequested)
+            return;
+
+        // Marshal the reconcile onto the Termina render loop, but DO NOT await it. The tracked task must
+        // complete as soon as the off-loop probe unwinds: CancelAndAwaitLabelRefreshAsync — which a save/reset
+        // awaits at its top — would otherwise block on a loop turn, deferring the save's OWN disk write behind
+        // this apply and dropping it on a fast quit. InvokeAsync queues the apply on the loop thread (Termina
+        // installs no SynchronizationContext, so reconciling in this continuation would race render/input — the
+        // #1426 race); the re-check makes a superseding refresh or a reset that has already cancelled this ct
+        // skip the now-stale apply when the loop reaches it. Fire-and-forget is exception-safe here: the queued
+        // work only completes-or-cancels (ApplyChannelResolution surfaces its own warnings on the loop — see
+        // ReconcileResolvedChannels), so it never faults an unobserved task. In tests the unbound InvokeAsync
+        // runs the apply inline — the post-frame state the loop reaches in production.
+        _ = InvokeAsync(
+            () =>
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+
+                ApplyChannelResolution(pending);
+                NotifyContentChanged();
+            },
+            ct);
+    }
+
+    // Shared probe step for both label-refresh paths: read the loop-thread channel snapshot synchronously
+    // BEFORE the await, run the probe off-loop, and package the outcome as ONE immutable PendingChannelResolution
+    // (or null when the adapter is disabled / has no channels / lacks credentials). Sets NO shared state.
+    private async Task<PendingChannelResolution?> ProbeChannelLabelsAsync(ChannelType type, CancellationToken ct)
+    {
+        if (!Step.IsAdapterEnabled(type))
+            return null;
 
         var channelIds = GetChannelIds(type);
         if (channelIds.Count == 0)
-            return;
+            return null;
 
         try
         {
-            var resolution = await ResolveChannelReferencesAsync(type, channelIds, ct);
-            if (resolution is null || ct.IsCancellationRequested)
-                return;
+            var probe = await ResolveChannelReferencesAsync(type, channelIds, ct);
+            if (probe is null || ct.IsCancellationRequested)
+                return null;
 
-            ReconcileResolvedChannels(type, channelIds, resolution.Value.Error, resolution.Value.Resolved);
-            NotifyContentChanged();
+            return new PendingChannelResolution(
+                type, channelIds, probe.Value.Result, probe.Value.Error, probe.Value.Resolved.ToArray());
         }
         catch (Exception ex)
         {
-            // A superseded background refresh (a newer resolution started, or the user navigated
-            // away) cancels via ct — that is not a lookup failure, so abandon it quietly rather than
-            // surfacing a warning. Any other failure surfaces the warning status.
+            // A superseded background refresh (a newer resolution started, or the user navigated away)
+            // cancels via ct — not a lookup failure, so abandon it quietly. Any other failure becomes a
+            // warning the loop thread surfaces (Status fan-out invalidates Termina nodes — never set off-loop).
             if (ex is OperationCanceledException && ct.IsCancellationRequested)
-                return;
+                return null;
 
-            Status.Value = new ConfigStatusMessage(
-                $"{GetAdapterDisplayName(type)} channel label lookup failed: {ex.Message}",
-                ConfigStatusTone.Warning);
+            return PendingChannelResolution.Failed(
+                type, $"{GetAdapterDisplayName(type)} channel label lookup failed: {ex.Message}");
+        }
+    }
+
+    // Applies one resolution outcome to shared view-model state. MUST run on the loop thread (the inline add
+    // path awaits it; the background path marshals it there via InvokeAsync). Sets the adapter's
+    // LastChannelResolution snapshot, then reconciles the stored allow-list to canonical ids — or surfaces a
+    // lookup-failure warning.
+    private void ApplyChannelResolution(PendingChannelResolution pending)
+    {
+        if (pending.LookupErrorStatus is { } lookupError)
+        {
+            Status.Value = new ConfigStatusMessage(lookupError, ConfigStatusTone.Warning);
+            return;
+        }
+
+        SetLastChannelResolution(pending.Type, pending.Result);
+        ReconcileResolvedChannels(pending.Type, pending.Stored, pending.Error, pending.Resolved);
+    }
+
+    // Carries one off-loop label-resolution outcome to the loop thread. Immutable: the only fields are the
+    // probed type, the references that were probed, the raw resolution result (for LastChannelResolution),
+    // and the (error, resolved-pair) reconcile inputs. A LookupErrorStatus instead means the probe threw.
+    private sealed record PendingChannelResolution(
+        ChannelType Type,
+        IReadOnlyList<string> Stored,
+        object? Result,
+        string? Error,
+        IReadOnlyList<(string Id, string Name)> Resolved,
+        string? LookupErrorStatus = null)
+    {
+        internal static PendingChannelResolution Failed(ChannelType type, string status)
+            => new(type, [], null, null, [], status);
+    }
+
+    // Applies the raw probe result onto the active adapter's LastChannelResolution (loop-thread only).
+    // The probe returns the platform-specific result object; route it to the matching adapter VM.
+    private void SetLastChannelResolution(ChannelType type, object? result)
+    {
+        switch (type)
+        {
+            case ChannelType.Slack when result is SlackChannelResolutionResult slackResult:
+                Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).LastChannelResolution = slackResult;
+                break;
+            case ChannelType.Discord when result is DiscordChannelResolutionResult discordResult:
+                Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).LastChannelResolution = discordResult;
+                break;
+            case ChannelType.Mattermost when result is MattermostChannelResolutionResult mattermostResult:
+                Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).LastChannelResolution = mattermostResult;
+                break;
         }
     }
 
@@ -1080,10 +1181,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     }
 
     // The single place that knows each transport's probe shape: probe the live adapter for the given
-    // references and return (probe-error, resolved id/name pairs) — or null when the adapter's credentials
-    // aren't available. Everything downstream (ReconcileResolvedChannels) is transport-agnostic, so
-    // onboarding and the add-channel flow share one resolution path for every channel type.
-    private async Task<(string? Error, IEnumerable<(string Id, string Name)> Resolved)?> ResolveChannelReferencesAsync(
+    // references and return the raw result plus (probe-error, resolved id/name pairs) — or null when the
+    // adapter's credentials aren't available. Reads the credential snapshot synchronously before the await
+    // (loop-thread state), then awaits the probe off-loop. Crucially it does NOT write LastChannelResolution
+    // here: it returns the raw Result, and the loop-thread apply sets it (SetLastChannelResolution) — the inline
+    // add path inline, the background path via InvokeAsync. Downstream (ReconcileResolvedChannels) is transport-agnostic.
+    private async Task<(object Result, string? Error, IEnumerable<(string Id, string Name)> Resolved)?> ResolveChannelReferencesAsync(
         ChannelType type, IReadOnlyList<string> channelIds, CancellationToken ct)
     {
         switch (type)
@@ -1096,8 +1199,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                     return null;
 
                 var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
-                slack.LastChannelResolution = result;
-                return (result.ErrorMessage, result.Resolved.Select(static c => (c.Id, c.Name)));
+                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.Id, c.Name)));
             }
 
             case ChannelType.Discord:
@@ -1108,8 +1210,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                     return null;
 
                 var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
-                discord.LastChannelResolution = result;
-                return (result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
             }
 
             case ChannelType.Mattermost:
@@ -1121,8 +1222,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                     return null;
 
                 var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
-                mattermost.LastChannelResolution = result;
-                return (result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
             }
 
             default:
@@ -1140,8 +1240,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     //     a real channel id (it would be an inert allow-list entry that silently grants nothing). Fail loud.
     // A probe failure (auth/scope/network) produces no id mapping for the typed display names, so by the
     // same rule they are not persisted — only id-shaped references survive it — and the underlying reason
-    // is surfaced. This runs off the loop thread: it only mutates view-model/status state and persists,
-    // then NotifyContentChanged posts the redraw (see the termina-tui-patterns skill); never blocks the loop.
+    // is surfaced. This mutates shared view-model/status state and persists, so it MUST run on the loop
+    // thread (the inline add path awaits it; the background path marshals it there via InvokeAsync).
+    // See .claude/skills/termina-tui-patterns.md ("Marshal the apply onto the loop") for why off-loop is unsafe.
     private void ReconcileResolvedChannels(
         ChannelType type,
         IReadOnlyList<string> stored,
@@ -1339,6 +1440,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         // guard. Awaited (not blocked via .GetResult()) so it never freezes the Termina loop and
         // never deadlocks under a host that installs a SynchronizationContext (e.g. the xunit v3 test
         // runner). Dispatched fire-and-forget via ResetConfirmationFromInputAsync.
+        // Cancelling the refresh also neuters its marshaled apply: the background path queues the reconcile on
+        // the loop via InvokeAsync(..., ct), and that queued work re-checks ct and skips once cancellation
+        // trips. So even though the apply is fire-and-forget (not awaited), no stale reconcile can re-add the
+        // deleted channels on a later frame after this reset deletes the section.
         await CancelAndAwaitLabelRefreshAsync();
 
         var resetType = _activeAdapterType;
@@ -1793,7 +1898,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _labelResolutionCts?.Cancel();
         _labelResolutionCts?.Dispose();
         _labelResolutionCts = new CancellationTokenSource();
-        _labelRefreshTask = RefreshChannelLabelsAsync(type, _labelResolutionCts.Token);
+        // Fire-and-forget: probe off-loop, then marshal the reconcile onto the loop via InvokeAsync. This
+        // path must NOT reconcile in its continuation (that is the render/edit race this fix closes).
+        _labelRefreshTask = RefreshChannelLabelsInBackgroundAsync(type, _labelResolutionCts.Token);
     }
 
     // Exposes the in-flight background label refresh for tests asserting save/dispose serialization.
@@ -1810,9 +1917,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         if (inFlight is null)
             return;
 
-        // RefreshChannelLabelsAsync catches all of its own exceptions (cancellation is abandoned
-        // quietly, any other failure surfaces a warning status), so awaiting the tracked task here
-        // observes completion without throwing.
+        // The tracked task completes as soon as the off-loop PROBE unwinds — the apply is marshaled onto the
+        // loop fire-and-forget, not awaited here, precisely so this wait can't block on a loop turn and defer
+        // the caller's own disk write. ProbeChannelLabelsAsync catches its own exceptions (returning a
+        // Failed/null result), so awaiting completes without throwing. Cancelling above guarantees any apply the
+        // refresh already queued re-checks ct and skips, so once this returns no resumed probe or stale apply
+        // can clobber the just-reloaded state or write off-loop.
         await inFlight;
 
         _labelRefreshTask = null;

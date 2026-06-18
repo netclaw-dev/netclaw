@@ -61,6 +61,22 @@ public sealed class FakeSlackProbe : ISlackProbe
     /// </summary>
     public IReadOnlyDictionary<string, string>? ResolveByName { get; set; }
 
+    /// <summary>
+    /// Optional gate for deterministic concurrency tests: when set, <see cref="ResolveChannelNamesAsync"/>
+    /// signals <see cref="ResolveEntered"/> (the probe is now in flight) and then awaits this task before
+    /// returning — letting a test hold the background refresh open while it races loop-thread edits, then
+    /// release it to publish. No <c>Thread.Sleep</c>/<c>Task.Delay</c> in the test: it is a finite handshake.
+    /// </summary>
+    public Task? ReleaseResolve { get; set; }
+
+    private readonly TaskCompletionSource _resolveEntered =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes when <see cref="ResolveChannelNamesAsync"/> has started and parked on <see cref="ReleaseResolve"/>.
+    /// </summary>
+    public Task ResolveEntered => _resolveEntered.Task;
+
     public async Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
@@ -78,6 +94,12 @@ public sealed class FakeSlackProbe : ISlackProbe
         LastResolvedNames = channelNames;
         if (ResolutionException is not null)
             throw ResolutionException;
+
+        if (ReleaseResolve is not null)
+        {
+            _resolveEntered.TrySetResult();
+            await ReleaseResolve.WaitAsync(ct);
+        }
 
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);

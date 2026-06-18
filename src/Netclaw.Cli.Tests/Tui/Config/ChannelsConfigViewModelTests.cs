@@ -396,7 +396,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Enable_slack_then_discord_via_subflow_channel_names_then_escape_preserves_both()
+    public async Task Enable_slack_then_discord_via_subflow_channel_names_then_escape_preserves_both()
     {
         // Variant that mirrors the realistic wizard path: channel names are entered
         // during the adapter sub-flow (Slack sub-step 3 / Discord channel-IDs sub-step),
@@ -435,6 +435,9 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         slack.ChannelNamesInput = "general";
         for (var i = 0; i < 10 && vm.Step.IsInSubFlow; i++)
             vm.GoNext();
+        // Sub-flow completion starts a background label refresh that canonicalizes "general" -> "C100".
+        // The probe publishes off-loop; drain on the (test = loop) thread, as the page does on render.
+        await SettleBackgroundLabelRefreshAsync(vm);
         vm.GoBack(); // ChannelPermissions -> AdapterMenu
         vm.GoBack(); // AdapterMenu -> Picker
 
@@ -450,6 +453,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         discord.ChannelIdsInput = "555000111";
         for (var i = 0; i < 10 && vm.Step.IsInSubFlow; i++)
             vm.GoNext();
+        await SettleBackgroundLabelRefreshAsync(vm); // canonicalize the Discord sub-flow channel on the loop thread
         vm.GoBack(); // ChannelPermissions -> AdapterMenu
         vm.GoBack(); // AdapterMenu -> Picker
 
@@ -1237,7 +1241,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Open_management_resolves_persisted_slack_channel_labels()
+    public async Task Open_management_resolves_persisted_slack_channel_labels()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1252,7 +1256,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel(slackProbe: slackProbe);
 
         vm.OpenAdapterManagement(ChannelType.Slack);
-        vm.ActivateManagementMenuItem();
+        vm.ActivateManagementMenuItem(); // starts the background label refresh (probe publishes off-loop)
+        await SettleBackgroundLabelRefreshAsync(vm); // loop thread applies the published result
 
         Assert.Equal(1, slackProbe.ResolveCallCount);
         Assert.Equal(["C01"], slackProbe.LastResolvedNames);
@@ -1370,6 +1375,73 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Background_label_refresh_probes_off_loop_without_mutating_shared_state_until_marshaled_apply()
+    {
+        // The off-loop label-refresh race (issue #1426): the background refresh used to RECONCILE in its
+        // continuation — mutating _channelAudiences / the Step channel ids / IsSaved / Status / disk — on a
+        // thread-pool thread, concurrently with the loop thread reading that state for render (GetChannelRows /
+        // FormatChannelLabel) and mutating it in the ←/→ audience handler. _channelAudiences is a plain
+        // Dictionary and the audience is a security-relevant ACL trust tier, so the concurrent access was a
+        // torn read / lost update.
+        //
+        // After the fix the background path does ONLY the pure probe off-loop and marshals the reconcile back
+        // onto the loop via InvokeAsync. This test proves the invariant deterministically (no Thread.Sleep /
+        // Task.Delay — a finite probe-entered/release handshake): hold the probe open mid-flight and assert
+        // shared view-model state is UNCHANGED while the continuation is parked off-loop. The stored channel is
+        // a literal name ("netclaw-test") that resolves to "C99", so a reconcile WOULD be observable — it must
+        // not appear until the marshaled apply runs.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Slack": {
+                "Enabled": true,
+                "SocketMode": true,
+                "AllowedChannelIds": ["C01", "netclaw-test"],
+                "AllowedUserIds": ["U01"],
+                "AllowDirectMessages": true,
+                "ChannelAudiences": { "C01": "team", "netclaw-test": "public", "dm": "personal" }
+              }
+            }
+            """);
+        WriteChannelSecrets();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slackProbe = new FakeSlackProbe
+        {
+            ReleaseResolve = gate.Task, // park the probe in flight until we release it
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("general", "C01"), new ResolvedSlackChannel("netclaw-test", "C99")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem();        // starts the fire-and-forget background refresh
+        await slackProbe.ResolveEntered;        // the probe is now parked off-loop, continuation suspended
+
+        // While the probe continuation is suspended off-loop, NOTHING shared has moved: render reads succeed and
+        // the stored allow-list is still the un-canonicalized name. A regression that reconciled off-loop would
+        // already show "C99" here (or tear the Dictionary GetChannelRows enumerates).
+        var rowsWhileParked = vm.GetChannelRows(includeAddAction: false)
+            .Where(r => !r.IsAction && !r.IsDirectMessage).Select(r => r.Id).ToArray();
+        Assert.Equal(["C01", "netclaw-test"], rowsWhileParked);
+        Assert.Equal(["C01", "netclaw-test"], PersistedChannels(ChannelType.Slack));
+        Assert.False(vm.IsSaved.Value);
+
+        // Release the probe and let the marshaled apply run (InvokeAsync's unbound default applies inline, the
+        // post-frame state the loop reaches in production). Only now does the reconcile land.
+        gate.SetResult();
+        await SettleBackgroundLabelRefreshAsync(vm);
+
+        Assert.Equal(["C01", "C99"], PersistedChannels(ChannelType.Slack));
+        Assert.Equal(
+            ["C01", "C99"],
+            vm.GetChannelRows(includeAddAction: false).Where(r => !r.IsAction && !r.IsDirectMessage).Select(r => r.Id).ToArray());
+    }
+
+    [Fact]
     public async Task ApplyResetConfirmation_surfaces_save_failure_without_crashing_the_loop()
     {
         WriteAllChannelConfig();
@@ -1415,7 +1487,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Open_management_normalizes_resolved_slack_channel_name_to_id_and_persists()
+    public async Task Open_management_normalizes_resolved_slack_channel_name_to_id_and_persists()
     {
         // Bug C: a channel saved as a literal NAME (it did not resolve at first save) stays inert
         // in the runtime ACL, which matches AllowedChannelIds by Slack channel ID. Once the bot can
@@ -1448,6 +1520,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.OpenAdapterManagement(ChannelType.Slack);
         vm.ActivateManagementMenuItem();
+        await SettleBackgroundLabelRefreshAsync(vm); // loop thread applies the published resolution
 
         // The stored name was rewritten to its ID on disk so the runtime ACL can match it.
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
@@ -1464,7 +1537,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Open_management_does_not_rewrite_already_canonical_slack_channels()
+    public async Task Open_management_does_not_rewrite_already_canonical_slack_channels()
     {
         // Guard against spurious writes: opening management when every channel is already stored
         // as its canonical ID must not rewrite the config file at all.
@@ -1487,12 +1560,13 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.OpenAdapterManagement(ChannelType.Slack);
         vm.ActivateManagementMenuItem();
+        await SettleBackgroundLabelRefreshAsync(vm); // reconcile runs but every channel is already canonical
 
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public void Open_management_resolves_persisted_discord_channel_labels()
+    public async Task Open_management_resolves_persisted_discord_channel_labels()
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
@@ -1508,6 +1582,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.OpenAdapterManagement(ChannelType.Discord);
         vm.ActivateManagementMenuItem();
+        await SettleBackgroundLabelRefreshAsync(vm); // loop thread applies the published resolution
 
         Assert.Equal(1, discordProbe.ResolveCallCount);
         Assert.Equal(["123456789"], discordProbe.LastResolvedIds);
@@ -1753,6 +1828,17 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         await vm.RefreshChannelLabelsAsync(type, TestContext.Current.CancellationToken);
     }
 
+    // Awaits the fire-and-forget background label refresh started by OpenAdapterManagement/ManageChannels
+    // (StartChannelLabelResolution). The background path probes off-loop, then marshals the reconcile onto the
+    // Termina loop via InvokeAsync. Unbound to a host (as here), InvokeAsync's default runs that apply inline,
+    // so by the time the tracked task completes the reconcile has run — exactly the post-frame state the loop
+    // reaches in production. Awaiting the task is therefore enough to observe the canonicalized result.
+    private static async Task SettleBackgroundLabelRefreshAsync(ChannelsConfigViewModel vm)
+    {
+        if (vm.PendingLabelRefresh is { } refresh)
+            await refresh;
+    }
+
     // Drives the real picker-driven entry flow for a brand-new adapter: select its
     // row in the picker, toggle it on (which enters the credential/channel sub-flow),
     // stage credentials + channel input on the step VM, step through the sub-flow to
@@ -1788,6 +1874,11 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         Assert.False(vm.Step.IsInSubFlow);
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+
+        // Sub-flow completion opens the permissions screen and starts a background label refresh for the
+        // names entered in the sub-flow. The probe publishes off-loop; drain it on the (test = loop) thread
+        // to canonicalize those names to ids before adding the next channel — what the page does on render.
+        await SettleBackgroundLabelRefreshAsync(vm);
 
         vm.BeginAddChannel();
         vm.AddChannelInput = channelInput;

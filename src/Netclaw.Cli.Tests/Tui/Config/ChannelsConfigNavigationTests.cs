@@ -441,6 +441,16 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         await app.RunAsync(cts.Token);
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+
+        // The sub-flow's channel-NAME resolution runs as a fire-and-forget background probe that marshals the
+        // reconcile (name -> id on disk) back onto the loop via InvokeAsync. This script quits (Ctrl+Q) right
+        // after the last sub-flow, which can race the loop running that final apply. The real loop has stopped
+        // here, so settle the canonicalization deterministically on this (loop-equivalent) thread the way the
+        // next frame would have — drive the inline resolution path, which probes and applies synchronously.
+        if (channelsVm.PendingLabelRefresh is { } pendingRefresh)
+            await pendingRefresh;
+        await channelsVm.RefreshChannelLabelsAsync(ChannelType.Slack, TestContext.Current.CancellationToken);
+
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
 
