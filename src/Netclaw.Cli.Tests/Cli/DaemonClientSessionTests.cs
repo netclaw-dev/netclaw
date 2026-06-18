@@ -22,8 +22,8 @@ public sealed class DaemonClientSessionTests
     [Fact]
     public async Task ResumeSessionAsync_reattaches_to_existing_session_via_EnsureSession()
     {
-        var port = GetFreeTcpPort();
-        using var host = await StartFakeHubAsync(port);
+        using var host = await StartFakeHubAsync();
+        var port = TestNetworkHelpers.GetBoundPort(host);
 
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
 
@@ -56,8 +56,8 @@ public sealed class DaemonClientSessionTests
     [Fact]
     public async Task RespondToInteractionAsync_invokes_hub_method()
     {
-        var port = GetFreeTcpPort();
-        using var host = await StartFakeHubAsync(port);
+        using var host = await StartFakeHubAsync();
+        var port = TestNetworkHelpers.GetBoundPort(host);
         var state = host.Services.GetRequiredService<FakeSessionState>();
 
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
@@ -71,8 +71,8 @@ public sealed class DaemonClientSessionTests
     [Fact]
     public async Task RespondToInteractionAsync_supports_session_scope()
     {
-        var port = GetFreeTcpPort();
-        using var host = await StartFakeHubAsync(port);
+        using var host = await StartFakeHubAsync();
+        var port = TestNetworkHelpers.GetBoundPort(host);
         var state = host.Services.GetRequiredService<FakeSessionState>();
 
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
@@ -83,7 +83,9 @@ public sealed class DaemonClientSessionTests
         Assert.Equal(("call-2", ApprovalOptionKeys.ApproveSession), state.LastInteractionResponse);
     }
 
-    private static async Task<IHost> StartFakeHubAsync(int port)
+    // port: 0 (default) lets Kestrel bind a free ephemeral port and hold it for the
+    // host's lifetime; callers read the actual port back via TestNetworkHelpers.GetBoundPort.
+    private static async Task<IHost> StartFakeHubAsync(int port = 0)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -100,8 +102,6 @@ public sealed class DaemonClientSessionTests
         await app.StartAsync();
         return app;
     }
-
-    private static int GetFreeTcpPort() => TestNetworkHelpers.GetFreeTcpPort();
 
     private sealed class FakeSessionState
     {

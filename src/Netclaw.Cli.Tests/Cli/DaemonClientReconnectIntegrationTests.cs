@@ -24,8 +24,8 @@ public sealed class DaemonClientReconnectIntegrationTests
     [Fact]
     public async Task EnsureSession_reattaches_same_session_after_transport_disconnect()
     {
-        var port = GetFreeTcpPort();
-        using var host = await StartFakeHubAsync(port);
+        using var host = await StartFakeHubAsync();
+        var port = TestNetworkHelpers.GetBoundPort(host);
 
         await using var client = new DaemonClient(
             $"http://127.0.0.1:{port}",
@@ -84,8 +84,8 @@ public sealed class DaemonClientReconnectIntegrationTests
     [Fact]
     public async Task EnsureSession_recreates_session_after_server_restart()
     {
-        var port = GetFreeTcpPort();
-        var host1 = await StartFakeHubAsync(port);
+        var host1 = await StartFakeHubAsync();
+        var port = TestNetworkHelpers.GetBoundPort(host1);
 
         // Fast reconnect delays keep the post-restart reconnect tight on the happy
         // path. Short ServerTimeout (2s) bounds how long the client can spend
@@ -179,7 +179,11 @@ public sealed class DaemonClientReconnectIntegrationTests
         return await task.WaitAsync(timeout, TestContext.Current.CancellationToken);
     }
 
-    private static async Task<IHost> StartFakeHubAsync(int port, FakeHubState? state = null)
+    // port: 0 (default) lets Kestrel bind a free ephemeral port and hold it for the
+    // host's lifetime; callers read the actual port back via TestNetworkHelpers
+    // .GetBoundPort. A non-zero port is passed only to rebind a replacement host to a
+    // prior host's now-released port (the server-restart scenario).
+    private static async Task<IHost> StartFakeHubAsync(int port = 0, FakeHubState? state = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -208,8 +212,6 @@ public sealed class DaemonClientReconnectIntegrationTests
         await app.StartAsync();
         return app;
     }
-
-    private static int GetFreeTcpPort() => TestNetworkHelpers.GetFreeTcpPort();
 
     private sealed class FakeHubState
     {
