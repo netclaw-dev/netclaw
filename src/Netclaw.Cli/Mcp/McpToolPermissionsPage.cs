@@ -326,14 +326,16 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            if (ViewModel.CurrentState.Value == ToolPermissionsState.ServerList)
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
+            {
+                _gridCursor = 0;
+                ViewModel.GoBack();
+            }
+            else
             {
                 ViewModel.RequestQuit();
-                return;
             }
 
-            _gridCursor = 0;
-            ViewModel.GoBack();
             return;
         }
 

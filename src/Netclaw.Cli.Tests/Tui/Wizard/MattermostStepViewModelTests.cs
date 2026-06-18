@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -14,13 +15,15 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class MattermostStepViewModelTests : WizardStepTestBase
 {
+    private readonly FakeMattermostProbe _probe = new();
+
     [Theory]
     [InlineData(false, false, 1)]
     [InlineData(true, false, 7)]
     [InlineData(true, true, 8)]
     public void SubStepCount_MatchesState(bool enabled, bool restrict, int expected)
     {
-        using var step = new MattermostStepViewModel();
+        using var step = new MattermostStepViewModel(_probe);
         step.MattermostEnabled = enabled;
         if (restrict) step.RestrictToSpecificUsers = true;
         Assert.Equal(expected, step.SubStepCount);
@@ -29,7 +32,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void TryAdvance_ThroughAllSubSteps_NoRestrict()
     {
-        using var step = new MattermostStepViewModel();
+        using var step = new MattermostStepViewModel(_probe);
         step.MattermostEnabled = true;
 
         Assert.True(step.TryAdvance()); // 0 -> 1 server URL
@@ -58,7 +61,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void TryAdvance_WithRestrict_AdvancesThroughAllowedUserIds()
     {
-        using var step = new MattermostStepViewModel();
+        using var step = new MattermostStepViewModel(_probe);
         step.MattermostEnabled = true;
 
         // Advance to sub-step 5 (user access choice)
@@ -79,7 +82,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void TryAdvance_AllowAnyone_ClearsAllowedUserIds()
     {
-        using var step = new MattermostStepViewModel();
+        using var step = new MattermostStepViewModel(_probe);
         step.MattermostEnabled = true;
         step.AllowedUserIdsInput = "4xp9p3onpins8";
 
@@ -96,7 +99,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void TryGoBack_FromCallbackUrl_SkipsAllowedUserIds_WhenNotRestricting()
     {
-        using var step = new MattermostStepViewModel();
+        using var step = new MattermostStepViewModel(_probe);
         step.MattermostEnabled = true;
 
         // Advance to callback URL without restricting
@@ -113,7 +116,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     public void OnLeave_PopulatesChannelEntries_WhenEnabled()
     {
         Context.SelectedPosture = DeploymentPosture.Team;
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -128,7 +131,10 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
         var entries = Context.ChannelEntries[ChannelType.Mattermost];
         Assert.Equal(3, entries.Count);
         Assert.True(entries[0].IsDmRow);
+        // Team posture, no single allow-listed user → DMs and channels both default to Team.
+        Assert.Equal(TrustAudience.Team, entries[0].Audience);
         Assert.Equal("4xp9p3onpins8", entries[1].Id);
+        Assert.Equal(TrustAudience.Team, entries[1].Audience);
     }
 
     [Fact]
@@ -137,7 +143,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
         Context.ChannelEntries[ChannelType.Mattermost] =
             [new ChannelEntry("Mattermost:abc", "abc", TrustAudience.Team)];
 
-        using var step = new MattermostStepViewModel { MattermostEnabled = false };
+        using var step = new MattermostStepViewModel(_probe) { MattermostEnabled = false };
         step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
 
@@ -147,14 +153,21 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeConfig_Enabled_SetsMattermostSection()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
             CallbackUrl = "http://netclaw-host:5199/api/mattermost/actions",
             AllowDirectMessages = true,
             ChannelIdsInput = "4xp9p3onpins8",
-            AllowedUserIdsInput = "9rp7q1abcdef"
+            AllowedUserIdsInput = "9rp7q1abcdef",
+            // Health check resolves the channel reference to its canonical id; ContributeConfig
+            // persists only resolved ids (here id == input, so the assertions are unchanged).
+            LastChannelResolution = new MattermostChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedMattermostChannel("4xp9p3onpins8", "general", "General")],
+                [])
         };
 
         step.OnEnter(Context, NavigationDirection.Forward);
@@ -173,9 +186,46 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void ContributeConfig_PersistsResolvedId_NotTypedName_AndOmitsUnresolvedFromAudiences()
+    {
+        using var step = new MattermostStepViewModel(_probe)
+        {
+            MattermostEnabled = true,
+            ServerUrl = "https://mm.example.com",
+            ChannelIdsInput = "general, ghost-channel",
+            // The bot can see "general" (slug) → canonical id "9rp7q1abcdef"; "ghost-channel" is unresolved.
+            LastChannelResolution = new MattermostChannelResolutionResult(
+                false,
+                null,
+                [new ResolvedMattermostChannel("9rp7q1abcdef", "general", "General")],
+                ["ghost-channel"])
+        };
+
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.OnLeave();
+
+        foreach (var entry in Context.ChannelEntries[ChannelType.Mattermost])
+            entry.Audience = TrustAudience.Team;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Mattermost);
+        // The resolved channel persists by its canonical id, never the typed slug...
+        Assert.Equal("9rp7q1abcdef", Assert.Single(builder.Mattermost!.AllowedChannelIds!));
+
+        var audiences = builder.Mattermost.ChannelAudiences;
+        Assert.NotNull(audiences);
+        Assert.True(audiences!.ContainsKey("9rp7q1abcdef"));
+        // ...and the unresolved channel NAME is NOT written as a dead ACL key the runtime can't match.
+        Assert.DoesNotContain("ghost-channel", audiences.Keys);
+        Assert.DoesNotContain("general", audiences.Keys);
+    }
+
+    [Fact]
     public void ContributeConfig_Disabled_DoesNotSetSection()
     {
-        using var step = new MattermostStepViewModel { MattermostEnabled = false };
+        using var step = new MattermostStepViewModel(_probe) { MattermostEnabled = false };
 
         var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
@@ -186,7 +236,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeConfig_BlankCallbackUrl_OmitsCallbackUrl()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -206,7 +256,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeSecrets_Enabled_AddsBotToken()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -225,7 +275,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public void ContributeSecrets_NoBotToken_WritesNothing()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -242,7 +292,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public async Task ContributeHealthChecks_Disabled_ReportsDisabled()
     {
-        using var step = new MattermostStepViewModel { MattermostEnabled = false };
+        using var step = new MattermostStepViewModel(_probe) { MattermostEnabled = false };
 
         var results = new List<HealthCheckItem>();
         var runner = new HealthCheckRunner(results, () => { });
@@ -257,7 +307,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public async Task ContributeHealthChecks_MissingServerUrl_Fails()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = null,
@@ -277,7 +327,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public async Task ContributeHealthChecks_MissingBotToken_Fails()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -297,7 +347,7 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
     [Fact]
     public async Task ContributeHealthChecks_FullyConfigured_Passes()
     {
-        using var step = new MattermostStepViewModel
+        using var step = new MattermostStepViewModel(_probe)
         {
             MattermostEnabled = true,
             ServerUrl = "https://mm.example.com",
@@ -312,6 +362,34 @@ public sealed class MattermostStepViewModelTests : WizardStepTestBase
         Assert.Single(results);
         Assert.True(results[0].Passed);
         Assert.Contains("mm.example.com", results[0].Label);
+    }
+
+    [Fact]
+    public async Task ContributeHealthChecks_WithChannels_ResolvesAndPopulatesResolution()
+    {
+        _probe.NextResolutionResult = new MattermostChannelResolutionResult(
+            true,
+            null,
+            [new ResolvedMattermostChannel("9rp7q1abcdef", "general", "General")],
+            []);
+
+        using var step = new MattermostStepViewModel(_probe)
+        {
+            MattermostEnabled = true,
+            ServerUrl = "https://mm.example.com",
+            BotToken = "mm-bot-token",
+            ChannelIdsInput = "general"
+        };
+
+        var results = new List<HealthCheckItem>();
+        var runner = new HealthCheckRunner(results, () => { });
+
+        await step.ContributeHealthChecksAsync(runner, CancellationToken.None);
+
+        Assert.Equal(1, _probe.ResolveCallCount);
+        Assert.NotNull(step.LastChannelResolution);
+        Assert.Equal("9rp7q1abcdef", Assert.Single(step.LastChannelResolution!.Resolved).ChannelId);
+        Assert.Contains(results, r => r.Passed == true && r.Label.Contains("channels resolved"));
     }
 
     [Fact]

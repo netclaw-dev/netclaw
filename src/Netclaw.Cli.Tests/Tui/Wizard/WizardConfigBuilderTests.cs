@@ -361,52 +361,46 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
     [Fact]
     public void WriteSecretsFile_ExistingSection_OverwritesContributedSecretsAndPreservesUnrelatedValues()
     {
-        var priorProtector = SensitiveStringTypeConverter.Protector;
+        // WizardSecretsBuilder.WriteSecretsFile now derives its protector from its paths, so this
+        // test no longer touches the process-wide SensitiveStringTypeConverter.Protector static at
+        // all — every encrypt/decrypt below uses this explicit, paths-bound protector.
         var protector = SecretsProtection.CreateProtector(Context.Paths);
-        SensitiveStringTypeConverter.Protector = protector;
 
-        try
-        {
-            SecretsFileWriter.Write(Context.Paths.SecretsPath,
-                """
-                {
-                  "Discord": {
-                    "BotToken": "old-token",
-                    "OtherSecret": "keep-discord"
-                  },
-                  "Discord:BotToken": "literal-collision",
-                  "Search": {
-                    "BraveApiKey": "keep-search"
-                  }
-                }
-                """,
-                protector);
-
-            var builder = new WizardSecretsBuilder(Context.Paths);
-            builder.AddSection("Discord", new Dictionary<string, object>
+        SecretsFileWriter.Write(Context.Paths.SecretsPath,
+            """
             {
-                ["BotToken"] = "new-token"
-            });
+              "Discord": {
+                "BotToken": "old-token",
+                "OtherSecret": "keep-discord"
+              },
+              "Discord:BotToken": "literal-collision",
+              "Search": {
+                "BraveApiKey": "keep-search"
+              }
+            }
+            """,
+            protector);
 
-            builder.WriteSecretsFile();
-
-            var encryptedJson = File.ReadAllText(Context.Paths.SecretsPath);
-            Assert.DoesNotContain("\"Discord:BotToken\"", encryptedJson, StringComparison.Ordinal);
-
-            var decryptedJson = SecretsFileWriter.DecryptJsonLeaves(encryptedJson, protector);
-            using var document = JsonDocument.Parse(decryptedJson);
-
-            var root = document.RootElement;
-            var discord = root.GetProperty("Discord");
-            Assert.Equal("new-token", discord.GetProperty("BotToken").GetString());
-            Assert.Equal("keep-discord", discord.GetProperty("OtherSecret").GetString());
-            Assert.Equal("keep-search", root.GetProperty("Search").GetProperty("BraveApiKey").GetString());
-            Assert.False(root.TryGetProperty("Discord:BotToken", out _));
-        }
-        finally
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        builder.AddSection("Discord", new Dictionary<string, object>
         {
-            SensitiveStringTypeConverter.Protector = priorProtector;
-        }
+            ["BotToken"] = "new-token"
+        });
+
+        builder.WriteSecretsFile();
+
+        var encryptedJson = File.ReadAllText(Context.Paths.SecretsPath);
+        Assert.DoesNotContain("\"Discord:BotToken\"", encryptedJson, StringComparison.Ordinal);
+
+        var decryptedJson = SecretsFileWriter.DecryptJsonLeaves(encryptedJson, protector);
+        using var document = JsonDocument.Parse(decryptedJson);
+
+        var root = document.RootElement;
+        var discord = root.GetProperty("Discord");
+        Assert.Equal("new-token", discord.GetProperty("BotToken").GetString());
+        Assert.Equal("keep-discord", discord.GetProperty("OtherSecret").GetString());
+        Assert.Equal("keep-search", root.GetProperty("Search").GetProperty("BraveApiKey").GetString());
+        Assert.False(root.TryGetProperty("Discord:BotToken", out _));
     }
 
     [Fact]

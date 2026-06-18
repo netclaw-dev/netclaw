@@ -2,9 +2,7 @@
 
 Define the bootstrap and post-install behavior of deployment-wide runtime
 feature enablement, separate from posture and per-audience access policy.
-
 ## Requirements
-
 ### Requirement: Feature selection wizard step
 
 The init wizard SHALL present a Feature Selection step after the Security
@@ -34,7 +32,9 @@ exposure remains governed by explicit tool/server allowlists.
 - **GIVEN** the operator selected Personal posture
 - **WHEN** the Security Posture step completes
 - **THEN** the Feature Selection step is skipped
-- **AND** all features are enabled by default
+- **AND** the wizard writes no per-feature `Enabled` flags to the config
+- **AND** the runtime treats absent `Enabled` flags as `true` (schema default),
+  so all features are effectively on without the wizard writing explicit values
 
 #### Scenario: Operator toggles features
 
@@ -58,7 +58,9 @@ The configuration schema SHALL include `Enabled` boolean properties for
 Memory, Search, SkillSync, SubAgents, and Webhooks sections, plus a new top-
 level `Scheduling` section whose only property is `Enabled`. The Feature
 Selection wizard step SHALL write these flags to the config during
-`ContributeConfig()`.
+`ContributeConfig()` only when the step actually runs (i.e., for non-Personal
+postures). For Personal posture, `ContributeConfig()` is never called and no
+`Enabled` flags are written; the runtime defaults missing flags to `true`.
 
 These flags MAY be set during bootstrap and SHALL be editable post-install
 through the `Enabled Features` leaf. The post-install editor and bootstrap
@@ -90,11 +92,13 @@ serialization is not required.
 - **THEN** `Scheduling.Enabled` is `false` in `netclaw.json`
 - **AND** `Scheduling` contains no other properties in this change
 
-#### Scenario: Personal posture default keeps all features enabled
+#### Scenario: Personal posture omits Enabled flags from config
 
 - **GIVEN** the operator selected Personal posture (Feature Selection skipped)
 - **WHEN** config is finalized
-- **THEN** all `Enabled` flags default to `true`
+- **THEN** no per-feature `Enabled` flags are written to `netclaw.json`
+- **AND** the runtime loads each absent flag as `true` via the default-true
+  fallback in `LoadEnabledFeatures`, making all features effectively enabled
 
 ### Requirement: Post-install runtime feature editing moves to Enabled Features
 
@@ -113,7 +117,6 @@ own per-audience runtime feature toggles.
 - **WHEN** they use `netclaw config`
 - **THEN** the change is made in `Enabled Features`
 - **AND** Audience Profiles is not used for that runtime toggle
-
 
 ### Requirement: Feature flags respected at runtime
 
@@ -143,3 +146,30 @@ profiles still control which audiences may discover or use it.
 - **WHEN** a Public session starts
 - **THEN** search runtime may exist for the deployment
 - **BUT** `web_search` and `web_fetch` are not exposed to that session
+
+### Requirement: Post-install posture change opens Enabled Features editor
+
+A non-Personal posture change applied in `netclaw config` SHALL open the Enabled Features editor.
+
+When the operator applies a non-Personal posture change in `netclaw config`,
+the Security & Access view SHALL immediately transition to the Enabled Features
+editor after saving the posture, so the operator can review and adjust
+deployment-wide feature gates without a separate navigation step.
+
+#### Scenario: Non-Personal posture save transitions to Enabled Features
+
+- **WHEN** the operator saves a posture change to Team or Public posture in
+  `netclaw config -> Security & Access -> Security Posture`
+- **THEN** the view transitions directly to the Enabled Features sub-editor
+  (`SecurityAccessEditorMode.Features`)
+- **AND** the Enabled Features editor reflects the current on-disk feature
+  flag state (re-loaded from config after the posture save)
+
+#### Scenario: Personal posture save returns to Security & Access menu
+
+- **WHEN** the operator saves a posture change to Personal posture in
+  `netclaw config -> Security & Access -> Security Posture`
+- **THEN** the view returns to the Security & Access menu
+  (`SecurityAccessEditorMode.Menu`) and does not open the Enabled Features
+  editor
+

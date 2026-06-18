@@ -24,6 +24,7 @@
 #   KEEP_TEMP         set to 1 to retain the combined tape for inspection
 #   TAPE_PREAMBLE     preamble file to prepend  (default: <TAPES_DIR>/preamble.tape)
 #   TAPE_BODY_DIR     directory holding <name>.tape (default: TAPES_DIR)
+#   TAPE_USER_HOME    per-tape HOME dir; default <tmp>/user-home-<name>
 #
 # TAPE_PREAMBLE / TAPE_BODY_DIR let the `screenshots` mode of run-smoke.sh
 # point this runner at screenshot-preamble.tape and tests/smoke/tapes/
@@ -58,6 +59,7 @@ NETCLAW_BIN_DIR="$(cd "$(dirname "$NETCLAW_SMOKE_CLI")" && pwd)"
 
 # Per-tape NETCLAW_HOME on the host filesystem.
 NETCLAW_HOME="${NETCLAW_HOME:-$(mktemp -d)/tape-home-${TAPE_NAME}}"
+TAPE_USER_HOME="${TAPE_USER_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/user-home-${TAPE_NAME}.XXXXXX")}" 
 
 # Preamble + body dir are overridable so the screenshots mode can swap in
 # screenshot-preamble.tape + tests/smoke/tapes/screenshots/. Defaults keep
@@ -65,6 +67,13 @@ NETCLAW_HOME="${NETCLAW_HOME:-$(mktemp -d)/tape-home-${TAPE_NAME}}"
 preamble="${TAPE_PREAMBLE:-${TAPES_DIR}/preamble.tape}"
 body="${TAPE_BODY_DIR:-${TAPES_DIR}}/${TAPE_NAME}.tape"
 assertion="${ASSERT_DIR}/${TAPE_NAME}.sh"
+
+requires_assertion=false
+case "$TAPE_NAME" in
+  init-wizard|provider-add|provider-rename|config-*)
+    requires_assertion=true
+    ;;
+esac
 
 if [[ ! -f "$preamble" ]]; then
   echo "ERROR: preamble not found at $preamble" >&2
@@ -121,6 +130,7 @@ collect_failure_artifacts() {
 # means body tapes can use any token, not just the preamble.
 cat "$preamble" "$body" | sed \
   -e "s|__NETCLAW_HOME__|${NETCLAW_HOME}|g" \
+  -e "s|__NETCLAW_USER_HOME__|${TAPE_USER_HOME}|g" \
   -e "s|__NETCLAW_BIN_DIR__|${NETCLAW_BIN_DIR}|g" \
   -e "s|__NETCLAW_DAEMON__|${NETCLAW_SMOKE_DAEMON}|g" \
   -e "s|__TAPE_NAME__|${TAPE_NAME}|g" \
@@ -163,7 +173,15 @@ if [[ -x "$assertion" ]]; then
     exit "$assert_status"
   fi
 elif [[ -f "$assertion" ]]; then
+  if [[ "$requires_assertion" == "true" ]]; then
+    echo "FAIL: $assertion exists but is not executable; config-writing tapes require semantic assertions." >&2
+    exit 1
+  fi
+
   echo "WARNING: $assertion exists but is not executable; skipping." >&2
+elif [[ "$requires_assertion" == "true" ]]; then
+  echo "FAIL: missing semantic assertion script for config-writing tape ${TAPE_NAME}: ${assertion}" >&2
+  exit 1
 fi
 
 echo "==> ${TAPE_NAME}: OK"

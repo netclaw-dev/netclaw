@@ -32,15 +32,12 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
         ConfigureIdentity(steps, "Netclaw", "America/Chicago");
 
         var config = AssembleConfig(steps);
 
         AssertPosture(config, "Personal");
         AssertShellMode(config, "HostAllowed");
-        AssertSearchBackend(config, "brave");
         Assert.False(config.ContainsKey("Daemon"));
 
         // The bug: Personal posture must not inject Enabled:false for any feature
@@ -53,8 +50,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Team);
         EnterFeatureSelection(steps);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.TailscaleServe, webhooks: true);
         ConfigureIdentity(steps, "TeamBot", "UTC");
 
         var config = AssembleConfig(steps);
@@ -68,8 +63,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         AssertSectionEnabled(config, "SubAgents", true);
         AssertSectionEnabled(config, "Webhooks", true);
 
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-serve", daemon["ExposureMode"]);
+        Assert.False(config.ContainsKey("Daemon"));
     }
 
     [Fact]
@@ -85,8 +79,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.ToggleFeature(1); // Search
         featureStep.OnLeave();
 
-        ConfigureSearch(steps, SearchBackend.SearXng, searXngEndpoint: "https://search.example.com");
-        ConfigureExposure(steps, ExposureMode.TailscaleFunnel, webhooks: false);
         ConfigureIdentity(steps, "PublicBot", "Europe/London");
 
         var config = AssembleConfig(steps);
@@ -99,12 +91,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         AssertSectionEnabled(config, "SubAgents", false);
         AssertSectionEnabled(config, "Webhooks", false);
 
-        var search = GetSection(config, "Search");
-        Assert.Equal("searxng", search["Backend"]);
-        Assert.Equal("https://search.example.com", search["SearXngEndpoint"]);
-
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-funnel", daemon["ExposureMode"]);
+        Assert.False(config.ContainsKey("Daemon"));
     }
 
     [Fact]
@@ -120,8 +107,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.ToggleFeature(3); // Scheduling OFF
         featureStep.OnLeave();
 
-        ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
         ConfigureIdentity(steps, "Netclaw", "America/New_York");
 
         var config = AssembleConfig(steps);
@@ -135,61 +120,78 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     }
 
     [Fact]
-    public void PersonalPosture_WithIdentityAndWorkspaces_ConfigMatchesChoices()
+    public void PersonalPosture_WithIdentity_ConfigMatchesChoices()
     {
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
-
         var identityStep = GetStep<IdentityStepViewModel>(steps);
         identityStep.AgentName = "Jarvis";
         identityStep.UserName = "Aaron";
         identityStep.UserTimezone = "America/Chicago";
-        identityStep.WorkspacesDirectory = "~/projects";
 
         var config = AssembleConfig(steps);
 
-        // Identity is written to separate files, not the config dict.
-        // Workspaces IS in the config dict.
-        var workspaces = GetSection(config, "Workspaces");
-        Assert.Equal("~/projects", workspaces["Directory"]);
+        // Identity is written to separate files, not the config dict. The init wizard
+        // no longer collects a workspaces directory — that is a post-install setting
+        // owned by `netclaw config`, so the assembled config must not pin one.
+        Assert.False(config.ContainsKey("Workspaces"));
 
         AssertNoDisabledFeatureFlags(config);
     }
 
     [Fact]
-    public void PersonalPosture_ExposureModeLocal_NoDaemonSection()
+    public void ExistingConfig_PostureEdit_PreservesUnrelatedSections()
     {
-        var steps = BuildCoreSteps();
-        EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
-        ConfigureIdentity(steps, "Netclaw", "UTC");
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Slack": { "Enabled": true, "SocketMode": true },
+              "Daemon": { "ExposureMode": "reverse-proxy", "Host": "10.0.0.2", "TrustedProxies": ["10.0.0.0/24"] },
+              "Search": { "Backend": "duckduckgo" }
+            }
+            """);
 
-        var config = AssembleConfig(steps);
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            ExistingConfig = Netclaw.Cli.Config.ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath),
+            SelectedPosture = DeploymentPosture.Personal
+        };
 
-        Assert.False(config.ContainsKey("Daemon"));
-        AssertNoEnabledKey(config, "Webhooks");
+        var steps = new List<IWizardStepViewModel>
+        {
+            new SecurityPostureStepViewModel { SelectedPosture = DeploymentPosture.Team }
+        };
+
+        using var orchestrator = new WizardOrchestrator(steps, context, singleStepMode: true);
+        orchestrator.WriteConfig();
+
+        var config = LoadWrittenConfig();
+        Assert.True(config.ContainsKey("Slack"));
+        Assert.True(config.ContainsKey("Daemon"));
+        Assert.True(config.ContainsKey("Search"));
+        Assert.Equal("Team", GetSection(config, "Security")["DeploymentPosture"]);
     }
 
     [Fact]
-    public void TeamPosture_ExposureTailscaleFunnel_WebhooksOn()
+    public void WriteConfig_PersonalPosture_PersistsShellApprovalGateInAudienceProfiles()
     {
+        // Security-critical winning path: SecurityPosture emits the Tools section through two
+        // paths (typed ContributeConfig + the section BuildContribution that is applied last and
+        // wins). This pins the MERGED on-disk result — the persisted Tools.AudienceProfiles must
+        // gate shell_execute behind Approval for Personal posture, so any future dedup that drops
+        // the default-deny override fails here.
         var steps = BuildCoreSteps();
-        EnterAndConfigurePosture(steps, DeploymentPosture.Team);
-        EnterFeatureSelection(steps);
-        ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.TailscaleFunnel, webhooks: true);
-        ConfigureIdentity(steps, "Netclaw", "UTC");
+        EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
 
         var config = AssembleConfig(steps);
 
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-funnel", daemon["ExposureMode"]);
-
-        // Webhooks: both the feature gate and the exposure step contribute
-        AssertSectionEnabled(config, "Webhooks", true);
+        var profiles = GetSection(GetSection(config, "Tools"), "AudienceProfiles");
+        var overrides = GetSection(GetSection(GetSection(profiles, "Personal"), "ApprovalPolicy"), "ToolOverrides");
+        Assert.Equal("Approval", overrides["shell_execute"]);
     }
 
     // ── Helpers ──
@@ -200,9 +202,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         [
             new SecurityPostureStepViewModel(),
             new FeatureSelectionStepViewModel(),
-            new SearchStepViewModel(),
-            new IdentityStepViewModel(),
-            new ExposureModeStepViewModel()
+            new IdentityStepViewModel()
         ];
     }
 
@@ -224,22 +224,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         step.OnLeave();
     }
 
-    private static void ConfigureSearch(List<IWizardStepViewModel> steps, SearchBackend backend,
-        string? searXngEndpoint = null)
-    {
-        var step = GetStep<SearchStepViewModel>(steps);
-        step.SelectedBackend = backend;
-        if (searXngEndpoint is not null)
-            step.SearXngEndpoint = searXngEndpoint;
-    }
-
-    private static void ConfigureExposure(List<IWizardStepViewModel> steps, ExposureMode mode, bool webhooks)
-    {
-        var step = GetStep<ExposureModeStepViewModel>(steps);
-        step.SelectedMode = mode;
-        step.WebhooksEnabled = webhooks;
-    }
-
     private static void ConfigureIdentity(List<IWizardStepViewModel> steps, string name, string timezone)
     {
         var step = GetStep<IdentityStepViewModel>(steps);
@@ -251,6 +235,12 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         _orchestrator = new WizardOrchestrator(steps, Context);
         _orchestrator.WriteConfig();
+
+        return LoadWrittenConfig();
+    }
+
+    private Dictionary<string, object> LoadWrittenConfig()
+    {
 
         var json = File.ReadAllText(Context.Paths.NetclawConfigPath);
         var doc = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
@@ -293,12 +283,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         var security = GetSection(config, "Security");
         Assert.Equal(expected, security["ShellExecutionMode"]);
-    }
-
-    private static void AssertSearchBackend(Dictionary<string, object> config, string expected)
-    {
-        var search = GetSection(config, "Search");
-        Assert.Equal(expected, search["Backend"]);
     }
 
     private static void AssertNoDisabledFeatureFlags(Dictionary<string, object> config)

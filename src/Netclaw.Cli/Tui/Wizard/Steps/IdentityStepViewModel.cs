@@ -5,15 +5,22 @@
 // -----------------------------------------------------------------------
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
-/// Wizard step for configuring agent identity (name, communication style, user profile, webhook, workspaces).
-/// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
+/// Wizard step for configuring agent identity (name, communication style, user profile).
+/// 4 sub-steps: agent name → comm style → user name → timezone.
+/// Workspaces directory and notification webhooks are post-install settings owned by
+/// <c>netclaw config</c> (Workspaces Directory; Telemetry &amp; Alerting → outbound webhooks),
+/// so the first-run wizard does not collect them.
 /// </summary>
-public sealed class IdentityStepViewModel : IWizardStepViewModel
+[NoDoctorChecks("Identity is synthetic and init-owned. Doctor coverage applies to the underlying config and generated identity files instead.")]
+public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     private int _currentSubStep;
     private int _highWaterSubStep;
@@ -21,20 +28,22 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
     public string StepId => WizardStepIds.Identity;
     public string DisplayTitle => "Identity";
+    public string SectionId => StepId;
+    public string DisplayName => DisplayTitle;
+    public string? Category => null;
+    public bool ShowInMenu => false;
+    public IReadOnlyList<string> RelevantDoctorChecks => [];
 
     // ── State ──
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
-    public string WorkspacesDirectory { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".netclaw", "workspaces");
-    public string? WebhookUrl { get; set; }
 
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => 6;
+    public int SubStepCount => 4;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -42,8 +51,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         1 => "  How should your assistant communicate?",
         2 => "  So your assistant knows what to call you.",
         3 => "  Used for time-aware responses and scheduling.",
-        4 => "  Where your agent stores and discovers project workspaces. Press Enter to keep the default.",
-        5 => "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
         _ => ""
     };
 
@@ -71,6 +78,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        PrefillFromExistingConfig(context);
         if (direction == NavigationDirection.Forward)
             _currentSubStep = 0;
         else if (direction == NavigationDirection.Back)
@@ -88,19 +96,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             UserName = UserName,
             UserTimezone = UserTimezone
         };
-
-        builder.Workspaces = new WorkspacesConfigSection
-        {
-            Directory = WorkspacesDirectory
-        };
-
-        if (!string.IsNullOrWhiteSpace(WebhookUrl))
-        {
-            builder.Notifications = new NotificationsConfigSection
-            {
-                WebhookUrl = WebhookUrl
-            };
-        }
     }
 
     public void ContributeSecrets(WizardSecretsBuilder builder) { }
@@ -110,6 +105,33 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         // Memory backend check (always SQLite)
         runner.Add(new HealthCheckItem("Memory backend (SQLite)", true));
         return Task.CompletedTask;
+    }
+
+    public SectionStatus GetStatus(WizardContext context)
+        => HasPersistedIdentity(context) ? SectionStatus.Configured : SectionStatus.NotConfigured;
+
+    public string Summary(WizardContext context)
+    {
+        var name = !string.IsNullOrWhiteSpace(AgentName) ? AgentName : ReadString(context, "Identity.AgentName");
+        var timezone = !string.IsNullOrWhiteSpace(UserTimezone) ? UserTimezone : ReadString(context, "Identity.UserTimezone");
+        return string.IsNullOrWhiteSpace(name) ? "Not configured" : string.IsNullOrWhiteSpace(timezone) ? name : $"{name} ({timezone})";
+    }
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => ActivatorUtilities.CreateInstance<IdentityStepViewModel>(services);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (IdentityStepViewModel)editor;
+        return new SectionContribution(
+        [
+            new SectionFieldAction("Identity.AgentName", SectionFieldActionKind.Set, vm.AgentName),
+            new SectionFieldAction("Identity.CommunicationStyle", SectionFieldActionKind.Set, vm.CommunicationStyle ?? "Concise & casual"),
+            string.IsNullOrWhiteSpace(vm.UserName)
+                ? new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Delete)
+                : new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Set, vm.UserName),
+            new SectionFieldAction("Identity.UserTimezone", SectionFieldActionKind.Set, vm.UserTimezone)
+        ]);
     }
 
     /// <summary>
@@ -148,7 +170,9 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             ["{{AGENTS_DETAIL_DIR}}"] = paths.AgentsDetailDirectory,
             ["{{TOOLING_DETAIL_DIR}}"] = paths.ToolingDetailDirectory,
             ["{{SKILLS_DIR}}"] = paths.SkillsDirectory,
-            ["{{WORKSPACES_DIR}}"] = WorkspacesDirectory
+            // Workspaces dir is no longer collected in init; use the resolved default
+            // (configured Workspaces.Directory or {BasePath}/workspaces) for the templates.
+            ["{{WORKSPACES_DIR}}"] = paths.WorkspacesDirectory
         };
 
         File.WriteAllText(paths.SoulPath, SubstitutePlaceholders(
@@ -289,6 +313,26 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
         File.WriteAllText(path, content);
     }
+
+    private void PrefillFromExistingConfig(WizardContext context)
+    {
+        if (context.ExistingConfig is null)
+            return;
+
+        AgentName = ReadString(context, "Identity.AgentName") ?? AgentName;
+        CommunicationStyle ??= ReadString(context, "Identity.CommunicationStyle");
+        UserName ??= ReadString(context, "Identity.UserName");
+        UserTimezone = ReadString(context, "Identity.UserTimezone") ?? UserTimezone;
+    }
+
+    private static bool HasPersistedIdentity(WizardContext context)
+        => !string.IsNullOrWhiteSpace(ReadString(context, "Identity.AgentName"));
+
+    private static string? ReadString(WizardContext context, string path)
+        => context.ExistingConfig is not null
+           && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, path, out var value)
+            ? value as string
+            : null;
 
     public void Dispose() { }
 }

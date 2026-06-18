@@ -92,7 +92,66 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.Contains(expectedMessage, failure.Label, StringComparison.Ordinal);
         Assert.DoesNotContain("Daemon did not become ready", failure.Label, StringComparison.Ordinal);
         Assert.Contains(crashLogPath, failure.Label, StringComparison.Ordinal);
-        Assert.Equal("Setup complete with warnings. Run `netclaw daemon start` to begin.", context.StatusMessage.Value);
+        Assert.Equal(
+            "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.",
+            context.StatusMessage.Value);
+        Assert.False(step.Succeeded.Value);
+    }
+
+    [Fact]
+    public async Task ResultsSnapshot_is_safe_to_read_while_results_are_mutated_concurrently()
+    {
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System);
+        using var step = new HealthCheckStepViewModel(
+            daemonManager, daemonApi: null, navigationState: new ChatNavigationState());
+
+        var runner = new HealthCheckRunner(step.Results, () => { });
+        using var cts = new CancellationTokenSource();
+        var writer = Task.Factory.StartNew(() =>
+        {
+            var writeCount = 0;
+            while (!cts.IsCancellationRequested)
+            {
+                runner.Add(new HealthCheckItem("probe", true));
+
+                if (++writeCount % 128 != 0)
+                    continue;
+
+                lock (step.Results)
+                {
+                    if (step.Results.Count > 256)
+                        step.Results.RemoveRange(0, step.Results.Count - 256);
+                }
+
+                Thread.Yield();
+            }
+        },
+        TestContext.Current.CancellationToken,
+        TaskCreationOptions.LongRunning,
+        TaskScheduler.Default);
+
+        try
+        {
+            // Wait (bounded) for the writer to start producing before the read loop, so the reads
+            // genuinely race concurrent Adds AND the final non-empty assertion is deterministic. On a
+            // contended CI scheduler the Task.Run writer may not run before cts.Cancel(), which left
+            // Results empty and failed the assertion intermittently.
+            Assert.True(
+                SpinWait.SpinUntil(() => step.ResultsSnapshot().Count > 0, TimeSpan.FromSeconds(10)),
+                "Writer task did not start adding results within 10s.");
+
+            // Read snapshots while the writer mutates Results off-thread. Without the synchronized
+            // snapshot, ToArray throws "Collection was modified" during a concurrent Add.
+            for (var i = 0; i < 50_000; i++)
+                _ = step.ResultsSnapshot();
+        }
+        finally
+        {
+            cts.Cancel();
+            await writer.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+
+        Assert.NotEmpty(step.ResultsSnapshot());
     }
 
     [Fact]
@@ -172,6 +231,8 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
             daemonApi,
             navigationState: new ChatNavigationState(),
             timeProvider: TimeProvider.System);
+        string? launchedRoute = null;
+        step.Navigate = route => launchedRoute = route;
         using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
         using var context = new WizardContext
         {
@@ -188,6 +249,9 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         Assert.True(File.Exists(_paths.NetclawConfigPath));
         Assert.Contains(step.Results, r => r.Label == "Daemon ready" && r.Passed == true);
+        // A clean bootstrap launches chat automatically — no second Enter required.
+        Assert.True(step.Succeeded.Value);
+        Assert.Equal("/chat", launchedRoute);
         // It confirmed readiness by polling health (not by spawning/POSTing).
         Assert.Contains("GET /api/health/ready", handler.Requests);
         // Watcher-owned: the wizard never stops the daemon and never triggers the restart itself.
@@ -210,6 +274,103 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         // Running before, but the daemon reported no generation (pre-#1302 / torn read) →
         // cannot confirm a restart → not ready yet (fail safe).
         Assert.False(HealthCheckStepViewModel.IsRestartedGeneration(before: 1, current: null));
+    }
+
+    [Fact]
+    public async Task RunWithOrchestrator_SupervisorMarkerSetButNoSupervisor_SurfacesActionableReason()
+    {
+        // NETCLAW_CONTAINER_SUPERVISOR is set (IsExternallySupervised) but nothing actually
+        // starts the daemon — e.g. a derived image that kept the marker yet replaced the
+        // entrypoint with `sleep infinity`. DaemonManager.Start() defers to the (absent)
+        // supervisor and the daemon never comes up; the readiness check must surface that
+        // actionable reason, not the generic "Daemon did not become ready".
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System, new FakeSupervisor(supervised: true));
+
+        using var step = new HealthCheckStepViewModel(
+            daemonManager,
+            // No readiness probe → the poll loop is skipped and we fall straight through to
+            // the timeout diagnostic, exercising the message path without a real wait.
+            daemonApi: null,
+            navigationState: new ChatNavigationState());
+        var launched = false;
+        step.Navigate = _ => launched = true;
+        using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+        exposureStep.OnEnter(context, NavigationDirection.Forward);
+        using var orchestrator = new WizardOrchestrator([exposureStep, step], context);
+
+        await step.RunWithOrchestrator(orchestrator);
+
+        var failure = Assert.Single(step.Results, r => r.Passed is false);
+        Assert.Contains("container supervisor", failure.Label, StringComparison.Ordinal);
+        Assert.Contains("marker may be set without a supervisor present", failure.Label, StringComparison.Ordinal);
+        Assert.DoesNotContain("Daemon did not become ready", failure.Label, StringComparison.Ordinal);
+        Assert.False(step.Succeeded.Value);
+        // A failed health check must NOT auto-launch chat — it stays on the summary.
+        Assert.False(launched);
+    }
+
+    [Fact]
+    public async Task RunWithOrchestrator_UnexpectedStepException_ReleasesWizardAndReportsError()
+    {
+        // An unexpected exception in a step's ContributeHealthChecksAsync must NOT leave the wizard
+        // wedged at IsRunning=true / IsComplete=false (GoNext gates on both being false, so the
+        // operator could neither advance, go back, nor see an error).
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System);
+        using var step = new HealthCheckStepViewModel(
+            daemonManager,
+            daemonApi: null,
+            navigationState: new ChatNavigationState());
+        using var throwingStep = new ThrowingHealthCheckStep();
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        using var orchestrator = new WizardOrchestrator([throwingStep, step], context);
+
+        // Must not throw — the catch-all handles it.
+        await step.RunWithOrchestrator(orchestrator);
+
+        Assert.False(step.IsRunning.Value);
+        Assert.True(step.IsComplete.Value);
+        Assert.Contains(step.Results, r => r.Passed == false && r.Label.Contains("Health check failed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Minimal wizard step whose health-check contribution throws an unexpected (non-cancellation)
+    // exception, to prove the orchestrator run releases the wizard instead of wedging it.
+    private sealed class ThrowingHealthCheckStep : IWizardStepViewModel
+    {
+        public string StepId => "throwing";
+        public string DisplayTitle => "Throwing";
+        public bool IsApplicable(WizardContext context) => true;
+        public int CurrentSubStep => 0;
+        public int SubStepCount => 1;
+        public string GetHelpText() => string.Empty;
+        public bool TryAdvance() => false;
+        public bool TryGoBack() => false;
+        public void OnEnter(WizardContext context, NavigationDirection direction) { }
+        public void OnLeave() { }
+        public void ContributeConfig(WizardConfigBuilder builder) { }
+        public void ContributeSecrets(WizardSecretsBuilder builder) { }
+        public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
+            => throw new InvalidOperationException("boom");
+        public void Dispose() { }
+    }
+
+    private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
+    {
+        public bool IsExternallySupervised => supervised;
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

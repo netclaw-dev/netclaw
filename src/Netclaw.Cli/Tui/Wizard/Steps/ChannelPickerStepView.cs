@@ -12,7 +12,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the unified channel picker step.
-/// Picker mode: checklist with ↑/↓ cursor, Space to toggle, Enter/E to configure, D to finish.
+/// Picker mode: checklist with ↑/↓ cursor, Space to toggle, Enter/E to configure, configurable done key to finish.
 /// Sub-flow mode: delegates rendering and input to the active adapter's view.
 /// </summary>
 public sealed class ChannelPickerStepView : IWizardStepView
@@ -75,12 +75,31 @@ public sealed class ChannelPickerStepView : IWizardStepView
             layout = layout.WithChild(node);
         }
 
+        if (_vm.ShowDonePickerRow)
+        {
+            var isFocused = _vm.IsDonePickerRowSelected;
+            var prefix = isFocused ? " ▶ " : "   ";
+            var node = new TextNode($"{prefix}{_vm.DonePickerRowLabel,-24} Return to Settings Areas");
+            node = isFocused
+                ? node.WithForeground(Color.Cyan).Bold()
+                : node.WithForeground(Color.White);
+            layout = layout.WithChild(node);
+        }
+
         layout = layout.WithSpacing(1);
 
         var hasConfigured = _vm.AnyAdapterConfigured;
         var hintText = hasConfigured
-            ? "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [e] Edit configured channel    [d] Done — continue to next step"
-            : "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [d] Done — continue to next step";
+            ? "  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel"
+            : "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.";
+        if (_vm.ShowDonePickerRow)
+            hintText += "\n  Select Done when finished; completed changes are already saved.";
+        if (_vm.ShowDoneAction)
+        {
+            hintText += hasConfigured
+                ? $"    [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}"
+                : $"\n  [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}";
+        }
 
         layout = layout.WithChild(new TextNode(hintText).WithForeground(Color.BrightBlack));
 
@@ -99,6 +118,18 @@ public sealed class ChannelPickerStepView : IWizardStepView
         var keyInfo = key.KeyInfo;
         var adapters = _vm.Adapters;
 
+        if (_vm.ShowDoneAction && keyInfo.Key == _vm.DoneKey)
+        {
+            _callbacks.AdvanceStep();
+            return true;
+        }
+
+        if (_vm.ShowDonePickerRow && keyInfo.Key == _vm.DoneKey)
+        {
+            _callbacks.AdvanceStep();
+            return true;
+        }
+
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:
@@ -108,17 +139,26 @@ public sealed class ChannelPickerStepView : IWizardStepView
                 return true;
 
             case ConsoleKey.DownArrow:
-                if (_vm.CursorIndex < adapters.Count - 1)
+                if (_vm.CursorIndex < _vm.PickerRowCount - 1)
                     _vm.CursorIndex++;
                 _callbacks.InvalidateAndRedraw();
                 return true;
 
             case ConsoleKey.Spacebar:
+                if (!_vm.IsAdapterRowSelected)
+                    return true;
+
                 _vm.ToggleAdapter(_vm.CursorIndex);
                 _callbacks.InvalidateAndRedraw();
                 return true;
 
             case ConsoleKey.Enter:
+                if (_vm.IsDonePickerRowSelected)
+                {
+                    _callbacks.AdvanceStep();
+                    return true;
+                }
+
                 if (_vm.IsAdapterEnabled(_vm.CursorIndex))
                 {
                     // Re-enter sub-flow for editing
@@ -130,10 +170,6 @@ public sealed class ChannelPickerStepView : IWizardStepView
                     _vm.ToggleAdapter(_vm.CursorIndex);
                 }
                 _callbacks.InvalidateAndRedraw();
-                return true;
-
-            case ConsoleKey.D:
-                _callbacks.AdvanceStep();
                 return true;
 
             case ConsoleKey.E:

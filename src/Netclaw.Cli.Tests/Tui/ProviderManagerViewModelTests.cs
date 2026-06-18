@@ -413,6 +413,43 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Leaving_detail_view_cancels_in_flight_revalidation()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        vm.DetailProvider = vm.DisplayProviders.Single(p => p.IsConfigured);
+        var item = vm.DetailProvider;
+        _fakeProbe.Gate = new TaskCompletionSource();
+
+        vm.RevalidateDetailProvider(); // starts the revalidation — it blocks on the gated probe
+        Assert.NotNull(vm.RevalidateCompletion);
+        Assert.Equal(ProviderHealthStatus.Probing, item.Health);
+
+        // Operator leaves the detail view: the in-flight revalidation must be cancelled, not left
+        // running with CancellationToken.None to update health (or redraw) against an abandoned view.
+        vm.GoBackToList();
+
+        await vm.RevalidateCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // The cancelled revalidation did not update health (stayed Probing) and did not throw.
+        Assert.Equal(ProviderHealthStatus.Probing, item.Health);
+    }
+
+    [Fact]
     public async Task ActivateSelectedProvider_Healthy_TransitionsToDetails()
     {
         WriteConfig(new Dictionary<string, object>
@@ -515,6 +552,54 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
         Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
         Assert.False(vm.IsFixFlow);
+    }
+
+    [Fact]
+    public async Task FixCredentials_ProbeFailure_LeavesStoredSecretUnchanged()
+    {
+        // An unhealthy provider with an existing, working secret on disk.
+        _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(false, "Unauthorized", []);
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old-working-key" }
+            }
+        });
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var idx = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.SelectedProviderIndex = idx;
+        vm.ActivateSelectedProvider();
+        Assert.Equal(ProviderManagerState.FixCredentials, vm.CurrentState.Value);
+
+        // Submit a NEW (bad) key — the probe still fails.
+        vm.FixApiKey = "sk-bad-new-key";
+        vm.SubmitFixCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(vm.ProbeResult.Value);
+        Assert.False(vm.ProbeResult.Value!.Success);
+        // The failed fix must NOT clobber the working secret: the file is byte-for-byte unchanged and
+        // the bad key was never written.
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+        Assert.DoesNotContain("sk-bad-new-key", File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -839,13 +924,35 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
-    public void GoBack_FromList_ShutdownSignal()
+    public void GoBack_FromList_DoesNotNavigateWhenStandalone()
+    {
+        // Standalone `netclaw provider` host: IsEmbeddedInConfig stays false (no
+        // EmbeddedConfigHostMarker in DI). Backing out past the root must NOT navigate to /config
+        // (not registered standalone); it exits the app. The previous code both navigated and
+        // Shutdown(), which in the embedded host dropped the queued nav and quit the config app.
+        using var vm = CreateViewModel();
+        Assert.False(vm.IsEmbeddedInConfig);
+        vm.CurrentState.Value = ProviderManagerState.List;
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
+        vm.GoBack();
+
+        Assert.Null(route);
+    }
+
+    [Fact]
+    public void GoBack_FromList_NavigatesToConfigWhenEmbedded()
     {
         using var vm = CreateViewModel();
+        vm.IsEmbeddedInConfig = true;
         vm.CurrentState.Value = ProviderManagerState.List;
-        // GoBack from list should call Shutdown (which we can't easily test without a host,
-        // but we can verify it doesn't crash)
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
         vm.GoBack();
+
+        Assert.Equal("/config", route);
     }
 
     [Fact]

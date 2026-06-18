@@ -78,6 +78,16 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _probeCts;
+    private CancellationTokenSource? _revalidateCts;
+
+    internal Action<string>? RouteRequested { get; set; }
+
+    /// <summary>
+    /// True when this manager is hosted inside <c>netclaw config</c> (reached from the dashboard).
+    /// Set by the embedded host registration; left false for the standalone <c>netclaw provider</c>
+    /// host. Controls whether backing out past the root navigates to the dashboard or exits the app.
+    /// </summary>
+    internal bool IsEmbeddedInConfig { get; set; }
 
     public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
@@ -139,23 +149,31 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     internal Task? EagerProbeCompletion { get; private set; }
 
     /// <summary>
+    /// Completes when the detail-provider revalidation finishes. Used for testing.
+    /// </summary>
+    internal Task? RevalidateCompletion { get; private set; }
+
+    /// <summary>
     /// The provider descriptor registry. Exposed for use by the page.
     /// </summary>
     public ProviderDescriptorRegistry Registry => _registry;
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry,
-        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
-        : this(paths, registry, registry, oauthFactory, daemonApi)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
+        EmbeddedConfigHostMarker? embeddedHost = null)
+        : this(paths, registry, registry, oauthFactory, daemonApi, embeddedHost)
     {
     }
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe,
-        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null,
+        EmbeddedConfigHostMarker? embeddedHost = null)
     {
         _paths = paths;
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
+        IsEmbeddedInConfig = embeddedHost is not null;
         OAuth = new OAuthFlowCoordinator(
             registry,
             oauthFactory,
@@ -518,35 +536,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return;
         }
 
-        // Write updated credentials
-        if (DetailProvider.ConfiguredName is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(FixApiKey))
-            {
-                var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
-                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-                secretProviders[DetailProvider.ConfiguredName] = new Dictionary<string, object>
-                {
-                    ["ApiKey"] = FixApiKey
-                };
-                ConfigFileHelper.WriteSecretsFile(_paths, secrets);
-            }
-
-            if (FixEndpoint is not null && DetailProvider.Entry is not null
-                && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
-            {
-                var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
-                var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
-                if (providers.TryGetValue(DetailProvider.ConfiguredName, out var existing) &&
-                    existing is Dictionary<string, object> providerDict)
-                {
-                    providerDict["Endpoint"] = FixEndpoint;
-                    ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
-                }
-            }
-        }
-
-        // Set up probe using fix credentials
+        // Do NOT write the new credential yet: defer the secrets/config write to the probe-success
+        // branch (WriteFixedCredentials) so a bad API key or endpoint never clobbers the working one
+        // on disk with no rollback. The normal add flow defers its write identically.
         NewProviderType = type;
         NewEndpoint = FixEndpoint;
         NewApiKey = FixApiKey
@@ -557,6 +549,39 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         CurrentState.Value = ProviderManagerState.AddValidating;
         NotifyStateChanged();
         StartProbe();
+    }
+
+    // Persists the fixed API key (to secrets.json) and endpoint (to netclaw.json) for the provider
+    // being repaired. Called only from the probe-success branch so an invalid new credential never
+    // overwrites the working one. Updates the existing provider entry keyed by ConfiguredName.
+    private void WriteFixedCredentials()
+    {
+        if (DetailProvider?.ConfiguredName is not { } name)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(FixApiKey))
+        {
+            var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
+            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+            secretProviders[name] = new Dictionary<string, object>
+            {
+                ["ApiKey"] = FixApiKey
+            };
+            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+        }
+
+        if (FixEndpoint is not null && DetailProvider.Entry is not null
+            && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
+        {
+            var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+            var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
+            if (providers.TryGetValue(name, out var existing) &&
+                existing is Dictionary<string, object> providerDict)
+            {
+                providerDict["Endpoint"] = FixEndpoint;
+                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            }
+        }
     }
 
     /// <summary>
@@ -706,25 +731,51 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         DetailProvider.Health = ProviderHealthStatus.Probing;
         NotifyStateChanged();
 
-        _ = RevalidateAsync(DetailProvider);
+        CancelRevalidate();
+        _revalidateCts = new CancellationTokenSource();
+        RevalidateCompletion = RevalidateAsync(DetailProvider, _revalidateCts.Token);
     }
 
-    private async Task RevalidateAsync(ProviderDisplayItem item)
+    // Cancel and dispose the in-flight detail-provider revalidation. Called when a newer revalidate
+    // starts, when the operator leaves the detail view, and on dispose — all on the UI thread.
+    private void CancelRevalidate()
+    {
+        if (_revalidateCts is not null)
+        {
+            _revalidateCts.Cancel();
+            _revalidateCts.Dispose();
+            _revalidateCts = null;
+        }
+    }
+
+    private async Task RevalidateAsync(ProviderDisplayItem item, CancellationToken ct)
     {
         try
         {
             var result = item.Entry is not null
-                ? await _probe.ProbeAsync(item.Entry, CancellationToken.None)
+                ? await _probe.ProbeAsync(item.Entry, ct)
                 : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
-                    GetProbeCredential(item.Entry), CancellationToken.None);
+                    GetProbeCredential(item.Entry), ct);
+
+            // Abandoned (operator left the detail view, or a newer revalidate started): do not
+            // update health or redraw against a stale/disposed view-model.
+            if (ct.IsCancellationRequested)
+                return;
 
             item.ProbeResult = result;
             item.Health = result.Success
                 ? ProviderHealthStatus.Healthy
                 : ProviderHealthStatus.Unhealthy;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
         catch
         {
+            if (ct.IsCancellationRequested)
+                return;
+
             item.Health = ProviderHealthStatus.Unhealthy;
         }
 
@@ -748,6 +799,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public void GoBackToList()
     {
         CancelProbe();
+        CancelRevalidate();
         ClearAddState();
         DetailProvider = null;
         IsFixFlow = false;
@@ -815,7 +867,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 CancelRename();
                 break;
             default:
-                Shutdown();
+                if (IsEmbeddedInConfig)
+                {
+                    // Embedded in `netclaw config`: return to the dashboard. We must NOT Shutdown
+                    // here — Shutdown cancels the run loop's token before the queued navigation is
+                    // processed, dropping the nav and quitting the entire config app.
+                    RouteRequested?.Invoke("/config");
+                    Navigate?.Invoke("/config");
+                }
+                else
+                {
+                    // Standalone `netclaw provider`: backing out past the root exits the app.
+                    Shutdown();
+                }
+
                 break;
         }
     }
@@ -931,6 +996,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 {
                     WriteProviderConfig();
                     _newProviderPersisted = true;
+                }
+                else
+                {
+                    // API-key / endpoint fix: persist only now that the probe succeeded, so a typo
+                    // in the new credential leaves the prior working secret untouched on disk.
+                    WriteFixedCredentials();
                 }
 
                 // Fix flow: re-probe all providers so list shows fresh health
@@ -1069,6 +1140,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public override void Dispose()
     {
         CancelProbe();
+        CancelRevalidate();
         OAuth.Dispose();
         CurrentState.Dispose();
         StatusMessage.Dispose();

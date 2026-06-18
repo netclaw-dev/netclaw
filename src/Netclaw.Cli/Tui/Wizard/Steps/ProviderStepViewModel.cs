@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
@@ -20,7 +22,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Sub-steps: 0=provider selection, 1=auth method, 2=credentials, 3=validation,
 /// 4=model selection, 5=OAuth device flow, 6=OAuth browser flow.
 /// </summary>
-public sealed class ProviderStepViewModel : IWizardStepViewModel
+public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry _registry;
@@ -46,6 +48,11 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
 
     public string StepId => WizardStepIds.Provider;
     public string DisplayTitle => "LLM Provider";
+    public string SectionId => StepId;
+    public string DisplayName => DisplayTitle;
+    public string? Category => null;
+    public bool ShowInMenu => false;
+    public IReadOnlyList<string> RelevantDoctorChecks => ["Config Schema", "Context Window"];
 
     // ── State ──
     public string? SelectedProviderType { get; set; }
@@ -53,6 +60,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public string? ApiKeyInput { get; set; }
     public string? EndpointInput { get; set; }
     public string? SelectedModelId { get; set; }
+    public bool HasStoredCredential { get; private set; }
     public List<DiscoveredModel> DiscoveredModels { get; } = [];
     public OAuthFlowCoordinator OAuth { get; }
     public ProviderDescriptorRegistry Registry => _registry;
@@ -135,6 +143,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        PrefillFromExistingConfig(context);
         if (direction == NavigationDirection.Back)
             _currentSubStep = _highWaterSubStep;
     }
@@ -151,20 +160,20 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
 
     public void CancelProbe()
     {
-        if (_probeCts is not null)
-        {
-            _probeCts.Cancel();
-            _probeCts.Dispose();
-            _probeCts = null;
-        }
+        // Atomically take ownership of the active CTS so a concurrently-completing probe's finally
+        // cannot also cancel/dispose it (double dispose, or cancelling a newer probe's live CTS).
+        var cts = Interlocked.Exchange(ref _probeCts, null);
+        cts?.Cancel();
+        cts?.Dispose();
     }
 
     internal Task? ProbeCompletion { get; private set; }
 
     internal async Task ProbeProviderAsync()
     {
-        _probeCts = new CancellationTokenSource();
-        var ct = _probeCts.Token;
+        var cts = new CancellationTokenSource();
+        _probeCts = cts;
+        var ct = cts.Token;
         var providerType = SelectedProviderType ?? "unknown";
         var probeEntry = BuildProbeEntry(providerType);
 
@@ -203,7 +212,14 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         }
         finally
         {
-            CancelProbe();
+            // Tear down only THIS probe's CTS, and only if it is still the active one. A newer probe
+            // (StartProbe → CancelProbe) may have already replaced and disposed it; claiming the field
+            // atomically stops this finally from cancelling/disposing the newer probe's live CTS.
+            if (Interlocked.CompareExchange(ref _probeCts, null, cts) == cts)
+            {
+                cts.Cancel();
+                cts.Dispose();
+            }
         }
 
         DiscoveredModels.Clear();
@@ -359,7 +375,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
             OAuth.Result,
             ApiKeyInput,
             _registry,
-            SensitiveStringTypeConverter.Protector);
+            // Protector for this config's keys directory, not the process-wide static service locator.
+            SecretsProtection.CreateProtector(paths));
     }
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
@@ -378,6 +395,147 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
             true)); // not a hard failure
 
         return Task.CompletedTask;
+    }
+
+    public SectionStatus GetStatus(WizardContext context)
+        => !string.IsNullOrWhiteSpace(SelectedProviderType) || ConfigFileHelper.PathPresent(context.ExistingConfig ?? [], "Providers")
+            ? SectionStatus.Configured
+            : SectionStatus.NotConfigured;
+
+    public string Summary(WizardContext context)
+    {
+        var providerType = SelectedProviderType ?? ReadExistingProviderType(context);
+        var modelId = SelectedModelId ?? ReadExistingModelId(context);
+        if (string.IsNullOrWhiteSpace(providerType))
+            return "Not configured";
+
+        return string.IsNullOrWhiteSpace(modelId) ? providerType : $"{providerType} / {modelId}";
+    }
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => ActivatorUtilities.CreateInstance<ProviderStepViewModel>(services);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (ProviderStepViewModel)editor;
+        if (string.IsNullOrWhiteSpace(vm.SelectedProviderType))
+            return SectionContribution.Empty;
+
+        var providerType = vm.SelectedProviderType.ToLowerInvariant();
+        var fieldActions = new List<SectionFieldAction>
+        {
+            new("Providers", SectionFieldActionKind.Set, BuildProvidersDictionary(vm, providerType)),
+            new("Models.Main.Provider", SectionFieldActionKind.Set, providerType)
+        };
+
+        if (string.IsNullOrWhiteSpace(vm.SelectedModelId))
+            fieldActions.Add(new SectionFieldAction("Models.Main.ModelId", SectionFieldActionKind.Delete));
+        else
+            fieldActions.Add(new SectionFieldAction("Models.Main.ModelId", SectionFieldActionKind.Set, vm.SelectedModelId));
+
+        var secretPath = $"Providers.{providerType}";
+        var secretActions = new List<SectionSecretAction>();
+        if (!string.IsNullOrWhiteSpace(vm.ApiKeyInput))
+        {
+            secretActions.Add(new SectionSecretAction($"{secretPath}.ApiKey", SectionSecretActionKind.Set,
+                new SensitiveString(vm.ApiKeyInput)));
+        }
+        else if (vm.HasStoredCredential)
+        {
+            secretActions.Add(new SectionSecretAction(secretPath, SectionSecretActionKind.Preserve));
+        }
+
+        return new SectionContribution(fieldActions, secretActions);
+    }
+
+    private void PrefillFromExistingConfig(WizardContext context)
+    {
+        if (context.ExistingConfig is null)
+            return;
+
+        var providerType = ReadExistingProviderType(context);
+        if (string.IsNullOrWhiteSpace(providerType))
+            return;
+
+        SelectedProviderType ??= providerType;
+        SelectedModelId ??= ReadExistingModelId(context);
+
+        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, $"Providers.{providerType}.Endpoint", out var endpoint)
+            && endpoint is string endpointText)
+        {
+            EndpointInput ??= endpointText;
+        }
+
+        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, $"Providers.{providerType}.AuthMethod", out var authMethod)
+            && authMethod is string authMethodText
+            && Enum.TryParse<AuthMethod>(authMethodText, ignoreCase: true, out var parsed))
+        {
+            SelectedAuthMethod = parsed;
+        }
+
+        HasStoredCredential = ConfigFileHelper.SecretPresent(context.Paths, $"Providers.{providerType}.ApiKey")
+            || ConfigFileHelper.SecretPresent(context.Paths, $"Providers.{providerType}.OAuthAccessToken");
+    }
+
+    private static string? ReadExistingProviderType(WizardContext context)
+    {
+        if (context.ExistingConfig is null
+            || !ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Models.Main.Provider", out var provider)
+            || provider is not string providerText)
+        {
+            return null;
+        }
+
+        return providerText;
+    }
+
+    private static string? ReadExistingModelId(WizardContext context)
+        => context.ExistingConfig is not null
+           && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Models.Main.ModelId", out var model)
+            ? model as string
+            : null;
+
+    private Dictionary<string, object> BuildProvidersDictionary(ProviderStepViewModel vm, string providerType)
+    {
+        var providerEntry = new Dictionary<string, object>
+        {
+            [providerType] = BuildProviderEntry(vm, providerType)
+        };
+
+        if (_context?.ExistingConfig is not null
+            && ConfigFileHelper.TryGetPathValue(_context.ExistingConfig, "Providers", out var existing)
+            && existing is Dictionary<string, object> existingProviders)
+        {
+            foreach (var (key, value) in existingProviders)
+            {
+                if (!providerEntry.ContainsKey(key))
+                    providerEntry[key] = value;
+            }
+        }
+
+        return providerEntry;
+    }
+
+    private Dictionary<string, object> BuildProviderEntry(ProviderStepViewModel vm, string providerType)
+    {
+        var entry = new Dictionary<string, object>
+        {
+            ["Type"] = providerType
+        };
+
+        if (vm.SelectedAuthMethod != AuthMethod.None)
+            entry["AuthMethod"] = vm.SelectedAuthMethod.ToString();
+
+        var endpoint = !string.IsNullOrWhiteSpace(vm.EndpointInput)
+            ? vm.EndpointInput
+            : _registry.TryGet(providerType, out var descriptor) && descriptor.Auth is EndpointOnlyAuth
+                ? descriptor.DefaultEndpoint
+                : null;
+
+        if (!string.IsNullOrWhiteSpace(endpoint))
+            entry["Endpoint"] = endpoint;
+
+        return entry;
     }
 
     public void Dispose()

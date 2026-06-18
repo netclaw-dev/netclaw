@@ -33,6 +33,9 @@ public sealed class StepViewCallbacks
     /// <summary>Request a terminal redraw.</summary>
     public required Action RequestRedraw { get; init; }
 
+    /// <summary>Show a step-scoped validation or status message.</summary>
+    public Action<string>? SetStatusMessage { get; init; }
+
     /// <summary>Invalidate content and help, then request a redraw.</summary>
     public void InvalidateAndRedraw()
     {
@@ -40,6 +43,16 @@ public sealed class StepViewCallbacks
         InvalidateHelp();
         RequestRedraw();
     }
+
+    /// <summary>Show a validation error and redraw without advancing the step.</summary>
+    public void ShowValidationError(string message)
+    {
+        SetStatusMessage?.Invoke(message);
+        RequestRedraw();
+    }
+
+    /// <summary>Clear the step-scoped validation or status message.</summary>
+    public void ClearStatusMessage() => SetStatusMessage?.Invoke(string.Empty);
 }
 
 /// <summary>

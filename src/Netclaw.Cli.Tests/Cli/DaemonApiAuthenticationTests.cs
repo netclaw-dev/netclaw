@@ -99,6 +99,30 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPairedDevices_ReverseProxyWrittenAfterConstruction_AttachesBearerToken()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"ExposureMode\":\"local\"}}");
+        HttpRequestMessage? capturedRequest = null;
+        var api = CreateDaemonApi(
+            "http://127.0.0.1:5199",
+            request =>
+            {
+                capturedRequest = request;
+                return FakeHttpMessageHandler.JsonResponse(Array.Empty<object>());
+            });
+
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"ExposureMode\":\"reverse-proxy\"}}");
+        WriteDeviceToken("fresh-bootstrap-device-token");
+
+        var devices = await api.ListPairedDevicesAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
+        Assert.Equal("fresh-bootstrap-device-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.Empty(devices);
+    }
+
+    [Fact]
     public void ResolveEndpoint_FallsBackToDaemonBindConfig()
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Host\":\"10.0.0.20\",\"Port\":6200}}");

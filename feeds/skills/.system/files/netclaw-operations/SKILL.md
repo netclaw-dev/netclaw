@@ -761,8 +761,10 @@ Rules:
   form unless the operator provides a configuration-style colon path.
 - `netclaw secrets add` is an alias for `set` and overwrites the same effective
   path.
-- Re-running `netclaw init` updates secret values explicitly entered in the
-  wizard while preserving unrelated secrets.
+- Re-running `netclaw init` on an existing install opens an action menu
+  (`Redo identity setup`, `Open configuration editor`, `Start over from
+  scratch`, `Cancel`) rather than re-walking setup. Update individual secrets
+  with `netclaw secrets set` or the relevant `netclaw config` editor.
 - If a channel reports a 401 or invalid-token error, rotate the relevant secret
   and restart the daemon so the channel reloads config.
 
@@ -942,22 +944,31 @@ Exposure diagnostics are fail-closed:
   `cloudflare-tunnel`) require their local tunnel process by default.
   `Daemon.SkipTunnelProcessCheck=true` is an explicit opt-in only for sidecar or
   host-managed tunnel topologies; all other exposure requirements still apply.
+- The `netclaw config` Exposure Mode editor preserves dormant reverse-proxy
+  values in `~/.netclaw/config/editor-state.json` when switching to `local` or a
+  tunnel mode. Runtime-active `Daemon.Host` and `Daemon.TrustedProxies` are
+  removed from `netclaw.json` while inactive so local startup validation remains
+  loopback-only. Treat `editor-state.json` as passive editor state, not daemon
+  configuration.
 
-The `netclaw init` wizard's Network Exposure step offers all five modes —
-`local`, `reverse-proxy`, `tailscale-serve`, `tailscale-funnel`,
-`cloudflare-tunnel`. Selecting `reverse-proxy` adds two follow-up prompts that
-collect `Daemon.Host` (must be non-loopback) and `Daemon.TrustedProxies` (≥1
-entry required, comma-separated). The wizard refuses to advance past the
-trusted-proxies prompt with an empty list — the same minimum the daemon
-validator enforces at startup — so an operator who does not yet know their
-proxy IP should choose `local` and re-run `netclaw init` later, supplying the
-bind address and trusted proxies on the second pass once the proxy topology
-is known.
+Network exposure is configured in `netclaw config` → Security & Access →
+Exposure Mode — not in first-run `netclaw init`, which is a minimal bootstrap
+(Provider → Identity → Security Posture → Enabled Features → Health Check).
+The exposure editor offers all five modes — `local`, `reverse-proxy`,
+`tailscale-serve`, `tailscale-funnel`, `cloudflare-tunnel`. Selecting
+`reverse-proxy` collects `Daemon.Host` (must be non-loopback) and
+`Daemon.TrustedProxies` (≥1 entry required, comma-separated). The editor
+refuses to save past the trusted-proxies prompt with an empty list — the same
+minimum the daemon validator enforces at startup — so an operator who does not
+yet know their proxy IP can leave exposure at `local` and set the bind address
+and trusted proxies later once the proxy topology is known.
 
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
-`~/.netclaw/config/secrets.json` (credentials — never display API keys).
+`~/.netclaw/config/secrets.json` (credentials — never display API keys), and
+`~/.netclaw/config/editor-state.json` (passive config-editor state for dormant
+mode-specific values).
 
 ## Feature Kill Switches
 

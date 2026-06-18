@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Tui.Wizard.Steps;
+using Netclaw.Cli.Tui.Sections;
 using R3;
 
 namespace Netclaw.Cli.Tui.Wizard;
@@ -19,11 +20,18 @@ public sealed class WizardOrchestrator : IDisposable
     private readonly WizardContext _context;
     private List<IWizardStepViewModel> _activeSteps;
     private int _currentIndex;
+    private readonly bool _singleStepMode;
 
     public WizardOrchestrator(IReadOnlyList<IWizardStepViewModel> steps, WizardContext context)
+        : this(steps, context, singleStepMode: false)
+    {
+    }
+
+    public WizardOrchestrator(IReadOnlyList<IWizardStepViewModel> steps, WizardContext context, bool singleStepMode)
     {
         _allSteps = steps;
         _context = context;
+        _singleStepMode = singleStepMode;
         _activeSteps = BuildInitialActiveSteps();
 
         if (_activeSteps.Count > 0)
@@ -86,6 +94,9 @@ public sealed class WizardOrchestrator : IDisposable
         current.OnLeave();
         _activeSteps = RebuildActiveSteps();
 
+        if (_singleStepMode)
+            return false;
+
         var nextIndex = currentIdx + 1;
         if (nextIndex >= _activeSteps.Count)
             return false; // already at the end
@@ -125,6 +136,9 @@ public sealed class WizardOrchestrator : IDisposable
         if (currentIdx <= 0)
             return false; // at the very beginning
 
+        if (_singleStepMode)
+            return false;
+
         current.OnLeave();
         _activeSteps = RebuildActiveSteps();
 
@@ -152,8 +166,21 @@ public sealed class WizardOrchestrator : IDisposable
 
         foreach (var step in _activeSteps)
         {
+            // Two-phase emission. ContributeConfig populates the typed section objects (the base
+            // section shape, also covered directly by WizardConfigBuilder tests). Then — for steps
+            // that are ISectionEditor — BuildContribution's field actions are applied LAST and win
+            // for every key they set, so BuildContribution is authoritative for those keys. The two
+            // must stay in agreement (e.g. via the shared helpers in SecurityPostureStepViewModel)
+            // so the clobbered typed write is a genuine no-op rather than a silent divergence.
             step.ContributeConfig(configBuilder);
             step.ContributeSecrets(secretsBuilder);
+
+            if (step is ISectionEditor sectionEditor)
+            {
+                var contribution = sectionEditor.BuildContribution(step);
+                configBuilder.ApplyContribution(contribution);
+                secretsBuilder.ApplyContribution(contribution);
+            }
         }
 
         configBuilder.WriteConfigFile();

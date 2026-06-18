@@ -36,6 +36,7 @@
 #   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
 #   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
+#   SMOKE_DAEMON_PORT        isolated daemon port   (default: 56199)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
 
 set -euo pipefail
@@ -53,7 +54,7 @@ SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-${ROOT_DIR}/smoke-logs}"
 
 # Cheapest harness checks first so a harness-level break fails fast
 # before paying for the wizard + probe tapes.
-LIGHT_TAPES=(help init-wizard init-wizard-reverse-proxy provider-add provider-rename tui-cleanup mcp-permissions approvals model-manager sessions-tui)
+LIGHT_TAPES=(help init-wizard init-existing provider-add provider-rename config-search config-exposure config-posture config-features config-audience config-channels config-surfaces config-ops-surfaces config-workspaces-picker config-skill-picker config-back-nav tui-cleanup mcp-permissions approvals model-manager sessions-tui)
 FULL_TAPES=("${LIGHT_TAPES[@]}")
 
 LIGHT_SCENARIOS=(
@@ -73,7 +74,7 @@ FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 # may emit several `Screenshot "/tmp/shot-<frame>.png"` directives. SHOT_FRAMES
 # is the full set of frame names the harness compares against baselines — it
 # MUST stay in sync with the Screenshot paths in those tapes.
-SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions)
+SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions config-search)
 SHOT_FRAMES=(
   help
   wizard-provider-picker
@@ -81,6 +82,9 @@ SHOT_FRAMES=(
   provider-manager-empty
   mcp-permissions-server-list
   mcp-permissions-tool-grid
+  config-search-selection
+  config-search-brave-entry
+  config-search-saved
 )
 
 usage() {
@@ -153,6 +157,9 @@ fi
 RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/netclaw-smoke.XXXXXX")"
 export RUN_ROOT
 mkdir -p "${RUN_ROOT}/home"
+
+SMOKE_DAEMON_PORT="${SMOKE_DAEMON_PORT:-56199}"
+SMOKE_DAEMON_BASE_URL="http://127.0.0.1:${SMOKE_DAEMON_PORT}"
 
 teardown_done=0
 teardown() {
@@ -268,8 +275,17 @@ run_one_tape() {
   echo "Tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/tape-${tape}"
+  local user_home="${RUN_ROOT}/home/user-tape-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/${tape}" \
@@ -285,9 +301,18 @@ run_one_scenario() {
   echo "Scenario: ${scenario}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/scenario-${scenario}"
+  local user_home="${RUN_ROOT}/home/user-scenario-${scenario}"
   rm -rf "$home"
+  rm -rf "$user_home"
   mkdir -p "$home"
-  if ! NETCLAW_HOME="$home" \
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        NETCLAW_DAEMON_PATH="$NETCLAW_SMOKE_DAEMON" \
@@ -311,8 +336,16 @@ run_shot_tape() {
   echo "Screenshot tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/shot-${tape}"
+  local user_home="${RUN_ROOT}/home/user-shot-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/shot-${tape}" \

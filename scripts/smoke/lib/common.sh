@@ -11,12 +11,14 @@
 #   START_TIMEOUT_SECONDS  daemon start/health timeout (default: 180)
 #   STOP_TIMEOUT_SECONDS   daemon stop timeout         (default: 90)
 #   STEP_TIMEOUT_SECONDS   per-command timeout         (default: 120)
-#   DAEMON_HEALTH_URL      health endpoint base        (default loopback:5199)
+#   DAEMON_BASE_URL        health endpoint base        (default loopback:56199)
+#   DAEMON_PORT            daemon listen port          (default: port from DAEMON_BASE_URL or 56199)
 
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-180}"
 STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-90}"
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-120}"
-DAEMON_BASE_URL="${DAEMON_BASE_URL:-http://127.0.0.1:5199}"
+DAEMON_BASE_URL="${DAEMON_BASE_URL:-http://127.0.0.1:56199}"
+DAEMON_PORT="${DAEMON_PORT:-${DAEMON_BASE_URL##*:}}"
 
 # ── Output / counters ────────────────────────────────────────────────────────
 
@@ -105,7 +107,7 @@ pid_is_smoke_daemon() {
   [[ -n "$exe" && "$exe" == "$NETCLAW_SMOKE_DAEMON" ]]
 }
 
-# ensure_daemon_port_free — block until 127.0.0.1:5199 has no LISTEN socket.
+# ensure_daemon_port_free — block until the configured smoke daemon port has no LISTEN socket.
 # Every tape and scenario daemon binds the same fixed port; a daemon orphaned
 # by an earlier NETCLAW_HOME is invisible to `netclaw daemon stop` (which only
 # signals the PID in the current home's PID file) and will squat the port,
@@ -114,7 +116,7 @@ pid_is_smoke_daemon() {
 # port is still held after the timeout OR if it is held by a non-smoke
 # process we refuse to touch.
 ensure_daemon_port_free() {
-  local port=5199
+  local port="$DAEMON_PORT"
   local deadline=$((SECONDS + 30))
   while (( SECONDS < deadline )); do
     local holders

@@ -65,7 +65,37 @@ jobs:
 
       - name: "dotnet test"
         shell: bash
-        run: dotnet test -c Release
+        # blame-hang aborts + writes a Sequence file (naming the in-flight test) and a full process
+        # dump if a test stalls (no test activity) for 300s, so a hang fails fast (~minutes, not the
+        # 30-min job cap) and is diagnosable from the CI log + the uploaded dump instead of a silent
+        # timeout. The full dump carries every thread's stack — needed to confirm the suspected
+        # macOS/ARM64 weak-memory-ordering hang in the TUI view-models.
+        run: dotnet test -c Release --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
+
+      # Diagnostic: surface the blame Sequence file (names the stuck test) in the CI log so a
+      # platform-specific hang can be pinpointed even without downloading the dump artifact.
+      - name: "Show hang sequence (if a test hung)"
+        if: always()
+        shell: bash
+        run: |
+          seq=$(find ./TestResults -name '*Sequence*.xml' 2>/dev/null || true)
+          if [ -n "$seq" ]; then
+            for f in $seq; do echo "===== HANG SEQUENCE: $f ====="; cat "$f"; echo; done
+          else
+            echo "No blame Sequence file — no test hang detected."
+          fi
+
+      # Upload the hang dump + sequence file so a dedicated agent can open the dump (dotnet-dump
+      # analyze / lldb) and read the stalled thread stacks. Per-OS name; only the macOS run is
+      # expected to produce one today.
+      - name: "Upload hang dump"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-hang-dump-${{ matrix.os }}
+          path: ./TestResults
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: "Publish CLI (single-file, self-contained)"
         if: runner.os != 'Windows'

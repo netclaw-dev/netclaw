@@ -44,6 +44,10 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         ParseChannelNames(ChannelNamesInput).Count;
     public string? BotToken { get; set; }
     public string? AppToken { get; set; }
+    internal string? BotTokenDraft { get; set; }
+    internal string? AppTokenDraft { get; set; }
+    public bool HasPersistedBotToken { get; set; }
+    public bool HasPersistedAppToken { get; set; }
     public string? ChannelNamesInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public bool RestrictToSpecificUsers { get; set; }
@@ -132,6 +136,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         SlackEnabled = false;
         BotToken = null;
         AppToken = null;
+        BotTokenDraft = null;
+        AppTokenDraft = null;
         ChannelNamesInput = null;
         AllowDirectMessages = false;
         RestrictToSpecificUsers = false;
@@ -158,19 +164,11 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
             if (AllowDirectMessages)
             {
                 var allowedUsers = ParseUserIds(AllowedUserIdsInput);
-                var dmAudience = allowedUsers.Count == 1
-                    ? TrustAudience.Personal
-                    : posture == DeploymentPosture.Personal
-                        ? TrustAudience.Personal
-                        : posture == DeploymentPosture.Team
-                            ? TrustAudience.Team
-                            : TrustAudience.Public;
+                var dmAudience = ChannelAudienceDefaults.ForDirectMessage(posture, allowedUsers.Count);
                 entries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
             }
 
-            var channelAudience = posture == DeploymentPosture.Public
-                ? TrustAudience.Public
-                : TrustAudience.Team;
+            var channelAudience = ChannelAudienceDefaults.ForChannel(posture);
 
             if (!string.IsNullOrWhiteSpace(ChannelNamesInput))
             {
@@ -227,19 +225,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
 
     public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        runner.Add(new HealthCheckItem("Slack configuration", null));
-
-        if (!SlackEnabled)
-        {
-            runner.UpdateLast(new HealthCheckItem("Slack configuration (disabled)", true));
+        if (!runner.BeginAdapterCheck("Slack", SlackEnabled, (BotToken, "bot token")))
             return;
-        }
-
-        if (string.IsNullOrWhiteSpace(BotToken))
-        {
-            runner.UpdateLast(new HealthCheckItem("Slack configuration (bot token missing)", false));
-            return;
-        }
 
         // Probe Slack auth
         bool slackAuthOk;
@@ -320,20 +307,40 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in slackEntries)
-            audiences[ResolveChannelAudienceKey(entry)] = entry.Audience.ToWireValue();
+        {
+            // Only write an audience under a canonical key the Slack runtime ACL can match — a
+            // resolved channel ID, or the literal "dm" DM key. An unresolved channel NAME is a dead
+            // key the runtime never matches, so omit it instead of silently writing inert ACL config
+            // (a no-silent-fallback violation on a security path). The health-check phase already
+            // surfaces unresolved channels to the operator.
+            if (TryResolveChannelAudienceKey(entry, out var key))
+                audiences[key] = entry.Audience.ToWireValue();
+        }
 
         return audiences.Count > 0 ? audiences : null;
     }
 
-    private string ResolveChannelAudienceKey(ChannelEntry entry)
+    private bool TryResolveChannelAudienceKey(ChannelEntry entry, out string key)
     {
-        if (entry.IsDmRow || LastChannelResolution is null)
-            return entry.Id;
+        if (entry.IsDmRow)
+        {
+            key = entry.Id; // canonical DM key ("dm")
+            return true;
+        }
 
-        var resolved = LastChannelResolution.Resolved.FirstOrDefault(
-            channel => string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase));
+        key = string.Empty;
+        if (LastChannelResolution is null)
+            return false;
 
-        return string.IsNullOrWhiteSpace(resolved?.Id) ? entry.Id : resolved.Id;
+        var resolved = LastChannelResolution.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(channel.Id, entry.Id, StringComparison.Ordinal));
+
+        if (string.IsNullOrWhiteSpace(resolved?.Id))
+            return false;
+
+        key = resolved.Id;
+        return true;
     }
 
     internal static IReadOnlyList<string> ParseChannelNames(string? input)

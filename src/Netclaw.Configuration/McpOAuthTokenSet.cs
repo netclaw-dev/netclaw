@@ -12,12 +12,15 @@ namespace Netclaw.Configuration;
 public sealed class McpOAuthTokenSet
 {
     /// <summary>The current access token.</summary>
+    [ConfigValue(Key = "AccessToken", PersistTo = ConfigPersistStore.McpOAuthTokens)]
     public SensitiveString AccessToken { get; set; } = null!;
 
     /// <summary>Refresh token for obtaining new access tokens (optional).</summary>
+    [ConfigValue(Key = "RefreshToken", PersistTo = ConfigPersistStore.McpOAuthTokens)]
     public SensitiveString? RefreshToken { get; set; }
 
     /// <summary>When the access token expires (null = unknown/never).</summary>
+    [ConfigValue(Key = "ExpiresAt", PersistTo = ConfigPersistStore.McpOAuthTokens)]
     public DateTimeOffset? ExpiresAt { get; set; }
 
     /// <summary>Resolved client ID (from DCR or static config).</summary>

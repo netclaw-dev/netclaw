@@ -42,14 +42,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
     public override ILayoutNode BuildLayout()
     {
-        return Layouts.Vertical()
-            .WithChild(
-                new PanelNode()
-                    .WithTitle("Model Manager")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Cyan)
-                    .WithContent(BuildInnerLayout())
-                    .Fill());
+        return NetclawTuiChrome.BuildPageFrame("Model Manager", BuildInnerLayout());
     }
 
     private ILayoutNode BuildInnerLayout()
@@ -90,9 +83,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private LayoutNode BuildStatusBar()
     {
         return ViewModel.StatusMessage
-            .Select(msg => (ILayoutNode)(string.IsNullOrWhiteSpace(msg)
-                ? Layouts.Empty()
-                : new TextNode($"  {msg}").WithForeground(Color.Green)))
+            .Select(msg => NetclawTuiChrome.BuildStatusLine(msg, Color.Green))
             .AsLayout()
             .Height(1);
     }
@@ -111,7 +102,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                     _ =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit"
                 };
-                return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
+                return (ILayoutNode)NetclawTuiChrome.BuildKeyHintLine(text);
             })
             .AsLayout()
             .Height(1);
@@ -255,12 +246,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                     .WithForeground(Color.White))
                 .WithChild(new TextNode("").Height(1))
                 .WithChild(new TextNode("  Enter model ID:").WithForeground(Color.White))
-                .WithChild(new PanelNode()
-                    .WithTitle("Model ID")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Gray)
-                    .WithContent(_manualModelInput)
-                    .Height(3));
+                .WithChild(NetclawTuiChrome.BuildTextInputPanel(_manualModelInput, "Model ID"));
         }
 
         // Build model list with manual entry option

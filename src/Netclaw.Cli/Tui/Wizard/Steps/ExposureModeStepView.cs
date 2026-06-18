@@ -6,6 +6,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Netclaw.Configuration;
+using Netclaw.Cli.Tui.Workflow;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -24,7 +25,16 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
-    private IDisposable? _modeList;
+    private static readonly IReadOnlyList<SelectionOption<ExposureMode>> ModeOptions =
+    [
+        new(ExposureMode.Local, "Local — loopback only, safest (recommended)"),
+        new(ExposureMode.ReverseProxy, "Reverse Proxy — behind nginx, Caddy, Traefik, IIS, ALB, etc."),
+        new(ExposureMode.TailscaleServe, "Tailscale Serve — accessible within your tailnet"),
+        new(ExposureMode.TailscaleFunnel, "Tailscale Funnel — public internet ⚠"),
+        new(ExposureMode.CloudflareTunnel, "Cloudflare Tunnel — public internet ⚠")
+    ];
+
+    private ActiveSelectionList<SelectionOption<ExposureMode>>? _modeList;
     private SelectionListNode<string>? _confirmList;
     private IDisposable? _webhookList;
     private TextInputNode? _hostInput;
@@ -43,6 +53,9 @@ public sealed class ExposureModeStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (ExposureModeStepViewModel)stepVm;
+
+        if (vm.CurrentSubStep != 0)
+            _modeList = null;
 
         if (vm.CurrentSubStep == 0)
             return BuildModeSelection(vm, callbacks);
@@ -64,50 +77,34 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildModeSelection(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var localOption = new SelectionOption<ExposureMode>(ExposureMode.Local,
-            "Local — loopback only, safest (recommended)");
-        var reverseProxyOption = new SelectionOption<ExposureMode>(ExposureMode.ReverseProxy,
-            "Reverse Proxy — behind nginx, Caddy, Traefik, IIS, ALB, etc.");
-        var serveOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleServe,
-            "Tailscale Serve — accessible within your tailnet");
-        var funnelOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleFunnel,
-            "Tailscale Funnel — public internet ⚠");
-        var cloudflareOption = new SelectionOption<ExposureMode>(ExposureMode.CloudflareTunnel,
-            "Cloudflare Tunnel — public internet ⚠");
-
-        var modeList = Layouts.SelectionList<SelectionOption<ExposureMode>>(
-                [localOption, reverseProxyOption, serveOption, funnelOption, cloudflareOption],
-                static o => o.ToString())
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        _modeList = modeList;
-        modeList.OnFocused();
-        _lastFocusedList = modeList;
+        _modeList = null;
+        _lastFocusedList = null;
         _lastFocusedInput = null;
         _confirmList = null;
         _webhookList = null;
         _hostInput = null;
         _trustedProxiesInput = null;
 
-        modeList.SelectionConfirmed
-            .Subscribe(selected =>
+        var modeList = new ActiveSelectionList<SelectionOption<ExposureMode>>(
+            ModeOptions,
+            static option => option.Label,
+            option => option.Value == vm.SelectedMode,
+            confirmed: option =>
             {
-                if (selected.Count > 0)
-                {
-                    vm.SelectedMode = selected[0].Value;
-                    callbacks.AdvanceStep();
-                }
-            })
-            .DisposeWith(callbacks.Subscriptions);
+                vm.SelectedMode = option.Value;
+                callbacks.AdvanceStep();
+            },
+            changed: callbacks.RequestRedraw);
+        modeList.FocusFirst(option => option.Value == vm.SelectedMode);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  How will this Netclaw daemon be accessed?").WithForeground(Color.White))
-            .WithSpacing(1)
-            .WithChild(modeList)
-            .WithSpacing(1)
-            .WithChild(new TextNode("  ⚠ = exposes daemon beyond this machine. Ensure auth is configured first.")
-                .WithForeground(Color.BrightBlack));
+        _modeList = modeList;
+
+        return WorkflowViewComponents.BuildSelectionScreen(
+            heading: "How will this Netclaw daemon be accessed?",
+            selector: modeList.AsLayout(),
+            legend: ActiveSelectionList<SelectionOption<ExposureMode>>.BuildLegend("active exposure mode"),
+            supportText: "⚠ = exposes daemon beyond this machine. Ensure auth is configured first.",
+            supportColor: Color.BrightBlack);
     }
 
     private ILayoutNode BuildReverseProxyHost(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -280,18 +277,40 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildConfirmation(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        if (vm.IsHighRisk)
-            return BuildHighRiskWarning(vm, callbacks);
-
-        return BuildTailscaleServeNotice(vm, callbacks);
+        return vm.SelectedMode switch
+        {
+            ExposureMode.TailscaleFunnel => BuildTailscaleFunnelWarning(callbacks),
+            ExposureMode.CloudflareTunnel => BuildCloudflareTunnelWarning(callbacks),
+            _ => BuildTailscaleServeNotice(vm, callbacks)
+        };
     }
 
-    private ILayoutNode BuildHighRiskWarning(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    private ILayoutNode BuildTailscaleFunnelWarning(StepViewCallbacks callbacks)
     {
-        var modeLabel = vm.SelectedMode == ExposureMode.TailscaleFunnel
-            ? "Tailscale Funnel"
-            : "Cloudflare Tunnel";
+        return BuildHighRiskWarning(
+            "Tailscale Funnel",
+            [
+                "Hub authentication is configured (device pairing or bearer token)",
+                "`tailscaled` is running and Funnel is explicitly enabled for this service",
+                "You trust your security posture selection"
+            ],
+            callbacks);
+    }
 
+    private ILayoutNode BuildCloudflareTunnelWarning(StepViewCallbacks callbacks)
+    {
+        return BuildHighRiskWarning(
+            "Cloudflare Tunnel",
+            [
+                "Hub authentication is configured (device pairing or bearer token)",
+                "`cloudflared` is running and Cloudflare Access protects the tunnel",
+                "You trust your security posture selection"
+            ],
+            callbacks);
+    }
+
+    private ILayoutNode BuildHighRiskWarning(string modeLabel, IReadOnlyList<string> requirements, StepViewCallbacks callbacks)
+    {
         _confirmList = Layouts.SelectionList("I understand the risks — continue")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Yellow);
@@ -304,16 +323,16 @@ public sealed class ExposureModeStepView : IWizardStepView
             .Subscribe(_ => callbacks.AdvanceStep())
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  ⚠  {modeLabel} exposes your daemon to the public internet.")
                 .WithForeground(Color.Yellow))
             .WithSpacing(1)
-            .WithChild(new TextNode("  Before proceeding, ensure:").WithForeground(Color.White))
-            .WithChild(new TextNode("    • Hub authentication is configured (device pairing or bearer token)").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    • Your tunnel is running and healthy").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    • You trust your security posture selection").WithForeground(Color.BrightBlack))
-            .WithSpacing(1)
-            .WithChild(_confirmList);
+            .WithChild(new TextNode("  Before proceeding, ensure:").WithForeground(Color.White));
+
+        foreach (var requirement in requirements)
+            layout = layout.WithChild(new TextNode($"    • {requirement}").WithForeground(Color.BrightBlack));
+
+        return layout.WithSpacing(1).WithChild(_confirmList);
     }
 
     private ILayoutNode BuildTailscaleServeNotice(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -330,16 +349,15 @@ public sealed class ExposureModeStepView : IWizardStepView
             .Subscribe(_ => callbacks.AdvanceStep())
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Tailscale Serve: daemon accessible within your tailnet only.")
-                .WithForeground(Color.Cyan))
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Devices on your tailnet can reach the daemon. Not reachable from the public internet.")
-                .WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("  Ensure `tailscaled` is running before starting Netclaw.")
-                .WithForeground(Color.BrightBlack))
-            .WithSpacing(1)
-            .WithChild(_confirmList);
+        return WorkflowViewComponents.BuildNoticeScreen(
+            title: "Tailscale Serve: daemon accessible within your tailnet only.",
+            bodyLines:
+            [
+                "Devices on your tailnet can reach the daemon. Not reachable from the public internet.",
+                "Ensure `tailscaled` is running before starting Netclaw."
+            ],
+            confirmation: _confirmList,
+            titleColor: Color.Cyan);
     }
 
     private ILayoutNode BuildWebhookToggle(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -368,15 +386,11 @@ public sealed class ExposureModeStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Should this daemon accept inbound webhooks?").WithForeground(Color.White))
-            .WithSpacing(1)
-            .WithChild(webhookList)
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Inbound webhooks let external services trigger autonomous runs via HTTP POST.")
-                .WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("  This is separate from outbound notification webhooks.")
-                .WithForeground(Color.BrightBlack));
+        return WorkflowViewComponents.BuildSelectionScreen(
+            heading: "Should this daemon accept inbound webhooks?",
+            selector: webhookList,
+            supportText: "Inbound webhooks let external services trigger autonomous runs via HTTP POST.\nThis is separate from outbound notification webhooks.",
+            supportColor: Color.BrightBlack);
     }
 
     private static string FormatServingUrl(string host)
@@ -395,6 +409,9 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     public bool HandleKeyPress(KeyPressed key)
     {
+        if (_modeList is not null && _modeList.HandleInput(key.KeyInfo))
+            return true;
+
         if (_lastFocusedList is not null)
         {
             _lastFocusedList.HandleInput(key.KeyInfo);

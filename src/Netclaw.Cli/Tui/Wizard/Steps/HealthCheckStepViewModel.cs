@@ -47,8 +47,50 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     // ── Reactive state ──
     public ReactiveProperty<bool> IsRunning { get; } = new(false);
     public ReactiveProperty<bool> IsComplete { get; } = new(false);
+
+    /// <summary>True once the check completed with all probes passing. Drives the
+    /// post-flight UX: a clean bootstrap shows the "ready" summary and launches chat on
+    /// Enter; warnings/failures stay on the summary and exit on Enter.</summary>
+    public ReactiveProperty<bool> Succeeded { get; } = new(false);
     public List<HealthCheckItem> Results { get; } = [];
     internal ReactiveProperty<int> ResultVersion { get; } = new(0);
+
+    // All Results access is synchronized on the list instance: the async health-check core and its
+    // daemon-poll timer mutate Results off the UI thread while the render thread reads it (through
+    // ResultsSnapshot). HealthCheckRunner locks the same object for its Add/UpdateLast.
+    private void AddResult(HealthCheckItem item)
+    {
+        lock (Results)
+            Results.Add(item);
+    }
+
+    private void ClearResults()
+    {
+        lock (Results)
+            Results.Clear();
+    }
+
+    private void SetLastResult(HealthCheckItem item)
+    {
+        lock (Results)
+        {
+            if (Results.Count > 0)
+                Results[^1] = item;
+        }
+    }
+
+    private bool LastResultPending()
+    {
+        lock (Results)
+            return Results.Count > 0 && Results[^1].Passed is null;
+    }
+
+    /// <summary>Thread-safe snapshot for the render thread; Results is mutated off the UI thread.</summary>
+    internal IReadOnlyList<HealthCheckItem> ResultsSnapshot()
+    {
+        lock (Results)
+            return Results.ToArray();
+    }
 
     /// <summary>Task that completes when health check finishes. For testing.</summary>
     internal Task? HealthCheckCompletion { get; private set; }
@@ -81,7 +123,8 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         {
             IsRunning.Value = false;
             IsComplete.Value = false;
-            Results.Clear();
+            Succeeded.Value = false;
+            ClearResults();
             NotifyChanged();
         }
     }
@@ -115,12 +158,25 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         }
         catch (OperationCanceledException) when (overallCts.IsCancellationRequested)
         {
-            Results.Add(new HealthCheckItem("Health check timed out", false));
+            AddResult(new HealthCheckItem("Health check timed out", false));
             IsRunning.Value = false;
             IsComplete.Value = true;
             NotifyChanged();
             if (_context is not null)
                 _context.StatusMessage.Value = "Setup timed out. Run `netclaw daemon start` to begin.";
+        }
+        catch (Exception ex)
+        {
+            // Any unexpected failure in the health-check core (e.g. an IO error in a step's
+            // ContributeHealthChecksAsync) must still release the wizard. Leaving IsRunning=true /
+            // IsComplete=false permanently wedges the step — GoNext gates on !IsRunning &&
+            // !IsComplete, so the operator could neither advance, go back, nor see an error.
+            AddResult(new HealthCheckItem($"Health check failed: {ex.Message}", false));
+            IsRunning.Value = false;
+            IsComplete.Value = true;
+            NotifyChanged();
+            if (_context is not null)
+                _context.StatusMessage.Value = "Setup health check failed. Run `netclaw daemon start` to begin.";
         }
     }
 
@@ -129,7 +185,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         // Standalone mode — no orchestrator. Used for testing.
         IsRunning.Value = true;
         IsComplete.Value = false;
-        Results.Clear();
+        ClearResults();
         NotifyChanged();
 
         IsRunning.Value = false;
@@ -142,7 +198,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     {
         IsRunning.Value = true;
         IsComplete.Value = false;
-        Results.Clear();
+        ClearResults();
         NotifyChanged();
 
         var runner = new HealthCheckRunner(Results, NotifyChanged);
@@ -211,7 +267,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             {
                 runner.UpdateLast(new HealthCheckItem("Daemon ready", true));
             }
-            else if (Results.Count > 0 && Results[^1].Passed is null)
+            else if (LastResultPending())
             {
                 runner.UpdateLast(new HealthCheckItem(NotReadyMessage, false));
             }
@@ -222,16 +278,27 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         NotifyChanged();
 
         allPassed = runner.AllPassed;
-        if (allPassed && _context is not null)
+        Succeeded.Value = allPassed;
+        if (allPassed)
         {
-            _context.StatusMessage.Value = "Setup complete! Launching chat...";
-            Navigate?.Invoke("/chat");
+            // Validation passed — launch chat automatically rather than gating on a second
+            // Enter. Mirrors the provider step's async-success auto-advance: this runs on
+            // the health-check task and drives navigation through the same wired Navigate
+            // delegate the Enter handler used (it sets the onboarding trigger first).
+            if (_context is not null)
+                _context.StatusMessage.Value = "✓ Netclaw is ready — starting chat…";
+            LaunchChat();
         }
         else if (_context is not null)
         {
-            _context.StatusMessage.Value = "Setup complete with warnings. Run `netclaw daemon start` to begin.";
+            _context.StatusMessage.Value =
+                "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.";
         }
     }
+
+    /// <summary>Launch the chat experience after a successful bootstrap. Routed through
+    /// the wrapped <see cref="Navigate"/> delegate so the onboarding trigger is set first.</summary>
+    public void LaunchChat() => Navigate?.Invoke("/chat");
 
     /// <summary>
     /// Applies the freshly-written config and waits for the daemon to be ready on it.
@@ -256,6 +323,13 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         var startedAt = _timeProvider.GetUtcNow();
         var verb = ProgressLabel(wasRunning);
 
+        // When the daemon was down and Start() defers to a container supervisor, hold onto
+        // that reason. If the supervisor never actually brings the daemon up — the marker is
+        // set but no supervisor is present (e.g. a derived image that kept
+        // NETCLAW_CONTAINER_SUPERVISOR but replaced the entrypoint) — the readiness poll
+        // below times out, and this message is what the operator needs instead of a generic
+        // "did not become ready".
+        string? supervisorDeferral = null;
         if (!wasRunning)
         {
             // Nothing is running to reload the config, so start it. Guarded: under a
@@ -266,14 +340,17 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
                 && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase)
                 && !result.Message.Contains("container supervisor", StringComparison.OrdinalIgnoreCase))
             {
-                Results[^1] = new HealthCheckItem(
+                SetLastResult(new HealthCheckItem(
                     result.CrashLogPath is null
                         ? result.Message
                         : $"{result.Message} See crash log: {result.CrashLogPath}",
-                    false);
+                    false));
                 NotifyChanged();
                 return false;
             }
+
+            if (!result.Success && result.Message.Contains("container supervisor", StringComparison.OrdinalIgnoreCase))
+                supervisorDeferral = result.Message;
         }
 
         // Poll until a newer generation is healthy. We never break early on "not
@@ -307,12 +384,12 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             var abort = _daemonManager.TryReadStartupFailureFromCrashLog(startedAt, out var abortLogPath);
             if (abort is not null)
             {
-                Results[^1] = new HealthCheckItem($"{abort} See crash log: {abortLogPath}", false);
+                SetLastResult(new HealthCheckItem($"{abort} See crash log: {abortLogPath}", false));
                 NotifyChanged();
                 return false;
             }
 
-            Results[^1] = new HealthCheckItem($"{verb} ({++elapsedSeconds}s)", null);
+            SetLastResult(new HealthCheckItem($"{verb} ({++elapsedSeconds}s)", null));
             NotifyChanged();
             await Task.Delay(TimeSpan.FromSeconds(1), _timeProvider, ct);
         }
@@ -320,15 +397,19 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         // Timed out: surface the startup-abort crash-log diagnostic if present, so a
         // bad-config crash-loop isn't reported as a generic "not ready".
         var crashFailure = _daemonManager.TryReadStartupFailureFromCrashLog(startedAt, out var crashLogPath);
-        var failureMessage = (crashFailure, crashLogPath) switch
+        var failureMessage = (crashFailure, crashLogPath, supervisorDeferral) switch
         {
-            (not null, _) => $"{crashFailure} See crash log: {crashLogPath}",
-            (null, not null) => $"{NotReadyMessage}. See crash log: {crashLogPath}",
+            (not null, _, _) => $"{crashFailure} See crash log: {crashLogPath}",
+            (null, not null, _) => $"{NotReadyMessage}. See crash log: {crashLogPath}",
+            // Marker set but the supervised daemon never came up: surface the actionable
+            // supervisor reason ("check the container/entrypoint logs — the marker may be
+            // set without a supervisor present") instead of the generic timeout message.
+            (null, null, not null) => supervisorDeferral,
             _ => null
         };
         if (failureMessage is not null)
         {
-            Results[^1] = new HealthCheckItem(failureMessage, false);
+            SetLastResult(new HealthCheckItem(failureMessage, false));
             NotifyChanged();
         }
 
@@ -357,6 +438,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     {
         IsRunning.Dispose();
         IsComplete.Dispose();
+        Succeeded.Dispose();
         ResultVersion.Dispose();
     }
 }

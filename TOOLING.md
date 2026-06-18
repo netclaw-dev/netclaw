@@ -50,6 +50,11 @@ TUI code SHOULD run the harness before declaring a change done.
 `NETCLAW_SMOKE_DAEMON` if exported), installs `vhs`, starts a native
 `ollama serve`, and pulls the smoke models automatically.
 
+Config-writing flow tapes (`init-wizard`, `provider-add`, `provider-rename`,
+and `config-*`) must have executable semantic assertion scripts under
+`tests/smoke/assertions/`. `run-native-tape.sh` fails these tapes when the
+assertion is missing or non-executable.
+
 When a tape fails, `smoke-logs/tapes/<name>/` collects: a debug GIF of the
 last frame, the combined tape file, daemon logs, and the produced
 `NETCLAW_HOME`. CI uploads the `smoke-logs` directory as a job artefact.

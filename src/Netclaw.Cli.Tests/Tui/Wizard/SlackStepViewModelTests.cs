@@ -176,7 +176,32 @@ public sealed class SlackStepViewModelTests : WizardStepTestBase
         var entries = Context.ChannelEntries[ChannelType.Slack];
         Assert.Equal(3, entries.Count); // DMs + #general + #dev
         Assert.True(entries[0].IsDmRow);
+        // Team posture, no single allow-listed user → DMs and channels both default to Team.
+        Assert.Equal(TrustAudience.Team, entries[0].Audience);
         Assert.Equal("#general", entries[1].DisplayName);
+        Assert.Equal(TrustAudience.Team, entries[1].Audience);
+    }
+
+    [Fact]
+    public void OnLeave_PersonalPosture_DmIsPersonalChannelsAreTeam()
+    {
+        // Pins the posture→audience default mapping the wizard shares with the config editor:
+        // Personal posture keeps the DM row Personal (most private) while a regular channel
+        // defaults to Team. These two rules differ only outside Public/Team, so Personal is the
+        // case that distinguishes them.
+        Context.SelectedPosture = DeploymentPosture.Personal;
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = true;
+        step.AllowDirectMessages = true;
+        step.ChannelNamesInput = "general";
+        step.OnEnter(Context, NavigationDirection.Forward);
+
+        step.OnLeave();
+
+        var entries = Context.ChannelEntries[ChannelType.Slack];
+        Assert.True(entries[0].IsDmRow);
+        Assert.Equal(TrustAudience.Personal, entries[0].Audience);
+        Assert.Equal(TrustAudience.Team, entries[1].Audience);
     }
 
     [Fact]
@@ -250,6 +275,38 @@ public sealed class SlackStepViewModelTests : WizardStepTestBase
         var audience = Assert.Single(builder.Slack.ChannelAudiences!);
         Assert.Equal("C0B62888XAL", audience.Key);
         Assert.Equal("personal", audience.Value);
+    }
+
+    [Fact]
+    public void ContributeConfig_OmitsUnresolvedChannelNameFromAudiences_KeepsResolvedById()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe)
+        {
+            SlackEnabled = true,
+            ChannelNamesInput = "general, ghost-channel",
+            LastChannelResolution = new SlackChannelResolutionResult(
+                false,
+                null,
+                [new ResolvedSlackChannel("general", "C01GENERAL")],
+                ["ghost-channel"])
+        };
+
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.OnLeave();
+
+        foreach (var entry in Context.ChannelEntries[ChannelType.Slack])
+            entry.Audience = TrustAudience.Team;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Slack);
+        var audiences = builder.Slack!.ChannelAudiences;
+        Assert.NotNull(audiences);
+        // The resolved channel is keyed by its canonical Slack ID...
+        Assert.True(audiences!.ContainsKey("C01GENERAL"));
+        // ...and the unresolved channel NAME is NOT written as a dead ACL key the runtime can't match.
+        Assert.DoesNotContain("ghost-channel", audiences.Keys);
     }
 
     [Fact]

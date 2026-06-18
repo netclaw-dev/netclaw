@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Cli.Tui.Workflow;
 using Termina.Extensions;
 using Termina.Input;
 using Termina.Layout;
@@ -19,38 +20,40 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 public sealed class FeatureSelectionStepView : IWizardStepView
 {
     private int _cursorIndex;
+    private ActiveSelectionList<FeatureToggleOption>? _featureList;
     private StepViewCallbacks? _callbacks;
     private FeatureSelectionStepViewModel? _vm;
 
     public string StepId => WizardStepIds.FeatureSelection;
+
+    public bool ManagesOwnFocusState => true;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         _callbacks = callbacks;
         _vm = (FeatureSelectionStepViewModel)stepVm;
 
-        var featureCount = FeatureSelectionStepViewModel.FeatureNames.Length;
-        if (_cursorIndex >= featureCount) _cursorIndex = featureCount - 1;
+        var options = FeatureToggleOption.All;
+        if (_cursorIndex >= options.Count) _cursorIndex = options.Count - 1;
         if (_cursorIndex < 0) _cursorIndex = 0;
+
+        _featureList = new ActiveSelectionList<FeatureToggleOption>(
+            options,
+            static option => option.Name.PadRight(12),
+            option => _vm.IsFeatureEnabled(option.Index),
+            static option => option.Description,
+            focusedIndex: _cursorIndex,
+            toggled: option => _vm.ToggleFeature(option.Index),
+            changed: () =>
+            {
+                _cursorIndex = _featureList?.FocusedIndex ?? _cursorIndex;
+                callbacks.RequestRedraw();
+            });
 
         var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Select which features to enable for this deployment:").WithForeground(Color.White))
-            .WithSpacing(1);
-
-        for (var i = 0; i < featureCount; i++)
-        {
-            var isFocused = i == _cursorIndex;
-            var isEnabled = _vm.IsFeatureEnabled(i);
-            var prefix = isFocused ? " ▶ " : "   ";
-            var checkbox = isEnabled ? "[x]" : "[ ]";
-            var line = $"{prefix}{checkbox} {FeatureSelectionStepViewModel.FeatureNames[i]} — {FeatureSelectionStepViewModel.FeatureDescriptions[i]}";
-
-            var node = new TextNode(line);
-            node = isFocused
-                ? node.WithForeground(Color.Cyan).Bold()
-                : node.WithForeground(Color.White);
-            layout = layout.WithChild(node);
-        }
+            .WithSpacing(1)
+            .WithChild(_featureList.AsLayout());
 
         layout = layout.WithSpacing(1)
             .WithChild(new TextNode("  Space to toggle, Enter to continue.")
@@ -72,33 +75,14 @@ public sealed class FeatureSelectionStepView : IWizardStepView
         if (_vm is null)
             return false;
 
-        var keyInfo = key.KeyInfo;
-        var featureCount = FeatureSelectionStepViewModel.FeatureNames.Length;
-
-        switch (keyInfo.Key)
+        switch (key.KeyInfo.Key)
         {
-            case ConsoleKey.UpArrow:
-                if (_cursorIndex > 0) _cursorIndex--;
-                break;
-
-            case ConsoleKey.DownArrow:
-                if (_cursorIndex < featureCount - 1) _cursorIndex++;
-                break;
-
-            case ConsoleKey.Spacebar:
-                _vm.ToggleFeature(_cursorIndex);
-                break;
-
             case ConsoleKey.Enter:
                 _callbacks?.AdvanceStep();
                 return true;
-
-            default:
-                return false;
         }
 
-        _callbacks?.InvalidateAndRedraw();
-        return true;
+        return _featureList?.HandleInput(key.KeyInfo) ?? false;
     }
 
     public void HandlePaste(PasteEvent paste)
@@ -109,5 +93,19 @@ public sealed class FeatureSelectionStepView : IWizardStepView
     public void ClearFocusState()
     {
         _cursorIndex = 0;
+        _featureList = null;
+    }
+
+    private sealed record FeatureToggleOption(int Index, string Name, string Description)
+    {
+        public static readonly IReadOnlyList<FeatureToggleOption> All =
+        [
+            new(0, FeatureSelectionStepViewModel.FeatureNames[0], FeatureSelectionStepViewModel.FeatureDescriptions[0]),
+            new(1, FeatureSelectionStepViewModel.FeatureNames[1], FeatureSelectionStepViewModel.FeatureDescriptions[1]),
+            new(2, FeatureSelectionStepViewModel.FeatureNames[2], FeatureSelectionStepViewModel.FeatureDescriptions[2]),
+            new(3, FeatureSelectionStepViewModel.FeatureNames[3], FeatureSelectionStepViewModel.FeatureDescriptions[3]),
+            new(4, FeatureSelectionStepViewModel.FeatureNames[4], FeatureSelectionStepViewModel.FeatureDescriptions[4]),
+            new(5, FeatureSelectionStepViewModel.FeatureNames[5], FeatureSelectionStepViewModel.FeatureDescriptions[5])
+        ];
     }
 }

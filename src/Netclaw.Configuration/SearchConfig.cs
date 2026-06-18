@@ -20,17 +20,20 @@ public sealed class SearchConfig
     /// <summary>
     /// Search backend identifier.
     /// </summary>
+    [ConfigValue(Key = "Search.Backend", PersistTo = ConfigPersistStore.NetclawJson)]
     public SearchBackend Backend { get; set; } = SearchBackend.DuckDuckGo;
 
     /// <summary>
     /// Brave Search API subscription token. Required when Backend is "brave".
     /// Stored in secrets.json under Search.BraveApiKey.
     /// </summary>
+    [ConfigValue(Key = "Search.BraveApiKey", PersistTo = ConfigPersistStore.SecretsJson)]
     public SensitiveString? BraveApiKey { get; set; }
 
     /// <summary>
     /// SearXNG instance base URL (e.g., "http://searxng.local:8080").
     /// Required when Backend is "searxng".
     /// </summary>
+    [ConfigValue(Key = "Search.SearXngEndpoint", PersistTo = ConfigPersistStore.NetclawJson)]
     public string? SearXngEndpoint { get; set; }
 }

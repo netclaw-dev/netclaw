@@ -15,7 +15,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Identity wizard step.
-/// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
+/// 4 sub-steps: agent name → comm style → user name → timezone.
 /// </summary>
 public sealed class IdentityStepView : IWizardStepView
 {
@@ -23,8 +23,6 @@ public sealed class IdentityStepView : IWizardStepView
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
     private TextInputNode? _timezoneInput;
-    private TextInputNode? _workspacesInput;
-    private TextInputNode? _webhookUrlInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
 
@@ -40,8 +38,6 @@ public sealed class IdentityStepView : IWizardStepView
             1 => BuildCommStyle(vm, callbacks),
             2 => BuildUserName(vm, callbacks),
             3 => BuildTimezone(vm, callbacks),
-            4 => BuildWorkspacesDirectory(vm, callbacks),
-            5 => BuildWebhookUrl(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -142,54 +138,6 @@ public sealed class IdentityStepView : IWizardStepView
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_timezoneInput, "Timezone"));
     }
 
-    private ILayoutNode BuildWorkspacesDirectory(IdentityStepViewModel vm, StepViewCallbacks callbacks)
-    {
-        _workspacesInput = new TextInputNode().WithPlaceholder(vm.WorkspacesDirectory);
-        _workspacesInput.Text = vm.WorkspacesDirectory;
-
-        _workspacesInput.OnFocused();
-        _lastFocusedInput = _workspacesInput;
-        _lastFocusedList = null;
-
-        _workspacesInput.Submitted
-            .Subscribe(text =>
-            {
-                if (!string.IsNullOrWhiteSpace(text))
-                    vm.WorkspacesDirectory = text;
-                callbacks.AdvanceStep();
-            })
-            .DisposeWith(callbacks.Subscriptions);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Projects directory:").WithForeground(Color.White))
-            .WithChild(WizardStepHelpers.BuildTextInputPanel(_workspacesInput, "Workspaces"));
-    }
-
-    private ILayoutNode BuildWebhookUrl(IdentityStepViewModel vm, StepViewCallbacks callbacks)
-    {
-        _webhookUrlInput = new TextInputNode()
-            .WithPlaceholder("https://hooks.slack.com/services/...");
-
-        if (!string.IsNullOrWhiteSpace(vm.WebhookUrl))
-            _webhookUrlInput.Text = vm.WebhookUrl;
-
-        _webhookUrlInput.OnFocused();
-        _lastFocusedInput = _webhookUrlInput;
-        _lastFocusedList = null;
-
-        _webhookUrlInput.Submitted
-            .Subscribe(text =>
-            {
-                vm.WebhookUrl = string.IsNullOrWhiteSpace(text) ? null : text;
-                callbacks.AdvanceStep();
-            })
-            .DisposeWith(callbacks.Subscriptions);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Notification webhook URL (optional, press Enter to skip):").WithForeground(Color.White))
-            .WithChild(WizardStepHelpers.BuildTextInputPanel(_webhookUrlInput, "Webhook"));
-    }
-
     public bool HandleKeyPress(KeyPressed key)
     {
         if (_lastFocusedList is not null)
@@ -218,7 +166,5 @@ public sealed class IdentityStepView : IWizardStepView
         _commStyleList = null;
         _userNameInput = null;
         _timezoneInput = null;
-        _workspacesInput = null;
-        _webhookUrlInput = null;
     }
 }

@@ -15,10 +15,10 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
 {
 
     [Fact]
-    public void SubStepCount_IsSix()
+    public void SubStepCount_IsFour()
     {
         using var step = new IdentityStepViewModel();
-        Assert.Equal(6, step.SubStepCount);
+        Assert.Equal(4, step.SubStepCount);
     }
 
     [Fact]
@@ -26,13 +26,13 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     {
         using var step = new IdentityStepViewModel();
 
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < step.SubStepCount - 1; i++)
         {
             Assert.True(step.TryAdvance());
             Assert.Equal(i + 1, step.CurrentSubStep);
         }
 
-        // Sub-step 5 → complete
+        // Last sub-step → complete
         Assert.False(step.TryAdvance());
     }
 
@@ -56,11 +56,12 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     public void OnEnter_Back_ResumesAtLastSubStep()
     {
         using var step = new IdentityStepViewModel();
-        for (var i = 0; i < 5; i++)
+        var last = step.SubStepCount - 1;
+        for (var i = 0; i < last; i++)
             step.TryAdvance();
 
         step.OnEnter(Context, NavigationDirection.Back);
-        Assert.Equal(5, step.CurrentSubStep);
+        Assert.Equal(last, step.CurrentSubStep);
     }
 
     [Fact]
@@ -71,7 +72,6 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         step.CommunicationStyle = "Detailed & formal";
         step.UserName = "Alice";
         step.UserTimezone = "America/New_York";
-        step.WebhookUrl = "https://hooks.example.com";
 
         var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
@@ -80,19 +80,11 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Equal("TestBot", builder.Identity!.AgentName);
         Assert.Equal("Detailed & formal", builder.Identity.CommunicationStyle);
         Assert.Equal("Alice", builder.Identity.UserName);
-        Assert.NotNull(builder.Notifications);
-        Assert.Equal("https://hooks.example.com", builder.Notifications!.WebhookUrl);
-    }
+        Assert.Equal("America/New_York", builder.Identity.UserTimezone);
 
-    [Fact]
-    public void ContributeConfig_NoWebhook_WhenEmpty()
-    {
-        using var step = new IdentityStepViewModel();
-        step.WebhookUrl = null;
-
-        var builder = new WizardConfigBuilder(Context.Paths);
-        step.ContributeConfig(builder);
-
+        // Workspaces directory and notification webhooks are post-install settings
+        // owned by `netclaw config`; the init Identity step must not contribute them.
+        Assert.Null(builder.Workspaces);
         Assert.Null(builder.Notifications);
     }
 
@@ -126,5 +118,34 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Equal("Netclaw", step.AgentName);
         Assert.Null(step.CommunicationStyle);
         Assert.Equal(TimeZoneInfo.Local.Id, step.UserTimezone);
+    }
+
+    [Fact]
+    public void OnEnter_PrefillsFromExistingConfig()
+    {
+        using var step = new IdentityStepViewModel();
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            ExistingConfig = new Dictionary<string, object>
+            {
+                ["Identity"] = new Dictionary<string, object>
+                {
+                    ["AgentName"] = "ExistingBot",
+                    ["CommunicationStyle"] = "Detailed & casual",
+                    ["UserName"] = "Dana",
+                    ["UserTimezone"] = "UTC"
+                }
+            }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        Assert.Equal("ExistingBot", step.AgentName);
+        Assert.Equal("Detailed & casual", step.CommunicationStyle);
+        Assert.Equal("Dana", step.UserName);
+        Assert.Equal("UTC", step.UserTimezone);
     }
 }

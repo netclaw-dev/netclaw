@@ -42,6 +42,34 @@ public enum DeploymentPosture
 }
 
 /// <summary>
+/// Canonical default <see cref="TrustAudience"/> for a newly added channel or DM row, derived from
+/// the deployment posture. Used by both the init wizard's channel steps and the <c>netclaw config</c>
+/// channels editor so a channel added in either surface lands at the same trust tier. An unmapped
+/// posture falls back to <see cref="TrustAudience.Personal"/> — the most restrictive audience — to
+/// preserve the default-deny posture if <see cref="DeploymentPosture"/> ever gains a value.
+/// </summary>
+public static class ChannelAudienceDefaults
+{
+    /// <summary>Default audience for a regular channel: a Public posture publishes, otherwise Team.</summary>
+    public static TrustAudience ForChannel(DeploymentPosture posture)
+        => posture == DeploymentPosture.Public ? TrustAudience.Public : TrustAudience.Team;
+
+    /// <summary>
+    /// Default audience for the DM row: a single allow-listed user is always Personal; otherwise the
+    /// audience tracks the posture (Public→Public, Team→Team, Personal/unmapped→Personal).
+    /// </summary>
+    public static TrustAudience ForDirectMessage(DeploymentPosture posture, int allowedUserCount)
+        => allowedUserCount == 1
+            ? TrustAudience.Personal
+            : posture switch
+            {
+                DeploymentPosture.Public => TrustAudience.Public,
+                DeploymentPosture.Team => TrustAudience.Team,
+                _ => TrustAudience.Personal,
+            };
+}
+
+/// <summary>
 /// Classification of the principal currently contacting the bot.
 /// </summary>
 public enum PrincipalClassification
