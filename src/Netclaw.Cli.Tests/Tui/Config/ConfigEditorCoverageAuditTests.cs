@@ -408,7 +408,11 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             .Select(static item => RouteToEditorId(item.Route!));
 
         using var security = new SecurityAccessViewModel(_paths);
-        var securityEditors = security.Items.Select(SecurityAccessItemToEditorId);
+        var securityEditors = security.Items
+            // "Done" is a navigation row (back to the config dashboard), not a leaf editor — exclude it,
+            // the same way the dashboard's non-routed "Run Full Doctor"/"Quit" rows are excluded above.
+            .Where(static item => item.Label != "Done")
+            .Select(SecurityAccessItemToEditorId);
 
         return rootEditors.Concat(securityEditors).OrderBy(static id => id).ToArray();
     }

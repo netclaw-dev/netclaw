@@ -157,11 +157,13 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             SelectedIndex.Value = next;
     }
 
-    public void MovePostureSelection(int delta) => Move(SelectedPostureIndex, delta, Postures.Length);
+    // Each editor appends a "Done" row after its real items (index == item count), so navigation extends one
+    // past the array; activation at that index backs out instead of acting on a row (see the action guards).
+    public void MovePostureSelection(int delta) => Move(SelectedPostureIndex, delta, Postures.Length + 1);
     public void MoveCascadeSelection(int delta) => Move(SelectedCascadeIndex, delta, CascadeOptions.Length);
-    public void MoveFeatureSelection(int delta) => Move(SelectedFeatureIndex, delta, FeatureConfigPaths.Length);
-    public void MoveAudienceSelection(int delta) => Move(SelectedAudienceIndex, delta, Audiences.Length);
-    public void MoveAudienceRow(int delta) => Move(SelectedAudienceRowIndex, delta, AudienceRows.Length);
+    public void MoveFeatureSelection(int delta) => Move(SelectedFeatureIndex, delta, FeatureConfigPaths.Length + 1);
+    public void MoveAudienceSelection(int delta) => Move(SelectedAudienceIndex, delta, Audiences.Length + 1);
+    public void MoveAudienceRow(int delta) => Move(SelectedAudienceRowIndex, delta, AudienceRows.Length + 1);
 
     public void ActivateSelected()
     {
@@ -202,6 +204,10 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
                 return;
             case "Audience Profiles":
                 OpenAudienceList();
+                return;
+            case "Done":
+                // Discoverable equivalent of Esc — back out to the config dashboard.
+                GoBack();
                 return;
         }
 
@@ -256,6 +262,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void ApplySelectedPosture()
     {
+        if (SelectedPostureIndex.Value >= Postures.Length)
+        {
+            GoBack();
+            return;
+        }
+
         var posture = Postures[SelectedPostureIndex.Value].Value;
         if (posture == CurrentPosture)
         {
@@ -314,6 +326,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void ToggleSelectedFeature()
     {
+        if (SelectedFeatureIndex.Value >= FeatureConfigPaths.Length)
+        {
+            GoBack();
+            return;
+        }
+
         var index = SelectedFeatureIndex.Value;
         _enabledFeatures[index] = !_enabledFeatures[index];
 
@@ -340,6 +358,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void OpenSelectedAudienceProfile()
     {
+        if (SelectedAudienceIndex.Value >= Audiences.Length)
+        {
+            GoBack();
+            return;
+        }
+
         SelectedAudienceRowIndex.Value = 0;
         Mode.Value = SecurityAccessEditorMode.AudienceProfile;
         StatusMessage.Value = "";
@@ -386,6 +410,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void ActivateSelectedAudienceProfileRow()
     {
+        if (SelectedAudienceRowIndex.Value >= AudienceRows.Length)
+        {
+            GoBack();
+            return;
+        }
+
         var row = AudienceRows[SelectedAudienceRowIndex.Value];
         switch (row.Kind)
         {
@@ -423,6 +453,9 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void ChangeSelectedAudienceProfileRow(int direction)
     {
+        if (SelectedAudienceRowIndex.Value >= AudienceRows.Length)
+            return; // the Done row has no value to cycle with ←/→
+
         var row = AudienceRows[SelectedAudienceRowIndex.Value];
         switch (row.Kind)
         {
@@ -657,7 +690,8 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
                 "Deployment trust stance."),
             new("Enabled Features", ReadEnabledFeaturesSummary(config), "Deployment-wide runtime feature gates."),
             new("Audience Profiles", ReadAudienceProfilesSummary(config), "Curated per-audience access rules."),
-            new("Exposure Mode", ReadExposureModeSummary(config), "Daemon reachability and tunnel topology.", "/exposure-mode")
+            new("Exposure Mode", ReadExposureModeSummary(config), "Daemon reachability and tunnel topology.", "/exposure-mode"),
+            new("Done", "", "Return to Settings Areas.")
         ];
     }
 

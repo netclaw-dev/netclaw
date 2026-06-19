@@ -96,6 +96,11 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
                 active));
         }
 
+        var doneFocused = ViewModel.SelectedPostureIndex.Value == options.Count;
+        layout = layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Row($"{FocusPrefix(doneFocused)}Done    Return to Security & Access.", doneFocused));
+
         return layout;
     }
 
@@ -138,6 +143,11 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
                 enabled));
         }
 
+        var doneFocused = ViewModel.SelectedFeatureIndex.Value == names.Count;
+        layout = layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Row($"{FocusPrefix(doneFocused)}Done    Return to Security & Access.", doneFocused));
+
         return layout;
     }
 
@@ -161,6 +171,11 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
                 $"{FocusPrefix(focused)}{defaultMarker} {option.Label,-9} {option.Description,-34} {marker}",
                 focused));
         }
+
+        var doneFocused = ViewModel.SelectedAudienceIndex.Value == options.Count;
+        layout = layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Row($"{FocusPrefix(doneFocused)}Done    Return to Security & Access.", doneFocused));
 
         return layout;
     }
@@ -206,10 +221,19 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
             layout = layout.WithChild(Row(line, focused, enabled));
         }
 
-        var focusedRow = rows[ViewModel.SelectedAudienceRowIndex.Value];
+        var doneFocused = ViewModel.SelectedAudienceRowIndex.Value == rows.Count;
         layout = layout
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(Hint($"  {ViewModel.AudienceRowHelp(focusedRow.Kind)}"));
+            .WithChild(Row($"{FocusPrefix(doneFocused)}Done    Return to Audiences.", doneFocused));
+
+        // Per-row help applies only to a real row; the appended Done row (index == rows.Count) has none.
+        if (!doneFocused)
+        {
+            var focusedRow = rows[ViewModel.SelectedAudienceRowIndex.Value];
+            layout = layout
+                .WithChild(Layouts.Empty().Height(1))
+                .WithChild(Hint($"  {ViewModel.AudienceRowHelp(focusedRow.Kind)}"));
+        }
 
         return layout;
     }

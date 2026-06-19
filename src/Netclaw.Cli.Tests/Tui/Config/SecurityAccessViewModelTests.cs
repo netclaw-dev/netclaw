@@ -28,8 +28,67 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
             "Security Posture",
             "Enabled Features",
             "Audience Profiles",
-            "Exposure Mode"
+            "Exposure Mode",
+            "Done"
         ], labels);
+    }
+
+    [Fact]
+    public void Done_item_returns_to_the_config_dashboard()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        string? routed = null;
+        vm.RouteRequested = route => routed = route;
+
+        var doneIndex = vm.Items
+            .Select((item, index) => (item, index))
+            .Single(entry => entry.item.Label == "Done")
+            .index;
+        vm.SelectedIndex.Value = doneIndex;
+        vm.ActivateSelected();
+
+        Assert.Equal("/config", routed);
+    }
+
+    [Fact]
+    public void Posture_editor_done_row_backs_out_to_menu()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.OpenPostureEditor();
+        vm.SelectedPostureIndex.Value = vm.PostureOptions.Count; // the appended Done row
+        vm.ApplySelectedPosture();                               // Enter on Done
+        Assert.Equal(SecurityAccessEditorMode.Menu, vm.Mode.Value);
+    }
+
+    [Fact]
+    public void Feature_editor_done_row_backs_out_to_menu()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.OpenFeatureEditor();
+        vm.SelectedFeatureIndex.Value = vm.FeatureNames.Count;   // the appended Done row
+        vm.ToggleSelectedFeature();                              // Space/Enter on Done
+        Assert.Equal(SecurityAccessEditorMode.Menu, vm.Mode.Value);
+    }
+
+    [Fact]
+    public void Audience_list_done_row_backs_out_to_menu()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.OpenAudienceList();
+        vm.SelectedAudienceIndex.Value = vm.AudienceOptions.Count; // the appended Done row
+        vm.OpenSelectedAudienceProfile();                          // Enter on Done
+        Assert.Equal(SecurityAccessEditorMode.Menu, vm.Mode.Value);
+    }
+
+    [Fact]
+    public void Audience_profile_done_row_backs_out_to_audience_list()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.OpenAudienceList();
+        vm.OpenSelectedAudienceProfile();                         // enter the first audience's profile
+        vm.SelectedAudienceRowIndex.Value = vm.ProfileRows.Count; // the appended Done row
+        vm.ActivateSelectedAudienceProfileRow();                  // Space/Enter on Done
+        Assert.Equal(SecurityAccessEditorMode.AudienceList, vm.Mode.Value);
     }
 
     [Fact]
