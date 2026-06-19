@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using R3;
+using Netclaw.Cli.Tui;
 using Termina.Input;
 using Termina.Layout;
 using Termina.Reactive;
@@ -29,17 +30,24 @@ public sealed class HealthCheckStepView : IWizardStepView
 
         foreach (var item in items)
         {
-            var (icon, color) = item.Passed switch
+            if (item.Passed is null)
+            {
+                lines.Add(SpinnerViews.Labeled(item.Label, Color.Yellow));
+                continue;
+            }
+
+            var (icon, color) = item.Passed.Value switch
             {
                 true => ("\u2713", Color.Green),
                 false => ("\u2717", Color.Red),
-                null => ("\u25cf", Color.Yellow)
             };
             lines.Add(new TextNode($"  {icon}  {item.Label}").WithForeground(color));
         }
 
         if (lines.Count == 0)
-            lines.Add(new TextNode("  Press Enter to run health checks...").WithForeground(Color.BrightBlack));
+            lines.Add(vm.IsRunning.Value
+                ? SpinnerViews.Labeled("Starting health checks...", Color.Yellow)
+                : new TextNode("  Health checks start automatically...").WithForeground(Color.BrightBlack));
 
         // Post-flight summary: once the checks finish, nudge toward the bootstrap-vs-config
         // split so the operator knows where ongoing settings live (simplify-netclaw-init §6).

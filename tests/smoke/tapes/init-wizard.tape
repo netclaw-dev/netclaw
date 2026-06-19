@@ -71,10 +71,8 @@ Wait+Screen@10s /Who will interact with this Netclaw instance/
 Enter
 
 # ─── Step 4 of 4: Health Check ──────────────────────────────────────
-Wait+Screen@10s /Press Enter to run health checks/
-Enter
-
-# Health checks contact ollama, write config, validate, and start the daemon.
+# Health checks start automatically when the final step opens. No extra Enter.
+# They contact ollama, write config, validate, and start the daemon.
 # On a clean bootstrap, once validation passes the wizard launches chat
 # automatically — there is no Enter gate / post-flight summary to confirm.
 # Anchor on a health item that renders during the run (it stays on screen

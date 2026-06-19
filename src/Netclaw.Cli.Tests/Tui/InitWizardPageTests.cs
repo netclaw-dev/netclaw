@@ -6,6 +6,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -197,6 +198,34 @@ public sealed class InitWizardPageTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task EnteringHealthCheckStep_StartsValidationWithoutSecondEnter()
+    {
+        var vm = CreateViewModel();
+        try
+        {
+            AdvanceToStep(vm, WizardStepIds.SecurityPosture);
+            var postureStep = Assert.IsType<SecurityPostureStepViewModel>(vm.Orchestrator.CurrentStep);
+            postureStep.SelectedPosture = DeploymentPosture.Personal;
+
+            vm.GoNext();
+
+            Assert.Equal(WizardStepIds.HealthCheck, vm.Orchestrator.CurrentStep?.StepId);
+            var completion = vm.HealthCheckStep.HealthCheckCompletion;
+            Assert.NotNull(completion);
+
+            await completion!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            Assert.True(vm.HealthCheckStep.IsComplete.Value);
+            Assert.False(vm.HealthCheckStep.IsRunning.Value);
+            Assert.Contains(vm.HealthCheckStep.Results, r => r.Label == "Configuration written" && r.Passed == true);
+        }
+        finally
+        {
+            vm.Dispose();
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -230,8 +259,7 @@ public sealed class InitWizardPageTests : IDisposable
                 _ => new InitWizardPage(),
                 _ =>
                 {
-                    capturedVm = new InitWizardViewModel(
-                        _paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
+                    capturedVm = CreateViewModel();
                     return capturedVm;
                 });
         });
@@ -243,4 +271,7 @@ public sealed class InitWizardPageTests : IDisposable
 
         return (terminal, app, capturedVm!);
     }
+
+    private InitWizardViewModel CreateViewModel()
+        => new(_paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
 }

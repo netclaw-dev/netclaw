@@ -158,15 +158,23 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         if (_orchestrator.CurrentStep is HealthCheckStepViewModel healthStep)
         {
-            if (!healthStep.IsRunning.Value && !healthStep.IsComplete.Value)
-                healthStep.StartWithOrchestrator(_orchestrator);
+            StartHealthCheckIfReady(healthStep);
             return;
         }
 
-        _orchestrator.GoNext();
+        var advanced = _orchestrator.GoNext();
         _context.StatusMessage.Value = "";
+        if (advanced && _orchestrator.CurrentStep is HealthCheckStepViewModel enteredHealthStep)
+            StartHealthCheckIfReady(enteredHealthStep);
+
         OnStepContentChanged?.Invoke();
         RequestRedraw();
+    }
+
+    private void StartHealthCheckIfReady(HealthCheckStepViewModel healthStep)
+    {
+        if (!healthStep.IsRunning.Value && !healthStep.IsComplete.Value)
+            healthStep.StartWithOrchestrator(_orchestrator);
     }
 
     /// <summary>

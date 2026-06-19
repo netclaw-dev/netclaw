@@ -41,7 +41,7 @@ existing-install re-entry paths.
 
 ### Step 5: Final Validation
 
-- run config and health validation
+- automatically run config and health validation when the step is reached
 - show summary with remediation guidance on failure
 - output next-step commands (`netclaw chat`, `netclaw config`)
 
