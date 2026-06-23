@@ -111,7 +111,7 @@
        decompression DoS). Netclaw uses MessagePack nowhere — this is sample-only
        Aspire tooling RPC — but pin to the patched v2 (2.5.301) to clear the audit. -->
   <ItemGroup>
-    <PackageVersion Include="MessagePack" Version="2.5.301" />
+    <PackageVersion Include="MessagePack" Version="3.1.7" />
   </ItemGroup>
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2
