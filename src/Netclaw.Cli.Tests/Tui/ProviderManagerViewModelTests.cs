@@ -140,6 +140,29 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task EagerProbe_UsesConfiguredProviderProbeWithProviderName()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        Assert.Equal(["my-openrouter"], _fakeProbe.ConfiguredProviderNames);
+    }
+
+    [Fact]
     public async Task EagerProbe_UsesOAuthAccessTokenWhenApiKeyMissing()
     {
         WriteConfig(new Dictionary<string, object>
@@ -172,6 +195,26 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
         Assert.Equal("openai", _fakeProbe.LastProviderType);
         Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
+    }
+
+    [Fact]
+    public async Task AddValidationProbe_DoesNotUseConfiguredProviderProbeBeforePersist()
+    {
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var idx = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.SelectedProviderIndex = idx;
+        vm.ActivateSelectedProvider();
+        Assert.True(vm.TrySetNewProviderName("lab-a100", out _));
+        vm.AdvanceAfterName();
+        vm.SelectAuthMethod(AuthMethod.ApiKey);
+        vm.NewApiKey = "sk-test-key";
+
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Empty(_fakeProbe.ConfiguredProviderNames);
     }
 
     [Fact]
@@ -447,6 +490,34 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
         // The cancelled revalidation did not update health (stayed Probing) and did not throw.
         Assert.Equal(ProviderHealthStatus.Probing, item.Health);
+    }
+
+    [Fact]
+    public async Task RevalidateDetailProvider_UsesConfiguredProviderProbeWithProviderName()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+        _fakeProbe.ConfiguredProviderNames.Clear();
+
+        vm.DetailProvider = vm.DisplayProviders.Single(p => p.ConfiguredName == "my-openrouter");
+        vm.RevalidateDetailProvider();
+        await vm.RevalidateCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["my-openrouter"], _fakeProbe.ConfiguredProviderNames);
     }
 
     [Fact]
