@@ -2506,6 +2506,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SaveSnapshotSuccess>(msg =>
         {
             _log.Info("Snapshot saved (seqNr={SequenceNr})", msg.Metadata.SequenceNr);
+
+            DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
+            DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr-1)); // delete all old snapshots
         });
 
         Command<SaveSnapshotFailure>(msg =>
