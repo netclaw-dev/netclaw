@@ -20,7 +20,8 @@ namespace Netclaw.Actors.SubAgents;
     "Delegate a task to a specialist subagent. "
     + "The subagent runs autonomously with its own tools and returns a result. "
     + "Use the discovery context layer to see available subagents.",
-    Grant = "builtin")]
+    Grant = "builtin",
+    Liveness = ToolLivenessMode.SelfMonitoring)]
 public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
 {
     private readonly SubAgentDefinitionRegistry _registry;

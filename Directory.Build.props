@@ -8,25 +8,28 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.24.0</VersionPrefix>
-    <VersionSuffix>beta.4</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.24.0-beta.3 — Channel infrastructure standardization, Discord/Mattermost gateway self-healing, and install script fix
+    <VersionPrefix>0.24.1</VersionPrefix>
+    <VersionSuffix>
+    </VersionSuffix>
+    <PackageReleaseNotes>Netclaw v0.24.1 — TUI reliability improvements, remote skill server awareness, spawn_agent liveness fixes, and SQLitePCLRaw CVE mitigation
 
 **Features**
 
-* **Standardized channel infrastructure (SPEC-015)** — generic `ChannelLifecycleActor` and `RemoteChatChannelBuilder` reduce new channel implementations to ~80 LOC (down from 1,100+ duplicated LOC across Discord and Mattermost), while enforcing a standardized security pipeline and gateway lifecycle. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
-
-* **`lookup_channel_destination` blank-query support** — passing `query: null` or an empty string now returns all available destinations, enabling "Select Destination" TUI steps that list every channel without filtering. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
+* **Show advertised skill count for remote skill servers** — the TUI now displays the number of skills advertised by each remote skill server, giving users visibility into available capabilities. ([#1452](https://github.com/netclaw-dev/netclaw/pull/1452))
 
 **Bug Fixes**
 
-* **Discord gateway no longer enters zombie state after failed auto-retry** — fixed a critical reliability issue where the Discord gateway dropped every inbound message for 30+ minutes and would not recover without a daemon restart. The gateway now correctly enters its self-healing reconnect loop and publishes `ConnectionRestored` on recovery. ([#1374](https://github.com/netclaw-dev/netclaw/pull/1374))
+* **SQLitePCLRaw CVE suppression** — suppressed GHSA-2m69-gcr7-jv3q (SQLitePCLRaw CVE-2025-6965) until upstream patches the vulnerability. ([#1444](https://github.com/netclaw-dev/netclaw/pull/1444))
 
-* **Mattermost auto-retry recovery publishes `ConnectionRestored`** — the same gateway-lifecycle fix applied to the Mattermost actor; auto-retry timeouts now correctly trigger the self-healing reconnect loop. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
+* **Auto-start init health checks** — the TUI now automatically starts health checks during the init wizard, ensuring servers are ready before proceeding. ([#1454](https://github.com/netclaw-dev/netclaw/pull/1454))
 
-* **Install scripts persist `--channel` preference to config** — `Daemon.UpdateChannel` is now written to `netclaw.json` during `--channel beta` installs (both `install.sh` and `install.ps1`), so the daemon's self-update mechanism no longer silently defaults to stable. The init wizard preserves an existing beta channel from config. ([#1377](https://github.com/netclaw-dev/netclaw/pull/1377))
+* **Config-screen consistency** — the TUI config screen now consistently shows Done rows, an embedded footer, and proper Search spacer styling. ([#1441](https://github.com/netclaw-dev/netclaw/pull/1441))
 
----</PackageReleaseNotes>
+* **Auto-advance add-skill-server flow** — the skill server add flow now automatically advances on a successful probe, reducing manual steps. ([#1458](https://github.com/netclaw-dev/netclaw/pull/1458))
+
+* **spawn_agent liveness respect** — spawn_agent now properly respects self-monitoring liveness checks, ensuring child agents are health-checked correctly after startup. ([#1453](https://github.com/netclaw-dev/netclaw/pull/1453))
+
+* **Security &amp; Access menu Done rows** — added Done rows to the Security &amp; Access menu and editors for consistent UI feedback. ([#1448](https://github.com/netclaw-dev/netclaw/pull/1448))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

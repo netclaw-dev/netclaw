@@ -127,6 +127,56 @@ public sealed class ToolAudienceProfiles
     ];
 }
 
+public static class ToolAudienceProfileToolCatalog
+{
+    public const string ShellExecute = "shell_execute";
+    public const string FileRead = "file_read";
+    public const string FileList = "file_list";
+    public const string AttachFile = "attach_file";
+    public const string FileWrite = "file_write";
+    public const string FileEdit = "file_edit";
+    public const string WebSearch = "web_search";
+    public const string WebFetch = "web_fetch";
+    public const string SkillManage = "skill_manage";
+    public const string SetWebhook = "set_webhook";
+    public const string ListWebhooks = "list_webhooks";
+    public const string DeleteWebhook = "delete_webhook";
+    public const string SetReminder = "set_reminder";
+    public const string ListReminders = "list_reminders";
+    public const string CancelReminder = "cancel_reminder";
+    public const string GetReminderHistory = "get_reminder_history";
+    public const string SetWorkingDirectory = "set_working_directory";
+
+    public static IReadOnlyList<string> FileTools { get; } = [FileRead, FileList, FileWrite, FileEdit, AttachFile];
+    public static IReadOnlyList<string> WebTools { get; } = [WebSearch, WebFetch];
+    public static IReadOnlyList<string> SkillTools { get; } = [SkillManage];
+    public static IReadOnlyList<string> WebhookTools { get; } = [SetWebhook, ListWebhooks, DeleteWebhook];
+    public static IReadOnlyList<string> SchedulingTools { get; } = [SetReminder, ListReminders, CancelReminder, GetReminderHistory];
+    public static IReadOnlyList<string> WorkingDirectoryTools { get; } = [SetWorkingDirectory];
+
+    public static IReadOnlyList<string> PublicDefaultAllowedTools { get; } = [FileRead, FileList, AttachFile];
+
+    public static IReadOnlyList<string> TeamDefaultAllowedTools { get; } =
+    [
+        .. FileTools,
+        .. WebTools,
+        .. SkillTools,
+        .. SchedulingTools,
+        .. WorkingDirectoryTools
+    ];
+
+    public static IReadOnlyList<string> ProfileManagedTools { get; } =
+    [
+        .. TeamDefaultAllowedTools,
+        .. WebhookTools,
+        ShellExecute
+    ];
+
+    private static readonly HashSet<string> ProfileManagedToolSet = new(ProfileManagedTools, StringComparer.Ordinal);
+
+    public static bool IsProfileManaged(string toolName) => ProfileManagedToolSet.Contains(toolName);
+}
+
 public static class ToolAudienceProfileDefaults
 {
     public const string SessionDirectoryToken = "{session_dir}";
@@ -150,7 +200,7 @@ public static class ToolAudienceProfileDefaults
     // session-directory scope rather than an unusable profile.
     public static ToolAudienceProfile CreatePublic() => new()
     {
-        AllowedTools = ["file_read", "file_list", "attach_file"],
+        AllowedTools = [.. ToolAudienceProfileToolCatalog.PublicDefaultAllowedTools],
         ReadFiles = CreateSessionScopedFilesystemAccess(),
         WriteFiles = CreateSessionScopedFilesystemAccess(),
         AttachFiles = CreateSessionScopedFilesystemAccess(),
@@ -163,13 +213,7 @@ public static class ToolAudienceProfileDefaults
     // Monotonic invariant: Public ⊆ Team ⊆ Personal.
     public static ToolAudienceProfile CreateTeam() => new()
     {
-        AllowedTools =
-        [
-            "file_read", "file_list", "file_write", "file_edit", "attach_file",
-            "web_search", "web_fetch", "skill_manage", "set_reminder",
-            "list_reminders", "cancel_reminder", "get_reminder_history",
-            "set_working_directory"
-        ],
+        AllowedTools = [.. ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools],
         ReadFiles = CreateSessionScopedFilesystemAccess(),
         WriteFiles = CreateSessionScopedFilesystemAccess(),
         AttachFiles = CreateSessionScopedFilesystemAccess(),

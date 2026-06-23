@@ -14,6 +14,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Jobs;
 
+[Collection(BackgroundJobProcessCollection.Name)]
 public class BackgroundJobExecutionActorTests : TestKit
 {
     private readonly DisposableTempDir _dir = new();
@@ -108,6 +109,39 @@ public class BackgroundJobExecutionActorTests : TestKit
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(definition.Id, completed.JobId);
+        Assert.Equal(BackgroundJobStatus.Cancelled, completed.Status);
+    }
+
+    [Fact]
+    public async Task RunningJob_OutputIsObservableOnDiskBeforeExit()
+    {
+        // The detached-process contract: a job that never exits (dev server)
+        // must still have its output readable from the log while it runs.
+        var command = OperatingSystem.IsWindows()
+            ? "echo server-is-up && ping -n 300 127.0.0.1"
+            : "echo server-is-up && sleep 300";
+        var definition = MakeDefinition(command);
+        var probe = CreateTestProbe("parent");
+        var actor = SpawnExecution(definition, probe);
+        var outputPath = _store.GetOutputLogPath(definition.Id);
+
+        await AwaitAssertAsync(() =>
+            {
+                var (tail, _) = JobOutputLog.ReadTail(outputPath, 2000);
+                Assert.Contains("server-is-up", tail);
+            },
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // The process is still alive — no completion has been reported.
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        actor.Tell(new CancelBackgroundJob(
+            definition.Id, definition.SessionId, definition.Audience, definition.Boundary));
+        var completed = await probe.ExpectMsgAsync<BackgroundJobCompleted>(
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(BackgroundJobStatus.Cancelled, completed.Status);
     }
 

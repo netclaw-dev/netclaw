@@ -15,16 +15,21 @@ using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Approvals;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Config;
+using Netclaw.Cli.Tui.Sections;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Cli.Skills;
 using Netclaw.Cli.Update;
 using Netclaw.Cli.Webhooks;
@@ -98,7 +103,10 @@ static async Task RunAsync(string[] args)
     {
         if (args.Length > 1 && IsHelpToken(args[1]))
         {
-            WriteDoctorHelp();
+            if (mode is "init")
+                WriteInitHelp();
+            else
+                WriteDoctorHelp();
             return;
         }
 
@@ -124,6 +132,7 @@ static async Task RunAsync(string[] args)
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             builder.Services.AddDoctorChecks();
         }
 
@@ -152,6 +161,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton<DeviceFlowServiceFactory>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
             var initPaths = new NetclawPaths();
@@ -159,6 +169,11 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<DaemonManager>();
             builder.Services.AddSingleton<IBrowserAutomationBootstrapper, BrowserAutomationBootstrapper>();
+            builder.Services
+                .AddSectionEditor<ProviderStepViewModel>()
+                .AddSectionEditor<IdentityStepViewModel>()
+                .AddSectionEditor<SecurityPostureStepViewModel>()
+                .AddSectionEditor<FeatureSelectionStepViewModel>();
 
             // Register DaemonClient, ChatNavigationState, and SessionConfig for ChatPage
             // (uses freshly-written config from the wizard's WriteConfig)
@@ -200,15 +215,32 @@ static async Task RunAsync(string[] args)
                 };
             });
 
-            builder.Services.AddTermina("/init", termina =>
+            builder.Services.AddSingleton<InitNavigationState>();
+
+            // On an existing install, `netclaw init` opens an explicit action menu instead
+            // of silently re-walking setup (simplify-netclaw-init). First run starts the
+            // bootstrap wizard directly.
+            var initStartRoute = File.Exists(initPaths.NetclawConfigPath)
+                ? InitExistingInstallViewModel.MenuRoute
+                : "/init";
+
+            builder.Services.AddTermina(initStartRoute, termina =>
             {
                 ConfigureNativeSelection(termina);
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
+                termina.RegisterRoute<InitExistingInstallPage, InitExistingInstallViewModel>(InitExistingInstallViewModel.MenuRoute);
+                termina.RegisterRoute<IdentityRedoPage, IdentityRedoViewModel>(InitExistingInstallViewModel.IdentityRoute);
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
 
-            var initApp = builder.Build();
+            using var initApp = builder.Build();
+            var initNav = initApp.Services.GetRequiredService<InitNavigationState>();
             await RunTerminaHostAsync(initApp);
+
+            // "Open configuration editor" from the existing-install menu hands off to the
+            // config editor once the init host has exited.
+            if (initNav.PendingAction == InitFollowUpAction.OpenConfigEditor)
+                await RunConfigEditorAsync(args);
             return;
         }
 
@@ -439,7 +471,7 @@ static async Task RunAsync(string[] args)
                 termina.RegisterRoute<StatsPage, StatsViewModel>("/stats");
             });
 
-            var statsApp = builder.Build();
+            using var statsApp = builder.Build();
             await RunTerminaHostAsync(statsApp);
             return;
         }
@@ -642,6 +674,8 @@ static async Task RunAsync(string[] args)
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+            builder.Services.AddSingleton<TuiNavigation>();
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-mcp-tools-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -652,7 +686,8 @@ static async Task RunAsync(string[] args)
                 t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
             });
 
-            await RunTerminaHostAsync(builder.Build());
+            using var mcpToolsHost = builder.Build();
+            await RunTerminaHostAsync(mcpToolsHost);
             return;
         }
 
@@ -713,7 +748,8 @@ static async Task RunAsync(string[] args)
                 t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
             });
 
-            await RunTerminaHostAsync(builder.Build());
+            using var providerHost = builder.Build();
+            await RunTerminaHostAsync(providerHost);
             return;
         }
 
@@ -745,7 +781,8 @@ static async Task RunAsync(string[] args)
                 t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
             });
 
-            await RunTerminaHostAsync(builder.Build());
+            using var modelHost = builder.Build();
+            await RunTerminaHostAsync(modelHost);
             return;
         }
 
@@ -777,7 +814,8 @@ static async Task RunAsync(string[] args)
                 t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals");
             });
 
-            await RunTerminaHostAsync(builder.Build());
+            using var approvalsHost = builder.Build();
+            await RunTerminaHostAsync(approvalsHost);
             return;
         }
 
@@ -804,7 +842,8 @@ static async Task RunAsync(string[] args)
                 t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder");
             });
 
-            await RunTerminaHostAsync(builder.Build());
+            using var reminderHost = builder.Build();
+            await RunTerminaHostAsync(reminderHost);
             return;
         }
 
@@ -854,10 +893,20 @@ static async Task RunAsync(string[] args)
         return;
     }
 
-    // ── Config management stubs ──
+    // ── Config dashboard ──
     if (mode is "config")
     {
-        Console.WriteLine("netclaw config: not yet implemented");
+        var configPaths = new NetclawPaths();
+        configPaths.EnsureDirectoriesExist();
+
+        var configExitCode = ConfigCommand.Run(args, configPaths);
+        if (configExitCode != 0 || (args.Length > 1 && IsHelpToken(args[1])))
+        {
+            Environment.ExitCode = configExitCode;
+            return;
+        }
+
+        await RunConfigEditorAsync(args);
         return;
     }
 
@@ -1045,7 +1094,7 @@ static async Task RunAsync(string[] args)
             return;
     }
 
-    var app = webBuilder.Build();
+    using var app = webBuilder.Build();
     await RunTerminaHostAsync(app);
 }
 
@@ -1070,11 +1119,103 @@ static void WriteCrashLog(Exception ex)
 // never receive a quit key — an un-killable subprocess. Fail fast in that case.
 // Daemon connectivity failures are handled here because the chat route can
 // resolve daemon-backed services while TerminaApplication is being constructed.
+// Boots the interactive `netclaw config` editor host. Shared by the `config` command
+// and the existing-install menu's "Open configuration editor" handoff so both reach an
+// identical editor (simplify-netclaw-init).
+static async Task RunConfigEditorAsync(string[] args)
+{
+    var builder = Host.CreateApplicationBuilder(args);
+    // ConfigureConfigServices registers NetclawPaths (same paths the caller already
+    // ensured on disk), so no separate paths registration is needed here.
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    builder.Services.AddSingleton(new ConfigDashboardNavigationState());
+    // Marks this as the embedded config host so the routed Provider/Model managers navigate back
+    // to the dashboard (rather than exiting) when backed out — the standalone hosts omit it.
+    builder.Services.AddSingleton(new EmbeddedConfigHostMarker());
+    builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+    builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
+    builder.Services.AddSingleton<ISkillFeedReachabilityProbe, SkillFeedReachabilityProbe>();
+    builder.Services.AddSingleton<TuiNavigation>();
+    builder.Services.AddProviderDescriptors();
+    builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+    builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+    builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
+    builder.Services.AddHttpClient("OAuthDeviceFlow");
+    builder.Services.AddSingleton(sp =>
+        new OAuthDeviceFlowService(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+            sp.GetService<TimeProvider>()));
+    builder.Services.AddSingleton(sp =>
+        new OpenAiDeviceFlowService(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+            sp.GetService<TimeProvider>()));
+    builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+    builder.Services
+        .AddSectionEditor<SecurityPostureStepViewModel>()
+        .AddSectionEditor<FeatureSelectionStepViewModel>()
+        .AddSectionEditor<ExposureModeStepViewModel>();
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+    var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
+    builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+    builder.Services.AddTermina("/config", t =>
+    {
+        // Every Termina host uses raw input so native terminal text-selection
+        // (mouse drag-select) and double-press Ctrl+C handling behave identically
+        // across `init`, `provider`, `model`, `config`, etc. The `config-*` smoke
+        // tapes are authored against this same raw-input mode.
+        ConfigureNativeSelection(t);
+        t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
+        t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
+        t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
+        t.RegisterRoute<ChannelsConfigPage, ChannelsConfigViewModel>("/channels");
+        t.RegisterRoute<InboundWebhooksConfigPage, InboundWebhooksConfigViewModel>("/inbound-webhooks");
+        t.RegisterRoute<SkillSourcesConfigPage, SkillSourcesConfigViewModel>("/skill-sources");
+        t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
+        t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
+        t.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>("/telemetry-alerting");
+        t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
+        t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
+        t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
+        t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
+    });
+
+    using var host = builder.Build();
+    var navigationState = host.Services.GetRequiredService<ConfigDashboardNavigationState>();
+    await RunTerminaHostAsync(host);
+
+    if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
+    {
+        var doctorArgs = new[] { "doctor" };
+        var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
+        ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
+        doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+        doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+        doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
+        doctorBuilder.Services.AddDoctorChecks();
+        doctorBuilder.Logging.ClearProviders();
+        doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        using var doctorHost = doctorBuilder.Build();
+        using var scope = doctorHost.Services.CreateScope();
+        var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
+        var result = await runner.RunAsync();
+        WriteDoctorResult(result);
+        Environment.ExitCode = result.ExitCode;
+    }
+}
+
 static async Task RunTerminaHostAsync(IHost host)
 {
     try
     {
-        if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+        var terminaApplication = host.Services.GetService<TerminaApplication>();
+        if (terminaApplication is not null)
+            host.Services.GetService<TuiNavigation>()?.Attach(terminaApplication);
+
+        if (terminaApplication is not null && Console.IsInputRedirected)
         {
             Console.Error.WriteLine(
                 "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
@@ -1129,7 +1270,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
     Console.WriteLine("  version, --version       Show CLI version");
-    Console.WriteLine("  config                   Configuration management (planned)");
+    Console.WriteLine("  config                   Main post-install settings dashboard");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
     Console.WriteLine();
@@ -1174,6 +1315,14 @@ static void WriteDaemonDevicesHelp()
     Console.WriteLine("  revoke <name>       Revoke a device token by device name");
     Console.WriteLine();
     Console.WriteLine("After revoking, the device will receive 401 on next connection attempt.");
+}
+
+static void WriteInitHelp()
+{
+    Console.WriteLine("Usage: netclaw init");
+    Console.WriteLine();
+    Console.WriteLine("Run the first-run setup wizard for bootstrap configuration.");
+    Console.WriteLine("Use `netclaw config` for ongoing post-install settings changes.");
 }
 
 static void WriteDoctorHelp()

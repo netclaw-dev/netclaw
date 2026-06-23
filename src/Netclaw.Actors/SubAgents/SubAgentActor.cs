@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -64,9 +64,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly int _maxToolIterations;
     private readonly ToolRegistry _toolRegistry;
     private IReadOnlyList<AITool> _aiTools = [];
-    private readonly ILoggingAdapter _log;
+    private ILoggingAdapter _log;
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
+
+    // Stopwatch tracking the total wall-clock duration of the sub-agent run.
+    // Used for the summary log on completion (ProcessingWatchdog is only a
+    // timer scheduler — it doesn't track elapsed time itself).
+    private readonly Stopwatch _runStopwatch = Stopwatch.StartNew();
 
     // Conversation state (not persisted — ephemeral)
     private readonly List<AiChatMessage> _history = [];
@@ -246,6 +251,22 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _externalCts = new CancellationTokenSource();
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
+
+            // Enrich the logger so every sub-agent log line correlates back to the
+            // parent session (SessionId) and to this specific sub-agent run
+            // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
+            // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
+            // "/subagent/..." suffix to recover the parent. SessionId matches the key the
+            // session/channel actors already use (see SessionLoggingScope), so sub-agent
+            // and parent logs share one filterable attribute; SubSessionId isolates a
+            // single run within that session.
+            var parentSessionId = SessionDiagnosticsContext.NormalizeSessionId(scopeId);
+            var enrichedLog = Context.GetLogger();
+            if (!string.IsNullOrWhiteSpace(parentSessionId))
+                enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
+            if (!string.IsNullOrWhiteSpace(scopeId))
+                enrichedLog = enrichedLog.WithContext("SubSessionId", scopeId);
+            _log = enrichedLog;
 
             // The run is bounded by a two-phase inactivity watchdog re-armed on
             // every progress event (LLM response, tool batch, streaming delta,
@@ -578,7 +599,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _interDeltaBudget,
                 Timers);
 
-            EmitActivity("the model is responding");
+            // log: false — the SubAgentStreamPing handler above already logs this
+            // liveness at Debug; an Info line per streamed delta would flood Seq.
+            EmitActivity("the model is responding", log: false);
         });
     }
 
@@ -595,6 +618,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ? JsonSerializer.Serialize(toolCall.Arguments)
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
+
+            // Log tool START event so tool execution spans are visible in Seq
+            // (previously only tool results were logged, making it impossible to
+            // correlate tool start with tool end when tools take a long time).
+            _log.Info("SubAgent [{AgentName}] tool start callId={ToolCallId} name={ToolName}",
+                _definition.Name, toolCall.CallId ?? "unknown", toolCall.Name);
         }
 
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
@@ -689,6 +718,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _log.Info("SubAgent [{AgentName}] completed (success={Success}, output={OutputLength} chars, iterations={Iterations})",
             _definition.Name, success, output.Length, _turnState.ToolIterationCount);
 
+        // Log cumulative stats for observability — total LLM calls, tool usage, etc.
+        // This gives operators a single summary line for sub-agent duration analysis.
+        _log.Info(
+            "SubAgent [{AgentName}] summary: success={Success}, totalToolCalls={TotalToolCalls}, "
+            + "iterations={Iterations}, duration={Duration}s",
+            _definition.Name, success, _turnState.ToolCallCount,
+            _turnState.ToolIterationCount,
+            _runStopwatch.Elapsed.TotalSeconds);
+
         var findings = success && _definition.EmitStructuredFindings
             ? BuildFindings(output, _toolExecutionContext.SessionId)
             : [];
@@ -721,12 +759,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private void RestartWatchdog(TimeSpan budget)
         => _watchdog.Start(ProcessingWatchdog.LlmCall, budget, Timers);
 
-    /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
-    private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false)
-        => _activitySink?.TryWrite(new ToolActivityUpdate(phase)
+    /// <summary>
+    /// Emit a liveness/progress item to the spawning tool's stream (if any) and log
+    /// the phase so it is visible in Seq even on non-streaming spawn paths (where
+    /// <see cref="_activitySink"/> is null), correlated by SessionId/SubSessionId.
+    /// The per-delta streaming ping passes <paramref name="log"/> = false because the
+    /// <see cref="SubAgentStreamPing"/> handler already logs that liveness at Debug —
+    /// logging it here too would emit one Info line per streamed delta.
+    /// </summary>
+    private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false, bool log = true)
+    {
+        if (log)
+            _log.Info("SubAgent [{AgentName}] {Phase}", _definition.Name, phase);
+
+        _activitySink?.TryWrite(new ToolActivityUpdate(phase)
         {
             SuspendsInactivityWatchdog = suspendsInactivityWatchdog
         });
+    }
 
     /// <summary>
     /// Record forward progress in the tool loop / post-approval: re-baseline the

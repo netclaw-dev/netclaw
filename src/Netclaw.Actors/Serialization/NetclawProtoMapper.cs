@@ -33,6 +33,7 @@ internal static class NetclawProtoMapper
         ToolApprovalRequested v => ToProto(v),
         ToolApprovalResolved v => ToProto(v),
         ToolBatchAbandoned v => ToProto(v),
+        SessionBackgroundJobsReaped v => ToProto(v),
         SessionSnapshot v => ToProto(v),
         TurnBroadcast v => ToProto(v),
         CompactionBroadcast v => ToProto(v),
@@ -340,6 +341,18 @@ internal static class NetclawProtoMapper
         SessionId = FromProto(proto.SessionId),
         ToolResults = proto.ToolResults.Select(FromProto).ToArray(),
         AbandonedAtMs = proto.AbandonedAtMs
+    };
+
+    internal static Proto.SessionBackgroundJobsReapedProto ToProto(SessionBackgroundJobsReaped evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        ReapedAtMs = evt.ReapedAtMs
+    };
+
+    internal static SessionBackgroundJobsReaped FromProto(Proto.SessionBackgroundJobsReapedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        ReapedAtMs = proto.ReapedAtMs
     };
 
     private static Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto ToApprovalCandidateProto(
@@ -833,7 +846,9 @@ internal static class NetclawProtoMapper
         Rationale = job.Rationale,
         StartedAtMs = job.StartedAtMs,
         Audience = (Proto.TrustAudience)(int)job.Audience,
-        Boundary = job.Boundary.Value
+        Boundary = job.Boundary.Value,
+        ReapedAtMs = job.ReapedAtMs ?? 0,
+        OutputLogPath = job.OutputLogPath ?? string.Empty
     };
 
     internal static ActiveJobInfo FromProto(Proto.ActiveJobInfoProto proto) => new()
@@ -848,6 +863,8 @@ internal static class NetclawProtoMapper
         // legacy-restricted boundary rather than throwing on construction.
         Boundary = string.IsNullOrEmpty(proto.Boundary)
             ? Configuration.TrustBoundary.LegacyRestricted
-            : new Configuration.TrustBoundary(proto.Boundary)
+            : new Configuration.TrustBoundary(proto.Boundary),
+        ReapedAtMs = proto.ReapedAtMs == 0 ? null : proto.ReapedAtMs,
+        OutputLogPath = string.IsNullOrEmpty(proto.OutputLogPath) ? null : proto.OutputLogPath
     };
 }

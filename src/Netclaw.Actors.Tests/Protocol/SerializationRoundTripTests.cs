@@ -464,6 +464,19 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void SessionBackgroundJobsReaped_round_trips()
+    {
+        var original = new SessionBackgroundJobsReaped
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            ReapedAtMs = 1_778_082_564_879
+        };
+        var result = RoundTrip(original);
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal(original.ReapedAtMs, result.ReapedAtMs);
+    }
+
+    [Fact]
     public void PendingApprovalPromptTracked_round_trips_with_tool_name_and_display_text()
     {
         var original = new PendingApprovalPromptTracked

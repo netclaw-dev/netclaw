@@ -38,6 +38,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     private readonly ProviderDescriptorRegistry? _registry;
     private CancellationTokenSource? _probeCts;
 
+    internal Action<string>? RouteRequested { get; set; }
+
+    /// <summary>
+    /// True when this manager is hosted inside <c>netclaw config</c> (reached from the dashboard).
+    /// Set by the embedded host registration; left false for the standalone <c>netclaw model</c>
+    /// host. Controls whether backing out past the root navigates to the dashboard or exits the app.
+    /// </summary>
+    internal bool IsEmbeddedInConfig { get; set; }
+
     public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.RoleOverview);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
@@ -66,11 +75,12 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     internal Task? ProbeCompletion { get; private set; }
 
     public ModelManagerViewModel(NetclawPaths paths, IProviderProbe probe,
-        ProviderDescriptorRegistry? registry = null)
+        ProviderDescriptorRegistry? registry = null, EmbeddedConfigHostMarker? embeddedHost = null)
     {
         _paths = paths;
         _probe = probe;
         _registry = registry;
+        IsEmbeddedInConfig = embeddedHost is not null;
     }
 
     public override void OnActivated()
@@ -256,10 +266,23 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
                     ClearAssignmentState();
                     CurrentState.Value = ModelManagerState.RoleOverview;
                     NotifyStateChanged();
-                }
+            }
                 break;
             default:
-                Shutdown();
+                if (IsEmbeddedInConfig)
+                {
+                    // Embedded in `netclaw config`: return to the dashboard. We must NOT Shutdown
+                    // here — Shutdown cancels the run loop's token before the queued navigation is
+                    // processed, dropping the nav and quitting the entire config app.
+                    RouteRequested?.Invoke("/config");
+                    Navigate?.Invoke("/config");
+                }
+                else
+                {
+                    // Standalone `netclaw model`: backing out past the root exits the app.
+                    Shutdown();
+                }
+
                 break;
         }
     }

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui.Config;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -19,6 +20,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class SlackStepView : IWizardStepView
 {
+    private SlackStepViewModel? _vm;
     private SelectionListNode<string>? _enabledList;
     private TextInputNode? _botTokenInput;
     private TextInputNode? _appTokenInput;
@@ -34,6 +36,7 @@ public sealed class SlackStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (SlackStepViewModel)stepVm;
+        _vm = vm;
 
         return vm.CurrentSubStep switch
         {
@@ -82,28 +85,52 @@ public sealed class SlackStepView : IWizardStepView
         _botTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xoxb-...");
+        WizardStepHelpers.SeedTextInput(_botTokenInput, vm.BotTokenDraft ?? vm.BotToken);
 
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_botTokenInput, StageFocusedInput, callbacks);
 
         _botTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    vm.BotTokenDraft = null;
+                    if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                    {
+                        callbacks.ClearStatusMessage();
+                        callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackBotTokenRequired);
+                    }
+
+                    return;
+                }
+
                 if (!text.StartsWith("xoxb-", StringComparison.OrdinalIgnoreCase))
                 {
-                    callbacks.RequestRedraw();
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackBotTokenPrefix);
                     return;
                 }
                 vm.BotToken = text;
+                vm.BotTokenDraft = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Slack Bot Token:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_botTokenInput, "Bot Token"));
+
+        if (vm.HasPersistedBotToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildAppTokenSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
@@ -111,41 +138,64 @@ public sealed class SlackStepView : IWizardStepView
         _appTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xapp-...");
+        WizardStepHelpers.SeedTextInput(_appTokenInput, vm.AppTokenDraft ?? vm.AppToken);
 
         _appTokenInput.OnFocused();
         _lastFocusedInput = _appTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_appTokenInput, StageFocusedInput, callbacks);
 
         _appTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    vm.AppTokenDraft = null;
+                    if (vm.HasPersistedAppToken || !string.IsNullOrWhiteSpace(vm.AppToken))
+                    {
+                        callbacks.ClearStatusMessage();
+                        callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackAppTokenRequired);
+                    }
+
+                    return;
+                }
+
                 if (!text.StartsWith("xapp-", StringComparison.OrdinalIgnoreCase))
                 {
-                    callbacks.RequestRedraw();
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackAppTokenPrefix);
                     return;
                 }
                 vm.AppToken = text;
+                vm.AppTokenDraft = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Slack App Token (Socket Mode):").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_appTokenInput, "App Token"));
+
+        if (vm.HasPersistedAppToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildChannelNamesSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
     {
         _channelNamesInput = new TextInputNode()
             .WithPlaceholder("general, dev, random  (leave blank to skip)");
-
-        if (!string.IsNullOrWhiteSpace(vm.ChannelNamesInput))
-            _channelNamesInput.Text = vm.ChannelNamesInput;
+        WizardStepHelpers.SeedTextInput(_channelNamesInput, vm.ChannelNamesInput);
 
         _channelNamesInput.OnFocused();
         _lastFocusedInput = _channelNamesInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_channelNamesInput, StageFocusedInput, callbacks);
 
         _channelNamesInput.Submitted
             .Subscribe(text =>
@@ -205,13 +255,12 @@ public sealed class SlackStepView : IWizardStepView
     {
         _allowedUserIdsInput = new TextInputNode()
             .WithPlaceholder("U01ABC123, U02DEF456  (Slack user IDs, comma-separated)");
-
-        if (!string.IsNullOrWhiteSpace(vm.AllowedUserIdsInput))
-            _allowedUserIdsInput.Text = vm.AllowedUserIdsInput;
+        WizardStepHelpers.SeedTextInput(_allowedUserIdsInput, vm.AllowedUserIdsInput);
 
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_allowedUserIdsInput, StageFocusedInput, callbacks);
 
         _allowedUserIdsInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
@@ -237,6 +286,8 @@ public sealed class SlackStepView : IWizardStepView
         if (_lastFocusedInput is not null)
         {
             _lastFocusedInput.HandleInput(key.KeyInfo);
+            if (key.KeyInfo.Key != ConsoleKey.Enter)
+                StageFocusedInput();
             return true;
         }
         return false;
@@ -245,6 +296,22 @@ public sealed class SlackStepView : IWizardStepView
     public void HandlePaste(PasteEvent paste)
     {
         _lastFocusedInput?.HandlePaste(paste);
+        StageFocusedInput();
+    }
+
+    private void StageFocusedInput()
+    {
+        if (_vm is null)
+            return;
+
+        if (ReferenceEquals(_lastFocusedInput, _botTokenInput))
+            _vm.BotTokenDraft = _botTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _appTokenInput))
+            _vm.AppTokenDraft = _appTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _channelNamesInput))
+            _vm.ChannelNamesInput = _channelNamesInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _allowedUserIdsInput))
+            _vm.AllowedUserIdsInput = _allowedUserIdsInput?.Text;
     }
 
     public void ClearFocusState()

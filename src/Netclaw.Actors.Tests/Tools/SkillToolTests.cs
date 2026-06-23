@@ -532,6 +532,74 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
+    public async Task SkillManage_WriteFile_RejectsSystemSkill()
+    {
+        WriteNestedSkill(".system", "sys-wf", """
+            ---
+            name: sys-wf
+            description: System skill.
+            ---
+
+            # System
+            """);
+        ScanSkills();
+
+        var tool = CreateManageTool();
+        var result = await tool.ExecuteAsync(ToolInput.Create(
+            "Action", "write_file",
+            "Name", "sys-wf",
+            "FilePath", "references/guide.md",
+            "FileContent", "content"),
+            PersonalCtx,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("System skills are read-only", result);
+
+        var expected = Path.Combine(_paths.SkillsDirectory, ".system", "sys-wf", "references", "guide.md");
+        Assert.False(File.Exists(expected));
+    }
+
+    [Fact]
+    public async Task SkillManage_WriteFile_RejectsExternalSkill()
+    {
+        var externalDir = Path.Combine(Path.GetTempPath(), $"netclaw-external-test-{Guid.NewGuid():N}");
+        try
+        {
+            var skillDir = Path.Combine(externalDir, "ext-wf");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+                ---
+                name: ext-wf
+                description: External skill.
+                ---
+
+                # External
+                """);
+
+            var externalScan = SkillScanner.Scan(externalDir);
+            _registry.ReplaceAll(externalScan.AcceptedSkills, externalScan.Issues);
+
+            var tool = CreateManageTool();
+            var result = await tool.ExecuteAsync(ToolInput.Create(
+                    "Action", "write_file",
+                    "Name", "ext-wf",
+                    "FilePath", "references/guide.md",
+                    "FileContent", "content"),
+                PersonalCtx,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("External skill directories are read-only", result);
+            var target = Path.Combine(externalDir, "ext-wf", "references", "guide.md");
+            Assert.False(File.Exists(target));
+        }
+        finally
+        {
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SkillManage_Patch_RejectsHighRiskResourceContent()
     {
         WriteSkill("patch-resource", """
@@ -556,6 +624,75 @@ public class SkillToolTests : IDisposable
         Assert.Contains("Content scan rejected", result);
         var content = File.ReadAllText(Path.Combine(_paths.SkillsDirectory, "patch-resource", "references", "guide.md"));
         Assert.DoesNotContain("Ignore previous instructions", content);
+    }
+
+    [Fact]
+    public async Task SkillManage_RemoveFile_RejectsSystemSkill()
+    {
+        WriteNestedSkill(".system", "sys-remove", """
+            ---
+            name: sys-remove
+            description: System skill.
+            ---
+
+            # System
+            """);
+
+        WriteNestedFile(".system", "sys-remove", "references/old.md", "old");
+        ScanSkills();
+
+        var tool = CreateManageTool();
+        var result = await tool.ExecuteAsync(ToolInput.Create(
+                "Action", "remove_file",
+                "Name", "sys-remove",
+                "FilePath", "references/old.md"),
+            PersonalCtx,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("System skills are read-only", result);
+        Assert.True(File.Exists(Path.Combine(_paths.SkillsDirectory, ".system", "sys-remove", "references", "old.md")));
+    }
+
+    [Fact]
+    public async Task SkillManage_RemoveFile_RejectsExternalSkill()
+    {
+        var externalDir = Path.Combine(Path.GetTempPath(), $"netclaw-external-test-{Guid.NewGuid():N}");
+        try
+        {
+            var skillDir = Path.Combine(externalDir, "ext-remove");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+                ---
+                name: ext-remove
+                description: External skill.
+                ---
+
+                # External
+                """);
+
+            Directory.CreateDirectory(Path.Combine(skillDir, "references"));
+            File.WriteAllText(Path.Combine(skillDir, "references", "old.md"), "old");
+
+            var externalScan = SkillScanner.Scan(externalDir);
+            _registry.ReplaceAll(externalScan.AcceptedSkills, externalScan.Issues);
+
+            var tool = CreateManageTool();
+            var result = await tool.ExecuteAsync(ToolInput.Create(
+                    "Action", "remove_file",
+                    "Name", "ext-remove",
+                    "FilePath", "references/old.md"),
+                PersonalCtx,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("External skill directories are read-only", result);
+            Assert.True(Directory.Exists(skillDir));
+            Assert.True(File.Exists(Path.Combine(skillDir, "references", "old.md")));
+        }
+        finally
+        {
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, recursive: true);
+        }
     }
 
     [Fact]

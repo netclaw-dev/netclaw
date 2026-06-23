@@ -100,7 +100,10 @@ public static class OAuthTokenPersistence
         else
             configProvider.Remove("OAuthTokenExpiry");
 
-        File.WriteAllText(paths.NetclawConfigPath,
+        // Atomic write (temp + rename) so a crash/power-loss between truncate and write cannot leave
+        // netclaw.json empty or partial — IConfiguration silently drops every section on a torn read.
+        // Matches the AtomicFile seam ConfigFileHelper.WriteConfigFile uses for the same file.
+        AtomicFile.WriteAllText(paths.NetclawConfigPath,
             configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
@@ -130,8 +133,10 @@ public static class OAuthTokenPersistence
         if (string.IsNullOrWhiteSpace(accessTokenStr))
             return null;
 
-        // Transparent decrypt via SensitiveStringTypeConverter.Protector
-        var protector = SensitiveStringTypeConverter.Protector;
+        // Decrypt with the protector for this config's keys directory rather than the process-wide
+        // SensitiveStringTypeConverter.Protector static (an ambient hook reserved for the
+        // framework-instantiated converters, not a general service locator).
+        ISecretsProtector? protector = SecretsProtection.CreateProtector(paths);
         if (protector is not null && ISecretsProtector.IsEncrypted(accessTokenStr))
             accessTokenStr = protector.Unprotect(accessTokenStr);
 

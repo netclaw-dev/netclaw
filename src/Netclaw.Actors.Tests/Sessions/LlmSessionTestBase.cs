@@ -45,6 +45,13 @@ public abstract class LlmSessionTestBase : TestKit
     protected sealed override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+        // Mirror production DI (Daemon Program.cs): WithNetclawActors() constructs
+        // BackgroundJobManagerActor and ReminderManagerActor via the DI resolver,
+        // which need TimeProvider. Without it those actors die with
+        // ActorInitializationException at startup — harmless for most session
+        // tests but a steady source of restart churn across the shared threadpool
+        // that destabilizes real-process integration tests running in parallel.
+        services.AddSingleton(TimeProvider.System);
         services.AddTestNetclawPaths();
         services.AddSingleton(SecurityPolicyDefaults.Resolve(null));
         services.AddSingleton<BackgroundJobDefinitionStore>();

@@ -180,6 +180,21 @@ public sealed record ToolBatchAbandoned : INetclawSerializableMessage
     public long AbandonedAtMs { get; init; }
 }
 
+/// <summary>
+/// Persisted event recording that the session's active background jobs were
+/// killed (reaped) at passivation. Reap marks are normally captured by the
+/// passivation snapshot, but that snapshot is skipped while an approval batch
+/// is parked (<c>SaveSnapshotIfSafe</c>); this event persists the marks
+/// independently so recovery cannot rehydrate the killed jobs as "running".
+/// Idempotent on replay — applies <c>MarkAllBackgroundJobsReaped</c>.
+/// </summary>
+public sealed record SessionBackgroundJobsReaped : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public long ReapedAtMs { get; init; }
+}
+
 public sealed record AdoptedContextRecorded : INetclawSerializableMessage
 {
     public sealed record AdoptedMessageRecord

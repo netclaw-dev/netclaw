@@ -98,19 +98,39 @@ public sealed record SessionState
         if (!string.IsNullOrEmpty(evt.SourceReminderId))
             processedReminders = processedReminders.Add(evt.SourceReminderId);
 
-        var processedJobs = ProcessedBackgroundJobIds;
-        var activeJobs = ActiveBackgroundJobs;
-        if (!string.IsNullOrEmpty(evt.SourceBackgroundJobId))
-        {
-            processedJobs = processedJobs.Add(evt.SourceBackgroundJobId);
-            activeJobs = activeJobs.Remove(evt.SourceBackgroundJobId);
-        }
-
-        return this with
+        // Background-job dedup/remove/prune is delegated to the single shared
+        // helper so the replay path here and the live turn-completion path in
+        // LlmSessionActor cannot drift.
+        return (this with
         {
             History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
             TurnCount = TurnCount + 1,
-            ProcessedReminderIds = processedReminders,
+            ProcessedReminderIds = processedReminders
+        }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+    }
+
+    /// <summary>
+    /// Single source of truth for per-turn background-job bookkeeping, shared by
+    /// the replay path (<see cref="Apply(TurnRecorded)"/>) and the live
+    /// turn-completion path (LlmSessionActor): dedup-records a delivery turn's
+    /// job ID, removes the delivered entry, and prunes reaped entries that were
+    /// surfaced in this turn's context block (so the agent learns of a reap
+    /// exactly once instead of on every turn forever).
+    /// </summary>
+    public SessionState CompleteTurnBackgroundJobBookkeeping(string? sourceBackgroundJobId)
+    {
+        var processedJobs = ProcessedBackgroundJobIds;
+        var activeJobs = ActiveBackgroundJobs;
+        if (!string.IsNullOrEmpty(sourceBackgroundJobId))
+        {
+            processedJobs = processedJobs.Add(sourceBackgroundJobId);
+            activeJobs = activeJobs.Remove(sourceBackgroundJobId);
+        }
+
+        activeJobs = PruneReaped(activeJobs);
+
+        return this with
+        {
             ProcessedBackgroundJobIds = processedJobs,
             ActiveBackgroundJobs = activeJobs
         };
@@ -120,6 +140,9 @@ public sealed record SessionState
     {
         return this with { Title = evt.Title };
     }
+
+    public SessionState Apply(SessionBackgroundJobsReaped evt)
+        => MarkAllBackgroundJobsReaped(evt.ReapedAtMs);
 
     public SessionState Apply(AdoptedContextRecorded evt)
     {
@@ -178,6 +201,38 @@ public sealed record SessionState
         {
             ActiveBackgroundJobs = ActiveBackgroundJobs.SetItem(jobKey, info)
         };
+    }
+
+    /// <summary>
+    /// Marks every tracked job as reaped (killed at session passivation). The
+    /// marked state is captured by the passivation snapshot so the next
+    /// rehydration surfaces the reap to the agent exactly once.
+    /// </summary>
+    public SessionState MarkAllBackgroundJobsReaped(long reapedAtMs)
+    {
+        if (ActiveBackgroundJobs.IsEmpty)
+            return this;
+
+        var marked = ActiveBackgroundJobs;
+        foreach (var (key, job) in marked)
+        {
+            if (job.ReapedAtMs is null)
+                marked = marked.SetItem(key, job with { ReapedAtMs = reapedAtMs });
+        }
+
+        return this with { ActiveBackgroundJobs = marked };
+    }
+
+    private static ImmutableDictionary<string, ActiveJobInfo> PruneReaped(
+        ImmutableDictionary<string, ActiveJobInfo> activeJobs)
+    {
+        foreach (var (key, job) in activeJobs)
+        {
+            if (job.ReapedAtMs is not null)
+                activeJobs = activeJobs.Remove(key);
+        }
+
+        return activeJobs;
     }
 
     // ── Command helpers ──

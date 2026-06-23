@@ -44,6 +44,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string ToolApprovalRequestedManifest = "tar-v1";
     private const string ToolApprovalResolvedManifest = "tares-v1";
     private const string ToolBatchAbandonedManifest = "tba-v1";
+    private const string SessionBackgroundJobsReapedManifest = "sbjr-v1";
     private const string PendingApprovalPromptTrackedManifest = "papt-v1";
     private const string PendingApprovalPromptClearedManifest = "papc-v1";
 
@@ -73,6 +74,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ToolApprovalRequested)] = ToolApprovalRequestedManifest,
         [typeof(ToolApprovalResolved)] = ToolApprovalResolvedManifest,
         [typeof(ToolBatchAbandoned)] = ToolBatchAbandonedManifest,
+        [typeof(SessionBackgroundJobsReaped)] = SessionBackgroundJobsReapedManifest,
         [typeof(Channels.PendingApprovalPromptTracked)] = PendingApprovalPromptTrackedManifest,
         [typeof(Channels.PendingApprovalPromptCleared)] = PendingApprovalPromptClearedManifest,
     }.ToFrozenDictionary();
@@ -149,6 +151,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.ToolApprovalResolvedProto.Parser.ParseFrom(bytes)),
             ToolBatchAbandonedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolBatchAbandonedProto.Parser.ParseFrom(bytes)),
+            SessionBackgroundJobsReapedManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionBackgroundJobsReapedProto.Parser.ParseFrom(bytes)),
             PendingApprovalPromptTrackedManifest => NetclawProtoMapper.FromProto(
                 Proto.PendingApprovalPromptTrackedProto.Parser.ParseFrom(bytes)),
             PendingApprovalPromptClearedManifest => NetclawProtoMapper.FromProto(

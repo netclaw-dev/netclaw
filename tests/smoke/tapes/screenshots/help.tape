@@ -13,13 +13,13 @@ Output "/tmp/tape-shot-help.gif"
 
 Type "netclaw --help"
 Enter
-# Anchor on the usage header, then settle. VHS Screenshot can otherwise
-# catch a frame mid-render; the Sleep after keeps the next keystroke from
-# leaking into the capture.
+# Anchor on the usage header, then sleep to let the full terminal output
+# finish rendering. `netclaw --help` writes multiple lines and VHS may not
+# have flushed all of them into the terminal buffer by the time Wait+Screen
+# matches the first visible line.
 Wait+Screen@10s /Usage:/
 Sleep 1s
 Screenshot "/tmp/shot-help.png"
-Sleep 1s
 
 Type "exit"
 Enter

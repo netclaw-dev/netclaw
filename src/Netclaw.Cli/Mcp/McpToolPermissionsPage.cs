@@ -177,7 +177,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithAutoScroll(AutoScrollPolicy.None)
             .WithContent(_toolRowsNode);
         _toolScrollNode.Fill();
-        layout = layout.WithChild(_toolScrollNode);
+        // ScrollableContainerNode.Render ignores bounds.Y and writes relative to the
+        // context's (0,0). Hosting it inside a borderless PanelNode ensures the
+        // PanelNode calls context.CreateSubContext(bounds) first, so the scroll
+        // container receives a context already offset to its actual screen position.
+        layout = layout.WithChild(
+            new PanelNode()
+                .WithBorder(BorderStyle.None)
+                .WithContent(_toolScrollNode)
+                .Fill());
 
         return layout;
     }
@@ -226,7 +234,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     {
         if (_toolScrollNode is null || _gridCursor < FirstToolRow) return;
         var toolIdx = _gridCursor - FirstToolRow;
-        if (_toolScrollNode.MaxScroll == 0) return;
+        if (_toolScrollNode.MaxScroll == 0)
+        {
+            // All tools fit in the viewport. Reset any stale offset left over from
+            // a prior larger scroll position (e.g. after a terminal resize or after
+            // the audience changes to a smaller visible tool set).
+            if (_toolScrollNode.ScrollOffset != 0)
+                _toolScrollNode.ScrollTo(0);
+            return;
+        }
         var viewportH = _toolScrollNode.ContentHeight - _toolScrollNode.MaxScroll;
         if (viewportH <= 0) return;
         if (toolIdx < _toolScrollNode.ScrollOffset)
@@ -249,7 +265,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             if (_confirmingSave)
             {
                 return new TextNode("Save changes?  [Y] Yes  [N] No  [Esc] Cancel")
-                    .WithForeground(Color.Yellow).Bold();
+                    .WithForeground(Color.Yellow).Bold().NoWrap();
             }
 
             var hints = ViewModel.CurrentState.Value switch
@@ -266,28 +282,14 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 var hasStatus = !string.IsNullOrEmpty(statusText);
 
                 if (ViewModel.HasSaveError)
-                {
-                    return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Red));
-                }
-
+                    return BuildToolGridFooterWithStatus(hints, $"  {statusText}", Color.Red);
                 if (ViewModel.HasUnsavedChanges)
-                {
-                    return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
-                }
-
+                    return BuildToolGridFooterWithStatus(hints, "  *unsaved*", Color.Yellow);
                 if (hasStatus)
-                {
-                    return Layouts.Horizontal()
-                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Green));
-                }
+                    return BuildToolGridFooterWithStatus(hints, $"  {statusText}", Color.Green);
             }
 
-            return new TextNode(hints).WithForeground(Color.BrightBlack);
+            return new TextNode(hints).WithForeground(Color.BrightBlack).NoWrap();
         });
 
         ViewModel.StateVersion
@@ -295,6 +297,13 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .DisposeWith(Subscriptions);
 
         return _footerNode;
+    }
+
+    private static LayoutNode BuildToolGridFooterWithStatus(string hints, string status, Color color)
+    {
+        return Layouts.Horizontal()
+            .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack).NoWrap())
+            .WithChild(new TextNode(status).WithForeground(color).WidthAuto());
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -317,14 +326,16 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            if (ViewModel.CurrentState.Value == ToolPermissionsState.ServerList)
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
+            {
+                _gridCursor = 0;
+                ViewModel.GoBack();
+            }
+            else
             {
                 ViewModel.RequestQuit();
-                return;
             }
 
-            _gridCursor = 0;
-            ViewModel.GoBack();
             return;
         }
 

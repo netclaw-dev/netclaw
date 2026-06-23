@@ -46,10 +46,6 @@ public sealed class ToolAccessPolicy
         _safeVerbPolicy = safeVerbs is not null ? new ScopedShellSafeVerbPolicy(safeVerbs) : null;
     }
 
-    public int MaxToolTimeoutSeconds => _toolConfig.MaxToolTimeoutSeconds;
-
-    public int ShellTimeoutSeconds => _toolConfig.ShellTimeoutSeconds;
-
     public IReadOnlyList<AITool> FilterExposedTools(
         IEnumerable<AITool> tools,
         ToolRegistry registry,

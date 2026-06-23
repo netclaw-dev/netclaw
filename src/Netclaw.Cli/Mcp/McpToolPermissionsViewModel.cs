@@ -8,6 +8,7 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using R3;
@@ -28,11 +29,19 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
     private bool _initializedForTests;
+    private readonly McpToolPermissionsNavigationState? _navigationState;
+    private readonly TuiNavigation? _navigation;
 
-    public McpToolPermissionsViewModel(NetclawPaths paths, DaemonApi daemonApi)
+    public McpToolPermissionsViewModel(
+        NetclawPaths paths,
+        DaemonApi daemonApi,
+        McpToolPermissionsNavigationState? navigationState = null,
+        TuiNavigation? navigation = null)
     {
         _paths = paths;
         _daemonApi = daemonApi;
+        _navigationState = navigationState;
+        _navigation = navigation;
     }
 
     public ReactiveProperty<ToolPermissionsState> CurrentState { get; } = new(ToolPermissionsState.Loading);
@@ -69,41 +78,67 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public override void OnActivated()
     {
         base.OnActivated();
+        ApplyPendingNavigationState();
         if (_initializedForTests) return;
         _ = LoadServersAsync();
     }
 
-    private async Task LoadServersAsync()
+    internal async Task LoadServersAsync()
     {
         StatusMessage.Value = "Loading MCP server statuses...";
 
+        JsonElement statuses;
         try
         {
-            var statuses = await _daemonApi.GetMcpServerStatusesAsync(CancellationToken.None);
-            Servers.Clear();
-
-            foreach (var prop in statuses.EnumerateObject())
-            {
-                var state = prop.Value.GetProperty("state").GetString() ?? "unknown";
-                var toolCount = prop.Value.TryGetProperty("toolCount", out var tc) ? tc.GetInt32() : 0;
-                Servers.Add((prop.Name, state, toolCount));
-            }
-
-            Profiles = LoadToolConfig().AudienceProfiles;
-
-            if (Servers.Count == 0)
-            {
-                StatusMessage.Value = "No MCP servers connected. Start the daemon and configure servers first.";
-            }
-            else
-            {
-                StatusMessage.Value = "";
-                CurrentState.Value = ToolPermissionsState.ServerList;
-            }
+            statuses = await _daemonApi.GetMcpServerStatusesAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
             StatusMessage.Value = $"Could not reach daemon: {ex.Message}";
+            NotifyStateChanged();
+            return;
+        }
+
+        Servers.Clear();
+
+        // A 200 response whose body is not the expected object shape (or a server entry missing
+        // its "state") would otherwise throw out of this fire-and-forget task. Surface it as a
+        // status message like the daemon-call path does, rather than crashing page activation.
+        try
+        {
+            foreach (var prop in statuses.EnumerateObject())
+            {
+                var state = prop.Value.TryGetProperty("state", out var stateEl)
+                    ? stateEl.GetString() ?? "unknown"
+                    : "unknown";
+                var toolCount = prop.Value.TryGetProperty("toolCount", out var tc) ? tc.GetInt32() : 0;
+                Servers.Add((prop.Name, state, toolCount));
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage.Value = $"Could not read MCP server statuses: {ex.Message}";
+            NotifyStateChanged();
+            return;
+        }
+
+        try
+        {
+            Profiles = LoadToolConfig().AudienceProfiles;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage.Value = $"Could not load MCP permissions config: {ex.Message}";
+            NotifyStateChanged();
+            return;
+        }
+
+        if (Servers.Count == 0)
+            StatusMessage.Value = "No MCP servers connected. Start the daemon and configure servers first.";
+        else
+        {
+            StatusMessage.Value = "";
+            CurrentState.Value = ToolPermissionsState.ServerList;
         }
 
         NotifyStateChanged();
@@ -123,6 +158,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     internal void InitializeForTests(McpServerName serverName, IEnumerable<string> tools)
     {
         _initializedForTests = true;
+        ApplyPendingNavigationState();
         SelectedServer = serverName.Value;
         DiscoveredTools.Clear();
         DiscoveredTools.AddRange(tools);
@@ -445,7 +481,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             var toolsSection = ConfigFileHelper.GetOrCreateSection(config, "Tools");
             var profilesSection = ConfigFileHelper.GetOrCreateSection(toolsSection, "AudienceProfiles");
 
-            SaveServerAccess(profilesSection);
+            SaveServerAccess(config, profilesSection);
             SaveToolGrants(profilesSection);
             SaveServerDefaults(profilesSection);
             SaveToolOverrides(profilesSection);
@@ -470,41 +506,59 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
     }
 
-    private void SaveServerAccess(Dictionary<string, object> profilesSection)
+    private void SaveServerAccess(Dictionary<string, object> config, Dictionary<string, object> profilesSection)
     {
+        var knownServers = GetKnownMcpServers(config);
+
+        // Accumulate per-audience working lists WITHOUT mutating the live in-memory profile objects
+        // (Profiles.Public/Team/Personal back the runtime ACL queries — IsServerAllowed, etc. — so
+        // coercing them here would leave the ACL in a post-save state if Save throws before the file
+        // write). Seed each audience's working list from its ORIGINAL profile the first time it is
+        // touched; later changes for the same audience build on the working list rather than re-reading
+        // a profile that an earlier iteration would have coerced.
+        var workingLists = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var ((audienceName, serverName), allowed) in _pendingServerAccess)
         {
             var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-
-            var serverList = audienceSection.TryGetValue("AllowedMcpServers", out var existingList)
-                && existingList is List<object> list
-                    ? list.Select(o => o.ToString()!).ToList()
-                    : [];
-
-            if (allowed && !serverList.Contains(serverName, StringComparer.OrdinalIgnoreCase))
+            if (!workingLists.TryGetValue(audienceName, out var serverList))
             {
-                serverList.Add(serverName);
+                var profile = ResolveProfile(AudienceFromName(audienceName));
+                serverList = profile.McpServersMode == ToolProfileMode.All
+                    ? knownServers.ToList()
+                    : profile.AllowedMcpServers.ToList();
+                workingLists[audienceName] = serverList;
             }
-            else if (!allowed)
-            {
+
+            if (allowed)
+                AddServer(serverList, serverName);
+            else
                 serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
-            }
 
+            audienceSection["McpServersMode"] = ToolProfileMode.Allowlist.ToString();
             audienceSection["AllowedMcpServers"] = serverList;
-
-            // Also update the in-memory profile so the UI reflects changes immediately
-            var profile = audienceName switch
-            {
-                "Public" => Profiles.Public,
-                "Team" => Profiles.Team,
-                _ => Profiles.Personal
-            };
-
-            if (allowed && !profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase))
-                profile.AllowedMcpServers.Add(serverName);
-            else if (!allowed)
-                profile.AllowedMcpServers.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    private IReadOnlyList<string> GetKnownMcpServers(Dictionary<string, object> config)
+    {
+        var names = new List<string>();
+        foreach (var server in Servers)
+            AddServer(names, server.Name);
+
+        if (ConfigFileHelper.TryGetPathValue(config, "McpServers", out var configuredServers)
+            && configuredServers is Dictionary<string, object> configuredServerMap)
+        {
+            foreach (var serverName in configuredServerMap.Keys)
+                AddServer(names, serverName);
+        }
+
+        return names;
+    }
+
+    private static void AddServer(List<string> serverList, string serverName)
+    {
+        if (!serverList.Contains(serverName, StringComparer.OrdinalIgnoreCase))
+            serverList.Add(serverName);
     }
 
     private void SaveToolGrants(Dictionary<string, object> profilesSection)
@@ -612,12 +666,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     {
         var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
         var approvalSection = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
-        var profile = audienceName switch
-        {
-            "Public" => Profiles.Public,
-            "Team" => Profiles.Team,
-            _ => Profiles.Personal
-        };
+        var profile = ResolveProfile(AudienceFromName(audienceName));
         profile.ApprovalPolicy ??= new ToolApprovalConfig();
         return (approvalSection, profile.ApprovalPolicy);
     }
@@ -644,7 +693,20 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         _ => "Personal"
     };
 
-    public void RequestQuit() => Shutdown();
+    private static TrustAudience AudienceFromName(string audienceName) => audienceName switch
+    {
+        "Public" => TrustAudience.Public,
+        "Team" => TrustAudience.Team,
+        _ => TrustAudience.Personal
+    };
+
+    public void RequestQuit()
+    {
+        if (_navigation?.TryGoBack() == true)
+            return;
+
+        Shutdown();
+    }
 
     public void GoBack()
     {
@@ -668,25 +730,32 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
+    private void ApplyPendingNavigationState()
+    {
+        if (_navigationState?.ConsumeInitialAudience() is { } audience)
+            SelectedAudience = audience;
+    }
+
+    public override void Dispose()
+    {
+        CurrentState.Dispose();
+        StateVersion.Dispose();
+        StatusMessage.Dispose();
+        base.Dispose();
+    }
+
     private ToolConfig LoadToolConfig()
     {
         if (!File.Exists(_paths.NetclawConfigPath))
             return new ToolConfig();
 
-        try
-        {
-            var text = File.ReadAllText(_paths.NetclawConfigPath);
-            using var doc = JsonDocument.Parse(text);
+        var text = File.ReadAllText(_paths.NetclawConfigPath);
+        using var doc = JsonDocument.Parse(text);
 
-            if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
-                return new ToolConfig();
-
-            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
-                ?? new ToolConfig();
-        }
-        catch
-        {
+        if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
             return new ToolConfig();
-        }
+
+        return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
+            ?? throw new InvalidDataException("Tools section could not be deserialized.");
     }
 }

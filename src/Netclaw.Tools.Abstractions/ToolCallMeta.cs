@@ -79,31 +79,26 @@ public sealed record ToolCallMeta
 
         if (arguments.TryGetValue("_timeout_seconds", out var tVal) && tVal is not null)
         {
-            timeoutSeconds = tVal switch
+            // Shares ToolArgumentHelper.TryCoerceInt with ValidateMetaValues so
+            // acceptance here and rejection there cannot drift. A positive int
+            // is a valid hint; anything else (including 0/negative) is left null
+            // and validation rejects it loudly before dispatch.
+            if (ToolArgumentHelper.TryCoerceInt(tVal, out var parsedTimeout) && parsedTimeout > 0)
             {
-                int i when i > 0 => i,
-                long l when l > 0 => (int)l,
-                double d when d > 0 => (int)d,
-                JsonElement { ValueKind: JsonValueKind.Number } je when je.GetInt32() > 0 => je.GetInt32(),
-                string s when int.TryParse(s, out var parsed) && parsed > 0 => parsed,
-                _ => null
-            };
-            if (timeoutSeconds.HasValue)
+                timeoutSeconds = parsedTimeout;
                 hasAnyMeta = true;
+            }
         }
 
         if (arguments.TryGetValue("_background", out var bVal) && bVal is not null)
         {
-            background = bVal switch
+            // Shares ToolArgumentHelper.TryCoerceBool with ValidateMetaValues.
+            if (ToolArgumentHelper.TryCoerceBool(bVal, out var parsedBackground))
             {
-                bool b => b,
-                JsonElement { ValueKind: JsonValueKind.True } => true,
-                JsonElement { ValueKind: JsonValueKind.False } => false,
-                string s when bool.TryParse(s, out var parsed) => parsed,
-                _ => false
-            };
-            if (background)
-                hasAnyMeta = true;
+                background = parsedBackground;
+                if (background)
+                    hasAnyMeta = true;
+            }
         }
 
         if (!hasAnyMeta)

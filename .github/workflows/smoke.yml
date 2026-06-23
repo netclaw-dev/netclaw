@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v5
@@ -98,7 +98,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download binary artifact
         uses: actions/download-artifact@v8
@@ -140,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download binary artifact
         uses: actions/download-artifact@v8
@@ -176,7 +176,7 @@ jobs:
     name: Screenshot Regression (Linux)
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     env:
       SMOKE_OLLAMA_MODEL: qwen2:0.5b
@@ -184,13 +184,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download binary artifact
         uses: actions/download-artifact@v8
         with:
           name: netclaw-native-binaries-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: ./publish
+
+      - name: Install ImageMagick
+        run: sudo apt-get install -y --no-install-recommends imagemagick
 
       - name: Mark binaries executable
         run: |

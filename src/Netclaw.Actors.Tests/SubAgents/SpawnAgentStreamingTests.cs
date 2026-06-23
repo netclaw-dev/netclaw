@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
@@ -115,5 +116,118 @@ public class SpawnAgentStreamingTests : TestKit
         // not a "Subagent '...' failed: ..." message from FormatResult.
         Assert.NotEmpty(result);
         Assert.DoesNotContain("failed", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Spawn_agent_self_monitoring_survives_quiet_window_after_first_activity()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+
+        var toolAccessPolicy = new ToolAccessPolicy(
+            new ToolConfig(),
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+
+        var registry = new ToolRegistry();
+        registry.Register(new FakeNetclawTool("file_read", "stub content"));
+
+        var subAgentRegistry = new SubAgentDefinitionRegistry();
+        subAgentRegistry.Register(new SubAgentProfile
+        {
+            Name = "summarizer",
+            Description = "Summarize content",
+            SystemPrompt = "You are a summarizer.",
+            ToolNames = ["file_read"],
+            Visibility = SubAgentVisibility.UserFacing
+        });
+
+        var fakeClient = new ControlledStreamingChatClient();
+        var spawner = new SubAgentSpawner(
+            new SingleClientProvider(fakeClient),
+            registry,
+            toolAccessPolicy,
+            approvalService: null,
+            new StaticSystemPromptProvider("You are a summarizer."),
+            NullLogger<SubAgentSpawner>.Instance);
+
+        registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, paths));
+
+        var executor = new DispatchingToolExecutor(
+            registry, toolAccessPolicy, approvalService: null, NullLogger<DispatchingToolExecutor>.Instance);
+
+        var ctx = new ToolExecutionContext("console/self-monitoring-test", dir.Path)
+        {
+            Audience = TrustAudience.Personal
+        };
+        ctx.SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name));
+
+        var spawnCall = new FunctionCallContent(
+            "call-1",
+            "spawn_agent",
+            new Dictionary<string, object?>
+            {
+                ["agent"] = "summarizer",
+                ["task"] = "Summarize the project."
+            });
+
+        Assert.Equal(ToolLivenessMode.SelfMonitoring, executor.GetLivenessMode(spawnCall));
+
+        var time = new FakeTimeProvider();
+        var firstActivitySeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = StreamingToolWatchdog.ConsumeAsync(
+            executor.ExecuteStreamAsync(spawnCall, ctx, TestContext.Current.CancellationToken),
+            "spawn_agent",
+            ToolWatchdogBudget.FirstItemOnly(TimeSpan.FromSeconds(1)),
+            time,
+            onActivity: _ => firstActivitySeen.TrySetResult(),
+            TestContext.Current.CancellationToken);
+
+        await firstActivitySeen.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromSeconds(10));
+        await Task.Yield();
+
+        Assert.False(task.IsCompleted);
+
+        fakeClient.Complete("summary complete");
+
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Contains("summary complete", result);
+    }
+
+    private sealed class ControlledStreamingChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource<string> _response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("ControlledStreamingChatClient is streaming-only.");
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var responseText = await _response.Task.WaitAsync(cancellationToken);
+            var response = new ChatResponse(new ChatMessage(ChatRole.Assistant, [new TextContent(responseText)]));
+
+            foreach (var update in response.ToChatResponseUpdates())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return update;
+            }
+        }
+
+        public void Complete(string responseText) => _response.TrySetResult(responseText);
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 }

@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -50,12 +51,80 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
+    /// <inheritdoc />
+    public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
+    {
+        if (_registry.GetByName(toolCall.Name) is not { } registered)
+            return null; // unknown-tool is handled separately by the execute paths
+
+        // Registry-free checks first (parse sentinel, meta values).
+        if (ValidateArguments(toolCall.Arguments) is { } rejection)
+            return rejection;
+
+        // Unrecognized argument keys — native tools only; MCP servers validate
+        // their own schema and reject observably.
+        if (registered is not McpToolAdapter
+            && ToolArgumentValidator.ValidateArgumentKeys(registered, toolCall.Arguments) is { } keyError)
+            return new ToolArgumentRejection(keyError, "unrecognized_argument");
+
+        return null;
+    }
+
+    /// <inheritdoc />
+    public ToolLivenessMode GetLivenessMode(FunctionCallContent toolCall)
+        => _registry.GetByName(toolCall.Name)?.LivenessMode ?? ToolLivenessMode.Opaque;
+
+    /// <summary>
+    /// The schema-independent half of <see cref="ValidateToolCall"/>: provider
+    /// args-parse sentinel + present-but-invalid meta values. Static so it is
+    /// the single definition of these rules across the executor and any other
+    /// pre-dispatch caller, with no registry needed.
+    /// </summary>
+    public static ToolArgumentRejection? ValidateArguments(IDictionary<string, object?>? args)
+    {
+        if (args is null || args.Count == 0)
+            return null;
+
+        // Provider args-parse failure rides as a sentinel key (set by the
+        // OpenAI-compatible client when the model's arguments JSON did not
+        // deserialize). Checked first so the sentinel key is not then reported
+        // as an "unrecognized argument", and the value is bounded so a
+        // forged/oversized value cannot flood the result.
+        if (args.TryGetValue(ToolCallArgumentErrors.ArgsParseErrorKey, out var parseFailure))
+        {
+            return new ToolArgumentRejection(
+                $"Error: Tool call arguments were not valid JSON: {ToolArgumentHelper.RenderValue(parseFailure, maxLength: 200)} The tool was NOT executed.",
+                "args_parse_error");
+        }
+
+        // Present-but-invalid meta values (malformed _timeout_seconds /
+        // _background) — the agent expressed execution semantics we cannot
+        // honor, so reject rather than run on defaults.
+        if (ToolCallMetaExtractor.ValidateMetaValues(args) is { } metaError)
+            return new ToolArgumentRejection(metaError, "invalid_meta_value");
+
+        return null;
+    }
+
     public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         if (_registry.GetByName(toolCall.Name) is null)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
             return $"Unknown tool: {toolCall.Name}";
+        }
+
+        // Pre-dispatch validation runs before authorization so a doomed call
+        // never raises an approval prompt. This is the shared seam: callers that
+        // bypass the session pipeline (sub-agents, direct callers) get the same
+        // protection here. The pipeline preflights via ValidateToolCall too, so
+        // for that path this is a cheap idempotent re-check.
+        if (ValidateToolCall(toolCall) is { } rejection)
+        {
+            _logger.LogWarning(
+                "Rejected tool call ({Reason}): {ToolName} — {Error}",
+                rejection.DenyReason, toolCall.Name, rejection.Message);
+            return rejection.Message;
         }
 
         var tool = await AuthorizeCoreAsync(toolCall, context, ct);
@@ -123,6 +192,16 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
             yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
+            yield break;
+        }
+
+        // Same pre-authorization validation as the non-streaming path.
+        if (ValidateToolCall(toolCall) is { } rejection)
+        {
+            _logger.LogWarning(
+                "Rejected tool call ({Reason}): {ToolName} — {Error}",
+                rejection.DenyReason, toolCall.Name, rejection.Message);
+            yield return new ToolCompletedUpdate(rejection.Message);
             yield break;
         }
 

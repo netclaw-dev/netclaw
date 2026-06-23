@@ -71,7 +71,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<SendUserMessage> _buffer = [];
     private readonly HashSet<string> _inFlightReminderIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _inFlightBackgroundJobIds = new(StringComparer.Ordinal);
-    private readonly Dictionary<IActorRef, OutputFilter> _subscribers = [];
+    private readonly SessionSubscriberManager _subscribers = new();
     private readonly List<AITool> _availableTools = [];
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ResolvedToolApproval> _resolvedToolApprovals = new(StringComparer.Ordinal);
@@ -177,6 +177,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool _restartDrainRequested;
     private bool _passivationCompleted;
     private bool _passivationFinalStopScheduled;
+
+    // Reap-on-passivation handshake: while a KillJobsForSession ask is in
+    // flight, the final snapshot is deferred so it captures the reaped marks.
+    // _jobReapEpoch is bumped per reap request so a late reply from a
+    // superseded passivation (aborted, then re-entered) cannot resolve a newer
+    // handshake — see JobReapResolved.
+    private bool _jobReapPending;
+    private bool _passivationDeferredForReap;
+    private long _jobReapEpoch;
     private IActorRef? _restartDrainReplyTo;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
@@ -253,6 +262,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ClearActiveToolBatchTracking();
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
+        Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt =>
         {
             _state = _state.Apply(evt);
@@ -356,15 +366,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
-    private static bool IsLegalTransition(SessionPhase from, SessionPhase to) => from switch
-    {
-        SessionPhase.Recovering => to == SessionPhase.Ready,
-        SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
-        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
-        SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
-        SessionPhase.Passivating => to is SessionPhase.Ready or SessionPhase.Processing,
-        _ => false
-    };
+    private static bool IsLegalTransition(SessionPhase from, SessionPhase to)
+        => SessionPhaseTransitions.IsLegal(from, to);
 
     private void EmitProcessingStateForPhase(SessionPhase phase)
     {
@@ -403,12 +406,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // Pending tool approvals do NOT defer passivation: approval state is
+            // journaled (ToolApprovalRequested/Resolved) and an approval response
+            // rehydrates the session and re-drives the parked batch, the same
+            // path that already covers daemon restarts. Keeping the actor in
+            // memory while a human decides buys nothing but resident memory.
             if (_pendingToolInteractions.Count > 0)
             {
                 _log.Info(
-                    "Session idle but {PendingApprovalCount} approval(s) are pending; deferring passivation",
+                    "Session idle with {PendingApprovalCount} journaled approval(s) outstanding; passivating — an approval response will rehydrate and resume",
                     _pendingToolInteractions.Count);
-                return;
             }
 
             if (_resolvedToolApprovals.Count > 0)
@@ -436,6 +443,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         CommandDistillationAckNoOp();
+        CommandJobReapResolved();
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
@@ -697,6 +705,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
         CommandDistillationAckNoOp();
+        CommandJobReapResolved();
     }
 
     private void HandleLlmResponseReceived(LlmResponseReceived msg)
@@ -798,6 +807,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _watchdog.Stop(Timers);
         CancelAndDisposeToolExecutionCts();
+
+        foreach (var startedJob in msg.StartedBackgroundJobs)
+            TrackStartedBackgroundJob(startedJob);
 
         var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var finding in msg.AcceptedSubAgentFindings)
@@ -1144,6 +1156,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionFailed>(HandleLegacyCompactionFailed);
 
         CommandDistillationAckNoOp();
+        CommandJobReapResolved();
     }
 
     private void HandleCompactionWatchdogExpired(ProcessingWatchdogExpired msg)
@@ -1379,6 +1392,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
+
+    // Bounds the reap-on-passivation handshake; the Ask always resolves within
+    // this window (ack or piped failure), so passivation can never wedge on it.
+    private static readonly TimeSpan JobReapAckTimeout = TimeSpan.FromSeconds(5);
     private static readonly object PassivationTimerKey = new();
 
     // After distillation + snapshot complete we wait this long for a racing
@@ -1394,6 +1411,40 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         // Disable idle timeout — we're shutting down
         Context.SetReceiveTimeout(null);
+
+        // Reap-on-passivation: a background job is session-scoped — when the
+        // conversation goes idle its processes must not linger. Kills are
+        // requested up front (parallel with distillation) and the final
+        // snapshot is gated on the ack so it captures the reaped marks.
+        _jobReapPending = false;
+        _passivationDeferredForReap = false;
+        if (!_state.ActiveBackgroundJobs.IsEmpty)
+        {
+            var jobRegistry = ActorRegistry.For(Context.System);
+            if (jobRegistry.TryGet<BackgroundJobManagerActorKey>(out var jobManager))
+            {
+                _jobReapPending = true;
+                var reapEpoch = ++_jobReapEpoch;
+                jobManager.Ask<Jobs.SessionJobsReaped>(
+                        new Jobs.KillJobsForSession(_sessionId), JobReapAckTimeout)
+                    .PipeTo(Self,
+                        success: ack => new JobReapResolved(reapEpoch, ack.ReapedCount, null),
+                        failure: ex => new JobReapResolved(reapEpoch, 0, ex));
+            }
+            else
+            {
+                _log.Error(
+                    "Session has {JobCount} active background job(s) but no background job manager is registered — processes cannot be reaped",
+                    _state.ActiveBackgroundJobs.Count);
+            }
+        }
+
+        // The reap reply is handled by the same epoch-correlated handler used in
+        // every other phase (CommandJobReapResolved) — registered for ALL phases
+        // so a reply can never dead-letter no matter where the session is when it
+        // lands. Here in Passivating the handler also releases the deferred
+        // CompletePassivation via FinishJobReap.
+        CommandJobReapResolved();
 
         Command<SessionDistillationCompleted>(msg =>
         {
@@ -1428,14 +1479,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             HandleIncomingUserMessage(cmd);
         });
 
-        // A passivating session always has an empty _pendingToolInteractions —
-        // the phase is entered only when the idle-timeout handler sees no
-        // pending interactions (LlmSessionActor.cs Ready ReceiveTimeout), and
-        // Passivating has no handler that adds one. So HandleToolInteractionResponseWhenIdle
-        // here always resolves to the fail-loud "expired" path; the re-drive
-        // never runs from Passivating. Aborting passivation is still correct:
-        // it delivers that feedback to the user instead of letting the
-        // response dead-letter into a stopping actor.
+        // A session may be passivating WITH pending tool interactions — idle
+        // passivation proceeds with journaled approvals outstanding (the Ready
+        // ReceiveTimeout handler no longer defers on them). An approval click
+        // landing in this window aborts passivation and re-drives the parked
+        // batch from history, exactly as it would after a cold respawn.
         CommandAsync<ToolInteractionResponse>(async msg =>
         {
             if (_restartDrainRequested)
@@ -1523,12 +1571,42 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_passivationFinalStopScheduled)
             return;
 
+        // The final snapshot must capture the reaped job marks — defer until
+        // the reap ask resolves (it always does: success or piped failure
+        // within JobReapAckTimeout).
+        if (_jobReapPending)
+        {
+            _passivationDeferredForReap = true;
+            return;
+        }
+
         _passivationFinalStopScheduled = true;
         SaveSnapshotIfSafe();
         Timers.StartSingleTimer(
             PassivationFinalStopTimerKey,
             new PassivationFinalStop(),
             PassivationFinalStopDelay);
+    }
+
+    // Marks tracked jobs reaped and releases a passivation that was waiting on
+    // the reap handshake. Runs for both the ack and the loud-failure path —
+    // the manager's definitions are the authoritative status either way.
+    // The reap is journaled (not just folded into the passivation snapshot) so
+    // the marks survive recovery even when that snapshot is skipped because an
+    // approval batch is parked (SaveSnapshotIfSafe). Otherwise a crash in that
+    // window would rehydrate the killed jobs as "running" in the context block.
+    private void FinishJobReap()
+    {
+        Persist(new SessionBackgroundJobsReaped { SessionId = _sessionId, ReapedAtMs = NowMs() }, evt =>
+        {
+            _state = _state.Apply(evt);
+            _jobReapPending = false;
+            if (_passivationDeferredForReap)
+            {
+                _passivationDeferredForReap = false;
+                CompletePassivation();
+            }
+        });
     }
 
     // Actual termination after the grace window expires. The observer
@@ -1568,6 +1646,41 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void CommandDistillationAckNoOp()
     {
         Command<AcceptedDistillationProposalsRecorded>(_ => { });
+    }
+
+    // Single handler for the reap Ask reply, registered in EVERY non-terminal
+    // phase (Ready/Processing/Compacting/Passivating) so the reply can never
+    // dead-letter regardless of which phase the session is in when it lands —
+    // passivation may have been aborted back to Ready, moved on to
+    // Processing/Compacting, or still be in Passivating. Centralizing here means
+    // a future phase cannot silently drop the reply by forgetting a bespoke
+    // registration. Epoch-correlated so a late reply from a superseded reap
+    // request cannot resolve a newer handshake.
+    private void CommandJobReapResolved()
+    {
+        Command<JobReapResolved>(HandleJobReapResolved);
+    }
+
+    private void HandleJobReapResolved(JobReapResolved msg)
+    {
+        if (msg.Epoch != _jobReapEpoch)
+        {
+            _log.Debug(
+                "Ignoring superseded background-job reap reply (epoch {Stale}, current {Current})",
+                msg.Epoch, _jobReapEpoch);
+            return;
+        }
+
+        if (msg.Error is not null)
+            // Fail loud, proceed anyway: the manager's kill is idempotent and no
+            // job process outlives the daemon.
+            _log.Error(msg.Error,
+                "Background job reap was not acknowledged within {Timeout}s — proceeding anyway; processes die with the daemon at the latest",
+                JobReapAckTimeout.TotalSeconds);
+        else
+            _log.Info("Background job reap acknowledged: {ReapedCount} job(s) reaped", msg.ReapedCount);
+
+        FinishJobReap();
     }
 
     private void CommandSessionContextMessages()
@@ -1840,15 +1953,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // These are emitted directly from the tool execution thread via Tell(),
         // which is thread-safe. The snapshot ensures we don't read _subscribers
         // from a non-actor thread.
-        var subscriberSnapshot = _subscribers.ToList();
+        var subscriberSnapshot = _subscribers.Snapshot();
         var logActor = _logActor;
         Action<SubAgentOutput> emitSubAgentOutput = output =>
         {
-            foreach (var (subscriber, filter) in subscriberSnapshot)
-            {
-                if (filter.HasFlag(OutputFilter.ToolCalls))
-                    subscriber.Tell(output);
-            }
+            SessionSubscriberManager.Emit(subscriberSnapshot, output, OutputFilter.ToolCalls);
             logActor?.Tell(output);
         };
 
@@ -1878,8 +1987,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             approvalChannel: _approvalChannel,
             emitApprovalRequest: request => self.Tell(request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
-            maxToolTimeoutSeconds: _toolAccessPolicy?.MaxToolTimeoutSeconds ?? 600,
-            shellTimeoutSeconds: _toolAccessPolicy?.ShellTimeoutSeconds ?? 60,
             backgroundJobManager: bgJobManager,
             projectDirectory: _state.WorkingContext.ProjectDirectory,
             setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,
@@ -1935,12 +2042,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 processed = processed.Add(evt.SourceReminderId);
             }
 
-            _state = _state with
+            _state = (_state with
             {
                 History = _state.History.Add(evt.AssistantReply),
                 TurnCount = _state.TurnCount + 1,
                 ProcessedReminderIds = processed
-            };
+            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
@@ -2334,13 +2441,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<JoinSession>(cmd =>
         {
-            // Detect re-join: same subscriber already registered with same filter.
-            var isReJoin = _subscribers.TryGetValue(cmd.Subscriber, out var existingFilter)
-                           && existingFilter == cmd.Filter;
+            var isReJoin = _subscribers.IsReJoin(cmd.Subscriber, cmd.Filter);
 
             if (!isReJoin)
             {
-                _subscribers[cmd.Subscriber] = cmd.Filter;
+                _subscribers.AddOrUpdate(cmd.Subscriber, cmd.Filter);
                 Context.WatchWith(cmd.Subscriber,
                     new LeaveSession(cmd.Subscriber) { SessionId = _sessionId });
 
@@ -3020,12 +3125,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 processed = processed.Add(evt.SourceReminderId);
             }
 
-            _state = _state with
+            _state = (_state with
             {
                 History = _state.History.Add(evt.AssistantReply),
                 TurnCount = _state.TurnCount + 1,
                 ProcessedReminderIds = processed
-            };
+            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
 
             EmitOutput(new TextOutput(msg.Result.Output)
             {
@@ -3134,11 +3239,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var lastUser = _state.FindLastUserMessage();
         if (lastUser == evt.UserMessage)
         {
-            _state = _state with
+            _state = (_state with
             {
                 History = _state.History.Add(evt.AssistantReply),
                 TurnCount = _state.TurnCount + 1
-            };
+            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
             return;
         }
 
@@ -4163,14 +4268,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)
     {
-        foreach (var (subscriber, filter) in _subscribers)
-        {
-            if (requiredFlag == OutputFilter.None || filter.HasFlag(requiredFlag))
-            {
-                subscriber.Tell(output);
-            }
-        }
-
+        _subscribers.Emit(output, requiredFlag);
         _logActor?.Tell(output);
         _observerActor?.Tell(output);
     }
@@ -4248,8 +4346,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
+    /// <summary>
+    /// Records a background job the pipeline just submitted into
+    /// <c>SessionState.ActiveBackgroundJobs</c> (snapshot-persisted) so the
+    /// active-jobs context block reflects it and passivation knows there is
+    /// something to reap. Keyed by the delivery dedup key so the
+    /// <c>TurnRecorded</c> removal on result delivery matches.
+    /// </summary>
+    private void TrackStartedBackgroundJob(Jobs.ActiveJobInfo? startedJob)
+    {
+        if (startedJob is null)
+            return;
+
+        var jobKey = $"{Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix}{startedJob.JobId.Value}";
+        _state = _state.TrackBackgroundJob(jobKey, startedJob);
+        _log.Info("Tracking background job {JobId} in session state", startedJob.JobId);
+    }
+
     private void ProcessToolCallResult(Pipelines.ToolCallResult result)
     {
+        TrackStartedBackgroundJob(result.StartedBackgroundJob);
+
         var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var finding in result.AcceptedSubAgentFindings)
         {

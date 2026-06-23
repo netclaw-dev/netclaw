@@ -192,6 +192,11 @@ message ToolBatchAbandonedProto {
   int64 abandoned_at_ms = 3;
 }
 
+message SessionBackgroundJobsReapedProto {
+  SessionIdProto session_id = 1;
+  int64 reaped_at_ms = 2;
+}
+
 // ── Adopted context ──
 
 message AdoptedContextRecordedProto {
@@ -225,6 +230,9 @@ message ActiveJobInfoProto {
   int64 started_at_ms = 4;
   TrustAudience audience = 5;
   string boundary = 6;
+  // 0 = not reaped (proto3 cannot express absence for scalars).
+  int64 reaped_at_ms = 7;
+  string output_log_path = 8;
 }
 
 message SessionSnapshotProto {

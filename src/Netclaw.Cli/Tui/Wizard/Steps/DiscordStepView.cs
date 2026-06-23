@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui.Config;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -19,6 +20,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class DiscordStepView : IWizardStepView
 {
+    private DiscordStepViewModel? _vm;
     private SelectionListNode<string>? _enabledList;
     private TextInputNode? _botTokenInput;
     private TextInputNode? _channelIdsInput;
@@ -33,6 +35,7 @@ public sealed class DiscordStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (DiscordStepViewModel)stepVm;
+        _vm = vm;
 
         return vm.CurrentSubStep switch
         {
@@ -80,36 +83,59 @@ public sealed class DiscordStepView : IWizardStepView
         _botTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("Discord bot token");
+        WizardStepHelpers.SeedTextInput(_botTokenInput, vm.BotTokenDraft ?? vm.BotToken);
 
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_botTokenInput, StageFocusedInput, callbacks);
 
         _botTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    vm.BotTokenDraft = null;
+                    if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                    {
+                        callbacks.ClearStatusMessage();
+                        callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.DiscordBotTokenRequired);
+                    }
+
+                    return;
+                }
+
                 vm.BotToken = text;
+                vm.BotTokenDraft = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Discord Bot Token:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_botTokenInput, "Bot Token"));
+
+        if (vm.HasPersistedBotToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildChannelIdsSubStep(DiscordStepViewModel vm, StepViewCallbacks callbacks)
     {
         _channelIdsInput = new TextInputNode()
             .WithPlaceholder("123456789012345678, 223456789012345678  (leave blank to skip)");
-
-        if (!string.IsNullOrWhiteSpace(vm.ChannelIdsInput))
-            _channelIdsInput.Text = vm.ChannelIdsInput;
+        WizardStepHelpers.SeedTextInput(_channelIdsInput, vm.ChannelIdsInput);
 
         _channelIdsInput.OnFocused();
         _lastFocusedInput = _channelIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_channelIdsInput, StageFocusedInput, callbacks);
 
         _channelIdsInput.Submitted
             .Subscribe(text =>
@@ -169,13 +195,12 @@ public sealed class DiscordStepView : IWizardStepView
     {
         _allowedUserIdsInput = new TextInputNode()
             .WithPlaceholder("129847561203948576, 130111223344556677  (Discord user IDs)");
-
-        if (!string.IsNullOrWhiteSpace(vm.AllowedUserIdsInput))
-            _allowedUserIdsInput.Text = vm.AllowedUserIdsInput;
+        WizardStepHelpers.SeedTextInput(_allowedUserIdsInput, vm.AllowedUserIdsInput);
 
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_allowedUserIdsInput, StageFocusedInput, callbacks);
 
         _allowedUserIdsInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
@@ -202,6 +227,8 @@ public sealed class DiscordStepView : IWizardStepView
         if (_lastFocusedInput is not null)
         {
             _lastFocusedInput.HandleInput(key.KeyInfo);
+            if (key.KeyInfo.Key != ConsoleKey.Enter)
+                StageFocusedInput();
             return true;
         }
 
@@ -211,6 +238,20 @@ public sealed class DiscordStepView : IWizardStepView
     public void HandlePaste(PasteEvent paste)
     {
         _lastFocusedInput?.HandlePaste(paste);
+        StageFocusedInput();
+    }
+
+    private void StageFocusedInput()
+    {
+        if (_vm is null)
+            return;
+
+        if (ReferenceEquals(_lastFocusedInput, _botTokenInput))
+            _vm.BotTokenDraft = _botTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _channelIdsInput))
+            _vm.ChannelIdsInput = _channelIdsInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _allowedUserIdsInput))
+            _vm.AllowedUserIdsInput = _allowedUserIdsInput?.Text;
     }
 
     public void ClearFocusState()

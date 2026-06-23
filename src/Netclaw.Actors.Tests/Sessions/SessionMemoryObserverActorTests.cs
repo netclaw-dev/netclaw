@@ -56,7 +56,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     /// messages from the observer to the returned probe. This is needed for
     /// tests that verify idle-triggered distillation (which sends to Context.Parent).
     /// </summary>
-    private (IActorRef Observer, IActorRef ParentActor, Akka.TestKit.TestProbe ParentProbe) CreateObserverWithParentProbe(
+    private async Task<(IActorRef Observer, IActorRef ParentActor, Akka.TestKit.TestProbe ParentProbe)> CreateObserverWithParentProbeAsync(
         string sessionSuffix,
         FakeChatClient? client = null,
         TimeSpan? idleTimeout = null,
@@ -72,15 +72,15 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var parent = Sys.ActorOf(Props.Create(() => new ForwardingParent(props, probe.Ref)),
             $"parent-wrapper-{sessionSuffix}");
 
-        // Ask the parent for the child ref
-        var observer = parent.Ask<IActorRef>(GetChild.Instance, TimeSpan.FromSeconds(3)).Result;
+        var observer = await parent.Ask<IActorRef>(GetChild.Instance, TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
         return (observer, parent, probe);
     }
 
     [Fact]
     public async Task ReceiveTimeout_with_no_new_content_does_not_reply_to_parent()
     {
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("observer-timeout");
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("observer-timeout");
 
         observer.Tell(ReceiveTimeout.Instance, parentProbe.Ref);
 
@@ -104,7 +104,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     public async Task SessionPhaseChanged_Passivating_disables_idle_distillation()
     {
         // Use a very short idle timeout so the test doesn't wait long
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("passivate-idle",
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("passivate-idle",
             idleTimeout: TimeSpan.FromMilliseconds(200));
 
         // Feed content so idle distillation would fire
@@ -124,7 +124,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     [Fact]
     public async Task SessionPhaseChanged_Ready_after_Passivating_re_enables_idle_distillation()
     {
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("abort-idle",
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("abort-idle",
             idleTimeout: TimeSpan.FromMilliseconds(300));
 
         // Feed content
@@ -197,7 +197,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
 
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("mid-distill", client: client,
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("mid-distill", client: client,
             idleTimeout: TimeSpan.FromSeconds(30)); // long idle to prevent auto-fire
 
         var passivationProbe = CreateTestProbe("passivation-caller");
@@ -240,7 +240,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
 
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("abort-stash", client: client,
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("abort-stash", client: client,
             idleTimeout: TimeSpan.FromSeconds(30));
 
         var passivationProbe = CreateTestProbe("passivation-abort-caller");
@@ -290,7 +290,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
-        var (observer, _, parentProbe) = CreateObserverWithParentProbe("dirty-mid-run", client: client,
+        var (observer, _, parentProbe) = await CreateObserverWithParentProbeAsync("dirty-mid-run", client: client,
             idleTimeout: TimeSpan.FromSeconds(30));
 
         observer.Tell(new SendUserMessage
@@ -325,7 +325,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
-        var (observer, parentActor, parentProbe) = CreateObserverWithParentProbe("same-parent-passivation", client: client,
+        var (observer, parentActor, parentProbe) = await CreateObserverWithParentProbeAsync("same-parent-passivation", client: client,
             idleTimeout: TimeSpan.FromSeconds(30));
 
         observer.Tell(new SendUserMessage

@@ -7,10 +7,10 @@ every tool's JSON schema and populated by the LLM as part of normal tool
 calling. The metadata captures the model's intent (`_rationale`), a per-call
 synchronous timeout hint (`_timeout_seconds`), and an explicit background
 execution signal (`_background`). The tool execution pipeline extracts these
-fields before dispatch so tool implementations never receive them, clamps the
-timeout hint to a configurable ceiling, persists the metadata on the tool call
-for journal replay, and enriches audit entries with the rationale and timeout
-hint. This capability defines the signaling and metadata mechanism only;
+fields before dispatch so tool implementations never receive them, honors the
+timeout hint as requested (rejecting only invalid values), persists the
+metadata on the tool call for journal replay, and enriches audit entries with
+the rationale and timeout hint. This capability defines the signaling and metadata mechanism only;
 actual background job execution is consumed by a follow-on change.
 
 ## Requirements
@@ -88,39 +88,39 @@ call in one sentence — what are you trying to accomplish and why?"
 
 ### Requirement: Per-call timeout hint
 
-The `_timeout_seconds` field SHALL allow the LLM to request a per-call timeout
-override. The value SHALL be clamped to a configurable ceiling
-(`ToolConfig.MaxToolTimeoutSeconds`, default 600). Values below the tool's
-default timeout SHALL be ignored (the default applies). The pipeline SHALL use
-the clamped value when creating the per-call `CancellationTokenSource`.
+The `_timeout_seconds` field SHALL allow the LLM to set a per-call timeout. A
+positive value SHALL be honored exactly — it SHALL NOT be clamped to a ceiling
+nor floored to the tool default; the agent owns this judgement. When no hint is
+provided, the inherited per-call default (`SessionConfig.ToolExecutionTimeout`)
+SHALL apply. The pipeline SHALL use this value when creating the per-call
+`CancellationTokenSource`, and the same value SHALL govern the background-job
+path when `_background` is set. (A present-but-invalid value — non-positive or
+unparseable — is rejected before dispatch; see "Malformed meta values".)
 
-#### Scenario: Timeout hint applied within ceiling
+#### Scenario: Timeout hint is honored exactly
 
-- **GIVEN** `MaxToolTimeoutSeconds` is 600
-- **AND** the LLM requests `_timeout_seconds: 300` on a shell_execute call
+- **GIVEN** the LLM requests `_timeout_seconds: 1200` on a shell_execute call
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout is set to 300 seconds
+- **THEN** the timeout is set to 1200 seconds
+- **AND** nothing is appended to the tool result
 
-#### Scenario: Timeout hint exceeds ceiling
+#### Scenario: A small timeout hint is honored, not floored
 
-- **GIVEN** `MaxToolTimeoutSeconds` is 600
-- **AND** the LLM requests `_timeout_seconds: 1200`
-- **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout is clamped to 600 seconds
-
-#### Scenario: Timeout hint below tool default ignored
-
-- **GIVEN** `ShellTimeoutSeconds` is 60 (shell tool default)
 - **AND** the LLM requests `_timeout_seconds: 10`
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the timeout remains at 60 seconds (the tool default)
+- **THEN** the timeout is set to 10 seconds (no floor is imposed)
 
-#### Scenario: No timeout hint uses default
+#### Scenario: No timeout hint uses the inherited default
 
 - **GIVEN** the LLM does not provide `_timeout_seconds`
 - **WHEN** the pipeline creates the cancellation token
-- **THEN** the existing default timeout applies (60s for shell, 90s for
-  general tool execution)
+- **THEN** the `SessionConfig.ToolExecutionTimeout` default applies
+
+#### Scenario: Background path honors the same hint
+
+- **GIVEN** the LLM sets `_background: true` and `_timeout_seconds: 1800`
+- **WHEN** the call is routed to a background job
+- **THEN** the job's timeout is 1800 seconds (not clamped)
 
 ### Requirement: Background execution signal
 
@@ -151,9 +151,49 @@ execution); this spec defines only the signaling mechanism.
 - **GIVEN** background job execution is not yet available
 - **AND** the LLM requests `_background: true`
 - **WHEN** the pipeline processes the tool call
-- **THEN** the tool executes synchronously with the requested (clamped) timeout
+- **THEN** the tool executes synchronously with the requested timeout
 - **AND** a log message indicates background execution was requested but is not
   yet available
+
+### Requirement: Malformed meta values reject the call
+
+The pipeline SHALL reject a tool call carrying a meta key whose value cannot
+be parsed as its declared type (`_timeout_seconds` not a positive integer;
+`_background` not a boolean) with a tool-result error before dispatch, naming
+the meta key, the supplied value, and the expected type. The tool SHALL NOT
+execute with default semantics in place of the expressed intent. Validation
+state SHALL be computed pipeline-side; the persisted `ToolCallMeta` type SHALL
+remain unchanged.
+
+#### Scenario: Unparseable timeout value rejects instead of silently defaulting
+
+- **GIVEN** a tool call with `"_timeout_seconds": "1200ms"`
+- **WHEN** the pipeline extracts meta fields
+- **THEN** the call is rejected with an error naming `_timeout_seconds`, the
+  value `"1200ms"`, and the expected type positive integer
+- **AND** the tool does not execute under the default timeout
+
+#### Scenario: Non-boolean background value rejects
+
+- **GIVEN** a tool call with `"_background": "yes"`
+- **WHEN** the pipeline extracts meta fields
+- **THEN** the call is rejected with an error naming `_background` and the
+  expected type boolean
+- **AND** the tool does not execute synchronously in place of the request
+
+#### Scenario: Non-integral JSON number for timeout is handled, not thrown
+
+- **GIVEN** a tool call with `"_timeout_seconds": 12.5`
+- **WHEN** the pipeline extracts meta fields
+- **THEN** extraction does not throw an uncaught exception
+- **AND** the call is rejected as present-but-invalid
+
+#### Scenario: Legacy persisted tool call re-drives deterministically
+
+- **GIVEN** a persisted tool call carrying a malformed meta value is re-driven
+  after recovery
+- **WHEN** the pipeline extracts meta fields
+- **THEN** the same rejection error is produced (deterministic on replay)
 
 ### Requirement: ToolCallMeta persistence
 
@@ -194,31 +234,4 @@ allow/deny, duration, approval decision).
 
 - **GIVEN** the LLM provides a timeout hint on a tool call
 - **WHEN** the audit entry is logged
-- **THEN** the entry includes the `TimeoutHintSeconds` value (pre-clamp, as
-  requested by the LLM)
-
-### Requirement: Configuration for timeout ceiling
-
-`ToolConfig` SHALL include `MaxToolTimeoutSeconds` (int, default 600). It SHALL
-be validated in the config schema (`netclaw-config.v1.schema.json`) with
-`minimum: 1`. The schema SHALL include a default value for migration-friendly
-`netclaw doctor --fix` support.
-
-#### Scenario: Config properties parsed
-
-- **GIVEN** the config file includes `tools.MaxToolTimeoutSeconds: 900`
-- **WHEN** the config is loaded
-- **THEN** `ToolConfig.MaxToolTimeoutSeconds` is 900
-
-#### Scenario: Config defaults applied
-
-- **GIVEN** the config file does not include timeout properties
-- **WHEN** the config is loaded
-- **THEN** `ToolConfig.MaxToolTimeoutSeconds` is 600
-
-#### Scenario: Config schema validates new properties
-
-- **GIVEN** `netclaw-config.v1.schema.json` includes the new properties
-- **WHEN** `netclaw doctor` validates a config with these properties
-- **THEN** validation passes
-- **AND** `SchemaFixResolver` can insert defaults for missing properties
+- **THEN** the entry includes the `TimeoutHintSeconds` value as requested by the LLM

@@ -26,3 +26,16 @@ public enum SessionPhase
     /// <summary>Draining: final memory distillation, then snapshot and stop.</summary>
     Passivating
 }
+
+internal static class SessionPhaseTransitions
+{
+    public static bool IsLegal(SessionPhase from, SessionPhase to) => from switch
+    {
+        SessionPhase.Recovering => to == SessionPhase.Ready,
+        SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
+        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
+        SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
+        SessionPhase.Passivating => to is SessionPhase.Ready,
+        _ => false
+    };
+}

@@ -4,9 +4,9 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
-using Netclaw.Actors.Channels;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -103,213 +103,6 @@ public sealed class InitWizardPageTests : IDisposable
         Assert.Equal(_registry.KnownTypeKeys[1], vm.ProviderStep.SelectedProviderType);
     }
 
-    // ── Channels step key routing (#539) ───────────────────────────────────
-
-    /// <summary>
-    /// Verifies that DownArrow reaches the Channels step view through
-    /// HandlePageInput, even when a stale SelectionListNode is on the
-    /// focus stack from a previous step.
-    /// </summary>
-    [Fact]
-    public async Task ChannelsStep_DownArrow_RendersChannelList()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Make Channels step applicable before the picker's OnLeave
-        vm.Context.AnyChatServicesEnabled = true;
-
-        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
-        vm.Orchestrator.GoNext(); // provider → security-posture
-        vm.Orchestrator.GoNext(); // security-posture → feature-selection
-        vm.Orchestrator.GoNext(); // feature-selection → channel-picker
-        vm.Orchestrator.GoNext(); // channel-picker → channels (additive flag preserved)
-
-        Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
-
-        // Populate entries for the Channels step to render
-        vm.Context.ChannelEntries[ChannelType.Slack] =
-        [
-            new ChannelEntry("#general", "C123", TrustAudience.Team),
-            new ChannelEntry("#random", "C456", TrustAudience.Team),
-        ];
-
-        // Send DownArrow (the key that was broken) then Ctrl+Q to exit
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Q, control: true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        // Terminal should contain both channel names
-        Assert.True(terminal.Contains("#general"),
-            $"Expected #general in terminal. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("#random"),
-            $"Expected #random in terminal. Screen:\n{terminal}");
-    }
-
-    /// <summary>
-    /// Verifies that the 'A' key enters add-channel mode on the Channels step.
-    /// </summary>
-    [Fact]
-    public async Task ChannelsStep_AKey_EntersAddMode()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Make Channels step applicable before the picker's OnLeave
-        vm.Context.AnyChatServicesEnabled = true;
-
-        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
-        vm.Orchestrator.GoNext();
-        vm.Orchestrator.GoNext();
-        vm.Orchestrator.GoNext();
-        vm.Orchestrator.GoNext();
-
-        Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
-
-        // No entries needed — testing add mode ('A' key should work regardless)
-
-        // Send 'A' key then Ctrl+Q to exit
-        input.EnqueueKey(ConsoleKey.A);
-        input.EnqueueKey(ConsoleKey.Q, control: true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        // Verify the Channels view entered add mode
-        var channelsView = (ChannelsStepView)vm.StepViews["channels"];
-        Assert.True(channelsView.IsAddMode,
-            $"Expected Channels view to be in add mode after pressing 'A'. " +
-            $"CurrentStep={vm.Orchestrator.CurrentStep?.StepId}, Screen:\n{terminal}");
-    }
-
-    // ── Channel picker sub-flow key routing ──────────────────────────────────
-
-    /// <summary>
-    /// Regression test: entering a valid Slack bot token (xoxb-...) and pressing
-    /// Enter must advance to the app token sub-step, not loop back to bot token.
-    /// Exercises the full Termina rendering + ChannelPicker sub-flow pipeline.
-    /// </summary>
-    [Fact]
-    public async Task SlackSubFlow_BotTokenSubmit_AdvancesToAppToken()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Navigate to channel-picker step
-        vm.Orchestrator.GoNext(); // provider → security-posture
-        vm.Orchestrator.GoNext(); // security-posture → feature-selection
-        vm.Orchestrator.GoNext(); // feature-selection → channel-picker
-        Assert.Equal("channel-picker", vm.Orchestrator.CurrentStep?.StepId);
-
-        // In picker mode: Enter on Slack (index 0) toggles it on and enters sub-flow
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Now in Slack sub-flow at bot token (sub-step 1, since enable is skipped).
-        // Type a valid token and press Enter to submit.
-        input.EnqueueString("xoxb-test-token-12345");
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // If the bug is present, we'd still be on bot token.
-        // Ctrl+Q to exit after the advance should have happened.
-        input.EnqueueKey(ConsoleKey.Q, control: true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        // The Slack VM should have advanced past bot token to app token (sub-step 2)
-        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
-        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
-        Assert.Equal("xoxb-test-token-12345", slackVm.BotToken);
-        Assert.True(terminal.Contains("App Token"),
-            $"Expected 'App Token' prompt after submitting bot token. Screen:\n{terminal}");
-    }
-
-    /// <summary>
-    /// Navigates to channel-picker via keyboard through the security-posture step
-    /// (instead of programmatic GoNext), building Termina's focus stack naturally.
-    /// The SecurityPostureStepView's SelectionListNode remains on the focus stack
-    /// when the Slack sub-flow's TextInputNode takes over — matching the real
-    /// terminal scenario where stale focused components may intercept keys.
-    /// </summary>
-    [Fact]
-    public async Task SlackSubFlow_WithFocusStackFromPriorSteps_BotTokenAdvances()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Skip provider (too many sub-steps to drive via keyboard)
-        vm.Orchestrator.GoNext(); // provider -> security-posture
-
-        // Enter on security-posture selects "Personal" (index 0).
-        // Personal skips feature-selection, lands on channel-picker.
-        // SecurityPostureStepView's SelectionListNode is now stale on the focus stack.
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Enter on channel-picker toggles Slack on and enters sub-flow.
-        // The picker's SelectionListNode is now also stale.
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Type valid bot token and submit
-        input.EnqueueString("xoxb-focus-stack-test");
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        input.EnqueueKey(ConsoleKey.Q, control: true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
-        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
-        Assert.Equal("xoxb-focus-stack-test", slackVm.BotToken);
-        Assert.True(terminal.Contains("App Token"),
-            $"Expected 'App Token' prompt after submitting bot token. Screen:\n{terminal}");
-    }
-
-    /// <summary>
-    /// Full Slack sub-flow traversal: bot token -> app token -> channel names -> DM enabled.
-    /// Exercises multiple TextInputNode and SelectionListNode transitions within the sub-flow,
-    /// verifying that focus state is correctly managed across sub-step boundaries.
-    /// By the time the DM SelectionListNode renders, multiple stale TextInputNodes sit
-    /// on the focus stack.
-    /// </summary>
-    [Fact]
-    public async Task SlackSubFlow_FullTraversal_BotTokenThroughDmEnabled()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        vm.Orchestrator.GoNext(); // provider -> security-posture
-
-        // Enter: selects Personal, skips feature-selection, lands on channel-picker
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Enter: toggles Slack on, enters sub-flow at bot token
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Sub-step 1: Bot token
-        input.EnqueueString("xoxb-full-traversal-token");
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Sub-step 2: App token
-        input.EnqueueString("xapp-full-traversal-token");
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Sub-step 3: Channel names (Enter to skip)
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        // Sub-step 4: DM enabled (SelectionListNode, Enter selects first = "Yes")
-        input.EnqueueKey(ConsoleKey.Enter);
-
-        input.EnqueueKey(ConsoleKey.Q, control: true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
-        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
-
-        Assert.Equal("xoxb-full-traversal-token", slackVm.BotToken);
-        Assert.Equal("xapp-full-traversal-token", slackVm.AppToken);
-        Assert.True(slackVm.AllowDirectMessages,
-            "Expected DM to be enabled after selecting 'Yes' on the DM sub-step");
-    }
 
     // ── Config integrity: wizard choices must match written config ──────────
 
@@ -322,8 +115,8 @@ public sealed class InitWizardPageTests : IDisposable
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
-        // Skip provider step programmatically (too many sub-steps to drive via keyboard)
-        vm.Orchestrator.GoNext(); // provider → security-posture
+        // Advance to the posture step (provider → identity → security-posture).
+        AdvanceToStep(vm, "security-posture");
 
         // Select Personal (index 0) via keyboard — this is the critical decision
         input.EnqueueKey(ConsoleKey.Enter);
@@ -369,7 +162,7 @@ public sealed class InitWizardPageTests : IDisposable
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
-        vm.Orchestrator.GoNext(); // provider → security-posture
+        AdvanceToStep(vm, "security-posture"); // provider → identity → security-posture
 
         // Select Team (index 1) via keyboard: DownArrow then Enter
         input.EnqueueKey(ConsoleKey.DownArrow);
@@ -405,7 +198,47 @@ public sealed class InitWizardPageTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task EnteringHealthCheckStep_StartsValidationWithoutSecondEnter()
+    {
+        var vm = CreateViewModel();
+        try
+        {
+            AdvanceToStep(vm, WizardStepIds.SecurityPosture);
+            var postureStep = Assert.IsType<SecurityPostureStepViewModel>(vm.Orchestrator.CurrentStep);
+            postureStep.SelectedPosture = DeploymentPosture.Personal;
+
+            vm.GoNext();
+
+            Assert.Equal(WizardStepIds.HealthCheck, vm.Orchestrator.CurrentStep?.StepId);
+            var completion = vm.HealthCheckStep.HealthCheckCompletion;
+            Assert.NotNull(completion);
+
+            await completion!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            Assert.True(vm.HealthCheckStep.IsComplete.Value);
+            Assert.False(vm.HealthCheckStep.IsRunning.Value);
+            Assert.Contains(vm.HealthCheckStep.Results, r => r.Label == "Configuration written" && r.Passed == true);
+        }
+        finally
+        {
+            vm.Dispose();
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Drive the orchestrator forward until the named step is current. Identity sits
+    /// between Provider and Security Posture in the bootstrap flow and advances purely
+    /// on its sub-step counter, so GoNext walks straight through it.
+    /// </summary>
+    private static void AdvanceToStep(InitWizardViewModel vm, string stepId)
+    {
+        for (var i = 0; i < 30 && vm.Orchestrator.CurrentStep?.StepId != stepId; i++)
+            vm.Orchestrator.GoNext();
+        Assert.Equal(stepId, vm.Orchestrator.CurrentStep?.StepId);
+    }
 
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
@@ -426,8 +259,7 @@ public sealed class InitWizardPageTests : IDisposable
                 _ => new InitWizardPage(),
                 _ =>
                 {
-                    capturedVm = new InitWizardViewModel(
-                        _paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
+                    capturedVm = CreateViewModel();
                     return capturedVm;
                 });
         });
@@ -439,4 +271,7 @@ public sealed class InitWizardPageTests : IDisposable
 
         return (terminal, app, capturedVm!);
     }
+
+    private InitWizardViewModel CreateViewModel()
+        => new(_paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
 }

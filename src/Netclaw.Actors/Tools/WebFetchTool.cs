@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers;
 using System.ComponentModel;
 using System.Net;
 using System.Text;
@@ -28,6 +29,9 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {
     private const int PreviewLines = 10;
     private const int MaxResponseBytes = 5 * 1024 * 1024; // 5MB
+
+    private const string TruncationNotice =
+        "\n[content truncated at 5 MB — the response exceeded the cap; the remainder was not fetched]";
 
     private static readonly string[] UserAgents =
     [
@@ -70,6 +74,17 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         if (string.IsNullOrWhiteSpace(args.Url))
             return "Error: 'url' parameter is required.";
 
+        // An unsupported format must not silently fall back to raw mode — the
+        // agent asked for an output shape we don't produce (netclaw-tools spec:
+        // web fetch format is validated).
+        if (args.Format is not null
+            && !string.Equals(args.Format, "raw", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(args.Format, "text", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Error: Parameter 'Format' value '{args.Format}' is not supported. "
+                 + "Valid values: raw, text. The fetch was NOT performed.";
+        }
+
         if (!Uri.TryCreate(args.Url, UriKind.Absolute, out var uri)
             || uri.Scheme is not ("http" or "https"))
             return "Error: Invalid URL. Must be an absolute HTTP or HTTPS URL.";
@@ -96,7 +111,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
             if (IsBinaryContentType(contentType))
             {
-                var bytes = await ReadBytesWithLimitAsync(response, ct);
+                var (bytes, binaryTruncated) = await ReadBytesWithLimitAsync(response, ct);
                 if (bytes.Length == 0)
                     return $"Fetched {args.Url} but the response was empty.";
 
@@ -104,10 +119,11 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
                     ?? GetFallbackExtension(contentType, isBinary: true);
                 var filePath = SaveBytesToFile(bytes, uri, fetchDir, extension);
 
-                return FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
+                var binarySummary = FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
+                return binaryTruncated ? binarySummary + TruncationNotice : binarySummary;
             }
 
-            var content = await ReadTextWithLimitAsync(response, ct);
+            var (content, contentTruncated) = await ReadTextWithLimitAsync(response, ct);
             var useTextMode = string.Equals(args.Format, "text", StringComparison.OrdinalIgnoreCase);
 
             string savedContent;
@@ -146,7 +162,8 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             var textFilePath = SaveToFile(savedContent, uri, fetchDir, textExtension);
             var lineCount = savedContent.Count(c => c == '\n') + 1;
 
-            return FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
+            var summary = FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
+            return contentTruncated ? summary + TruncationNotice : summary;
         }
         catch (HttpRequestException ex)
         {
@@ -206,14 +223,44 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             : isBinary ? ".bin" : ".txt";
     }
 
-    private static async Task<string> ReadTextWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
-        => Encoding.UTF8.GetString(await ReadBytesWithLimitAsync(response, ct));
+    private static async Task<(string Content, bool Truncated)> ReadTextWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var (bytes, truncated) = await ReadBytesWithLimitAsync(response, ct);
+        return (Encoding.UTF8.GetString(bytes), truncated);
+    }
 
-    private static async Task<byte[]> ReadBytesWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+    private static async Task<(byte[] Bytes, bool Truncated)> ReadBytesWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var limited = new BinaryReader(stream);
-        return limited.ReadBytes(MaxResponseBytes);
+
+        // Stream into a buffer that grows to the actual content size, capped at
+        // MaxResponseBytes. Avoids eagerly allocating the full cap for every
+        // small fetch (the old BinaryReader.ReadBytes(cap) cost) and the 5 MB
+        // slice-copy a truncated response used to pay. Truncation is detected by
+        // reading one extra byte past the cap, so it is surfaced, not inferred.
+        using var buffer = new MemoryStream();
+        var chunk = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+            {
+                var remaining = MaxResponseBytes - (int)buffer.Length;
+                if (read >= remaining)
+                {
+                    buffer.Write(chunk, 0, remaining);
+                    return (buffer.ToArray(), Truncated: true);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(chunk);
+        }
+
+        return (buffer.ToArray(), Truncated: false);
     }
 
     private string BuildFilePath(Uri uri, string directory, string extension)

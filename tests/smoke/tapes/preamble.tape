@@ -42,9 +42,11 @@ Hide
 
 # The host vhs-spawned bash may carry an unhelpful PS1; we set our own
 # below so anchors are deterministic.
-Type "rm -rf __NETCLAW_HOME__ && mkdir -p __NETCLAW_HOME__"
+Type "rm -rf __NETCLAW_HOME__ __NETCLAW_USER_HOME__ && mkdir -p __NETCLAW_HOME__ __NETCLAW_USER_HOME__"
 Enter
 Type "export PATH=__NETCLAW_BIN_DIR__:$PATH"
+Enter
+Type "export HOME=__NETCLAW_USER_HOME__"
 Enter
 Type "export NETCLAW_HOME=__NETCLAW_HOME__"
 Enter

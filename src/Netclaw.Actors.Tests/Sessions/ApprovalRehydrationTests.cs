@@ -152,6 +152,90 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Idle_passivation_proceeds_with_pending_approval_and_response_resumes()
+    {
+        const string callId = "call-shell-passivate";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(callId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/passivate-with-pending-approval");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("passivate-pending-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Cold-respawn so the session recovers the journaled pending approval
+        // and lands in Ready — the state the old rule kept pinned in memory.
+        await ColdRespawnAsync(sessionId);
+        var rejoinProbe = CreateTestProbe("passivate-pending-rejoin");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(rejoinProbe)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await rejoinProbe.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Idle timeout with the recovered approval still pending: the session
+        // passivates (approval state is journaled) instead of deferring forever.
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+        child.Tell(new LeaveSession(rejoinProbe) { SessionId = sessionId });
+        child.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(
+            child, TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The approval click rehydrates the session and re-drives the parked batch.
+        var subscriberB = CreateTestProbe("passivate-pending-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("local-user")
+        }, ActorRefs.Nobody);
+
+        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriberB.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
+    }
+
+    [Fact]
     public async Task Pending_approval_rejects_option_that_was_not_offered()
     {
         const string callId = "call-shell-invalid-option";

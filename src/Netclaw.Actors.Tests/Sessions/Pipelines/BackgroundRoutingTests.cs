@@ -118,6 +118,141 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
     }
 
     [Fact]
+    public async Task ExplicitBackground_HonorsRequestedTimeout()
+    {
+        // The agent's requested timeout is honored on the background path too —
+        // it is not clamped to a ceiling (the agent owns that judgement).
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe-bg-timeout");
+        var jobManagerProbe = CreateTestProbe("job-manager-bg-timeout");
+        var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-timeout", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "sleep 1200",
+                ["_background"] = true,
+                ["_timeout_seconds"] = 1800,
+                ["_rationale"] = "long job"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/background-timeout"),
+            source: TestMessageSource(),
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1800, received.TimeoutSeconds);
+    }
+
+    [Fact]
+    public async Task ExplicitBackground_OmittedTimeout_ArmsNoKillTimer()
+    {
+        // A background job is a detached process with no completion expectation:
+        // without an explicit _timeout_seconds the job gets NO kill timer
+        // (TimeoutSeconds = 0) — the synchronous default must not be substituted.
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe-bg-notimer");
+        var jobManagerProbe = CreateTestProbe("job-manager-bg-notimer");
+        var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-notimer", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "jekyll serve",
+                ["_background"] = true,
+                ["_rationale"] = "dev server"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/background-notimer"),
+            source: TestMessageSource(),
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, received.TimeoutSeconds);
+    }
+
+    [Fact]
+    public async Task ExplicitBackground_SubmitAckIncludesOutputLogPath()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe-bg-logpath");
+        var jobManagerProbe = CreateTestProbe("job-manager-bg-logpath");
+        var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-logpath", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "npm run dev",
+                ["_background"] = true,
+                ["_rationale"] = "dev server"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/background-logpath"),
+            source: TestMessageSource(),
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(completed.ToolResults);
+        // The ACK steers the agent at the streaming log so it can monitor a
+        // long-running job without an extra status round-trip.
+        Assert.Contains("output.log", completed.ToolResults[0].Content);
+    }
+
+    [Fact]
     public async Task ExplicitBackground_PreservesWorkingDirectory()
     {
         var executor = new EchoExecutor();
@@ -292,7 +427,9 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             {
                 probe.Forward(cmd);
                 _counter++;
-                Sender.Tell(new BackgroundJobStarted(new BackgroundJobId($"fake-{_counter:D4}")));
+                Sender.Tell(new BackgroundJobStarted(
+                    new BackgroundJobId($"fake-{_counter:D4}"),
+                    $"/tmp/jobs/fake-{_counter:D4}/output.log"));
             });
         }
     }

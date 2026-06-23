@@ -163,6 +163,43 @@ data: [DONE]
     }
 
     [Fact]
+    public async Task MalformedToolCallArguments_CarrySentinel_InsteadOfNullArgs()
+    {
+        // Truncated mid-stream arguments JSON must not dispatch a null-args
+        // call (silent intent discard) — the parse failure travels with the
+        // call via the sentinel and the pipeline rejects it pre-dispatch
+        // (tool-arg-validation spec).
+        const string sse = """
+data: {"id":"abc","model":"Qwen","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"shell_execute","arguments":"{\"Command\":\"ech"}}]}}]}
+
+data: {"id":"abc","model":"Qwen","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+""";
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000/api/v1");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
+            updates.Add(update);
+
+        var toolUpdate = Assert.Single(updates, u => u.FinishReason == ChatFinishReason.ToolCalls);
+        var toolCall = Assert.Single(toolUpdate.Contents.OfType<FunctionCallContent>());
+        Assert.NotNull(toolCall.Arguments);
+        var sentinel = Assert.Contains(
+            Netclaw.Tools.ToolCallArgumentErrors.ArgsParseErrorKey,
+            (IDictionary<string, object?>)toolCall.Arguments!);
+        Assert.Contains("Raw arguments prefix:", sentinel?.ToString());
+    }
+
+    [Fact]
     public async Task SerializesAssistantToolCalls_AndToolResults_InConversationHistory()
     {
         string? body = null;

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -14,16 +15,20 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// enable -> server URL -> bot token -> channel IDs -> DM enabled -> user access choice ->
 /// allowed user IDs (conditional) -> callback URL.
 /// Mattermost is self-hosted, so the server URL is collected up front and there is no
-/// auth probe — the wizard validates configuration locally.
+/// auth probe. The health-check step resolves channel references to canonical IDs against
+/// the live server (mirroring Slack/Discord) so only matchable IDs persist into the ACL;
+/// connectivity itself is validated locally.
 /// </summary>
 public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
+    private readonly IMattermostProbe _mattermostProbe;
     private int _currentSubStep;
     private int _highWaterSubStep;
     private WizardContext? _context;
 
-    public MattermostStepViewModel()
+    public MattermostStepViewModel(IMattermostProbe mattermostProbe)
     {
+        _mattermostProbe = mattermostProbe;
     }
 
     public string StepId => WizardStepIds.Mattermost;
@@ -42,11 +47,20 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
 
     public string? ServerUrl { get; set; }
     public string? BotToken { get; set; }
+    internal string? ServerUrlDraft { get; set; }
+    internal string? BotTokenDraft { get; set; }
+    public bool HasPersistedBotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public bool RestrictToSpecificUsers { get; set; }
     public string? AllowedUserIdsInput { get; set; }
     public string? CallbackUrl { get; set; }
+    internal string? CallbackUrlDraft { get; set; }
+
+    // Most recent channel-reference resolution against the live Mattermost server. Drives both
+    // the red-flag rendering of unresolved rows and the canonical-ID persistence in
+    // ContributeConfig / BuildChannelAudiences (names never persist verbatim into the ACL).
+    internal MattermostChannelResolutionResult? LastChannelResolution { get; set; }
 
     internal bool SkipEnableSubStep { get; set; }
 
@@ -161,11 +175,14 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         MattermostEnabled = false;
         ServerUrl = null;
         BotToken = null;
+        ServerUrlDraft = null;
+        BotTokenDraft = null;
         ChannelIdsInput = null;
         AllowDirectMessages = false;
         RestrictToSpecificUsers = false;
         AllowedUserIdsInput = null;
         CallbackUrl = null;
+        CallbackUrlDraft = null;
         var startSubStep = SkipEnableSubStep ? 1 : 0;
         _currentSubStep = startSubStep;
         _highWaterSubStep = startSubStep;
@@ -190,19 +207,11 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         if (AllowDirectMessages)
         {
             var allowedUsers = ParseUserIds(AllowedUserIdsInput);
-            var dmAudience = allowedUsers.Count == 1
-                ? TrustAudience.Personal
-                : posture == DeploymentPosture.Personal
-                    ? TrustAudience.Personal
-                    : posture == DeploymentPosture.Team
-                        ? TrustAudience.Team
-                        : TrustAudience.Public;
+            var dmAudience = ChannelAudienceDefaults.ForDirectMessage(posture, allowedUsers.Count);
             entries.Add(new ChannelEntry("Mattermost DMs", "dm", dmAudience, isDmRow: true));
         }
 
-        var channelAudience = posture == DeploymentPosture.Public
-            ? TrustAudience.Public
-            : TrustAudience.Team;
+        var channelAudience = ChannelAudienceDefaults.ForChannel(posture);
 
         var channelIds = ParseChannelIds(ChannelIdsInput);
         foreach (var channelId in channelIds)
@@ -216,16 +225,22 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         if (!MattermostEnabled)
             return;
 
-        var channelIds = ParseChannelIds(ChannelIdsInput);
         var userIds = ParseUserIds(AllowedUserIdsInput);
+
+        // Persist only canonical channel IDs the runtime ACL can match. An unresolved channel
+        // reference (a name/slug the bot can't see) is omitted, not written verbatim — an
+        // unmatchable entry in AllowedChannelIds is inert and grants nothing. Mirrors Slack/Discord.
+        var resolvedChannelIds = LastChannelResolution is { Resolved.Count: > 0 } resolution
+            ? resolution.Resolved.Select(channel => channel.ChannelId).ToList()
+            : new List<string>();
 
         builder.Mattermost = new MattermostConfigSection
         {
             Enabled = true,
             ServerUrl = string.IsNullOrWhiteSpace(ServerUrl) ? null : ServerUrl.Trim(),
             CallbackUrl = string.IsNullOrWhiteSpace(CallbackUrl) ? null : CallbackUrl.Trim(),
-            DefaultChannelId = channelIds.FirstOrDefault(),
-            AllowedChannelIds = channelIds.Count > 0 ? channelIds : null,
+            DefaultChannelId = resolvedChannelIds.FirstOrDefault(),
+            AllowedChannelIds = resolvedChannelIds.Count > 0 ? resolvedChannelIds : null,
             AllowDirectMessages = AllowDirectMessages,
             AllowedUserIds = userIds.Count > 0 ? userIds : null,
             ChannelAudiences = BuildChannelAudiences()
@@ -243,33 +258,53 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         });
     }
 
-    public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
+    public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        runner.Add(new HealthCheckItem("Mattermost configuration", null));
-
-        if (!MattermostEnabled)
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (disabled)", true));
-            return Task.CompletedTask;
-        }
-
-        if (string.IsNullOrWhiteSpace(ServerUrl))
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (server URL missing)", false));
-            return Task.CompletedTask;
-        }
-
-        if (string.IsNullOrWhiteSpace(BotToken))
-        {
-            runner.UpdateLast(new HealthCheckItem("Mattermost configuration (bot token missing)", false));
-            return Task.CompletedTask;
-        }
+        if (!runner.BeginAdapterCheck("Mattermost", MattermostEnabled, (ServerUrl, "server URL"), (BotToken, "bot token")))
+            return;
 
         // Mattermost is self-hosted with no first-party auth-probe API; the daemon
         // verifies connectivity on startup. The wizard validates configuration locally.
         runner.UpdateLast(new HealthCheckItem(
             $"Mattermost configured (server: {ServerUrl})", true));
-        return Task.CompletedTask;
+
+        // Resolve channel references (id / slug / display name) against the live server so the
+        // persisted allow-list holds canonical channel IDs the runtime ACL can match — an
+        // unresolved name in AllowedChannelIds is inert. Mirrors Slack/Discord. BeginAdapterCheck
+        // above already guaranteed ServerUrl and BotToken are present.
+        var parsedChannelIds = ParseChannelIds(ChannelIdsInput);
+        if (parsedChannelIds.Count == 0)
+            return;
+
+        runner.Add(new HealthCheckItem("Resolving Mattermost channels", null));
+        try
+        {
+            LastChannelResolution = await _mattermostProbe.ResolveChannelIdsAsync(
+                ServerUrl!, BotToken!, parsedChannelIds, ct);
+
+            if (LastChannelResolution.ErrorMessage is not null)
+            {
+                runner.UpdateLast(new HealthCheckItem(
+                    $"Mattermost channel lookup failed: {LastChannelResolution.ErrorMessage}", false));
+            }
+            else if (LastChannelResolution.Unresolved.Count > 0)
+            {
+                var notFound = string.Join(", ", LastChannelResolution.Unresolved);
+                runner.UpdateLast(new HealthCheckItem(
+                    $"Mattermost channels: resolved {LastChannelResolution.Resolved.Count}/{parsedChannelIds.Count}, not found: {notFound}",
+                    false));
+            }
+            else
+            {
+                runner.UpdateLast(new HealthCheckItem(
+                    $"Mattermost channels resolved ({LastChannelResolution.Resolved.Count})", true));
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            runner.UpdateLast(new HealthCheckItem(
+                "Mattermost channel resolution timed out. Check your network connection.", false));
+        }
     }
 
     private Dictionary<string, string>? BuildChannelAudiences()
@@ -282,9 +317,39 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in entries)
-            audiences[entry.Id] = entry.Audience.ToWireValue();
+        {
+            // Only write an audience under a key the runtime ACL can match — a resolved channel ID
+            // or the literal "dm" DM key. An unresolved channel reference is a dead key the runtime
+            // never matches, so omit it instead of silently writing inert ACL config (a
+            // no-silent-fallback violation on a security path). Mirrors Slack/Discord.
+            if (TryResolveChannelAudienceKey(entry, out var key))
+                audiences[key] = entry.Audience.ToWireValue();
+        }
 
         return audiences.Count > 0 ? audiences : null;
+    }
+
+    private bool TryResolveChannelAudienceKey(ChannelEntry entry, out string key)
+    {
+        if (entry.IsDmRow)
+        {
+            key = entry.Id; // canonical DM key ("dm")
+            return true;
+        }
+
+        key = string.Empty;
+        if (LastChannelResolution is null)
+            return false;
+
+        var resolved = LastChannelResolution.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.ChannelName, entry.Id, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(channel.ChannelId, entry.Id, StringComparison.Ordinal));
+
+        if (string.IsNullOrWhiteSpace(resolved?.ChannelId))
+            return false;
+
+        key = resolved.ChannelId;
+        return true;
     }
 
     internal static List<string> ParseChannelIds(string? input)

@@ -24,4 +24,17 @@ public sealed record ActiveJobInfo
     public required TrustAudience Audience { get; init; }
 
     public required TrustBoundary Boundary { get; init; }
+
+    /// <summary>
+    /// Path to the job's streaming output log, surfaced in the active-jobs
+    /// context block so the agent can monitor without a status query.
+    /// </summary>
+    public string? OutputLogPath { get; init; }
+
+    /// <summary>
+    /// Set when the job was killed at session passivation. A reaped entry is
+    /// surfaced once in the context block on the next rehydration so the agent
+    /// learns its process is gone, then pruned after the next completed turn.
+    /// </summary>
+    public long? ReapedAtMs { get; init; }
 }

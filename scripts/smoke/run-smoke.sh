@@ -36,6 +36,7 @@
 #   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
 #   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
+#   SMOKE_DAEMON_PORT        isolated daemon port   (default: 56199)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
 
 set -euo pipefail
@@ -53,7 +54,7 @@ SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-${ROOT_DIR}/smoke-logs}"
 
 # Cheapest harness checks first so a harness-level break fails fast
 # before paying for the wizard + probe tapes.
-LIGHT_TAPES=(help init-wizard init-wizard-reverse-proxy provider-add provider-rename tui-cleanup mcp-permissions approvals model-manager sessions-tui)
+LIGHT_TAPES=(help init-wizard init-existing provider-add provider-rename config-search config-exposure config-posture config-features config-audience config-channels config-surfaces config-ops-surfaces config-workspaces-picker config-skill-picker config-back-nav tui-cleanup mcp-permissions approvals model-manager sessions-tui)
 FULL_TAPES=("${LIGHT_TAPES[@]}")
 
 LIGHT_SCENARIOS=(
@@ -73,13 +74,53 @@ FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 # may emit several `Screenshot "/tmp/shot-<frame>.png"` directives. SHOT_FRAMES
 # is the full set of frame names the harness compares against baselines — it
 # MUST stay in sync with the Screenshot paths in those tapes.
-SHOT_TAPES=(help wizard-screens provider-manager)
+SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions config-search)
 SHOT_FRAMES=(
   help
   wizard-provider-picker
   wizard-security-posture
   provider-manager-empty
+  mcp-permissions-server-list
+  mcp-permissions-tool-grid
+  config-search-selection
+  config-search-brave-entry
+  config-search-saved
 )
+
+# Which frames each capture tape emits. Used by the blank-frame retry
+# (run_shot_tape_with_retry): after a tape runs, only its own captures are
+# inspected for the transient blank described below. Keep in sync with the
+# `Screenshot` directives in tests/smoke/tapes/screenshots/<tape>.tape.
+#
+# A function with a case is used instead of `declare -A` because macOS ships
+# bash 3.2, which has no associative arrays — `declare -A` there parses the
+# `[help]=...` entries as indexed-array assignments and aborts under set -u
+# (`help: unbound variable`), breaking the non-screenshot smoke modes too.
+shot_tape_frames() {
+  case "$1" in
+    help)             echo "help" ;;
+    wizard-screens)   echo "wizard-provider-picker wizard-security-posture" ;;
+    provider-manager) echo "provider-manager-empty" ;;
+    mcp-permissions)  echo "mcp-permissions-server-list mcp-permissions-tool-grid" ;;
+    config-search)    echo "config-search-selection config-search-brave-entry config-search-saved" ;;
+    *)                echo "" ;;
+  esac
+}
+
+# Max attempts per tape when a transient blank frame is detected. A TUI screen
+# can render momentarily blank because Termina emits a full-screen clear
+# ([2J) + repaint as one write on a startup resize event, and VHS can
+# sample the PNG between the clear and the repaint half of that same write.
+# The write is atomic from the app's side (real users never see it); only VHS's
+# mid-write PTY sampling does. Re-running the tape re-captures a settled frame.
+SHOT_BLANK_RETRIES="${SHOT_BLANK_RETRIES:-3}"
+
+# Pixel tolerance (ImageMagick AE) for a frame to count as matching its
+# baseline. Shared by compare_shot_frame (the pass/fail gate) and the retry
+# trigger (a capture above this differs enough to re-run). ~2 character cells —
+# clears a single shell-cursor cell (~493 px) while still failing on real
+# content changes (thousands of px). See compare_shot_frame for the rationale.
+SHOT_AE_TOLERANCE="${SHOT_AE_TOLERANCE:-1000}"
 
 usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
@@ -151,6 +192,9 @@ fi
 RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/netclaw-smoke.XXXXXX")"
 export RUN_ROOT
 mkdir -p "${RUN_ROOT}/home"
+
+SMOKE_DAEMON_PORT="${SMOKE_DAEMON_PORT:-56199}"
+SMOKE_DAEMON_BASE_URL="http://127.0.0.1:${SMOKE_DAEMON_PORT}"
 
 teardown_done=0
 teardown() {
@@ -266,8 +310,17 @@ run_one_tape() {
   echo "Tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/tape-${tape}"
+  local user_home="${RUN_ROOT}/home/user-tape-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/${tape}" \
@@ -283,9 +336,18 @@ run_one_scenario() {
   echo "Scenario: ${scenario}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/scenario-${scenario}"
+  local user_home="${RUN_ROOT}/home/user-scenario-${scenario}"
   rm -rf "$home"
+  rm -rf "$user_home"
   mkdir -p "$home"
-  if ! NETCLAW_HOME="$home" \
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        NETCLAW_DAEMON_PATH="$NETCLAW_SMOKE_DAEMON" \
@@ -309,8 +371,16 @@ run_shot_tape() {
   echo "Screenshot tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/shot-${tape}"
+  local user_home="${RUN_ROOT}/home/user-shot-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/shot-${tape}" \
@@ -319,6 +389,80 @@ run_shot_tape() {
        bash "${SMOKE_SCRIPTS}/run-native-tape.sh" "$tape"; then
     failed+=("shot-tape:${tape}")
   fi
+}
+
+# frame_is_blank <png> — true if the capture is a near-uniform frame, i.e. the
+# transient Termina full-refresh blank (see SHOT_BLANK_RETRIES). Baseline-
+# independent: it counts unique colors with ImageMagick `identify %k`. A blank
+# frame is the solid theme background (~1 color); any populated TUI screen has
+# hundreds. The threshold (16) sits far below the sparsest real frame and far
+# above a blank, so it never misclassifies a real screen as blank.
+frame_is_blank() {
+  local png="$1"
+  command -v identify >/dev/null 2>&1 || return 1   # can't tell → treat as not blank
+  [[ -f "$png" ]] || return 1                        # missing capture is handled elsewhere
+  local colors
+  colors=$(identify -format '%k' "$png" 2>/dev/null || echo "")
+  [[ "$colors" =~ ^[0-9]+$ ]] || return 1
+  (( colors < 16 ))
+}
+
+# frame_needs_retry <frame> — true if the capture looks like a transient Termina
+# full-refresh artifact that re-running the tape can clear. Two shapes:
+#   * fully blank (frame_is_blank) — VHS sampled the [2J-cleared frame.
+#   * partial/garbled — VHS sampled mid-repaint, so only the top rows landed
+#     (e.g. the MCP tool grid captured before its lower rows painted). Such a
+#     frame has plenty of colors (so frame_is_blank misses it) but differs from
+#     baseline by far more than the cursor tolerance.
+# A genuine regression also trips the second branch, but it reproduces every
+# attempt and so still fails at compare time — only the latency differs.
+frame_needs_retry() {
+  local frame="$1"
+  local capture="/tmp/shot-${frame}.png"
+  local baseline="${SHOT_BASELINE_DIR}/${frame}.approved.png"
+  [[ -f "$capture" ]] || return 1
+  frame_is_blank "$capture" && return 0
+  command -v compare >/dev/null 2>&1 || return 1
+  [[ -f "$baseline" ]] || return 1
+  local ae ae_int
+  ae=$(compare -metric AE "$baseline" "$capture" /dev/null 2>&1 || true)
+  ae_int="${ae%%.*}"; ae_int="${ae_int// /}"
+  [[ "$ae_int" =~ ^[0-9]+$ ]] || return 1
+  (( ae_int > SHOT_AE_TOLERANCE ))
+}
+
+# run_shot_tape_with_retry <tape> — run a capture tape, then inspect the frames
+# it emits. If any is a transient blank (SHOT_BLANK_RETRIES), re-run the whole
+# tape so the next attempt captures a settled frame. Bounded so a genuinely
+# broken tape still fails at compare time instead of looping forever.
+run_shot_tape_with_retry() {
+  local tape="$1"
+  local frames
+  frames="$(shot_tape_frames "$tape")"
+  local attempt=1
+  while :; do
+    run_shot_tape "$tape"
+    [[ -z "$frames" ]] && return          # no frame map → accept the single run
+
+    local bad="" f
+    for f in $frames; do
+      if frame_needs_retry "$f"; then
+        bad="$f"
+        break
+      fi
+    done
+    [[ -z "$bad" ]] && return              # all frames settled → done
+
+    if (( attempt >= SHOT_BLANK_RETRIES )); then
+      echo "  WARN: ${tape} produced a transient frame (${bad}) on all ${attempt} attempts;" >&2
+      echo "        leaving it for compare_shot_frame to fail on." >&2
+      return
+    fi
+    echo "  RETRY: ${tape} attempt ${attempt} produced a transient frame (${bad}) —" >&2
+    echo "         re-running tape (blank or partial Termina full-refresh capture)." >&2
+    attempt=$((attempt + 1))
+    for f in $frames; do rm -f "/tmp/shot-${f}.png"; done   # clear stale captures
+  done
 }
 
 # compare_shot_frame <frame> — compare /tmp/shot-<frame>.png against the
@@ -346,9 +490,32 @@ compare_shot_frame() {
     return
   fi
 
-  if cmp -s "$baseline" "$capture"; then
-    echo "  PASS: ${frame} — pixel-identical to baseline."
-    return
+  # Use ImageMagick pixel comparison rather than cmp -s (byte-for-byte).
+  # Two sources of false failures are tolerated:
+  #   1. VHS PNG zlib encoder jitter — same pixels, different byte streams
+  #      across process invocations (AE = 0, always passes).
+  #   2. Terminal cursor block — Set CursorBlink false freezes the cursor but
+  #      not its on/off state; the shell-prompt cursor cell can appear or not
+  #      between runs. The block is one character cell (measured AE≈493 at this
+  #      geometry). AE_CURSOR_TOLERANCE is set to ~2 cells so a single cursor
+  #      cell passes with margin, while real regressions still fail — a changed
+  #      word/line differs by thousands of px, a blank screen by ~68,000.
+  # Fall back to cmp -s only if ImageMagick is absent. The tolerance
+  # (SHOT_AE_TOLERANCE) is shared with the retry trigger (frame_needs_retry).
+  if command -v compare >/dev/null 2>&1; then
+    local ae
+    ae=$(compare -metric AE "$baseline" "$capture" /dev/null 2>&1 || true)
+    local ae_int="${ae%%.*}"
+    ae_int="${ae_int// /}"
+    if [[ "${ae_int:-0}" -le "$SHOT_AE_TOLERANCE" ]]; then
+      echo "  PASS: ${frame} — pixel-close to baseline (AE=${ae_int:-0})."
+      return
+    fi
+  else
+    if cmp -s "$baseline" "$capture"; then
+      echo "  PASS: ${frame} — pixel-identical to baseline."
+      return
+    fi
   fi
 
   # Mismatch — keep the actual, and a visual diff if ImageMagick is around.
@@ -372,7 +539,7 @@ if [[ "$shots_mode" -eq 1 ]]; then
   # Fresh /tmp so a stale capture from an earlier run cannot be compared.
   rm -f /tmp/shot-*.png
   for tape in "${SHOT_TAPES[@]}"; do
-    run_shot_tape "$tape"
+    run_shot_tape_with_retry "$tape"
   done
 
   echo

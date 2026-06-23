@@ -20,6 +20,7 @@ Read first:
 
 - `PROJECT_CONTEXT.md`
 - `TOOLING.md`
+- `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
 - `.claude/skills/ralph-*.md`
@@ -88,13 +89,39 @@ task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 
 Before coding a capability, discover in this order:
 
-1. matching PRD in `docs/prd/`
-2. matching engineering spec in `docs/spec/`
-3. matching OpenSpec capability in `openspec/specs/`
-4. active change plan in `openspec/changes/<name>/`
+1. active task in `IMPLEMENTATION_PLAN.md`
+2. matching PRD in `docs/prd/`
+3. matching engineering spec in `docs/spec/`
+4. matching OpenSpec capability in `openspec/specs/`
+5. active change plan in `openspec/changes/<name>/`
 
 If planning and implementation artifacts conflict, fix planning artifacts first.
 If discovery artifacts conflict with each other, update them before implementing.
+
+## Cross-Boundary Contract Rule
+
+When a change writes data consumed by another subsystem, identify the consumer
+before implementation and verify the producer emits the consumer's canonical
+representation. This applies to config editors, persistence records, actor
+messages, protocol payloads, tool schemas, and security policy inputs.
+
+For configuration changes, tests must prove both:
+
+- invalid or unresolved values are rejected before persistence
+- persisted values match what runtime ACL/routing/startup code expects
+
+Do not treat UI-level save success or schema validity as sufficient when runtime
+behavior depends on provider IDs, canonical names, permissions, or security
+policy keys.
+
+## Automation Floor
+
+Recent regressions define mandatory automated proof classes. TUI text input must
+have headless typed-key coverage and native smoke coverage for critical flows.
+Dynamic validation must have fake-failure tests proving save is blocked before
+persistence. Legacy/new config paradigm changes must have load/round-trip tests
+from the old shape to the runtime-consumed shape. Human manual testing is a
+last-mile confidence check, not a substitute for these gates.
 
 ## Configuration Schema Sync Rule
 

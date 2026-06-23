@@ -418,6 +418,38 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void GoBack_FromRoleOverview_NavigatesToConfigWhenEmbedded()
+    {
+        using var vm = CreateViewModel();
+        vm.IsEmbeddedInConfig = true;
+        vm.CurrentState.Value = ModelManagerState.RoleOverview;
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
+        vm.GoBack();
+
+        Assert.Equal("/config", route);
+    }
+
+    [Fact]
+    public void GoBack_FromRoleOverview_DoesNotNavigateWhenStandalone()
+    {
+        // Standalone `netclaw model` host: IsEmbeddedInConfig stays false (no EmbeddedConfigHostMarker
+        // in DI). Backing out past the root must NOT navigate to /config — that route is not
+        // registered in the standalone host, and the previous code both navigated and Shutdown(),
+        // which in the embedded host dropped the queued nav and quit the whole config app.
+        using var vm = CreateViewModel();
+        Assert.False(vm.IsEmbeddedInConfig);
+        vm.CurrentState.Value = ModelManagerState.RoleOverview;
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
+        vm.GoBack();
+
+        Assert.Null(route);
+    }
+
+    [Fact]
     public void Refresh_PopulatesDisplayNameFromRegistry()
     {
         WriteConfig(new Dictionary<string, object>

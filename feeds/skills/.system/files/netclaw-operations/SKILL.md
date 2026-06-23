@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.11.2"
+  version: "2.14.0"
 ---
 
 # Netclaw Operations
@@ -246,38 +246,79 @@ the user to add the path to trusted roots in config.
 
 ## Background Jobs
 
-Shell commands expected to run longer than the session timeout can be submitted
-as background jobs. Background jobs run independently of the session — results
-are delivered asynchronously when the job completes, even if the session was
-passivated.
+A background job is a **detached process with no expectation of completion** —
+use it for anything that outlives a single tool call: long builds, test suites,
+dev servers, watchers. Output streams to the job's log file while it runs, and
+you are notified whenever the process terminates, by whatever cause.
 
 To submit: set `_background: true` in the `shell_execute` tool call metadata.
-Approval gates are evaluated before the job starts.
+Approval gates are evaluated before the job starts. The submit result includes
+the output log path.
+
+Lifecycle:
+
+- **No `_timeout_seconds` = no kill timer.** The job runs until it exits, you
+  cancel it, or the session passivates. A positive `_timeout_seconds` arms an
+  explicit kill timer.
+- **Jobs are killed when the session passivates** (conversation idle past the
+  idle timeout). A job killed this way shows as `reaped` in
+  `[active-background-jobs]` on your next turn — its process is gone; resubmit
+  if still needed (its output log remains readable). For work that must survive
+  an idle conversation, use a scheduled task; check-back reminders also keep
+  the session (and its jobs) alive across a long wait.
+- On daemon restart, running jobs are killed and you receive a `lost`
+  notification with the log path — relaunch if still needed.
+- Process exit (success or failure) delivers a result turn with exit code,
+  output tail, and log path — even if the session was passivated mid-flight.
+
+Monitoring a running job (e.g. waiting for a dev server to come up):
+
+- `file_read`/`grep` the output log — it streams live (secret-redacted,
+  rotation-bounded) at `~/.netclaw/jobs/{id}/output.log`.
+- `check_background_job(JobId: "id")` — status, elapsed time, live output tail
+- Probe the service directly (e.g. curl the port) once the log shows it started.
+- `check_background_job(JobId: "id", Cancel: true)` — cancel a running job.
+  **Cancel servers and watchers when you are done validating** — do not leave
+  them holding one of the 5 concurrent job slots.
 
 Rules:
 
 - Only `shell_execute` supports background mode. Other tools ignore `_background`.
 - `_timeout_seconds` alone does NOT trigger background execution.
+- For synchronous calls `_timeout_seconds` is honored as you set it (no ceiling
+  or floor); when omitted, the default tool timeout applies. Background jobs
+  differ: omitted means no timer at all.
+- Synchronous tool timeouts are wall-clock budgets for opaque tools; repeated
+  stdout/progress output does not extend them. `spawn_agent` is self-monitoring:
+  the parent only guards startup silence, and the subagent reports its own stall
+  or success once it has started.
+- **Long-running delegation calls** (e.g. `curl` to a local coding-agent or
+  model server that takes minutes to respond) should run as background jobs.
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json`.
-- Output is captured (bounded; head+tail for very large output) to
-  `~/.netclaw/jobs/{id}/output.log` — `file_read`/`grep` it for detail beyond the tail.
-
-Monitoring tools:
-
-- `check_background_job(JobId: "id")` — query status, elapsed time, output tail
-- `check_background_job(JobId: "id", Cancel: true)` — cancel a running job
 
 `check_background_job` is only available when shell execution is granted (same
 `shell` grant category). It validates that the requesting session matches the
 submitting session's audience and boundary.
 
-After submitting a background job, schedule a check-back reminder so you report
-results proactively when the job completes.
+After submitting a long finite job, schedule a check-back reminder so you report
+results proactively when it completes.
 
 Active background jobs appear in the `[active-background-jobs]` section of the
 session context on every turn.
+
+## Tool argument validation
+
+Tool argument names are validated strictly — unrecognized keys reject the call
+before execution with a `did you mean '<canonical>'?` suggestion and the list
+of valid argument names. Meta keys are exact-match: `_timeout_seconds` and
+`_background` (a leading underscore, snake_case). `TimeoutSeconds`,
+`timeout_seconds`, or `_timeoutSeconds` are rejected, never silently dropped.
+Values must parse as their declared type: `_timeout_seconds: "1200ms"` or
+`_background: "yes"` rejects the call instead of silently using defaults. When
+a call is rejected this way the tool did NOT run — fix the argument and
+re-issue once; do not retry the same shape.
 
 ## Large tool output
 
@@ -724,8 +765,10 @@ Rules:
   form unless the operator provides a configuration-style colon path.
 - `netclaw secrets add` is an alias for `set` and overwrites the same effective
   path.
-- Re-running `netclaw init` updates secret values explicitly entered in the
-  wizard while preserving unrelated secrets.
+- Re-running `netclaw init` on an existing install opens an action menu
+  (`Redo identity setup`, `Open configuration editor`, `Start over from
+  scratch`, `Cancel`) rather than re-walking setup. Update individual secrets
+  with `netclaw secrets set` or the relevant `netclaw config` editor.
 - If a channel reports a 401 or invalid-token error, rotate the relevant secret
   and restart the daemon so the channel reloads config.
 
@@ -905,22 +948,31 @@ Exposure diagnostics are fail-closed:
   `cloudflare-tunnel`) require their local tunnel process by default.
   `Daemon.SkipTunnelProcessCheck=true` is an explicit opt-in only for sidecar or
   host-managed tunnel topologies; all other exposure requirements still apply.
+- The `netclaw config` Exposure Mode editor preserves dormant reverse-proxy
+  values in `~/.netclaw/config/editor-state.json` when switching to `local` or a
+  tunnel mode. Runtime-active `Daemon.Host` and `Daemon.TrustedProxies` are
+  removed from `netclaw.json` while inactive so local startup validation remains
+  loopback-only. Treat `editor-state.json` as passive editor state, not daemon
+  configuration.
 
-The `netclaw init` wizard's Network Exposure step offers all five modes —
-`local`, `reverse-proxy`, `tailscale-serve`, `tailscale-funnel`,
-`cloudflare-tunnel`. Selecting `reverse-proxy` adds two follow-up prompts that
-collect `Daemon.Host` (must be non-loopback) and `Daemon.TrustedProxies` (≥1
-entry required, comma-separated). The wizard refuses to advance past the
-trusted-proxies prompt with an empty list — the same minimum the daemon
-validator enforces at startup — so an operator who does not yet know their
-proxy IP should choose `local` and re-run `netclaw init` later, supplying the
-bind address and trusted proxies on the second pass once the proxy topology
-is known.
+Network exposure is configured in `netclaw config` → Security & Access →
+Exposure Mode — not in first-run `netclaw init`, which is a minimal bootstrap
+(Provider → Identity → Security Posture → Enabled Features → Health Check).
+The exposure editor offers all five modes — `local`, `reverse-proxy`,
+`tailscale-serve`, `tailscale-funnel`, `cloudflare-tunnel`. Selecting
+`reverse-proxy` collects `Daemon.Host` (must be non-loopback) and
+`Daemon.TrustedProxies` (≥1 entry required, comma-separated). The editor
+refuses to save past the trusted-proxies prompt with an empty list — the same
+minimum the daemon validator enforces at startup — so an operator who does not
+yet know their proxy IP can leave exposure at `local` and set the bind address
+and trusted proxies later once the proxy topology is known.
 
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
-`~/.netclaw/config/secrets.json` (credentials — never display API keys).
+`~/.netclaw/config/secrets.json` (credentials — never display API keys), and
+`~/.netclaw/config/editor-state.json` (passive config-editor state for dormant
+mode-specific values).
 
 ## Feature Kill Switches
 

@@ -26,6 +26,14 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     public const string ToolName = "shell_execute";
 
+    // Fallback wall-clock timeout used only when ShellTool runs without a
+    // pipeline-provided context (direct/test calls). In the session pipeline
+    // the per-call timeout always arrives via ToolExecutionContext
+    // .RequestedTimeoutSeconds (SessionConfig.ToolExecutionTimeout, or the
+    // agent's honored _timeout_seconds hint), so this default is just a safety
+    // net against an unbounded process.
+    private const int DefaultTimeoutSeconds = 90;
+
     // Shell output is mostly verbose noise the model skims, so bound it
     // aggressively: small inline head+tail, full output spilled to a session file
     // to grep. Content tools (file_read, web_fetch, MCP) keep the larger session
@@ -137,7 +145,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
         var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
             ? context.RequestedTimeoutSeconds.Value
-            : _config.ShellTimeoutSeconds;
+            : DefaultTimeoutSeconds;
 
         using var timeoutCts = new CancellationTokenSource();
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -245,7 +253,8 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     /// <summary>
     /// Streams stdout/stderr as <see cref="ToolActivityUpdate"/> items while the
-    /// process runs, keeping the per-call inactivity watchdog alive. The terminal
+    /// process runs. Shell output is live display data only; the parent pipeline
+    /// still treats shell as opaque and enforces a wall-clock budget. The terminal
     /// <see cref="ToolCompletedUpdate"/> carries the same bounded head+tail result
     /// as the non-streaming path.
     /// </summary>
@@ -379,14 +388,12 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
             var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
                 ? context.RequestedTimeoutSeconds.Value
-                : _config.ShellTimeoutSeconds;
+                : DefaultTimeoutSeconds;
 
-            // Wall-clock ceiling: the watchdog's inactivity budget resets on
-            // each activity item (keeping chatty commands alive), but a command
-            // that trickles output can run indefinitely without a hard cap.
-            // This CTS enforces the same absolute wall-clock limit that the
-            // non-streaming path uses via its own CancelAfter — whichever
-            // fires first (inactivity watchdog or wall-clock) wins.
+            // Wall-clock ceiling matching the non-streaming path. The parent
+            // pipeline also bounds opaque shell calls by wall-clock time, but the
+            // tool keeps its own process-level cap so direct callers and cleanup
+            // semantics stay consistent.
             using var wallClockCts = new CancellationTokenSource();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, wallClockCts.Token);
             wallClockCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));

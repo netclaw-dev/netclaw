@@ -57,12 +57,14 @@ public sealed class WizardContext : IDisposable
     public required Action RequestRedraw { get; init; }
 
     /// <summary>
-    /// Null for fresh init. When populated, steps should pre-populate their
-    /// fields from the existing config. (Deferred — not implemented yet.)
+    /// Null for fresh init. When populated, steps may pre-populate their
+    /// non-secret fields from the existing on-disk config.
     ///
-    /// Re-edit UX intent: when existing config is detected, the wizard should
-    /// offer "Start fresh" vs "Modify existing". "Start fresh" does NOT wipe
-    /// existing files until the health check/validate stage completes successfully.
+    /// Secrets are intentionally excluded from this snapshot. Secret-bearing UI
+    /// must use presence-only checks against secrets.json and keep fields blank.
+    ///
+    /// Re-edit UX intent: this supports init-owned re-entry for shared leaves,
+    /// not init as the long-term settings editor.
     /// </summary>
     public Dictionary<string, object>? ExistingConfig { get; init; }
 

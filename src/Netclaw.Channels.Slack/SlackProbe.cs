@@ -40,7 +40,7 @@ public interface ISlackProbe
     Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default);
 
     /// <summary>
-    /// Resolves user-provided channel names to Slack channel IDs via <c>conversations.list</c>.
+    /// Resolves user-provided channel names or IDs to Slack channel IDs via <c>conversations.list</c>.
     /// </summary>
     Task<SlackChannelResolutionResult> ResolveChannelNamesAsync(
         string botToken, IReadOnlyList<string> channelNames, CancellationToken ct = default);
@@ -161,11 +161,13 @@ public sealed class SlackProbe : ISlackProbe
                         if (id is null) continue;
 
                         // Check if this channel matches any remaining name (case-insensitive)
+                        // or an already-resolved channel ID from an existing config.
                         string? matchedInput = null;
                         foreach (var input in remaining)
                         {
                             if (string.Equals(input, name, StringComparison.OrdinalIgnoreCase) ||
-                                string.Equals(input, nameNormalized, StringComparison.OrdinalIgnoreCase))
+                                string.Equals(input, nameNormalized, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(input, id, StringComparison.Ordinal))
                             {
                                 matchedInput = input;
                                 break;
@@ -174,7 +176,7 @@ public sealed class SlackProbe : ISlackProbe
 
                         if (matchedInput is not null)
                         {
-                            resolved.Add(new ResolvedSlackChannel(matchedInput, id));
+                            resolved.Add(new ResolvedSlackChannel(name ?? nameNormalized ?? matchedInput, id));
                             remaining.Remove(matchedInput);
                         }
                     }

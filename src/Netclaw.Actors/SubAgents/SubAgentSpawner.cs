@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentSpawner.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -156,9 +156,11 @@ public sealed class SubAgentSpawner
                     ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge,
-                    // Null for non-streaming callers such as routed skills and
-                    // the legacy ExecuteAsync path. Streaming spawn_agent calls
-                    // pass a real sink so parent tool liveness sees progress.
+                    // Null for non-streaming callers such as routed skills and the
+                    // legacy ExecuteAsync path; the sub-agent surfaces its progress
+                    // through its own session-correlated logs regardless. Streaming
+                    // spawn_agent calls pass a real sink so the parent tool's
+                    // liveness watchdog sees progress.
                     ActivitySink = activitySink
                 },
                 // No Ask timeout: a healthy run is bounded by the sub-agent's own
@@ -168,9 +170,9 @@ public sealed class SubAgentSpawner
                 // including keepalives) and the no-progress deadline (keepalives but
                 // no real tokens for NoProgressTimeoutSeconds). ct — the spawning
                 // tool call's token — only adds parent-turn / user cancellation on
-                // top; note the parent's own per-call watchdog does NOT bound a
-                // keepalive wedge, because the sub-agent emits liveness activity on
-                // every keepalive, which refreshes it.
+                // top; once streaming spawn_agent has emitted its first activity,
+                // the parent no longer applies an inter-item watchdog. Keepalive
+                // wedges are bounded by the sub-agent's own no-progress watchdog.
                 timeout: Timeout.InfiniteTimeSpan,
                 cancellationToken: ct);
 
@@ -237,7 +239,10 @@ public sealed class SubAgentSpawner
             }
             else
             {
-                _logger.LogDebug(
+                // Log at INFO so tool denials are visible in production logs.
+                // Sub-agents without certain tools may be unable to complete
+                // their tasks, and this information is important for debugging.
+                _logger.LogInformation(
                     "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy",
                     profile.Name, tool.Name);
             }

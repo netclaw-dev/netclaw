@@ -6,6 +6,25 @@
 namespace Netclaw.Tools;
 
 /// <summary>
+/// Describes who owns stall detection for a tool call.
+/// </summary>
+public enum ToolLivenessMode
+{
+    /// <summary>
+    /// The tool does not expose reliable internal stall detection. The parent
+    /// tool pipeline bounds the whole call with a wall-clock budget.
+    /// </summary>
+    Opaque,
+
+    /// <summary>
+    /// The tool has its own internal watchdogs and returns a terminal success or
+    /// failure result when it detects a stall. The parent pipeline only guards
+    /// the wait for the first stream item.
+    /// </summary>
+    SelfMonitoring
+}
+
+/// <summary>
 /// One item in a streaming tool-call result. A tool invocation yields zero or
 /// more non-terminal <see cref="ToolActivityUpdate"/> items followed by exactly
 /// one terminal <see cref="ToolCompletedUpdate"/>.
@@ -13,9 +32,10 @@ namespace Netclaw.Tools;
 public interface ToolCallUpdate;
 
 /// <summary>
-/// A non-terminal progress/liveness signal emitted while a tool is still
-/// running. Activity items drive the per-call inactivity watchdog and an
-/// optional live output relay; they are never accumulated into LLM context.
+/// A non-terminal activity signal emitted while a tool is still running.
+/// Activity items may feed live output relays, but their liveness meaning is
+/// determined by the tool's <see cref="ToolLivenessMode"/>. They are never
+/// accumulated into LLM context.
 /// </summary>
 /// <param name="Phase">A short label describing what the tool is doing.</param>
 /// <param name="OutputChunk">
@@ -25,8 +45,8 @@ public sealed record ToolActivityUpdate(string Phase, string? OutputChunk = null
 {
     /// <summary>
     /// True when the tool is intentionally blocked on external input, such as a
-    /// human approval prompt. The watchdog resumes on the next non-suspending
-    /// activity item or terminal completion.
+    /// human approval prompt. This only affects reset-on-item watchdog mode;
+    /// opaque wall-clock budgets are not extended by activity.
     /// </summary>
     public bool SuspendsInactivityWatchdog { get; init; }
 }

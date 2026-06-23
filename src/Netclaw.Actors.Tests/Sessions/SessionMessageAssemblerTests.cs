@@ -378,6 +378,56 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
+    public void Public_audience_suppresses_active_background_jobs_block()
+    {
+        // The active-jobs block exposes commands, rationales, and the on-disk
+        // output-log path — internal operational state that must not leak to a
+        // Public-scoped turn on a session that started jobs at a higher audience.
+        var stateWithJob = SessionState.Empty.TrackBackgroundJob(
+            "bg-job:secret01",
+            new Netclaw.Actors.Jobs.ActiveJobInfo
+            {
+                JobId = new Netclaw.Actors.Jobs.BackgroundJobId("secret01"),
+                Command = "deploy --token hunter2",
+                Rationale = "internal deploy",
+                StartedAtMs = 1000,
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.Personal,
+                OutputLogPath = "/home/op/.netclaw/jobs/secret01/output.log"
+            }) with { History = SeedHistory("hi") };
+        var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Public)
+            with { State = stateWithJob };
+
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
+        Assert.DoesNotContain("[active-background-jobs]", block);
+        Assert.DoesNotContain("secret01", block);
+        Assert.DoesNotContain("output.log", block);
+    }
+
+    [Fact]
+    public void Personal_audience_includes_active_background_jobs_block()
+    {
+        var stateWithJob = SessionState.Empty.TrackBackgroundJob(
+            "bg-job:job01",
+            new Netclaw.Actors.Jobs.ActiveJobInfo
+            {
+                JobId = new Netclaw.Actors.Jobs.BackgroundJobId("job01"),
+                Command = "jekyll serve",
+                Rationale = "dev server",
+                StartedAtMs = 1000,
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.Personal,
+                OutputLogPath = "/home/op/.netclaw/jobs/job01/output.log"
+            }) with { History = SeedHistory("hi") };
+        var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Personal)
+            with { State = stateWithJob };
+
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
+        Assert.Contains("[active-background-jobs]", block);
+        Assert.Contains("job01", block);
+    }
+
+    [Fact]
     public void Personal_audience_includes_working_context_in_volatile_block()
     {
         // Working-context inclusion is audience-gated inside

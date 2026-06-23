@@ -1,0 +1,168 @@
+// -----------------------------------------------------------------------
+// <copyright file="SectionEditorLeafTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using Netclaw.Cli.Provider;
+using Netclaw.Cli.Tui.Sections;
+using Netclaw.Cli.Tui.Wizard;
+using Netclaw.Cli.Tui.Wizard.Steps;
+using Netclaw.Configuration;
+using Xunit;
+
+namespace Netclaw.Cli.Tests.Tui.Wizard;
+
+public sealed class ProviderSectionEditorTests : SectionEditorTestBase<ProviderStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_EnteredCredential_EmitsSensitiveSecretLeaf()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedProviderType = "openai";
+        editor.SelectedModelId = "gpt-4.1";
+        editor.ApiKeyInput = "sk-test";
+
+        var contribution = editor.BuildContribution(editor);
+        var action = Assert.Single(contribution.SecretActionsOrEmpty);
+
+        Assert.Equal("Providers.openai.ApiKey", action.Path);
+        Assert.Equal(SectionSecretActionKind.Set, action.Action);
+        Assert.NotNull(action.Value);
+        Assert.Equal("sk-test", action.Value.Value);
+    }
+
+    [Fact]
+    public void BuildContribution_BlankCredential_PreservesExistingSecret()
+    {
+        File.WriteAllText(Context.Paths.SecretsPath, """
+            { "Providers": { "openai": { "ApiKey": "ENC:stored" } } }
+            """);
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = ProviderCommand.CreateDefaultRegistry(),
+            RequestRedraw = () => { },
+            ExistingConfig = new Dictionary<string, object>
+            {
+                ["Models"] = new Dictionary<string, object>
+                {
+                    ["Main"] = new Dictionary<string, object> { ["Provider"] = "openai", ["ModelId"] = "gpt-4.1" }
+                },
+                ["Providers"] = new Dictionary<string, object>
+                {
+                    ["openai"] = new Dictionary<string, object> { ["Type"] = "openai", ["AuthMethod"] = "ApiKey" }
+                }
+            }
+        };
+
+        using var editor = CreateEditor();
+        editor.OnEnter(context, NavigationDirection.Forward);
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.SecretActionsOrEmpty, a => a.Action == SectionSecretActionKind.Preserve);
+    }
+}
+
+public sealed class IdentitySectionEditorTests : SectionEditorTestBase<IdentityStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_WritesSyntheticIdentityFields()
+    {
+        using var editor = CreateEditor();
+        editor.AgentName = "Netclaw";
+        editor.UserTimezone = "UTC";
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Identity.AgentName");
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Identity.UserTimezone");
+
+        // Workspaces directory and notification webhooks are post-install settings
+        // owned by `netclaw config`; the init Identity editor must not contribute them.
+        Assert.DoesNotContain(contribution.FieldActionsOrEmpty, a => a.Path == "Workspaces.Directory");
+        Assert.DoesNotContain(contribution.FieldActionsOrEmpty, a => a.Path == "Notifications");
+    }
+}
+
+public sealed class SecurityPostureSectionEditorTests : SectionEditorTestBase<SecurityPostureStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_PersonalPosture_PreservesShellApprovalDefaults()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedPosture = DeploymentPosture.Personal;
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Security.DeploymentPosture" && Equals(a.Value, "Personal"));
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Tools");
+    }
+}
+
+public sealed class FeatureSelectionSectionEditorTests : SectionEditorTestBase<FeatureSelectionStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_EmitsEnabledFlagsForAllFeatureLeaves()
+    {
+        using var editor = CreateEditor();
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            SelectedPosture = DeploymentPosture.Team
+        };
+        editor.OnEnter(context, NavigationDirection.Forward);
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Equal(6, contribution.FieldActionsOrEmpty.Count);
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Memory.Enabled");
+        Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Webhooks.Enabled");
+    }
+}
+
+public sealed class ExposureModeSectionEditorTests : SectionEditorTestBase<ExposureModeStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_ReverseProxy_EmitsExistingDaemonShapeFields()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedMode = ExposureMode.ReverseProxy;
+        editor.Host = "10.0.0.5";
+        editor.TrustedProxies = ["10.0.0.0/24"];
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.ExposureMode" && Equals(a.Value, "reverse-proxy"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.Host" && Equals(a.Value, "10.0.0.5"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.TrustedProxies" && Assert.IsType<string[]>(a.Value).SequenceEqual(["10.0.0.0/24"]));
+    }
+
+    [Fact]
+    public void BuildContribution_Local_StashesInactiveReverseProxyFields()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedMode = ExposureMode.Local;
+        editor.Host = "10.0.0.5";
+        editor.TrustedProxies = ["10.0.0.0/24"];
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.ExposureMode" && Equals(a.Value, "local"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.Host" && a.Action == SectionFieldActionKind.Delete);
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.TrustedProxies" && a.Action == SectionFieldActionKind.Delete);
+        Assert.Contains(contribution.StateActionsOrEmpty,
+            a => a is { SectionId: WizardStepIds.ExposureMode, Key: "ReverseProxy.Host", Action: SectionEditorStateActionKind.Set }
+                 && Equals(a.Value, "10.0.0.5"));
+        Assert.Contains(contribution.StateActionsOrEmpty,
+            a => a is { SectionId: WizardStepIds.ExposureMode, Key: "ReverseProxy.TrustedProxies", Action: SectionEditorStateActionKind.Set }
+                 && Assert.IsType<string[]>(a.Value).SequenceEqual(["10.0.0.0/24"]));
+    }
+}

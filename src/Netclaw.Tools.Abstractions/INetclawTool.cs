@@ -45,6 +45,14 @@ public interface INetclawTool
     string GrantCategory { get; }
 
     /// <summary>
+    /// Indicates who owns stall detection for this tool. Most tools are opaque:
+    /// the parent tool pipeline applies one wall-clock budget. Self-monitoring
+    /// tools, such as <c>spawn_agent</c>, report their own terminal failure when
+    /// their internal watchdogs detect a stall.
+    /// </summary>
+    ToolLivenessMode LivenessMode => ToolLivenessMode.Opaque;
+
+    /// <summary>
     /// Inline character budget for this tool's result before the dispatcher
     /// windows it (head+tail) and spills the full output to a session file with a
     /// steer. <c>0</c> means "use the session content budget"
@@ -90,7 +98,7 @@ public interface INetclawTool
     /// one terminal <see cref="ToolCompletedUpdate"/>. The default implementation
     /// runs the non-streaming context overload and yields its result as a single
     /// completion item, so tools that do not stream behave identically. Long-
-    /// running tools override this to emit liveness/progress while they work.
+    /// running tools override this to emit live activity while they work.
     /// </summary>
     async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,

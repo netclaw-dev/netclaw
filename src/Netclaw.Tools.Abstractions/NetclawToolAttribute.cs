@@ -27,4 +27,11 @@ public sealed class NetclawToolAttribute : Attribute
 
     /// <summary>ACL grant category for policy filtering (e.g. "shell", "file").</summary>
     public string Grant { get; set; } = "default";
+
+    /// <summary>
+    /// Declares how the tool is monitored for stalls. Defaults to opaque so
+    /// generated tools remain bounded by the parent pipeline unless they
+    /// explicitly opt into self-monitoring.
+    /// </summary>
+    public ToolLivenessMode Liveness { get; set; } = ToolLivenessMode.Opaque;
 }

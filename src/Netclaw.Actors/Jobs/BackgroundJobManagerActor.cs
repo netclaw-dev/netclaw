@@ -11,6 +11,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Jobs;
 
@@ -38,7 +39,6 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private readonly TimeProvider _timeProvider;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly ILoggingAdapter _log;
-    private bool _startupSchemaAlertsEmitted;
 
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
@@ -58,13 +58,18 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         Receive<BackgroundJobCompleted>(HandleCompleted);
         Receive<CancelBackgroundJob>(HandleCancel);
         Receive<QueryBackgroundJob>(HandleQuery);
-        Receive<Reconcile>(_ => HandleReconcile());
+        Receive<KillJobsForSession>(HandleKillJobsForSession);
+        Receive<GetBackgroundJobManagerHealth>(_ => HandleGetHealth());
     }
 
     protected override void PreStart()
     {
         _log.Info("BackgroundJobManagerActor started");
-        Self.Tell(Reconcile.Instance);
+        // Run synchronously in PreStart so reconciliation completes before any
+        // user message is dispatched. A Self.Tell approach races on slow schedulers
+        // (macOS CI): ActorOf returns before PreStart executes, allowing external
+        // messages to queue ahead of the Reconcile message.
+        HandleReconcile();
     }
 
     private async Task HandleStartAsync(StartBackgroundJob cmd)
@@ -91,17 +96,19 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         _store.Save(definition);
         _definitions[jobId.Value] = definition;
 
+        var outputLogPath = _store.GetOutputLogPathOnly(jobId);
+
         if (_activeJobIds.Count >= MaxConcurrentJobs)
         {
             _log.Info("Background job concurrency limit reached ({0}), queuing job {1}",
                 MaxConcurrentJobs, jobId.Value);
             _deferredQueue.Enqueue(jobId.Value);
-            Sender.Tell(new BackgroundJobStarted(jobId));
+            Sender.Tell(new BackgroundJobStarted(jobId, outputLogPath));
             return;
         }
 
         SpawnExecution(definition);
-        Sender.Tell(new BackgroundJobStarted(jobId));
+        Sender.Tell(new BackgroundJobStarted(jobId, outputLogPath));
     }
 
     private void HandleCompleted(BackgroundJobCompleted completed)
@@ -109,20 +116,65 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         _activeJobIds.Remove(completed.JobId.Value);
 
         BackgroundJobDefinition? def = null;
+        var wasReaped = false;
         if (_definitions.TryGetValue(completed.JobId.Value, out var existing))
         {
+            // A reaped job's child reports Cancelled when its process dies, but
+            // the reap already decided the terminal status — keep Reaped and
+            // suppress delivery (delivering would rehydrate the session that
+            // passivated).
+            wasReaped = existing.Status is BackgroundJobStatus.Reaped;
             def = existing with
             {
-                Status = completed.Status,
+                Status = wasReaped ? BackgroundJobStatus.Reaped : completed.Status,
                 ExitCode = completed.ExitCode,
                 CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
             };
             _store.Save(def);
         }
 
-        DeliverResultToSession(completed, def);
+        if (!wasReaped)
+            DeliverResultToSession(completed, def);
+
         _definitions.Remove(completed.JobId.Value);
         DispatchDeferred();
+    }
+
+    private void HandleKillJobsForSession(KillJobsForSession cmd)
+    {
+        var owned = _definitions.Values
+            .Where(d => d.SessionId == cmd.SessionId
+                        && d.Status is BackgroundJobStatus.Running or BackgroundJobStatus.Pending)
+            .ToList();
+
+        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        foreach (var def in owned)
+        {
+            var reaped = def with
+            {
+                Status = BackgroundJobStatus.Reaped,
+                CompletedAtMs = nowMs
+            };
+            _definitions[def.Id.Value] = reaped;
+            _store.Save(reaped);
+
+            var child = Context.Child($"job-{def.Id.Value}");
+            if (!child.IsNobody())
+            {
+                // The child kills its process tree on cancel and reports back;
+                // HandleCompleted sees the Reaped status and suppresses delivery.
+                child.Tell(new CancelBackgroundJob(def.Id, def.SessionId, def.Audience, def.Boundary));
+            }
+
+            _log.Info("Reaped background job {JobId} for passivating session {SessionId}",
+                def.Id, cmd.SessionId);
+        }
+
+        // Ack after kills are initiated and definitions marked — process death
+        // follows from the child's synchronous Kill(entireProcessTree) on the
+        // cancel message; a wedged child is backstopped by its PostStop kill
+        // and, ultimately, daemon teardown (no job process outlives the daemon).
+        Sender.Tell(new SessionJobsReaped(cmd.SessionId, owned.Count));
     }
 
     private void HandleCancel(CancelBackgroundJob cmd)
@@ -191,9 +243,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         var outputFileExists = false;
         try
         {
-            var text = File.ReadAllText(outputFilePath);
+            // Bounded seek-from-end: the log streams while the job runs and is
+            // rotation-capped at megabytes — never load the whole file for a tail.
+            (outputTail, _) = JobOutputLog.ReadTail(outputFilePath, MaxOutputTailChars);
+            // Re-redact the multi-line tail: the on-disk log is redacted per line,
+            // which misses secrets spanning line boundaries before they reach the LLM.
+            outputTail = SecretOutputRedactor.Redact(outputTail);
             outputFileExists = true;
-            outputTail = text.Length > MaxOutputTailChars ? text[^MaxOutputTailChars..] : text;
         }
         catch (FileNotFoundException) { } // slopwatch-ignore: SW003 output file may not exist yet for running jobs
         catch (DirectoryNotFoundException) { } // slopwatch-ignore: SW003 job output directory may not exist yet for running jobs
@@ -221,14 +277,15 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         });
     }
 
+    private void HandleGetHealth()
+    {
+        Sender.Tell(new BackgroundJobManagerHealthResponse(_activeJobIds.Count, _deferredQueue.Count));
+    }
+
     private void HandleReconcile()
     {
         var persisted = _store.List();
-        if (!_startupSchemaAlertsEmitted)
-        {
-            EmitRejectedLegacyDefinitionAlerts();
-            _startupSchemaAlertsEmitted = true;
-        }
+        EmitRejectedLegacyDefinitionAlerts();
 
         var reconciled = 0;
 
@@ -237,16 +294,25 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             var current = def;
             if (def.Status is BackgroundJobStatus.Running or BackgroundJobStatus.Pending)
             {
+                var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
                 current = def with
                 {
                     Status = BackgroundJobStatus.Lost,
-                    CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                    CompletedAtMs = nowMs
                 };
                 _store.Save(current);
                 reconciled++;
 
                 _log.Warning("Reconciled orphaned background job {JobId} as lost (process lost during restart)",
                     def.Id);
+
+                // Termination is a notification, whatever its cause — tell the
+                // owning session its process is gone so the agent can relaunch.
+                // Volume is bounded: passivated sessions have no live jobs, so
+                // only sessions that were warm at crash time appear here. The
+                // streamed log holds everything the process said before the
+                // daemon died.
+                NotifyLostJob(current, nowMs);
             }
 
             _definitions[current.Id.Value] = current;
@@ -254,6 +320,35 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         if (reconciled > 0)
             _log.Info("Background job startup reconciliation: marked {0} orphaned job(s) as lost", reconciled);
+    }
+
+    private void NotifyLostJob(BackgroundJobDefinition lost, long nowMs)
+    {
+        var outputFilePath = _store.GetOutputLogPathOnly(lost.Id);
+        string? outputTail = null;
+        try
+        {
+            (outputTail, _) = JobOutputLog.ReadTail(outputFilePath, MaxOutputTailChars);
+            // Re-redact the multi-line tail before it is delivered to the session.
+            outputTail = SecretOutputRedactor.Redact(outputTail);
+        }
+        catch (FileNotFoundException) { } // slopwatch-ignore: SW003 job may have produced no output before the restart
+        catch (DirectoryNotFoundException) { } // slopwatch-ignore: SW003 job may have produced no output before the restart
+        catch (Exception ex)
+        {
+            _log.Warning("Failed to read output log for lost job {JobId}: {Error}",
+                lost.Id.Value, ex.Message);
+        }
+
+        DeliverResultToSession(new BackgroundJobCompleted
+        {
+            JobId = lost.Id,
+            Status = BackgroundJobStatus.Lost,
+            ExitCode = -1,
+            OutputTail = outputTail,
+            OutputFilePath = File.Exists(outputFilePath) ? outputFilePath : null,
+            Duration = TimeSpan.FromMilliseconds(Math.Max(0, nowMs - lost.StartedAtMs))
+        }, lost);
     }
 
     private void EmitRejectedLegacyDefinitionAlerts()
@@ -301,7 +396,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         {
             var jobId = _deferredQueue.Dequeue();
             if (!_definitions.TryGetValue(jobId, out var def)
-                || def.Status is BackgroundJobStatus.Cancelled)
+                || def.Status is BackgroundJobStatus.Cancelled or BackgroundJobStatus.Reaped)
                 continue;
 
             SpawnExecution(def);
@@ -378,6 +473,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             BackgroundJobStatus.Failed => $"failed with exit code {completed.ExitCode}",
             BackgroundJobStatus.TimedOut => "timed out",
             BackgroundJobStatus.Cancelled => "was cancelled",
+            BackgroundJobStatus.Lost => "was lost — its process did not survive a daemon restart; relaunch it if still needed",
             _ => $"finished with status {completed.Status}"
         };
 
@@ -399,8 +495,4 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                output + filePath;
     }
 
-    private sealed record Reconcile : INoSerializationVerificationNeeded
-    {
-        public static readonly Reconcile Instance = new();
-    }
 }

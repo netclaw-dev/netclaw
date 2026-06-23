@@ -14,56 +14,85 @@ namespace Netclaw.Configuration.Tests;
 /// </summary>
 public sealed class ToolAudienceProfileDefaultsTests
 {
-    [Fact]
-    public void Public_default_grants_read_list_and_attach_only()
+    public static TheoryData<TrustAudience, string[]> DefaultAllowlists => new()
     {
-        var publicProfile = ToolAudienceProfileDefaults.CreatePublic();
+        {
+            TrustAudience.Public,
+            [
+                ToolAudienceProfileToolCatalog.FileRead,
+                ToolAudienceProfileToolCatalog.FileList,
+                ToolAudienceProfileToolCatalog.AttachFile
+            ]
+        },
+        {
+            TrustAudience.Team,
+            [
+                ToolAudienceProfileToolCatalog.FileRead,
+                ToolAudienceProfileToolCatalog.FileList,
+                ToolAudienceProfileToolCatalog.FileWrite,
+                ToolAudienceProfileToolCatalog.FileEdit,
+                ToolAudienceProfileToolCatalog.AttachFile,
+                ToolAudienceProfileToolCatalog.WebSearch,
+                ToolAudienceProfileToolCatalog.WebFetch,
+                ToolAudienceProfileToolCatalog.SkillManage,
+                ToolAudienceProfileToolCatalog.SetReminder,
+                ToolAudienceProfileToolCatalog.ListReminders,
+                ToolAudienceProfileToolCatalog.CancelReminder,
+                ToolAudienceProfileToolCatalog.GetReminderHistory,
+                ToolAudienceProfileToolCatalog.SetWorkingDirectory
+            ]
+        }
+    };
 
-        Assert.Equal(
-            ["file_read", "file_list", "attach_file"],
-            publicProfile.AllowedTools);
-        Assert.DoesNotContain("file_write", publicProfile.AllowedTools);
-        Assert.DoesNotContain("file_edit", publicProfile.AllowedTools);
+    public static TheoryData<TrustAudience, string[]> DefaultExcludedTools => new()
+    {
+        {
+            TrustAudience.Public,
+            [
+                ToolAudienceProfileToolCatalog.FileWrite,
+                ToolAudienceProfileToolCatalog.FileEdit,
+                ToolAudienceProfileToolCatalog.WebSearch,
+                ToolAudienceProfileToolCatalog.WebFetch
+            ]
+        },
+        {
+            TrustAudience.Team,
+            [
+                ToolAudienceProfileToolCatalog.ShellExecute,
+                ToolAudienceProfileToolCatalog.SetWebhook,
+                ToolAudienceProfileToolCatalog.ListWebhooks,
+                ToolAudienceProfileToolCatalog.DeleteWebhook
+            ]
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(DefaultAllowlists))]
+    public void Default_allowlists_match_expected_catalog_tools(TrustAudience audience, string[] expectedTools)
+    {
+        Assert.Equal(expectedTools, GetDefaultCatalogTools(audience));
+        Assert.Equal(expectedTools, GetDefaultProfile(audience).AllowedTools);
     }
 
     [Fact]
-    public void Team_default_grants_file_web_scheduling_and_skill_tools()
+    public void Profile_managed_catalog_covers_default_team_shell_and_webhook_tools()
     {
-        var team = ToolAudienceProfileDefaults.CreateTeam().AllowedTools;
+        var profileManaged = ToolAudienceProfileToolCatalog.ProfileManagedTools;
 
-        Assert.Contains("file_read", team);
-        Assert.Contains("file_list", team);
-        Assert.Contains("file_write", team);
-        Assert.Contains("file_edit", team);
-        Assert.Contains("attach_file", team);
-        Assert.Contains("web_search", team);
-        Assert.Contains("web_fetch", team);
-        Assert.Contains("skill_manage", team);
-        Assert.Contains("set_reminder", team);
-        Assert.Contains("list_reminders", team);
-        Assert.Contains("cancel_reminder", team);
-        Assert.Contains("get_reminder_history", team);
-        Assert.Contains("set_working_directory", team);
+        Assert.All(ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools,
+            tool => Assert.Contains(tool, profileManaged));
+        Assert.Contains(ToolAudienceProfileToolCatalog.ShellExecute, profileManaged);
+        Assert.All(ToolAudienceProfileToolCatalog.WebhookTools,
+            tool => Assert.Contains(tool, profileManaged));
     }
 
-    [Fact]
-    public void Public_default_excludes_outbound_web_tools()
+    [Theory]
+    [MemberData(nameof(DefaultExcludedTools))]
+    public void Default_allowlists_exclude_restricted_tools(TrustAudience audience, string[] excludedTools)
     {
-        var publicProfile = ToolAudienceProfileDefaults.CreatePublic();
+        var allowedTools = GetDefaultProfile(audience).AllowedTools;
 
-        Assert.DoesNotContain("web_search", publicProfile.AllowedTools);
-        Assert.DoesNotContain("web_fetch", publicProfile.AllowedTools);
-    }
-
-    [Fact]
-    public void Team_default_excludes_shell_and_webhook_tools()
-    {
-        var team = ToolAudienceProfileDefaults.CreateTeam().AllowedTools;
-
-        Assert.DoesNotContain("shell_execute", team);
-        Assert.DoesNotContain("set_webhook", team);
-        Assert.DoesNotContain("list_webhooks", team);
-        Assert.DoesNotContain("delete_webhook", team);
+        Assert.All(excludedTools, tool => Assert.DoesNotContain(tool, allowedTools));
     }
 
     [Fact]
@@ -87,4 +116,21 @@ public sealed class ToolAudienceProfileDefaultsTests
         // Team ⊆ Personal — Personal grants every tool via ToolsMode.All.
         Assert.Equal(ToolProfileMode.All, ToolAudienceProfileDefaults.CreatePersonal().ToolsMode);
     }
+
+    private static ToolAudienceProfile GetDefaultProfile(TrustAudience audience)
+        => audience switch
+        {
+            TrustAudience.Public => ToolAudienceProfileDefaults.CreatePublic(),
+            TrustAudience.Team => ToolAudienceProfileDefaults.CreateTeam(),
+            TrustAudience.Personal => ToolAudienceProfileDefaults.CreatePersonal(),
+            _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, null)
+        };
+
+    private static IReadOnlyList<string> GetDefaultCatalogTools(TrustAudience audience)
+        => audience switch
+        {
+            TrustAudience.Public => ToolAudienceProfileToolCatalog.PublicDefaultAllowedTools,
+            TrustAudience.Team => ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools,
+            _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, null)
+        };
 }

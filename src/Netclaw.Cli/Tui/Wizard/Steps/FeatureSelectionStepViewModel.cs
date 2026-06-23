@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
@@ -11,7 +13,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for selecting which deployment-wide features are enabled.
 /// Only shown for Team and Public postures (not Personal).
 /// </summary>
-public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
+public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     private WizardContext? _context;
     private readonly bool[] _enabledFlags = new bool[6];
@@ -40,6 +42,11 @@ public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
 
     public string StepId => WizardStepIds.FeatureSelection;
     public string DisplayTitle => "Feature Selection";
+    public string SectionId => StepId;
+    public string DisplayName => "Enabled Features";
+    public string? Category => "Security & Access";
+    public bool ShowInMenu => true;
+    public IReadOnlyList<string> RelevantDoctorChecks => ["Config Schema"];
 
     public bool IsApplicable(WizardContext context) =>
         context.SelectedPosture != DeploymentPosture.Personal;
@@ -77,6 +84,9 @@ public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
 
         if (direction == NavigationDirection.Forward)
         {
+            if (TryPrefillFromExisting(context))
+                return;
+
             // Set defaults based on posture
             var allOn = context.SelectedPosture == DeploymentPosture.Team;
             Array.Fill(_enabledFlags, allOn);
@@ -124,6 +134,97 @@ public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
     {
         // No health check — feature selection is always valid
         return Task.CompletedTask;
+    }
+
+    public SectionStatus GetStatus(WizardContext context)
+        => _enabledFlags.Any(static v => v) || HasAnyExistingSelection(context)
+            ? SectionStatus.Configured
+            : SectionStatus.NotConfigured;
+
+    public string Summary(WizardContext context)
+    {
+        var enabled = CurrentEnabledFeatureNames(context).ToArray();
+        return enabled.Length == 0 ? "All optional features disabled" : string.Join(", ", enabled);
+    }
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => ActivatorUtilities.CreateInstance<FeatureSelectionStepViewModel>(services);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (FeatureSelectionStepViewModel)editor;
+        return new SectionContribution(
+        [
+            new SectionFieldAction("Memory.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[0]),
+            new SectionFieldAction("Search.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[1]),
+            new SectionFieldAction("SkillSync.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[2]),
+            new SectionFieldAction("Scheduling.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[3]),
+            new SectionFieldAction("SubAgents.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[4]),
+            new SectionFieldAction("Webhooks.Enabled", SectionFieldActionKind.Set, vm._enabledFlags[5])
+        ]);
+    }
+
+    private bool TryPrefillFromExisting(WizardContext context)
+    {
+        if (context.ExistingConfig is null)
+            return false;
+
+        var mapped = new (string Path, int Index)[]
+        {
+            ("Memory.Enabled", 0),
+            ("Search.Enabled", 1),
+            ("SkillSync.Enabled", 2),
+            ("Scheduling.Enabled", 3),
+            ("SubAgents.Enabled", 4),
+            ("Webhooks.Enabled", 5)
+        };
+
+        var foundAny = false;
+        foreach (var (path, index) in mapped)
+        {
+            if (!ConfigFileHelper.TryGetPathValue(context.ExistingConfig, path, out var value) || value is not bool enabled)
+                continue;
+
+            _enabledFlags[index] = enabled;
+            foundAny = true;
+        }
+
+        return foundAny;
+    }
+
+    private bool HasAnyExistingSelection(WizardContext context)
+        => CurrentEnabledFeatureNames(context).Any();
+
+    private IEnumerable<string> CurrentEnabledFeatureNames(WizardContext context)
+    {
+        for (var i = 0; i < FeatureNames.Length; i++)
+        {
+            if (_enabledFlags[i])
+            {
+                yield return FeatureNames[i];
+                continue;
+            }
+
+            if (context.ExistingConfig is null)
+                continue;
+
+            var path = i switch
+            {
+                0 => "Memory.Enabled",
+                1 => "Search.Enabled",
+                2 => "SkillSync.Enabled",
+                3 => "Scheduling.Enabled",
+                4 => "SubAgents.Enabled",
+                5 => "Webhooks.Enabled",
+                _ => throw new InvalidOperationException("Unexpected feature index.")
+            };
+
+            if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, path, out var value)
+                && value is bool enabled && enabled)
+            {
+                yield return FeatureNames[i];
+            }
+        }
     }
 
     public void Dispose()

@@ -90,12 +90,15 @@ public sealed class DiscordProbe : IDiscordProbe
         }
     }
 
+    // Accepts channel IDs (snowflakes) OR display names (#general). Enumerates the bot's guild text
+    // channels once and matches each reference by id or by name, so operators can enter human-readable
+    // names instead of snowflakes (the resolved id is what the runtime ACL matches).
     public async Task<DiscordChannelResolutionResult> ResolveChannelIdsAsync(
-        string botToken, IReadOnlyList<string> channelIds, CancellationToken ct = default)
+        string botToken, IReadOnlyList<string> channelRefs, CancellationToken ct = default)
     {
-        var normalized = channelIds
-            .Select(id => id.Trim())
-            .Where(id => !string.IsNullOrWhiteSpace(id))
+        var normalized = channelRefs
+            .Select(reference => reference.Trim().TrimStart('#'))
+            .Where(reference => !string.IsNullOrWhiteSpace(reference))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -107,43 +110,32 @@ public sealed class DiscordProbe : IDiscordProbe
 
         try
         {
-            var channelTasks = normalized.Select(id =>
-                FetchChannelAsync(botToken, id, timeoutCts.Token));
-            var channelResults = await Task.WhenAll(channelTasks);
-
-            var channelPairs = normalized.Zip(channelResults).ToList();
-
-            var uniqueGuildIds = channelPairs
-                .Where(p => p.Second is not null && p.Second.Value.GuildId is not null)
-                .Select(p => p.Second!.Value.GuildId!)
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
-
-            var guildTasks = uniqueGuildIds.Select(async gid =>
-                (GuildId: gid, Name: await FetchGuildNameAsync(botToken, gid, timeoutCts.Token)));
-            var guildResults = await Task.WhenAll(guildTasks);
-            var guildNames = guildResults
-                .Where(g => g.Name is not null)
-                .ToDictionary(g => g.GuildId, g => g.Name!, StringComparer.Ordinal);
+            var byId = new Dictionary<string, ResolvedDiscordChannel>(StringComparer.Ordinal);
+            var byName = new Dictionary<string, ResolvedDiscordChannel>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (guildId, guildName) in await FetchBotGuildsAsync(botToken, timeoutCts.Token))
+            {
+                foreach (var (channelId, channelName) in await FetchGuildTextChannelsAsync(botToken, guildId, timeoutCts.Token))
+                {
+                    var channel = new ResolvedDiscordChannel(channelId, channelName, guildName);
+                    byId[channelId] = channel;
+                    // First match wins when a channel name is duplicated across guilds.
+                    byName.TryAdd(channelName, channel);
+                }
+            }
 
             var resolved = new List<ResolvedDiscordChannel>();
             var unresolved = new List<string>();
-
-            foreach (var (channelId, channelInfo) in channelPairs)
+            foreach (var reference in normalized)
             {
-                if (channelInfo is null)
-                {
-                    unresolved.Add(channelId);
-                    continue;
-                }
-
-                var (channelName, guildId) = channelInfo.Value;
-                guildNames.TryGetValue(guildId ?? "", out var guildName);
-                resolved.Add(new ResolvedDiscordChannel(channelId, channelName, guildName));
+                if (byId.TryGetValue(reference, out var idMatch))
+                    resolved.Add(idMatch);
+                else if (byName.TryGetValue(reference, out var nameMatch))
+                    resolved.Add(nameMatch);
+                else
+                    unresolved.Add(reference);
             }
 
-            return new DiscordChannelResolutionResult(
-                unresolved.Count == 0, null, resolved, unresolved);
+            return new DiscordChannelResolutionResult(unresolved.Count == 0, null, resolved, unresolved);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -162,41 +154,55 @@ public sealed class DiscordProbe : IDiscordProbe
         }
     }
 
-    private async Task<(string Name, string? GuildId)?> FetchChannelAsync(
-        string botToken, string channelId, CancellationToken ct)
+    private async Task<IReadOnlyList<(string Id, string Name)>> FetchBotGuildsAsync(string botToken, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/channels/{channelId}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/users/@me/guilds");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bot", botToken);
 
         using var response = await _httpClient.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
-            return null;
+            throw new HttpRequestException(MapHttpError(response.StatusCode, await response.Content.ReadAsStringAsync(ct)));
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
+        var guilds = new List<(string, string)>();
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            var id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+            var name = element.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+            if (id is not null && name is not null)
+                guilds.Add((id, name));
+        }
 
-        var name = root.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
-        var guildId = root.TryGetProperty("guild_id", out var guildProp) ? guildProp.GetString() : null;
-
-        return name is not null ? (name, guildId) : null;
+        return guilds;
     }
 
-    private async Task<string?> FetchGuildNameAsync(
-        string botToken, string guildId, CancellationToken ct)
+    private async Task<IReadOnlyList<(string Id, string Name)>> FetchGuildTextChannelsAsync(string botToken, string guildId, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/guilds/{guildId}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/guilds/{guildId}/channels");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bot", botToken);
 
         using var response = await _httpClient.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
-            return null;
+            return []; // a guild whose channels we cannot list is skipped, not fatal
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
+        var channels = new List<(string, string)>();
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            // Discord channel types: 0 = GUILD_TEXT, 5 = GUILD_ANNOUNCEMENT — both accept messages.
+            var type = element.TryGetProperty("type", out var typeProp) && typeProp.TryGetInt32(out var t) ? t : -1;
+            if (type != 0 && type != 5)
+                continue;
 
-        return root.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+            var id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+            var name = element.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+            if (id is not null && name is not null)
+                channels.Add((id, name));
+        }
+
+        return channels;
     }
 
     private static string MapHttpError(System.Net.HttpStatusCode statusCode, string body)

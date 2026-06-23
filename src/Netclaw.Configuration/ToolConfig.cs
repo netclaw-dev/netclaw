@@ -11,7 +11,6 @@ namespace Netclaw.Configuration;
 public sealed class ToolConfig
 {
     public ShellExecutionMode? ShellMode { get; set; }
-    public int ShellTimeoutSeconds { get; set; } = 60;
 
     /// <summary>
     /// The capture ceiling: the maximum characters of tool output captured (in
@@ -24,11 +23,6 @@ public sealed class ToolConfig
     /// </summary>
     public int MaxOutputChars { get; set; } = 256_000;
 
-    /// <summary>
-    /// Maximum per-call timeout in seconds that the LLM can request via <c>_timeout_seconds</c>.
-    /// Values above this ceiling are clamped. Default 600s (10 minutes).
-    /// </summary>
-    public int MaxToolTimeoutSeconds { get; set; } = 600;
     public ToolAudienceProfiles AudienceProfiles { get; set; } = new();
     public WebFetchConfig WebFetch { get; set; } = new();
 

@@ -115,52 +115,10 @@ public class ToolCallMetaExtractorTests
         Assert.Null(meta);
     }
 
-    // ── Timeout clamping tests ──
-
-    [Fact]
-    public void ComputeEffectiveTimeout_WithinRange_UsesHint()
-    {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            300, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(300), result);
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_AboveCeiling_ClampsToCeiling()
-    {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            1200, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(600), result);
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_BelowFloor_UsesDefault()
-    {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            10, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(60), result);
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_Absent_UsesDefault()
-    {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            null, TimeSpan.FromSeconds(90), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(90), result);
-    }
-
-    [Fact]
-    public void ComputeEffectiveTimeout_NegativeHint_UsesDefault()
-    {
-        var result = ToolCallMetaExtractor.ComputeEffectiveTimeout(
-            -5, TimeSpan.FromSeconds(60), 600);
-
-        Assert.Equal(TimeSpan.FromSeconds(60), result);
-    }
+    // Timeout-hint application (honor-or-default; no clamp/floor) is exercised
+    // end-to-end in MetaValidationAndNoticeTests against the pipeline. ExtractFrom's
+    // own parsing of _timeout_seconds (positive int → hint; else null) is covered
+    // by the extraction tests above and ToolArgumentHelperStrictTests.
 
     // ── Background signaling tests ──
 

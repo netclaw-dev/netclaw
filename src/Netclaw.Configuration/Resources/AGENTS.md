@@ -130,10 +130,29 @@ or one-off lookups where the user is actively waiting.
 
 ## Background Shell Execution
 
-Shell commands expected to run longer than the session timeout can be submitted
-as background jobs using `_background: true` in the shell_execute tool call
-metadata. Background jobs run independently of the session — results are
-delivered asynchronously when the job completes.
+A background job is a detached process with no expectation of completion — use
+it for anything that outlives a single tool call: long builds, dev servers,
+watchers. Submit with `_background: true` in the shell_execute tool call
+metadata. The job's output streams to its log file while it runs, so you can
+monitor it live, and you are notified whenever it terminates — by its own
+exit, your cancel, a timeout you set, or a daemon restart (`lost`).
+
+**Lifecycle:**
+- No `_timeout_seconds` means no kill timer — the job runs until it exits, you
+  cancel it, or this conversation goes idle. A positive `_timeout_seconds` arms
+  an explicit kill timer.
+- **Jobs are killed when this session passivates** (goes idle past the idle
+  timeout). If you return and see a job marked `reaped` in
+  `[active-background-jobs]`, its process is gone — resubmit if still needed.
+  For work that must run unattended past the conversation, use a scheduled
+  task instead; to keep a job alive across a long wait, schedule check-back
+  reminders (each firing keeps the session warm).
+
+**Monitoring a running job (e.g. waiting for a dev server to be ready):**
+- The submit result includes the output log path. `file_read` or `grep` it —
+  output appears there live, secret-redacted, while the process runs.
+- `check_background_job` returns status, elapsed time, and the live output tail.
+- Probe the service directly (curl the port) once the log shows it starting.
 
 **Rules:**
 - Only `shell_execute` supports background mode. Other tools ignore `_background`.
@@ -141,8 +160,9 @@ delivered asynchronously when the job completes.
   explicitly set `_background: true`.
 - Approval gates are evaluated before job submission — the user must approve
   the command before it starts running in the background.
-- Use `check_background_job` to query status or cancel a running job.
-- Schedule a check-back reminder for background jobs so you report results
+- Use `check_background_job` to query status or cancel. Cancel servers and
+  watchers when you are done validating — do not leave them running.
+- Schedule a check-back reminder for long jobs so you report results
   proactively.
 
 ## Subagent Delegation

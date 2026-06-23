@@ -275,6 +275,144 @@ public sealed class ShellApprovalMatcherTests
         Assert.Equal("git push origin main", display);
     }
 
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_multiline_quoted_arg_terminates_pattern_at_flag()
+    {
+        // Issue #1402: the multi-line message body is call-specific content,
+        // not approvable intent — the stored pattern stops at the flag so a
+        // later invocation with a different body still matches.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply --message \"Hi,\nWe've rolled out a fix. Please verify.\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("freshdesk ticket reply --message", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_multiline_quoted_arg_after_digit_id_terminates_at_id()
+    {
+        // The digit-bearing 605 terminates the walk before --message is
+        // reached (IsCallSpecificValueToken), so the multi-line blob never
+        // enters the pattern — pins issue #1402's exact command shape.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply 605 --message \"Hi,\nWe've rolled out a fix. Please verify.\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("freshdesk ticket reply", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_summarizes_multiline_quoted_arg()
+    {
+        // Issue #1402: channel renderers embed DisplayText in single-line
+        // code fences — the multi-line body renders as a size summary.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply 605 --message \"Hi,\nWe've rolled out a fix. Please verify.\""));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("freshdesk ticket reply 605 --message (2 lines, 42 chars)", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_renders_newline_separated_statements_with_explicit_separator()
+    {
+        // Bare-newline statement separators render as "; " so the one-line
+        // display doesn't visually merge two statements into one command.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("git fetch\ngit status"));
+
+        Assert.Equal("git fetch; git status", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_heredoc_falls_back_to_flattened_raw_command()
+    {
+        // The parser drops heredoc bodies from the tree (only the <<EOF
+        // marker survives as a redirect target), so a tree reconstruction
+        // would hide the executable payload from the approver. Heredoc
+        // commands fall back to the flattened raw command instead.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("bash <<EOF\nrm -rf /tmp/x\nEOF"));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("bash <<EOF rm -rf /tmp/x EOF", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_redirect_target_with_line_break_terminates_pattern()
+    {
+        // A quoted redirect target carrying an embedded newline must not
+        // reach the stored pattern — quote-aware normalization would
+        // otherwise preserve the break verbatim (`echo hi >> $LOGDIR\nfile`).
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("echo hi >> \"$LOGDIR\nfile\""));
+
+        Assert.Single(patterns);
+        Assert.DoesNotContain('\n', patterns[0]);
+        Assert.Equal("echo hi", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_carriage_return_arg_terminates_pattern_at_flag()
+    {
+        // A lone CR (no LF) is a line break too: in a terminal-rendered
+        // prompt it returns the cursor to column 0, so it must terminate
+        // the pattern walk exactly like LF.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply --message \"Hi,\rEvil\""));
+
+        Assert.Single(patterns);
+        Assert.DoesNotContain('\r', patterns[0]);
+        Assert.Equal("freshdesk ticket reply --message", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_carriage_return_arg_is_summarized()
+    {
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply --message \"Hi,\rEvil\""));
+
+        Assert.DoesNotContain('\r', display);
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("freshdesk ticket reply --message (2 lines, 8 chars)", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_summarizes_multiline_redirect_target()
+    {
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("echo hi >> \"$LOGDIR\nfile\""));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("echo hi >> (2 lines, 12 chars)", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_subshell_falls_back_to_flattened_raw_command()
+    {
+        // Subshell grouping doesn't survive the parser's flat clause list —
+        // a reconstruction would misstate which statements the pipe applies
+        // to. The fallback keeps the parens the user typed.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("(git fetch\ngit status) | tee log"));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("(git fetch git status) | tee log", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_subshell_with_multiline_arg_stays_single_line()
+    {
+        // Regression guard: the clause after a closed subshell carries
+        // CompoundOperator.None, which previously threw inside the display
+        // walk and silently fell back to the unsummarized raw command.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("(echo hi)\nfreshdesk ticket reply --message \"Hi,\nbody\""));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("(echo hi) freshdesk ticket reply --message \"Hi, body\"", display);
+    }
+
     [Fact]
     public void IsMessy_true_for_bash_control_flow()
     {

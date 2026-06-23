@@ -778,6 +778,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
     private static Dictionary<string, object?>? TryDeserializeArguments(string? argumentsJson)
     {
+        // Absent/empty arguments are legitimate (no-param tools) — null means
+        // "no intent expressed" and dispatch proceeds normally.
         if (string.IsNullOrWhiteSpace(argumentsJson))
             return null;
 
@@ -785,9 +787,22 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         {
             return JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsJson, JsonOptions);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            // The model DID emit arguments but they don't parse (truncated
+            // stream, malformed emission). Dispatching null args here silently
+            // discards the model's intent — instead the failure travels with
+            // the call and the pipeline rejects the call id pre-dispatch with a
+            // model-facing error (tool-arg-validation spec). The raw prefix is
+            // only available at this boundary.
+            var rawPrefix = argumentsJson.Length > 200
+                ? argumentsJson[..200] + "…"
+                : argumentsJson;
+            return new Dictionary<string, object?>
+            {
+                [Netclaw.Tools.ToolCallArgumentErrors.ArgsParseErrorKey] =
+                    $"{ex.Message} Raw arguments prefix: {rawPrefix}"
+            };
         }
     }
 

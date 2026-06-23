@@ -28,7 +28,10 @@ public sealed class HealthCheckRunner
     /// </summary>
     public void Add(HealthCheckItem item)
     {
-        Results.Add(item);
+        // Results is read by the render thread while step checks mutate it off-thread; synchronize
+        // on the list instance — the same lock HealthCheckStepViewModel uses for its own writes.
+        lock (Results)
+            Results.Add(item);
         _notifyChanged();
     }
 
@@ -38,9 +41,42 @@ public sealed class HealthCheckRunner
     /// </summary>
     public void UpdateLast(HealthCheckItem item)
     {
-        if (Results.Count > 0)
-            Results[^1] = item;
+        lock (Results)
+        {
+            if (Results.Count > 0)
+                Results[^1] = item;
+        }
+
         _notifyChanged();
+    }
+
+    /// <summary>
+    /// Emit the standard channel-adapter pre-flight: an in-progress "<paramref name="name"/>
+    /// configuration" row, then short-circuit to a passed "(disabled)" row when the adapter is
+    /// off, or a failed "(&lt;label&gt; missing)" row for the first blank required credential
+    /// (checked in the order given). Returns <c>true</c> only when the adapter is enabled and
+    /// every required credential is present, i.e. the caller should continue probing.
+    /// </summary>
+    public bool BeginAdapterCheck(string name, bool enabled, params (string? value, string label)[] requiredCredentials)
+    {
+        Add(new HealthCheckItem($"{name} configuration", null));
+
+        if (!enabled)
+        {
+            UpdateLast(new HealthCheckItem($"{name} configuration (disabled)", true));
+            return false;
+        }
+
+        foreach (var (value, label) in requiredCredentials)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                UpdateLast(new HealthCheckItem($"{name} configuration ({label} missing)", false));
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -61,5 +97,12 @@ public sealed class HealthCheckRunner
     }
 
     /// <summary>Whether all checks passed so far.</summary>
-    public bool AllPassed => Results.All(h => h.Passed == true);
+    public bool AllPassed
+    {
+        get
+        {
+            lock (Results)
+                return Results.All(h => h.Passed == true);
+        }
+    }
 }

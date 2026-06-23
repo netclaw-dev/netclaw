@@ -92,6 +92,7 @@ public sealed class ToolExecutionContext
     /// </summary>
     public int? RequestedTimeoutSeconds { get; set; }
 
+
     public string? ChannelType { get; set; }
 
     /// <summary>
