@@ -27,6 +27,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly FileSubAgentDefinitionLoader _agentLoader;
     private readonly SubAgentSpawner _subAgentSpawner;
     private readonly SubAgentConfig _subAgentConfig;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
@@ -38,7 +39,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         FileSubAgentDefinitionLoader agentLoader,
         SubAgentSpawner subAgentSpawner,
         SubAgentConfig subAgentConfig,
-        ILogger<ToolIndexUpdater> logger)
+        ILoggerFactory loggerFactory)
     {
         _paths = paths;
         _shadowCatalogWriter = shadowCatalogWriter;
@@ -48,14 +49,17 @@ internal sealed class ToolIndexUpdater : IHostedService
         _agentLoader = agentLoader;
         _subAgentSpawner = subAgentSpawner;
         _subAgentConfig = subAgentConfig;
-        _logger = logger;
+        _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<ToolIndexUpdater>();
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         LoadFileBasedAgents();
 
-        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader));
+        _toolRegistry.Register(new SpawnAgentTool(
+            _subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader,
+            _loggerFactory.CreateLogger<SpawnAgentTool>()));
 
         _shadowCatalogWriter.WriteCatalogs();
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
