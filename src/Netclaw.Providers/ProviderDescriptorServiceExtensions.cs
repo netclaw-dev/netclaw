@@ -8,6 +8,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
 using Netclaw.Providers.GitHubCopilot;
+using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
@@ -36,7 +37,8 @@ public static class ProviderDescriptorServiceExtensions
         // (for chat). The in-memory cache is per-process, which is what we want.
         services.AddSingleton(sp => new CopilotTokenExchanger(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient(CopilotTokenClientName),
-            sp.GetService<TimeProvider>()));
+            sp.GetService<TimeProvider>(),
+            sp.GetService<ProviderOAuthTokenRefreshService>()));
 
         services.AddSingleton(sp =>
             ProviderDescriptorCatalog.Create(

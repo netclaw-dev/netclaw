@@ -149,16 +149,7 @@ static async Task RunAsync(string[] args)
 
             // Provider descriptors (includes IProviderProbe via registry)
             builder.Services.AddProviderDescriptors();
-            builder.Services.AddHttpClient("OAuthDeviceFlow");
-            builder.Services.AddSingleton(sp =>
-                new OAuthDeviceFlowService(
-                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                    sp.GetService<TimeProvider>()));
-            builder.Services.AddSingleton(sp =>
-                new OpenAiDeviceFlowService(
-                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                    sp.GetService<TimeProvider>()));
-            builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+            builder.Services.AddProviderOAuthServices();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
             builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
@@ -726,16 +717,7 @@ static async Task RunAsync(string[] args)
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Services.AddProviderDescriptors();
-            builder.Services.AddHttpClient("OAuthDeviceFlow");
-            builder.Services.AddSingleton(sp =>
-                new OAuthDeviceFlowService(
-                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                    sp.GetService<TimeProvider>()));
-            builder.Services.AddSingleton(sp =>
-                new OpenAiDeviceFlowService(
-                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                    sp.GetService<TimeProvider>()));
-            builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+            builder.Services.AddProviderOAuthServices();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
@@ -1137,19 +1119,10 @@ static async Task RunConfigEditorAsync(string[] args)
     builder.Services.AddSingleton<ISkillFeedReachabilityProbe, SkillFeedReachabilityProbe>();
     builder.Services.AddSingleton<TuiNavigation>();
     builder.Services.AddProviderDescriptors();
+    builder.Services.AddProviderOAuthServices();
     builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
     builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
     builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
-    builder.Services.AddHttpClient("OAuthDeviceFlow");
-    builder.Services.AddSingleton(sp =>
-        new OAuthDeviceFlowService(
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-            sp.GetService<TimeProvider>()));
-    builder.Services.AddSingleton(sp =>
-        new OpenAiDeviceFlowService(
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-            sp.GetService<TimeProvider>()));
-    builder.Services.AddSingleton<DeviceFlowServiceFactory>();
     builder.Services
         .AddSectionEditor<SecurityPostureStepViewModel>()
         .AddSectionEditor<FeatureSelectionStepViewModel>()

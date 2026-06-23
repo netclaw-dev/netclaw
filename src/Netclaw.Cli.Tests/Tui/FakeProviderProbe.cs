@@ -11,7 +11,7 @@ namespace Netclaw.Cli.Tests.Tui;
 /// Test double for <see cref="IProviderProbe"/> that returns canned results
 /// without making real HTTP calls.
 /// </summary>
-public sealed class FakeProviderProbe : IProviderProbe
+public sealed class FakeProviderProbe : IProviderProbe, IConfiguredProviderProbe
 {
     /// <summary>
     /// Per-type results for concurrent probing scenarios.
@@ -23,6 +23,11 @@ public sealed class FakeProviderProbe : IProviderProbe
     /// Tracks which provider types were probed, in order.
     /// </summary>
     public List<string> ProbedTypes { get; } = [];
+
+    /// <summary>
+    /// Tracks provider names passed through the configured-provider probe path.
+    /// </summary>
+    public List<string> ConfiguredProviderNames { get; } = [];
 
     /// <summary>
     /// The fallback result to return when no per-type result is configured.
@@ -94,5 +99,14 @@ public sealed class FakeProviderProbe : IProviderProbe
         AuthMethod authMethod, CancellationToken ct = default)
     {
         return ProbeAsync(providerType, endpoint, credential, ct);
+    }
+
+    public Task<ProviderProbeResult> ProbeConfiguredAsync(
+        string providerName,
+        ProviderEntry entry,
+        CancellationToken ct = default)
+    {
+        ConfiguredProviderNames.Add(providerName);
+        return ProbeAsync(entry, ct);
     }
 }

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
 using Netclaw.Providers.GitHubCopilot;
@@ -29,17 +30,7 @@ public static class LlmProviderServiceExtensions
         // Register descriptors (shared with CLI)
         services.AddProviderDescriptors();
 
-        // OAuth device flow services (for future auto-refresh)
-        services.AddHttpClient("OAuthDeviceFlow").AddNetclawHeaders("provider-oauth");
-        services.AddSingleton(sp =>
-            new OAuthDeviceFlowService(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                sp.GetService<TimeProvider>()));
-        services.AddSingleton(sp =>
-            new OpenAiDeviceFlowService(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                sp.GetService<TimeProvider>()));
-        services.AddSingleton<DeviceFlowServiceFactory>();
+        services.AddProviderOAuthServices();
 
         // Register daemon-specific plugins
         services.AddSingleton<OllamaProviderPlugin>();
@@ -57,6 +48,34 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenRouterProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<GitHubCopilotProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<VeniceAiProviderPlugin>());
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers provider OAuth device-flow, refresh, and refresh-aware probe services.
+    /// Call after <see cref="ProviderDescriptorServiceExtensions.AddProviderDescriptors"/>
+    /// when the host needs OAuth provider flows or configured-provider refresh.
+    /// </summary>
+    public static IServiceCollection AddProviderOAuthServices(this IServiceCollection services)
+    {
+        services.AddHttpClient("OAuthDeviceFlow").AddNetclawHeaders("provider-oauth");
+        services.AddSingleton(sp =>
+            new OAuthDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
+        services.AddSingleton(sp =>
+            new OpenAiDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
+        services.AddSingleton<DeviceFlowServiceFactory>();
+        services.AddSingleton(sp => new ProviderOAuthTokenRefreshService(
+            sp.GetRequiredService<NetclawPaths>(),
+            sp.GetRequiredService<DeviceFlowServiceFactory>(),
+            sp.GetService<IOperationalNotificationSink>(),
+            sp.GetService<TimeProvider>()));
+        services.AddSingleton<ProviderOAuthRefreshingProbe>();
+        services.AddSingleton<IProviderProbe>(sp => sp.GetRequiredService<ProviderOAuthRefreshingProbe>());
 
         return services;
     }

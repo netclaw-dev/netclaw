@@ -33,7 +33,11 @@ namespace Netclaw.Providers.GitHubCopilot;
 /// the documented use of <see cref="ApiKeyCredential.Update"/>).
 /// </remarks>
 internal sealed class CopilotRequestPolicy(
-    CopilotTokenExchanger exchanger, ProviderEntry entry, ApiKeyCredential credential)
+    CopilotTokenExchanger exchanger,
+    ProviderEntry entry,
+    ApiKeyCredential credential,
+    string? providerName = null,
+    OAuthAuth? oauth = null)
     : PipelinePolicy
 {
     public override void Process(
@@ -55,7 +59,9 @@ internal sealed class CopilotRequestPolicy(
     public override async ValueTask ProcessAsync(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
-        var token = await exchanger.GetTokenAsync(entry, message.CancellationToken);
+        var token = providerName is not null && oauth is not null
+            ? await exchanger.GetTokenAsync(providerName, entry, oauth, message.CancellationToken)
+            : await exchanger.GetTokenAsync(entry, message.CancellationToken);
 
         // Refresh the credential the SDK's auth policy reads downstream, so it
         // emits "Authorization: Bearer {token}" with our short-lived token.

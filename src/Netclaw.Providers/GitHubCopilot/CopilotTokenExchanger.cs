@@ -12,6 +12,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using Netclaw.Configuration;
+using Netclaw.Providers.OAuth;
 
 namespace Netclaw.Providers.GitHubCopilot;
 
@@ -27,7 +28,10 @@ namespace Netclaw.Providers.GitHubCopilot;
 /// only in this in-memory cache. The long-lived GitHub OAuth token is the
 /// only credential that hits the secrets store.
 /// </remarks>
-public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? timeProvider = null)
+public sealed class CopilotTokenExchanger(
+    HttpClient httpClient,
+    TimeProvider? timeProvider = null,
+    ProviderOAuthTokenRefreshService? tokenRefreshService = null)
 {
     private static readonly Uri TokenEndpoint =
         new("https://api.github.com/copilot_internal/v2/token");
@@ -60,6 +64,34 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
         var oauthToken = entry.OAuthAccessToken.RequireValid(
             "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
 
+        return await GetTokenAsync(oauthToken, ct);
+    }
+
+    /// <summary>
+    /// Returns a valid Copilot API token after first refreshing the persisted
+    /// GitHub OAuth credential when its configured expiry is inside the refresh
+    /// buffer.
+    /// </summary>
+    public async Task<string> GetTokenAsync(
+        string providerName,
+        ProviderEntry entry,
+        OAuthAuth oauth,
+        CancellationToken ct = default)
+    {
+        if (tokenRefreshService is null)
+            return await GetTokenAsync(entry, ct);
+
+        var oauthToken = await tokenRefreshService.GetValidAccessTokenAsync(
+            providerName,
+            entry,
+            oauth,
+            ct);
+
+        return await GetTokenAsync(oauthToken, ct);
+    }
+
+    private async Task<string> GetTokenAsync(SensitiveString oauthToken, CancellationToken ct)
+    {
         var slot = slots.GetOrAdd(HashKey(oauthToken.Value), _ => new CacheSlot());
 
         if (IsFresh(slot.Token))
