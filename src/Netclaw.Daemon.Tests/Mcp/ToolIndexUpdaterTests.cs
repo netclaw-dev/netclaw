@@ -39,7 +39,7 @@ public sealed class ToolIndexUpdaterTests
             loader,
             subAgentSpawner: null!,
             new SubAgentConfig(),
-            NullLogger<ToolIndexUpdater>.Instance);
+            NullLoggerFactory.Instance);
 
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
@@ -92,7 +92,7 @@ public sealed class ToolIndexUpdaterTests
             loader,
             subAgentSpawner: null!,
             new SubAgentConfig { Enabled = false },
-            NullLogger<ToolIndexUpdater>.Instance);
+            NullLoggerFactory.Instance);
 
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
