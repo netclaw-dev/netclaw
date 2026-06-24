@@ -388,8 +388,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
-    public async Task Self_monitoring_tool_uses_first_item_guard_not_inter_item_timeout()
+    public async Task Self_monitoring_tool_runs_to_completion_without_a_parent_timeout()
     {
+        // Self-monitoring tools are drained with no parent watchdog, so a quiet
+        // window — even a long one — never trips a timeout.
         var time = new FakeTimeProvider();
         var executor = new SelfMonitoringStreamingExecutor();
         var probe = CreateTestProbe("self-monitoring-probe");
@@ -423,39 +425,6 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal("self-ok", result.Content);
-    }
-
-    [Fact]
-    public async Task Self_monitoring_tool_still_times_out_when_startup_never_emits()
-    {
-        var time = new FakeTimeProvider();
-        var executor = new SelfMonitoringNeverStartsExecutor();
-        var probe = CreateTestProbe("self-monitoring-startup-probe");
-
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
-            new SessionId("D1/self-monitoring-startup-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: time,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
-
-        time.Advance(TimeSpan.FromSeconds(2));
-
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        var result = Assert.Single(completed.ToolResults);
-        Assert.Contains("startup activity", result.Content);
     }
 
     [Fact]
@@ -735,26 +704,6 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             Started.TrySetResult();
             yield return new ToolActivityUpdate("calling the model");
             yield return new ToolCompletedUpdate(await _completion.Task.WaitAsync(ct));
-        }
-    }
-
-    private sealed class SelfMonitoringNeverStartsExecutor : IToolExecutor
-    {
-        public ToolLivenessMode GetLivenessMode(FunctionCallContent toolCall) => ToolLivenessMode.SelfMonitoring;
-
-        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
-            => throw new NotSupportedException("SelfMonitoringNeverStartsExecutor is streaming-only.");
-
-        public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
-            FunctionCallContent toolCall,
-            ToolExecutionContext? context = null,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
-            yield break;
         }
     }
 

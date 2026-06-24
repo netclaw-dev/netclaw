@@ -633,19 +633,21 @@ internal static class SessionToolExecutionPipeline
 
         try
         {
-            // Opaque tools are bounded by one wall-clock budget. Self-monitoring
-            // tools (spawn_agent) are only bounded until their first stream item;
-            // after that, their own internal watchdogs must return terminal
-            // success or failure.
-            var livenessMode = executor.GetLivenessMode(toolCall);
-            var budget = livenessMode == ToolLivenessMode.SelfMonitoring
-                ? ToolWatchdogBudget.FirstItemOnly(timeout)
-                : ToolWatchdogBudget.WallClock(timeout);
+            var stream = executor.ExecuteStreamAsync(toolCall, context, cancellationToken);
+
+            // Self-monitoring tools (spawn_agent) own their liveness end to end: the
+            // sub-agent's internal watchdogs self-terminate stalls and it always returns
+            // a terminal result (SubAgentActor.PostStop guarantees a reply on any stop),
+            // so the parent does not supervise them at all — it just drains to the
+            // terminal item under caller (turn/user) cancellation. Opaque tools remain
+            // bounded by one wall-clock budget.
+            if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
+                return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 
             return await StreamingToolWatchdog.ConsumeAsync(
-                executor.ExecuteStreamAsync(toolCall, context, cancellationToken),
+                stream,
                 toolCall.Name,
-                budget,
+                ToolWatchdogBudget.WallClock(timeout),
                 timeProvider,
                 onActivity: null,
                 cancellationToken);
@@ -665,6 +667,24 @@ internal static class SessionToolExecutionPipeline
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Drains a self-monitoring tool's stream to its terminal completion item with no
+    /// parent watchdog. The tool owns its own liveness and always produces a terminal
+    /// item; the only bound is caller (turn/user) cancellation.
+    /// </summary>
+    private static async Task<string> DrainToCompletionAsync(
+        IAsyncEnumerable<ToolCallUpdate> stream, string toolName, CancellationToken cancellationToken)
+    {
+        await foreach (var update in stream.WithCancellation(cancellationToken))
+        {
+            if (update is ToolCompletedUpdate completed)
+                return completed.Result;
+        }
+
+        throw new InvalidOperationException(
+            $"Tool '{toolName}' stream ended without a completion item.");
     }
 
     private static bool SetsEqual(IReadOnlySet<string> left, IReadOnlySet<string> right)

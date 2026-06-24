@@ -153,51 +153,6 @@ public sealed class StreamingToolCallTests
     }
 
     [Fact]
-    public async Task First_item_only_budget_disables_parent_liveness_after_startup()
-    {
-        var time = new FakeTimeProvider();
-        var channel = Channel.CreateUnbounded<ToolCallUpdate>();
-        var activitySeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var task = StreamingToolWatchdog.ConsumeAsync(
-            channel.Reader.ReadAllAsync(TestContext.Current.CancellationToken),
-            "spawn_agent",
-            ToolWatchdogBudget.FirstItemOnly(TimeSpan.FromSeconds(5)),
-            time,
-            onActivity: _ => activitySeen.TrySetResult(),
-            TestContext.Current.CancellationToken);
-
-        channel.Writer.TryWrite(new ToolActivityUpdate("calling the model"));
-        await activitySeen.Task;
-
-        time.Advance(TimeSpan.FromMinutes(10));
-        Assert.False(task.IsCompleted);
-
-        channel.Writer.TryWrite(new ToolCompletedUpdate("done"));
-        channel.Writer.Complete();
-
-        Assert.Equal("done", await task);
-    }
-
-    [Fact]
-    public async Task First_item_only_budget_still_bounds_startup_silence()
-    {
-        var time = new FakeTimeProvider();
-        var task = StreamingToolWatchdog.ConsumeAsync(
-            StallAsync(TestContext.Current.CancellationToken),
-            "spawn_agent",
-            ToolWatchdogBudget.FirstItemOnly(TimeSpan.FromSeconds(5)),
-            time,
-            onActivity: null,
-            TestContext.Current.CancellationToken);
-
-        time.Advance(TimeSpan.FromSeconds(6));
-
-        var ex = await Assert.ThrowsAsync<TimeoutException>(() => task);
-        Assert.Contains("startup activity", ex.Message);
-    }
-
-    [Fact]
     public async Task Concurrent_calls_are_bounded_independently()
     {
         var time = new FakeTimeProvider();
