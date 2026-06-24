@@ -29,6 +29,11 @@ data.
 
 ## Direct Host Upgrade
 
+`netclaw update` preserves the existing lifecycle owner: a daemon managed by an
+active or enabled systemd user unit is stopped and restarted with
+`systemctl --user`, while a directly-started daemon uses `netclaw daemon` process
+control.
+
 1. Stop daemon:
    - `netclaw daemon stop`
    - or `systemctl --user stop netclaw`

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.15.0"
+  version: "2.15.1"
 ---
 
 # Netclaw Operations
@@ -1044,6 +1044,13 @@ file. If it should be recalled when relevant → SQLite memory.
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
 | Permanently delete a reminder | `netclaw reminder delete <id>` |
+
+`netclaw update` preserves daemon ownership. When `netclaw.service` is active or
+enabled as a systemd user service, update restarts it with `systemctl --user`
+instead of launching a detached daemon. If restart fails, inspect
+`systemctl --user status netclaw.service`, then start it manually with
+`systemctl --user start netclaw.service` or fall back to `netclaw daemon start`
+only when no systemd user service owns the daemon.
 
 ## Demo AppHost
 

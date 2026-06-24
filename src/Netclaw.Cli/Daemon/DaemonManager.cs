@@ -602,30 +602,10 @@ public sealed partial class DaemonManager
 
     private static async Task<DaemonResult> RunCommandAsync(string command, string arguments)
     {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = command,
-                Arguments = arguments,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-
-            using var proc = Process.Start(psi)!;
-            var stderr = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
-
-            return proc.ExitCode == 0
-                ? new DaemonResult(true, "OK")
-                : new DaemonResult(false, stderr.Trim());
-        }
-        catch (Exception ex)
-        {
-            return new DaemonResult(false, ex.Message);
-        }
+        var result = await ProcessSystemCommandRunner.Instance.RunAsync(command, arguments);
+        return result.Success
+            ? new DaemonResult(true, "OK")
+            : new DaemonResult(false, result.Message);
     }
 
     // POSIX signals via P/Invoke

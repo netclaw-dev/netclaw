@@ -199,6 +199,11 @@ the actor system cleanly.
 `netclaw daemon status` checks the PID file and verifies the process is alive.
 Reports: running/stopped, PID, uptime, port, number of active sessions.
 
+`netclaw update` preserves the daemon's lifecycle owner. If the Linux systemd
+user unit is active or enabled, update stops and starts `netclaw.service` via
+`systemctl --user` instead of spawning a detached daemon. If no systemd user
+unit owns the daemon, update uses the direct detached process lifecycle.
+
 ### Crash interception and evidence
 
 The daemon installs process-level exception handlers at startup for:

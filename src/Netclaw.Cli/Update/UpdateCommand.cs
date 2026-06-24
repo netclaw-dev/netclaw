@@ -18,6 +18,8 @@ namespace Netclaw.Cli.Update;
 internal static class UpdateCommand
 {
     internal static Func<HttpMessageHandler>? TestHttpMessageHandlerFactory { get; set; }
+    internal static Func<NetclawPaths, IDaemonProcessLifecycle>? TestDaemonProcessManagerFactory { get; set; }
+    internal static Func<SystemdUserService>? TestSystemdUserServiceFactory { get; set; }
 
     internal static bool ShouldRunStartupUpdateCheck(string mode, string[] args)
     {
@@ -225,18 +227,21 @@ internal static class UpdateCommand
             }
 
             // Check if daemon is running (we'll need to restart it)
-            var manager = new DaemonManager(paths, TimeProvider.System);
+            var manager = CreateDaemonProcessManager(paths);
+            var systemdService = CreateSystemdUserService();
             var daemonStatus = manager.GetStatus();
-            var daemonWasRunning = daemonStatus.IsRunning;
+            var stopResult = UpdateDaemonStopResult.Succeeded(
+                UpdateDaemonOwner.None,
+                daemonStatus.Message);
 
-            if (daemonWasRunning)
+            if (daemonStatus.IsRunning)
             {
                 Console.Write("Stopping daemon...");
-                var stopResult = await manager.StopAsync("update");
+                stopResult = await StopDaemonForUpdateAsync(manager, systemdService, daemonStatus);
                 if (!stopResult.Success)
                 {
                     Console.WriteLine($" failed: {stopResult.Message}");
-                    Console.WriteLine("Update aborted. Stop the daemon manually and retry with --force.");
+                    Console.WriteLine("Update aborted. Stop the daemon manually, fix service state, and retry.");
                     return 1;
                 }
                 Console.WriteLine(" done.");
@@ -280,11 +285,18 @@ internal static class UpdateCommand
             Console.WriteLine(" done.");
 
             // Restart daemon if it was running
-            if (daemonWasRunning)
+            if (stopResult.ShouldRestart)
             {
                 Console.Write("Restarting daemon...");
-                var startResult = manager.Start();
-                Console.WriteLine(startResult.Success ? " done." : $" {startResult.Message}");
+                var startResult = await StartDaemonAfterUpdateAsync(stopResult.Owner, manager, systemdService);
+                if (!startResult.Success)
+                {
+                    Console.WriteLine($" failed: {startResult.Message}");
+                    Console.WriteLine("Update installed, but daemon restart failed. Start the daemon manually and check `netclaw status`.");
+                    return 1;
+                }
+
+                Console.WriteLine(" done.");
             }
 
             // Clean up backup files
@@ -307,6 +319,101 @@ internal static class UpdateCommand
             try { Directory.Delete(tempDir, recursive: true); }
             catch (Exception ex) { Console.Error.WriteLine($"warn: temp cleanup failed: {ex.Message}"); }
         }
+    }
+
+    internal static async Task<UpdateDaemonStopResult> StopDaemonForUpdateAsync(
+        IDaemonProcessLifecycle manager,
+        SystemdUserService systemdService,
+        DaemonStatus? daemonStatus = null)
+    {
+        daemonStatus ??= manager.GetStatus();
+        if (!daemonStatus.IsRunning)
+        {
+            return UpdateDaemonStopResult.Succeeded(
+                UpdateDaemonOwner.None,
+                daemonStatus.Message);
+        }
+
+        var systemdOwnership = await systemdService.GetOwnershipAsync();
+        switch (systemdOwnership.Kind)
+        {
+            case SystemdUserServiceOwnershipKind.Unknown:
+                return UpdateDaemonStopResult.Failed(
+                    UpdateDaemonOwner.None,
+                    $"Could not determine whether systemd owns the daemon lifecycle: {systemdOwnership.Message}");
+
+            case SystemdUserServiceOwnershipKind.Managed:
+            {
+                var systemdStop = await systemdService.StopAsync();
+                if (!systemdStop.Success)
+                {
+                    return UpdateDaemonStopResult.Failed(
+                        UpdateDaemonOwner.SystemdUserService,
+                        $"systemd stop failed: {systemdStop.Message}");
+                }
+
+                var remainingStatus = manager.GetStatus();
+                if (remainingStatus.IsRunning)
+                {
+                    var detachedStop = await manager.StopAsync("update");
+                    if (!detachedStop.Success)
+                    {
+                        return UpdateDaemonStopResult.Failed(
+                            UpdateDaemonOwner.SystemdUserService,
+                            "systemd service stopped, but a detached daemon is still running and "
+                            + $"could not be stopped: {detachedStop.Message}");
+                    }
+                }
+
+                return UpdateDaemonStopResult.Succeeded(
+                    UpdateDaemonOwner.SystemdUserService,
+                    systemdStop.Message);
+            }
+
+            case SystemdUserServiceOwnershipKind.Unmanaged:
+            default:
+            {
+                var detachedStop = await manager.StopAsync("update");
+                return detachedStop.Success
+                    ? UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.DetachedProcess, detachedStop.Message)
+                    : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, detachedStop.Message);
+            }
+        }
+    }
+
+    internal static async Task<DaemonResult> StartDaemonAfterUpdateAsync(
+        UpdateDaemonOwner owner,
+        IDaemonProcessLifecycle manager,
+        SystemdUserService systemdService)
+    {
+        return owner switch
+        {
+            UpdateDaemonOwner.None => new DaemonResult(true, "Daemon was not running."),
+            UpdateDaemonOwner.SystemdUserService => await systemdService.StartAsync(),
+            UpdateDaemonOwner.DetachedProcess => manager.Start(),
+            _ => new DaemonResult(false, $"Unknown daemon lifecycle owner: {owner}.")
+        };
+    }
+
+    private static IDaemonProcessLifecycle CreateDaemonProcessManager(NetclawPaths paths)
+    {
+        return TestDaemonProcessManagerFactory?.Invoke(paths)
+            ?? new DaemonProcessLifecycle(new DaemonManager(paths, TimeProvider.System));
+    }
+
+    private static SystemdUserService CreateSystemdUserService()
+    {
+        return TestSystemdUserServiceFactory?.Invoke()
+            ?? new SystemdUserService();
+    }
+
+    private sealed class DaemonProcessLifecycle(DaemonManager manager) : IDaemonProcessLifecycle
+    {
+        public DaemonStatus GetStatus() => manager.GetStatus();
+
+        public Task<DaemonResult> StopAsync(string reason) => manager.StopAsync(reason);
+
+        public DaemonResult Start() => manager.Start();
     }
 
     private static async Task<bool> DownloadAndVerifyAsync(
@@ -494,4 +601,34 @@ internal static class UpdateCommand
         if (notice is not null)
             Console.Error.WriteLine(notice);
     }
+}
+
+internal interface IDaemonProcessLifecycle
+{
+    DaemonStatus GetStatus();
+
+    Task<DaemonResult> StopAsync(string reason);
+
+    DaemonResult Start();
+}
+
+internal enum UpdateDaemonOwner
+{
+    None,
+    DetachedProcess,
+    SystemdUserService
+}
+
+internal sealed record UpdateDaemonStopResult(
+    bool Success,
+    UpdateDaemonOwner Owner,
+    string Message)
+{
+    public bool ShouldRestart => Success && Owner is not UpdateDaemonOwner.None;
+
+    public static UpdateDaemonStopResult Succeeded(UpdateDaemonOwner owner, string message) =>
+        new(true, owner, message);
+
+    public static UpdateDaemonStopResult Failed(UpdateDaemonOwner owner, string message) =>
+        new(false, owner, message);
 }
