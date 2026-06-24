@@ -206,14 +206,14 @@ internal static class SessionToolExecutionPipeline
         TurnContext? turnContext = null,
         ModelInputBatchBudget? modelInputBudget = null)
     {
-        // Pre-dispatch validation, on the ORIGINAL (pre-extraction) arguments:
-        // provider args-parse sentinel, present-but-invalid meta values, and
-        // unrecognized argument keys. Shared with the executor (and thus the
-        // sub-agent path) via IToolExecutor.ValidateToolCall so the rules live
-        // in one place. Rejecting here — rather than letting the executor return
-        // the rejection string from ExecuteAsync — is what lets the denial be
-        // audited as Allowed=false instead of being misreported as executed.
-        if (executor.ValidateToolCall(tc) is { } rejection)
+        // Single execution-preflight seam, shared with the sub-agent path via
+        // IToolExecutor.InterpretToolCall: validate the ORIGINAL arguments (parse
+        // sentinel, invalid/ambiguous meta values, unrecognized keys) and, on
+        // success, extract meta + strip meta keys. Rejecting here — rather than
+        // letting ExecuteAsync return the rejection string — is what lets the denial
+        // be audited as Allowed=false instead of being misreported as executed.
+        var interpretation = executor.InterpretToolCall(tc);
+        if (interpretation.Rejection is { } rejection)
         {
             auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, TimeSpan.Zero, meta: null) with
             {
@@ -230,8 +230,8 @@ internal static class SessionToolExecutionPipeline
             }, [], [], [], []);
         }
 
-        var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
-        tc = cleanedTc;
+        var meta = interpretation.Meta;
+        tc = interpretation.Cleaned;
 
         // The agent's per-call timeout hint is honored as requested; when absent
         // the inherited default (SessionConfig.ToolExecutionTimeout) applies.

@@ -63,13 +63,14 @@ Wait+Screen@5s /3 tools/
 Screenshot "/tmp/shot-mcp-permissions-server-list.png"
 
 # ─── Navigate into the ToolGrid ──────────────────────────────────────
-# Sleep 1s here is an intentional settle guard: the daemon can push a
+# Sleep 2s here is an intentional settle guard: the daemon can push a
 # server-state update (tool re-index, reconnect) immediately after the
 # server-list frame stabilises. Navigating into the tool grid during such
 # an update causes Enter to hit the TUI mid-transition, producing a blank
 # screen rather than the tool grid. The sleep lets any in-flight update
-# complete before Enter is delivered.
-Sleep 1s
+# complete before Enter is delivered. 2s (was 1s) provides more headroom
+# under CI load where daemon indexing can lag.
+Sleep 2s
 Enter
 
 # ─── Frame 2: ToolGrid ───────────────────────────────────────────────
@@ -81,6 +82,11 @@ Enter
 # unique to the tool-grid view and absent from the server-list scrollback.
 Wait+Screen@15s /record-tasks/
 Wait+Screen@10s /Server default:/
+# Sleep 500ms: settle guard against a Spectre Console full-refresh repaint
+# racing with VHS Screenshot. The Wait+Screen anchors fire on first match,
+# but the TUI can immediately redraw (daemon event, animation tick) before
+# Screenshot captures. The sleep absorbs that repaint window. See #1471.
+Sleep 500ms
 Screenshot "/tmp/shot-mcp-permissions-tool-grid.png"
 
 # ─── Exit TUI ────────────────────────────────────────────────────────

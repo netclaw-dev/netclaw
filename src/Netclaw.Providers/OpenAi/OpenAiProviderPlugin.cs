@@ -8,6 +8,7 @@ using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using OpenAI;
 
 namespace Netclaw.Providers.OpenAi;
@@ -18,7 +19,14 @@ namespace Netclaw.Providers.OpenAi;
 /// </summary>
 public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
 {
-    public OpenAiProviderPlugin(OpenAiDescriptor descriptor) : base(descriptor) { }
+    private readonly ProviderOAuthTokenRefreshService? _tokenRefreshService;
+
+    public OpenAiProviderPlugin(
+        OpenAiDescriptor descriptor,
+        ProviderOAuthTokenRefreshService? tokenRefreshService = null) : base(descriptor)
+    {
+        _tokenRefreshService = tokenRefreshService;
+    }
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
@@ -28,14 +36,29 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             var token = entry.OAuthAccessToken.RequireValid(
                 "OpenAI OAuth access token (run 'netclaw provider fix <name>')");
 
-            var accountId = JwtAccountIdExtractor.ResolveAccountId(entry)
-                ?? throw new InvalidOperationException(
+            var accountId = JwtAccountIdExtractor.ResolveAccountId(entry);
+            if (_tokenRefreshService is null && accountId is null)
+            {
+                throw new InvalidOperationException(
                     "OpenAI OAuth credential is missing ChatGPT account ID. Re-authenticate with 'netclaw provider fix <name>'.");
+            }
+            var oauth = Descriptor.Auth.GetOAuthConfig()
+                        ?? throw new InvalidOperationException("OpenAI OAuth configuration is unavailable.");
             var options = new OpenAIClientOptions
             {
                 Endpoint = new Uri("https://chatgpt.com/backend-api/codex")
             };
-            options.AddPolicy(new OpenAiCodexRequestPolicy(accountId), PipelinePosition.PerCall);
+            var credential = new ApiKeyCredential(token.Value);
+            options.AddPolicy(
+                _tokenRefreshService is null
+                    ? new OpenAiCodexRequestPolicy(accountId!)
+                    : new OpenAiCodexRequestPolicy(
+                        model.Provider,
+                        entry,
+                        oauth,
+                        credential,
+                        _tokenRefreshService),
+                PipelinePosition.PerCall);
 
             // No non-streaming wrapper is needed here: Netclaw issues streaming-only
             // LLM calls everywhere (the session loop and every auxiliary caller —
@@ -44,7 +67,7 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             // 400 {"detail":"Stream must be set to true"} on non-streaming Responses
             // calls is structurally unreachable.
             return new OpenAI.Responses.ResponsesClient(
-                    new ApiKeyCredential(token.Value), options)
+                    credential, options)
                 .AsIChatClient(model.ModelId);
         }
 

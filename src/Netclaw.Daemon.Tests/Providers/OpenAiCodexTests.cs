@@ -10,6 +10,7 @@ using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OpenAi;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -115,6 +116,15 @@ public sealed class OpenAiCodexTests
 
     public sealed class OpenAiCodexRequestPolicyTests
     {
+        private static readonly OAuthAuth OpenAiOAuth = new()
+        {
+            SupportedAuthMethods = [AuthMethod.OAuthDevice, AuthMethod.OAuthPkce],
+            TokenEndpoint = new Uri("https://auth.openai.com/oauth/token"),
+            DeviceEndpoint = new Uri("https://auth.openai.com/api/accounts/deviceauth/usercode"),
+            ClientId = "client-id",
+            UseProprietaryDeviceFlow = true,
+        };
+
         [Fact]
         public void Process_AddsChatGptAccountIdHeader()
         {
@@ -130,6 +140,62 @@ public sealed class OpenAiCodexTests
             Assert.True(terminal.WasCalled);
             message.Request.Headers.TryGetValue("ChatGPT-Account-Id", out var accountId);
             Assert.Equal("account-123", accountId);
+        }
+
+        [Fact]
+        public async Task ProcessAsync_RefreshesExpiredOAuthBeforeApplyingAccountHeader()
+        {
+            using var dir = new DisposableTempDir();
+            var paths = new NetclawPaths(dir.Path);
+            var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+            var time = new FakeTimeProvider(now);
+            var idToken = JwtTestToken.Make(new Dictionary<string, object>
+            {
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "account-new"
+                }
+            });
+            var handler = new FakeHttpMessageHandler(_ => FakeHttpMessageHandler.JsonResponse(new
+            {
+                access_token = "access-new",
+                refresh_token = "refresh-new",
+                id_token = idToken,
+                expires_in = 3600,
+            }));
+            var httpClient = new HttpClient(handler);
+            var refreshService = new ProviderOAuthTokenRefreshService(
+                paths,
+                new DeviceFlowServiceFactory(
+                    new OAuthDeviceFlowService(httpClient, time),
+                    new OpenAiDeviceFlowService(httpClient, time)),
+                NullNotificationSink.Instance,
+                time);
+            var entry = new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.OAuthDevice,
+                OAuthAccessToken = new SensitiveString("access-old"),
+                OAuthRefreshToken = new SensitiveString("refresh-old"),
+                OAuthTokenExpiry = now.AddMinutes(-1),
+                OAuthAccountId = new SensitiveString("account-old"),
+            };
+            var credential = new ApiKeyCredential("access-old");
+            var policy = new OpenAiCodexRequestPolicy(
+                "openai-codex", entry, OpenAiOAuth, credential, refreshService);
+            var pipeline = ClientPipeline.Create(new ClientPipelineOptions());
+            using var message = pipeline.CreateMessage();
+            message.Request.Method = "POST";
+            message.Request.Uri = new Uri("https://chatgpt.com/backend-api/codex/responses");
+            var terminal = new TerminalPolicy();
+
+            await policy.ProcessAsync(message, [policy, terminal], 0);
+
+            Assert.True(terminal.WasCalled);
+            Assert.Equal("access-new", entry.OAuthAccessToken!.Value);
+            Assert.Equal("refresh-new", entry.OAuthRefreshToken!.Value);
+            message.Request.Headers.TryGetValue("ChatGPT-Account-Id", out var accountId);
+            Assert.Equal("account-new", accountId);
         }
 
         private sealed class TerminalPolicy : PipelinePolicy

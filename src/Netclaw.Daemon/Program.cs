@@ -549,6 +549,11 @@ static void ConfigureDaemonServices(
         paths.PidFilePath,
         paths.LockFilePath,
         paths.RestartManifestPath,
+        // Skill directories managed by the sync service — writes from agent tools
+        // are lost on the next sync cycle and corrupt the sync service's view of
+        // on-disk state. The sync service writes directly via filesystem, not tools.
+        paths.SystemSkillsDirectory,
+        paths.ServerFeedsDirectory,
     };
     var readDenyList = new[]
     {
@@ -566,6 +571,8 @@ static void ConfigureDaemonServices(
         paths.PidFilePath,
         paths.LockFilePath,
         paths.RestartManifestPath,
+        paths.SystemSkillsDirectory,
+        paths.ServerFeedsDirectory,
     };
     var toolPathPolicy = new ToolPathPolicy(writeDenyList, readDenyList, shellIndicatorList);
     services.AddSingleton(toolPathPolicy);

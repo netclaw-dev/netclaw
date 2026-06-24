@@ -3,32 +3,71 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
 namespace Netclaw.Tools;
 
 /// <summary>
-/// Validates LLM-supplied argument keys against a native tool's declared
-/// surface before execution (tool-arg-validation spec). A key is recognized
-/// iff it would actually be consumed downstream: declared parameters match
-/// exactly or via <see cref="ToolArgumentHelper.NormalizeKey"/> (mirroring
-/// the flexible binding in <see cref="ToolArgumentHelper"/>), while meta keys
-/// (<c>_</c>-prefixed) match exactly only (mirroring exact extraction in
-/// <c>ToolCallMeta.ExtractFrom</c>). Unrecognized keys reject the call with a
-/// "did you mean" suggestion — fuzzy matching generates suggestion text ONLY,
-/// never acceptance: the LLM resolves ambiguity by re-issuing explicitly.
+/// Validates LLM-supplied argument keys against a tool's declared surface before
+/// execution (tool-arg-validation spec). A key is recognized iff it would
+/// actually be consumed downstream: declared parameters match exactly or via
+/// <see cref="ToolArgumentHelper.NormalizeKey"/> (mirroring the flexible binding
+/// in <see cref="ToolArgumentHelper"/>), and meta names (<c>TimeoutSeconds</c> →
+/// <c>_timeout_seconds</c>) resolve via <see cref="ResolveMetaField(INetclawTool, string)"/>,
+/// which yields to a declared parameter of the same name. Unrecognized keys reject
+/// the call with a "did you mean" suggestion — fuzzy matching generates suggestion
+/// text ONLY, never acceptance: the LLM resolves ambiguity by re-issuing explicitly.
 /// </summary>
 public static class ToolArgumentValidator
 {
     private sealed record RecognizedKeys(
         HashSet<string> Exact,
         Dictionary<string, string> NormalizedDeclared,
-        string[] MetaKeys,
         string[] ValidNames);
 
-    private static readonly ConcurrentDictionary<Type, RecognizedKeys?> Cache = new();
+    // Keyed by tool INSTANCE, not Type: MCP tools all share the McpToolAdapter
+    // type but each carries a distinct server-defined schema, so a Type cache
+    // would conflate their declared parameters. ConditionalWeakTable lets the
+    // entries be collected with their tools.
+    private sealed class RecognizedHolder
+    {
+        public RecognizedKeys? Value;
+    }
+
+    private static readonly ConditionalWeakTable<INetclawTool, RecognizedHolder> Cache = new();
+
+    private static RecognizedKeys? GetRecognized(INetclawTool tool)
+        => Cache.GetValue(tool, static t => new RecognizedHolder { Value = BuildRecognizedKeys(t) }).Value;
+
+    /// <summary>
+    /// Resolves <paramref name="key"/> to the canonical meta field it addresses
+    /// (<c>_rationale</c>/<c>_timeout_seconds</c>/<c>_background</c>), or null when
+    /// it is not meta. Schema-aware: if <paramref name="tool"/> declares a real
+    /// parameter that <paramref name="key"/> binds to, the parameter wins and this
+    /// returns null — so a third-party MCP tool's own <c>timeout</c> argument is
+    /// forwarded to the server, never hijacked as a Netclaw meta hint. The exact
+    /// canonical names always resolve as meta (they are the injected underscore
+    /// forms no real parameter shares).
+    /// </summary>
+    public static string? ResolveMetaField(INetclawTool tool, string key)
+    {
+        if (ToolArgumentHelper.ResolveMetaField(key) is not { } canonical)
+            return null;
+
+        // Exact canonical meta keys (_timeout_seconds) are always meta.
+        if (Array.IndexOf(ToolCallMeta.MetaFieldNames, key) >= 0)
+            return canonical;
+
+        // Otherwise a declared (non-meta) parameter of this tool wins.
+        var recognized = GetRecognized(tool);
+        if (recognized is not null
+            && recognized.NormalizedDeclared.ContainsKey(ToolArgumentHelper.NormalizeKey(key)))
+            return null;
+
+        return canonical;
+    }
 
     /// <summary>
     /// Validates the supplied argument keys for <paramref name="tool"/>.
@@ -40,26 +79,38 @@ public static class ToolArgumentValidator
         if (arguments is null || arguments.Count == 0)
             return null;
 
-        var recognized = Cache.GetOrAdd(tool.GetType(), _ => BuildRecognizedKeys(tool));
+        var recognized = GetRecognized(tool);
         if (recognized is null)
             return null; // schema exposes no property list — nothing to validate against
 
+        // Classify each key as declared param, near-miss meta, or unknown. Declared
+        // params are matched first; only then is a key tested as a near-miss meta
+        // name, so the tool-agnostic resolve is safe (a declared param can never be
+        // mistaken for meta here). Meta-value validity and ambiguous double-spellings
+        // are enforced upstream in ToolCallMetaExtractor.ValidateMetaValues (which
+        // runs for every tool, native and MCP — this method is native-only).
         List<(string Key, string? Suggestion)>? unknown = null;
         foreach (var key in arguments.Keys)
         {
             if (recognized.Exact.Contains(key))
-                continue;
+                continue; // exact schema property (declared param or injected meta key)
 
-            // Flexible recognition applies to declared params only: binding
-            // consumes case/punctuation variants of declared names, but meta
-            // extraction is exact-match, so a near-miss meta key would NOT be
-            // consumed and must be rejected here.
+            // NormalizeKey once, reused for the declared-param and meta checks.
             var normalized = ToolArgumentHelper.NormalizeKey(key);
+
+            // Flexible recognition for declared params: binding consumes
+            // case/punctuation variants of declared names.
             if (recognized.NormalizedDeclared.ContainsKey(normalized))
                 continue;
 
+            // Not a declared param — recognize ChatGPT-style near-miss meta names
+            // (TimeoutSeconds, Rationale, bare Timeout) so they are not flagged
+            // unknown; extraction consumes them the same way.
+            if (ToolArgumentHelper.ResolveMetaField(key) is not null)
+                continue;
+
             unknown ??= [];
-            unknown.Add((key, SuggestFor(key, normalized, recognized)));
+            unknown.Add((key, SuggestFor(normalized, recognized)));
         }
 
         if (unknown is null)
@@ -96,7 +147,6 @@ public static class ToolArgumentValidator
 
         var exact = new HashSet<string>(StringComparer.Ordinal);
         var normalizedDeclared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var meta = new List<string>();
         var names = new List<string>();
 
         foreach (var prop in props.EnumerateObject())
@@ -105,9 +155,9 @@ public static class ToolArgumentValidator
             exact.Add(name);
             names.Add(name);
 
-            if (name.StartsWith('_'))
-                meta.Add(name);
-            else
+            // Meta keys (_-prefixed) are recognized via ResolveMetaField, not the
+            // declared-param table, so they are not tracked here.
+            if (!name.StartsWith('_'))
                 normalizedDeclared[ToolArgumentHelper.NormalizeKey(name)] = name;
         }
 
@@ -122,21 +172,14 @@ public static class ToolArgumentValidator
                 normalizedDeclared.TryAdd(alias, normalizedDeclared[declared]);
         }
 
-        return new RecognizedKeys(exact, normalizedDeclared, [.. meta], [.. names]);
+        return new RecognizedKeys(exact, normalizedDeclared, [.. names]);
     }
 
-    private static string? SuggestFor(string key, string normalizedKey, RecognizedKeys recognized)
+    private static string? SuggestFor(string normalizedKey, RecognizedKeys recognized)
     {
-        // A key that canonicalizes to a meta key (TimeoutSeconds, timeout_seconds,
-        // _timeoutSeconds → _timeout_seconds) is the highest-confidence near-miss.
-        foreach (var metaKey in recognized.MetaKeys)
-        {
-            if (string.Equals(
-                    ToolArgumentHelper.NormalizeKey(metaKey), normalizedKey,
-                    StringComparison.OrdinalIgnoreCase))
-                return metaKey;
-        }
-
+        // Near-miss meta keys never reach here — ValidateArgumentKeys recognizes
+        // anything ResolveMetaField maps to a meta field before falling through to
+        // the unknown-key suggestion path. Only declared-param typos remain.
         string? best = null;
         var bestDistance = 3; // suggest only within edit distance 2
         foreach (var name in recognized.ValidNames)

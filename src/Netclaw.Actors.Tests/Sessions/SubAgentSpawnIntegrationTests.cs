@@ -286,7 +286,12 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 "shell_execute",
                 new Dictionary<string, object?>
                 {
-                    ["Command"] = "git push origin main"
+                    ["Command"] = "git push origin main",
+                    // Per-call timeout hint on the sub-agent path: the sub-agent
+                    // loop must extract this via the shared executor seam and apply
+                    // it to the tool context (it previously skipped extraction and
+                    // silently dropped the hint).
+                    ["_timeout_seconds"] = 1800
                 })
         ];
 
@@ -348,6 +353,10 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.NotNull(_recordingShellTool);
         Assert.True(_recordingShellTool!.WasCalled);
         Assert.Equal(TrustAudience.Personal, _recordingShellTool.LastContext?.Audience);
+
+        // The sub-agent extracted the meta timeout hint and applied it to the
+        // tool context (regression guard for the previously-dropped hint).
+        Assert.Equal(1800, _recordingShellTool.LastContext?.RequestedTimeoutSeconds);
     }
 
     [Fact]

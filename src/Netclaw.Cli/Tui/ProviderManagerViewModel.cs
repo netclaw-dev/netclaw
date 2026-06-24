@@ -274,10 +274,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             try
             {
-                var result = item.Entry is not null
-                    ? await _probe.ProbeAsync(item.Entry, CancellationToken.None)
-                    : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
-                        GetProbeCredential(item.Entry), CancellationToken.None);
+                var result = await ProbeDisplayItemAsync(item, CancellationToken.None);
 
                 item.ProbeResult = result;
                 item.Health = result.Success
@@ -752,10 +749,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         try
         {
-            var result = item.Entry is not null
-                ? await _probe.ProbeAsync(item.Entry, ct)
-                : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
-                    GetProbeCredential(item.Entry), ct);
+            var result = await ProbeDisplayItemAsync(item, ct);
 
             // Abandoned (operator left the detail view, or a newer revalidate started): do not
             // update health or redraw against a stale/disposed view-model.
@@ -780,6 +774,24 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         NotifyStateChanged();
+    }
+
+    private Task<ProviderProbeResult> ProbeDisplayItemAsync(
+        ProviderDisplayItem item,
+        CancellationToken ct)
+    {
+        // Only persisted providers have a stable config key for refresh writes;
+        // pending add/fix entries must stay on the no-clobber probe path.
+        if (item is { Entry: not null, ConfiguredName: not null }
+            && _probe is IConfiguredProviderProbe configuredProbe)
+        {
+            return configuredProbe.ProbeConfiguredAsync(item.ConfiguredName, item.Entry, ct);
+        }
+
+        return item.Entry is not null
+            ? _probe.ProbeAsync(item.Entry, ct)
+            : _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
+                GetProbeCredential(item.Entry), ct);
     }
 
     /// <summary>

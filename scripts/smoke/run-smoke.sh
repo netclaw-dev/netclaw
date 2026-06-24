@@ -113,7 +113,7 @@ shot_tape_frames() {
 # sample the PNG between the clear and the repaint half of that same write.
 # The write is atomic from the app's side (real users never see it); only VHS's
 # mid-write PTY sampling does. Re-running the tape re-captures a settled frame.
-SHOT_BLANK_RETRIES="${SHOT_BLANK_RETRIES:-3}"
+SHOT_BLANK_RETRIES="${SHOT_BLANK_RETRIES:-5}"
 
 # Pixel tolerance (ImageMagick AE) for a frame to count as matching its
 # baseline. Shared by compare_shot_frame (the pass/fail gate) and the retry

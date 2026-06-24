@@ -100,6 +100,38 @@ public static class ToolArgumentHelper
         }
     }
 
+    // Normalized-form -> canonical meta field, precomputed once. NormalizeKey
+    // folds underscore/punctuation/case, so "_timeout_seconds", "TimeoutSeconds",
+    // and "timeout_seconds" all key as "timeoutseconds"; the near-miss entry
+    // "timeout" covers the shortened form models emit, which NormalizeKey alone
+    // does not fold onto a canonical. OrdinalIgnoreCase because NormalizeKey
+    // strips punctuation but preserves case.
+    private static readonly Dictionary<string, string> NormalizedMetaFields = BuildNormalizedMetaFields();
+
+    private static Dictionary<string, string> BuildNormalizedMetaFields()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var canonical in ToolCallMeta.MetaFieldNames)
+            map[NormalizeKey(canonical)] = canonical;
+
+        map["timeout"] = "_timeout_seconds";
+        return map;
+    }
+
+    /// <summary>
+    /// Spelling-tolerant resolution of an argument key to its canonical meta field
+    /// (<c>_rationale</c>/<c>_timeout_seconds</c>/<c>_background</c>), or null. This
+    /// is tool-agnostic and does NOT account for a tool that declares a real
+    /// parameter of the same name — callers that handle untrusted schemas (MCP)
+    /// must go through <see cref="ToolArgumentValidator.ResolveMetaField(INetclawTool, string)"/>,
+    /// which yields to a declared parameter. Safe to use directly only where
+    /// collisions are impossible (proven for native tools by MetaFieldResolutionTests).
+    /// </summary>
+    public static string? ResolveMetaField(string? key)
+        => string.IsNullOrWhiteSpace(key)
+            ? null
+            : NormalizedMetaFields.TryGetValue(NormalizeKey(key), out var canonical) ? canonical : null;
+
     public static string? GetString(IDictionary<string, object?>? arguments, string key)
     {
         // Binding-side consumer of the text↔Message alias group above.

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.14.0"
+  version: "2.15.1"
 ---
 
 # Netclaw Operations
@@ -310,15 +310,24 @@ session context on every turn.
 
 ## Tool argument validation
 
-Tool argument names are validated strictly — unrecognized keys reject the call
-before execution with a `did you mean '<canonical>'?` suggestion and the list
-of valid argument names. Meta keys are exact-match: `_timeout_seconds` and
-`_background` (a leading underscore, snake_case). `TimeoutSeconds`,
-`timeout_seconds`, or `_timeoutSeconds` are rejected, never silently dropped.
-Values must parse as their declared type: `_timeout_seconds: "1200ms"` or
-`_background: "yes"` rejects the call instead of silently using defaults. When
-a call is rejected this way the tool did NOT run — fix the argument and
-re-issue once; do not retry the same shape.
+Prefer the canonical argument names exactly as a tool declares them, and the
+canonical meta keys `_rationale`, `_timeout_seconds`, `_background` (leading
+underscore, snake_case). Recognition is spelling-tolerant so a near-miss is
+consumed rather than dropped: declared params fold case/punctuation, and the
+meta keys also accept the underscore-dropped/cased/shortened forms
+(`TimeoutSeconds`, `timeout_seconds`, `Timeout` → the timeout hint; `Rationale`,
+`Background` likewise). The supplied value is always *used* — never silently
+defaulted.
+
+Three things are still rejected loudly, and when rejected the tool did NOT run —
+fix and re-issue once, do not retry the same shape:
+
+- **Unknown keys** — a key that matches no parameter and no meta field rejects
+  with a `did you mean '<canonical>'?` suggestion and the list of valid names.
+- **Invalid values** — a value that cannot parse as its type (`_timeout_seconds:
+  "1200ms"`, `_background: "yes"`) rejects instead of falling back to a default.
+- **Ambiguous meta spelling** — supplying two keys that map to the same meta
+  field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
 
 ## Large tool output
 
@@ -1035,6 +1044,13 @@ file. If it should be recalled when relevant → SQLite memory.
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
 | Permanently delete a reminder | `netclaw reminder delete <id>` |
+
+`netclaw update` preserves daemon ownership. When `netclaw.service` is active or
+enabled as a systemd user service, update restarts it with `systemctl --user`
+instead of launching a detached daemon. If restart fails, inspect
+`systemctl --user status netclaw.service`, then start it manually with
+`systemctl --user start netclaw.service` or fall back to `netclaw daemon start`
+only when no systemd user service owns the daemon.
 
 ## Demo AppHost
 

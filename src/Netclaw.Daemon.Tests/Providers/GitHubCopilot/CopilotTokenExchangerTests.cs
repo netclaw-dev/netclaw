@@ -8,7 +8,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Providers;
 using Netclaw.Providers.GitHubCopilot;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -16,12 +18,35 @@ namespace Netclaw.Daemon.Tests.Providers.GitHubCopilot;
 
 public sealed class CopilotTokenExchangerTests
 {
+    private static readonly OAuthAuth PublicOAuth = new()
+    {
+        SupportedAuthMethods = [AuthMethod.OAuthDevice],
+        TokenEndpoint = new Uri("https://github.com/login/oauth/access_token"),
+        DeviceEndpoint = new Uri("https://github.com/login/device/code"),
+        ClientId = "copilot-client",
+        Scope = "read:user",
+        UseProprietaryDeviceFlow = false,
+    };
+
     private static ProviderEntry EntryWithOAuth(string token) =>
         new()
         {
             Type = "github-copilot",
             AuthMethod = AuthMethod.OAuthDevice,
             OAuthAccessToken = new SensitiveString(token),
+        };
+
+    private static ProviderEntry ExpiredEntryWithOAuth(
+        DateTimeOffset now,
+        string accessToken = "oauth-old",
+        string? refreshToken = "refresh-old") =>
+        new()
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString(accessToken),
+            OAuthRefreshToken = refreshToken is null ? null : new SensitiveString(refreshToken),
+            OAuthTokenExpiry = now.AddMinutes(-1),
         };
 
     private static HttpResponseMessage TokenResponse(string token, long expiresAt) =>
@@ -53,31 +78,102 @@ public sealed class CopilotTokenExchangerTests
     }
 
     [Fact]
-    public async Task GetToken_WithinTtl_ReturnsCachedWithoutHttp()
+    public async Task GetToken_NamedProvider_ExpiredOAuthToken_RefreshesBeforeTokenExchange()
     {
-        var callCount = 0;
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var handler = new FakeHttpMessageHandler(_ =>
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        WriteProviderConfig(paths, "copilot");
+
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var requestUris = new List<string>();
+        string? exchangeAuthorization = null;
+        var handler = new FakeHttpMessageHandler(request =>
         {
-            callCount++;
-            return TokenResponse("copilot-token-1",
-                time.GetUtcNow().AddMinutes(30).ToUnixTimeSeconds());
+            requestUris.Add(request.RequestUri!.ToString());
+            return request.RequestUri!.ToString() switch
+            {
+                "https://github.com/login/oauth/access_token" => FakeHttpMessageHandler.JsonResponse(new
+                {
+                    access_token = "oauth-new",
+                    refresh_token = "refresh-new",
+                    expires_in = 3600,
+                }),
+                "https://api.github.com/copilot_internal/v2/token" => CaptureExchangeRequest(request),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
         });
-        var exchanger = new CopilotTokenExchanger(new HttpClient(handler), time);
+        var service = CreateRefreshService(paths, time, handler);
+        var exchanger = new CopilotTokenExchanger(new HttpClient(handler), time, service);
+        var entry = ExpiredEntryWithOAuth(now);
 
-        var entry = EntryWithOAuth("oauth-1");
-        await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromMinutes(5));
-        await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromMinutes(20)); // still > 2 min before expiry
-        var third = await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
+        var token = await exchanger.GetTokenAsync(
+            "copilot",
+            entry,
+            PublicOAuth,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal("copilot-token-1", third);
-        Assert.Equal(1, callCount);
+        Assert.Equal("copilot-token", token);
+        Assert.Equal("oauth-new", entry.OAuthAccessToken!.Value);
+        Assert.Equal("refresh-new", entry.OAuthRefreshToken!.Value);
+        Assert.Equal(now.AddHours(1), entry.OAuthTokenExpiry);
+        Assert.Equal("Bearer oauth-new", exchangeAuthorization);
+        Assert.Equal([
+            "https://github.com/login/oauth/access_token",
+            "https://api.github.com/copilot_internal/v2/token",
+        ], requestUris);
+
+        using var secretsDoc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
+        var secretProvider = secretsDoc.RootElement.GetProperty("Providers").GetProperty("copilot");
+        Assert.Equal("oauth-new", secretProvider.GetProperty("OAuthAccessToken").GetString());
+        Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());
+
+        using var configDoc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
+        var configProvider = configDoc.RootElement.GetProperty("Providers").GetProperty("copilot");
+        Assert.Equal(now.AddHours(1), DateTimeOffset.Parse(configProvider.GetProperty("OAuthTokenExpiry").GetString()!));
+
+        HttpResponseMessage CaptureExchangeRequest(HttpRequestMessage request)
+        {
+            exchangeAuthorization = request.Headers.Authorization!.ToString();
+            return TokenResponse("copilot-token", now.AddMinutes(30).ToUnixTimeSeconds());
+        }
     }
 
-    [Fact]
-    public async Task GetToken_WithinRefreshBuffer_FetchesFreshToken()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetToken_NamedProvider_RefreshFailure_ThrowsBeforeTokenExchange(bool hasRefreshToken)
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var handler = new FakeHttpMessageHandler(request =>
+            request.RequestUri!.ToString() switch
+            {
+                "https://github.com/login/oauth/access_token" when hasRefreshToken => FakeHttpMessageHandler.JsonResponse(
+                    new { error = "invalid_grant" }, HttpStatusCode.BadRequest),
+                "https://api.github.com/copilot_internal/v2/token" => throw new InvalidOperationException(
+                    "token exchange should not run after failed refresh"),
+                _ => throw new InvalidOperationException("unexpected HTTP request"),
+            });
+        var service = CreateRefreshService(paths, time, handler);
+        var exchanger = new CopilotTokenExchanger(new HttpClient(handler), time, service);
+
+        var ex = await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() =>
+            exchanger.GetTokenAsync(
+                "copilot",
+                ExpiredEntryWithOAuth(now, refreshToken: hasRefreshToken ? "refresh-old" : null),
+                PublicOAuth,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("provider fix copilot", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(25, "copilot-token-1", 1)]
+    [InlineData(29, "copilot-token-2", 2)]
+    public async Task GetToken_UsesRefreshBuffer(int advanceMinutes, string expectedToken, int expectedCalls)
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var callCount = 0;
@@ -93,12 +189,11 @@ public sealed class CopilotTokenExchangerTests
         var entry = EntryWithOAuth("oauth-1");
         await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
 
-        // Advance to inside the 2-minute refresh buffer (29 minutes elapsed → 1 minute to expiry)
-        time.Advance(TimeSpan.FromMinutes(29));
-        var refreshed = await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(advanceMinutes));
+        var token = await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
 
-        Assert.Equal("copilot-token-2", refreshed);
-        Assert.Equal(2, callCount);
+        Assert.Equal(expectedToken, token);
+        Assert.Equal(expectedCalls, callCount);
     }
 
     [Fact]
@@ -211,5 +306,34 @@ public sealed class CopilotTokenExchangerTests
             captured.Headers.GetValues("Editor-Plugin-Version").Single());
         Assert.Equal("vscode-chat", captured.Headers.GetValues("Copilot-Integration-Id").Single());
         Assert.Equal("2022-11-28", captured.Headers.GetValues("X-GitHub-Api-Version").Single());
+    }
+
+    private static ProviderOAuthTokenRefreshService CreateRefreshService(
+        NetclawPaths paths,
+        FakeTimeProvider time,
+        FakeHttpMessageHandler handler)
+    {
+        var httpClient = new HttpClient(handler);
+        var factory = new DeviceFlowServiceFactory(
+            new OAuthDeviceFlowService(httpClient, time),
+            new OpenAiDeviceFlowService(httpClient, time));
+
+        return new ProviderOAuthTokenRefreshService(paths, factory, timeProvider: time);
+    }
+
+    private static void WriteProviderConfig(NetclawPaths paths, string providerName)
+    {
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, $$"""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "{{providerName}}": {
+                  "Type": "github-copilot",
+                  "AuthMethod": "OAuthDevice"
+                }
+              }
+            }
+            """);
     }
 }

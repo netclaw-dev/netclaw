@@ -236,6 +236,54 @@ public sealed class StreamingToolCallTests
         await Assert.ThrowsAsync<TimeoutException>(() => task);
     }
 
+    /// <summary>
+    /// A human-approval block (<see cref="ToolActivityUpdate.SuspendsInactivityWatchdog"/>)
+    /// must pause the watchdog in EVERY budget mode — a human-in-the-loop wait is not the
+    /// tool running away on its own output, so it must never burn the budget. Regression
+    /// guard: before the fix, the <c>wallClock</c> case ignored the suspend and tripped the
+    /// timeout mid-approval. The pre-fix suspend test only exercised <c>Flat</c>, which is
+    /// exactly why the WallClock regression slipped through.
+    /// </summary>
+    [Theory]
+    [InlineData("flat")]
+    [InlineData("firstItemOnly")]
+    [InlineData("wallClock")]
+    public async Task Explicit_suspend_pauses_watchdog_in_every_mode(string mode)
+    {
+        var budget = mode switch
+        {
+            "flat" => ToolWatchdogBudget.Flat(TimeSpan.FromSeconds(5)),
+            "firstItemOnly" => ToolWatchdogBudget.FirstItemOnly(TimeSpan.FromSeconds(5)),
+            "wallClock" => ToolWatchdogBudget.WallClock(TimeSpan.FromSeconds(5)),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown budget mode")
+        };
+        var time = new FakeTimeProvider();
+        var channel = Channel.CreateUnbounded<ToolCallUpdate>();
+        var activitySeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var task = StreamingToolWatchdog.ConsumeAsync(
+            channel.Reader.ReadAllAsync(TestContext.Current.CancellationToken),
+            "spawn_agent",
+            budget,
+            time,
+            onActivity: _ => activitySeen.TrySetResult(),
+            TestContext.Current.CancellationToken);
+
+        channel.Writer.TryWrite(new ToolActivityUpdate("awaiting human approval")
+        {
+            SuspendsInactivityWatchdog = true
+        });
+        await activitySeen.Task;
+
+        // A long human-approval wait — far past the budget — must not trip the watchdog.
+        time.Advance(TimeSpan.FromMinutes(5));
+        Assert.False(task.IsCompleted);
+
+        channel.Writer.TryWrite(new ToolCompletedUpdate("done"));
+        channel.Writer.Complete();
+        Assert.Equal("done", await task);
+    }
+
     [Fact]
     public async Task Concurrent_calls_are_bounded_independently()
     {

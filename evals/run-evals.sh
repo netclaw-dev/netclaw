@@ -1030,10 +1030,11 @@ assert_tool_file_list() {
 }
 
 assert_tool_timeout_arg_recovery() {
-    # Loud arg validation: if the model emits a near-miss timeout key
-    # (TimeoutSeconds, timeout_seconds), the rejection's did-you-mean must
-    # steer it to the canonical _timeout_seconds within the turn — the
-    # command actually running is the proof of recovery.
+    # Spelling-tolerant meta keys: a near-miss timeout key (TimeoutSeconds,
+    # timeout_seconds, Timeout) now resolves onto _timeout_seconds and is
+    # consumed directly — no rejection round-trip needed. If the model instead
+    # emits the canonical key, that works too. Either way the command running is
+    # the proof the timeout hint was honored, not dropped.
     stdout_contains '\[tool:call\] shell_execute' \
         && stdout_contains 'netclaw-timeout-eval-ok'
 }

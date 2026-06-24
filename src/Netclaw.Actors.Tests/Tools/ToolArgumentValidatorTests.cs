@@ -72,33 +72,83 @@ public class ToolArgumentValidatorTests
     }
 
     [Fact]
-    public async Task TimeoutSeconds_rejected_with_meta_key_suggestion()
+    public async Task TimeoutSeconds_accepted_and_consumed_as_meta_field()
     {
         // The literal arg shape from production session
-        // D0AC6CKBK5K_1781115410_840529 that was silently dropped.
+        // D0AC6CKBK5K_1781115410_840529. ChatGPT-trained models (Qwen) emit the
+        // underscore-dropped name; rather than reject (which pushed the model off
+        // tools entirely — session D0AC6CKBK5K_1781746527), it now resolves onto
+        // _timeout_seconds and the call runs. Not a silent default: the value is
+        // consumed (see MetaFieldResolutionTests / ToolCallMetaExtractorTests).
         var result = await ExecuteShellAsync(new Dictionary<string, object?>
         {
-            ["Command"] = "echo should-not-run",
+            ["Command"] = "echo runs-now",
             ["TimeoutSeconds"] = "1200"
         });
 
-        Assert.Contains("Unrecognized argument 'TimeoutSeconds'", result);
-        Assert.Contains("Did you mean '_timeout_seconds'?", result);
+        Assert.DoesNotContain("Unrecognized argument", result);
+        Assert.Contains("runs-now", result);
+    }
+
+    [Fact]
+    public async Task Underscore_missing_timeout_seconds_accepted()
+    {
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo runs-now",
+            ["timeout_seconds"] = 300
+        });
+
+        Assert.DoesNotContain("Unrecognized argument", result);
+        Assert.Contains("runs-now", result);
+    }
+
+    [Fact]
+    public async Task Conflicting_timeout_spellings_rejected_as_ambiguous()
+    {
+        // Two distinct keys resolving to the same meta field would force a silent
+        // pick-one-drop-the-other — the no-silent-discard invariant rejects it.
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo should-not-run",
+            ["_timeout_seconds"] = 120,
+            ["TimeoutSeconds"] = 1200
+        });
+
+        Assert.Contains("both map to the meta field '_timeout_seconds'", result);
         Assert.Contains("NOT executed", result);
         Assert.DoesNotContain("should-not-run", result);
     }
 
-    [Fact]
-    public async Task Underscore_missing_timeout_seconds_rejected_never_bound()
+    [Theory]
+    [InlineData("Rationale")]
+    [InlineData("rationale")]
+    public async Task Misnamed_rationale_accepted(string key)
     {
         var result = await ExecuteShellAsync(new Dictionary<string, object?>
         {
-            ["Command"] = "echo should-not-run",
-            ["timeout_seconds"] = 300
+            ["Command"] = "echo runs-now",
+            [key] = "because"
         });
 
-        Assert.Contains("Unrecognized argument 'timeout_seconds'", result);
-        Assert.Contains("Did you mean '_timeout_seconds'?", result);
+        Assert.DoesNotContain("Unrecognized argument", result);
+        Assert.Contains("runs-now", result);
+    }
+
+    [Fact]
+    public async Task Misnamed_timeout_with_invalid_value_rejected_loudly()
+    {
+        // Spelling tolerance must not become a silent escape hatch: a resolved
+        // meta key with an unusable value is still rejected before dispatch,
+        // naming the model's own key spelling.
+        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        {
+            ["Command"] = "echo should-not-run",
+            ["TimeoutSeconds"] = "not-a-number"
+        });
+
+        Assert.Contains("Meta argument 'TimeoutSeconds'", result);
+        Assert.Contains("not a valid positive integer", result);
         Assert.DoesNotContain("should-not-run", result);
     }
 
@@ -237,5 +287,57 @@ public class ToolArgumentValidatorTests
         }
 
         Assert.DoesNotContain("Unrecognized argument", result);
+    }
+
+    [Fact]
+    public void Mcp_conflicting_meta_spellings_rejected_as_ambiguous()
+    {
+        // MCP tools skip native key validation (above), but the no-silent-discard
+        // invariant must still hold: two distinct keys mapping to one meta field are
+        // rejected loudly. The guard lives in ValidateMetaValues (every tool), not
+        // the native-only ValidateArgumentKeys — this proves it covers the MCP path.
+        var fakeTool = AIFunctionFactory.Create(() => "mcp-result", "store");
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
+        var executor = new DispatchingToolExecutor(registry);
+
+        var rejection = executor.ValidateToolCall(new FunctionCallContent(
+            "call-mcp", "memorizer/store", new Dictionary<string, object?>
+            {
+                ["_timeout_seconds"] = 120,
+                ["TimeoutSeconds"] = 1200
+            }));
+
+        Assert.NotNull(rejection);
+        Assert.Contains("both map to the meta field '_timeout_seconds'", rejection!.Message);
+    }
+
+    [Fact]
+    public void InterpretToolCall_valid_extracts_meta_and_strips_keys()
+    {
+        var interp = _executor.InterpretToolCall(new FunctionCallContent("c", "shell_execute",
+            new Dictionary<string, object?> { ["Command"] = "echo hi", ["TimeoutSeconds"] = 300 }));
+
+        Assert.Null(interp.Rejection);
+        Assert.Equal(300, interp.Meta?.TimeoutHintSeconds);
+        Assert.DoesNotContain("TimeoutSeconds", (IDictionary<string, object?>)interp.Cleaned.Arguments!);
+    }
+
+    [Fact]
+    public void InterpretToolCall_rejection_leaves_the_call_uncleaned()
+    {
+        var original = new FunctionCallContent("c", "shell_execute", new Dictionary<string, object?>
+        {
+            ["Command"] = "echo hi",
+            ["_timeout_seconds"] = 1,
+            ["TimeoutSeconds"] = 2
+        });
+
+        var interp = _executor.InterpretToolCall(original);
+
+        Assert.NotNull(interp.Rejection);
+        Assert.Contains("both map to the meta field", interp.Rejection!.Message);
+        Assert.Same(original, interp.Cleaned); // not cleaned when rejected
+        Assert.Null(interp.Meta);
     }
 }

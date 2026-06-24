@@ -1790,7 +1790,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             CanonicalizeToolCallNames(lastMessage, toolCalls, _toolRegistry);
         }
 
-        var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
+        // Persist tool calls exactly as the executor will interpret them (schema-aware
+        // meta extraction), so recorded history matches what actually runs — a near-miss
+        // meta key is stripped + captured in MetaJson, not left raw with an empty meta.
+        var assistantMsg = ChatMessageConverter.FromAiMessage(
+            lastMessage,
+            interpretToolCall: _toolExecutor is { } toolExec
+                ? tc =>
+                {
+                    var (meta, cleaned) = toolExec.PrepareToolCall(tc);
+                    return (meta, cleaned.Arguments);
+                }
+                : null);
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -2506,6 +2517,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SaveSnapshotSuccess>(msg =>
         {
             _log.Info("Snapshot saved (seqNr={SequenceNr})", msg.Metadata.SequenceNr);
+
+            DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
+            DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr-1)); // delete all old snapshots
         });
 
         Command<SaveSnapshotFailure>(msg =>
@@ -4152,7 +4166,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Rebuild the FunctionCallContent batch from the persisted assistant
         // message — tool arguments are durably stored in SerializableToolCall.
-        var aiMessage = ChatMessageConverter.ToAiMessage(assistantMsg);
+        // reinjectMeta re-applies the persisted per-call hints (timeout/background/
+        // rationale) that were stripped into MetaJson at persistence, so a re-driven
+        // call honors them instead of falling back to defaults.
+        var aiMessage = ChatMessageConverter.ToAiMessage(assistantMsg, reinjectMeta: true);
         var toolCalls = aiMessage.Contents
             .OfType<FunctionCallContent>()
             .Where(tc => !ParkedToolBatchHistory.HasToolResult(_state.History, tc.CallId)

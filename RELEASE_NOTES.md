@@ -1,3 +1,35 @@
+#### 0.24.2-beta.1 2026-06-24 ####
+
+Netclaw v0.24.2-beta.1 — Schema-aware meta argument coercion, reliability fixes, and performance improvements
+
+**Features**
+
+* **Schema-aware meta argument coercion** — ChatGPT-trained models (Qwen3.6, etc.) were being hard-rejected for using non-canonical meta argument names (`TimeoutSeconds` vs `_timeout_seconds`). This adds schema-aware near-miss resolution that coercively maps model-supplied key variants to canonical names when no real tool parameter shadows them. Fixes "tool was NOT executed" errors that pushed models off tools and into sandbox-style output. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
+
+* **Preserve per-call meta hints across tool-batch re-drive** — Tool calls awaiting approval that passivate and cold-recover were losing meta hints (`_timeout_seconds`, `_rationale`, `_background`), silently falling back to defaults. Fixes a pre-existing bug where the re-drive path never reinjected persisted MetaJson. Long-running tools approved after session recovery now respect the original timeout. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
+
+**Bug Fixes**
+
+* **Subagents: honor approval-pause in every tool-watchdog mode** — In WallClock mode (applied to every opaque tool), the human-approval pause was ignored: the wall-clock budget kept ticking through a human approval, killing healthy tools mid-wait when humans took longer than the budget. Prevents premature tool termination during human-in-the-loop approvals. ([#1473](https://github.com/netclaw-dev/netclaw/pull/1473))
+
+* **Skills: block agent mutations to server-feed skill directories** — Agents could freely edit/delete/write files into `.server-feeds/` skill directories via both `skill_manage` and direct file-write tools. Changes were silently overwritten on the next sync cycle. Two enforcement layers added: `skill_manage` guard + `ToolPathPolicy` write-deny for server-feed paths. Prevents wasted agent effort and misleading session state from server-feed mutations. ([#1466](https://github.com/netclaw-dev/netclaw/pull/1466))
+
+* **Subagents: record spawn lifecycle in the session transcript** — Sub-agent actor logs went through Akka's async logger bridge and were lost because `SessionDiagnosticsContext.AsyncLocal` was gone. Spawns that failed early (guard rejection, watchdog kill, child-actor failure) left the session transcript completely silent. Parent-side breadcrumbs now log spawn lifecycle under the parent session scope. ([#1468](https://github.com/netclaw-dev/netclaw/pull/1468))
+
+* **Providers: refresh inference OAuth tokens** — OpenAI Copilot and other inference providers with OAuth tokens now refresh tokens at runtime rather than relying on stale tokens. Includes Copilot probe-time token refresh. Prevents authentication failures during long-running sessions when tokens expire. ([#1465](https://github.com/netclaw-dev/netclaw/pull/1465))
+
+**Performance**
+
+* **Optimize `LlmSessionActor` storage** — Only retain the most recent snapshot + last N messages in the journal, instead of storing full history. Reduces memory consumption for long sessions with many messages. ([#1464](https://github.com/netclaw-dev/netclaw/pull/1464))
+
+**Dependency Updates**
+
+* **Bump MessagePack from 2.5.301 to 3.1.7** — Major version bump with serialization improvements. Please test your workflows after upgrading. ([#1420](https://github.com/netclaw-dev/netclaw/pull/1420))
+
+* **Bump Anthropic SDK** — 12.29.1 → 12.30.0 (semver-minor). ([#1460](https://github.com/netclaw-dev/netclaw/pull/1460))
+
+* **Bump Aspire.Hosting.Testing** — 13.4.4 → 13.4.6 (semver-patch). ([#1462](https://github.com/netclaw-dev/netclaw/pull/1462))
+
 #### 0.24.1 2026-06-23 ####
 
 Netclaw v0.24.1 — TUI reliability improvements, remote skill server awareness, spawn_agent liveness fixes, and SQLitePCLRaw CVE mitigation

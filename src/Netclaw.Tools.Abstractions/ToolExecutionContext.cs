@@ -92,6 +92,19 @@ public sealed class ToolExecutionContext
     /// </summary>
     public int? RequestedTimeoutSeconds { get; set; }
 
+    /// <summary>
+    /// Applies a per-call <see cref="ToolCallMeta"/> hint to this context — the one
+    /// definition of "meta hint → context" shared by the pipeline and sub-agent so the
+    /// timeout hint can't be dropped by a path that forgets to apply it. Currently
+    /// only the timeout hint maps onto the context; an absent hint leaves the
+    /// inherited default in place.
+    /// </summary>
+    public void ApplyMeta(ToolCallMeta? meta)
+    {
+        if (meta?.TimeoutHintSeconds is { } timeoutSeconds)
+            RequestedTimeoutSeconds = timeoutSeconds;
+    }
+
 
     public string? ChannelType { get; set; }
 

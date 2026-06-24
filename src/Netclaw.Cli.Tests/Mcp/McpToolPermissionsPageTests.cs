@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpToolPermissionsPageTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -303,10 +303,9 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     [Fact]
     public async Task ToolGrid_ManyTools_HeaderRowsNotOverwrittenByScrollContent()
     {
-        // Regression test for issue #1424: ScrollableContainerNode.Render ignores
-        // bounds.Y and writes at context (0,0). With enough tools the scroll container
-        // overwrites the server-info and audience rows. The fix wraps the container in
-        // a borderless PanelNode so it receives a properly-offset render context.
+        // Regression test for issue #1424: ScrollableContainerNode.Render now correctly
+        // respects bounds, so it no longer overwrites header rows when many tools are
+        // displayed. The PanelNode workaround was removed in issue #1427.
         var (terminal, app, vm) = CreateHeadlessApp(out var input);
 
         // 15 tools: on a 40-row terminal the tool list starts at row ~10 without the

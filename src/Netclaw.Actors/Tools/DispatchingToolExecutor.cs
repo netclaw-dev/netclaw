@@ -53,22 +53,62 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     /// <inheritdoc />
     public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
-    {
-        if (_registry.GetByName(toolCall.Name) is not { } registered)
-            return null; // unknown-tool is handled separately by the execute paths
+        => _registry.GetByName(toolCall.Name) is { } registered
+            ? ValidateCore(toolCall, registered, MetaResolverFor(registered))
+            : null; // unknown-tool is handled separately by the execute paths
 
-        // Registry-free checks first (parse sentinel, meta values).
-        if (ValidateArguments(toolCall.Arguments) is { } rejection)
+    /// <inheritdoc />
+    public ToolCallInterpretation InterpretToolCall(FunctionCallContent toolCall)
+    {
+        // The single execution-preflight seam: resolve the tool + build the resolver
+        // ONCE, then validate and (only on success) extract — so validation and
+        // extraction can never disagree, and a caller cannot extract without first
+        // validating (the silent-drop footgun). Both the main pipeline and the
+        // sub-agent loop route through this.
+        if (_registry.GetByName(toolCall.Name) is not { } registered)
+            return new ToolCallInterpretation(null, null, toolCall); // unknown tool: execute path reports it
+
+        var resolveMeta = MetaResolverFor(registered);
+        if (ValidateCore(toolCall, registered, resolveMeta) is { } rejection)
+            return new ToolCallInterpretation(rejection, null, toolCall);
+
+        var (meta, cleaned) = ToolCallMetaExtractor.Extract(toolCall, resolveMeta);
+        return new ToolCallInterpretation(null, meta, cleaned);
+    }
+
+    /// <inheritdoc />
+    public (ToolCallMeta? Meta, FunctionCallContent Cleaned) PrepareToolCall(FunctionCallContent toolCall)
+    {
+        // Extraction only (no validation) — used by the persistence path, which must
+        // record the model's message regardless of whether it would be rejected.
+        // Schema-aware; unknown tool → exact-match default (no schema to consult).
+        return _registry.GetByName(toolCall.Name) is { } registered
+            ? ToolCallMetaExtractor.Extract(toolCall, MetaResolverFor(registered))
+            : ToolCallMetaExtractor.Extract(toolCall);
+    }
+
+    // Validate against a tool already resolved from the registry, using a resolver
+    // built once by the caller — so InterpretToolCall and ValidateToolCall share one
+    // definition and never drift. Schema-aware meta resolution (see MetaResolverFor):
+    // a key that binds to the tool's OWN declared parameter is forwarded, never
+    // hijacked as meta. Meta-value validity and ambiguous double-spellings are checked
+    // in ValidateArguments (every tool); unrecognized keys are native-only (MCP
+    // servers validate their own schema and reject observably).
+    private static ToolArgumentRejection? ValidateCore(
+        FunctionCallContent toolCall, INetclawTool registered, Func<string, string?> resolveMeta)
+    {
+        if (ValidateArguments(toolCall.Arguments, resolveMeta) is { } rejection)
             return rejection;
 
-        // Unrecognized argument keys — native tools only; MCP servers validate
-        // their own schema and reject observably.
         if (registered is not McpToolAdapter
             && ToolArgumentValidator.ValidateArgumentKeys(registered, toolCall.Arguments) is { } keyError)
             return new ToolArgumentRejection(keyError, "unrecognized_argument");
 
         return null;
     }
+
+    private static Func<string, string?> MetaResolverFor(INetclawTool tool)
+        => key => ToolArgumentValidator.ResolveMetaField(tool, key);
 
     /// <inheritdoc />
     public ToolLivenessMode GetLivenessMode(FunctionCallContent toolCall)
@@ -80,7 +120,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
     /// the single definition of these rules across the executor and any other
     /// pre-dispatch caller, with no registry needed.
     /// </summary>
-    public static ToolArgumentRejection? ValidateArguments(IDictionary<string, object?>? args)
+    public static ToolArgumentRejection? ValidateArguments(
+        IDictionary<string, object?>? args, Func<string, string?>? resolveMeta = null)
     {
         if (args is null || args.Count == 0)
             return null;
@@ -100,7 +141,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // Present-but-invalid meta values (malformed _timeout_seconds /
         // _background) — the agent expressed execution semantics we cannot
         // honor, so reject rather than run on defaults.
-        if (ToolCallMetaExtractor.ValidateMetaValues(args) is { } metaError)
+        if (ToolCallMetaExtractor.ValidateMetaValues(args, resolveMeta) is { } metaError)
             return new ToolArgumentRejection(metaError, "invalid_meta_value");
 
         return null;

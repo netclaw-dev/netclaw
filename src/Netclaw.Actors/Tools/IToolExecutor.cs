@@ -6,6 +6,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -31,6 +32,35 @@ public interface IToolExecutor
     /// provides the real check.
     /// </summary>
     ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall) => null;
+
+    /// <summary>
+    /// Validate + extract a tool call in one step — the single execution-preflight
+    /// seam BOTH the main session pipeline and the sub-agent loop route through, so
+    /// neither can skip validation or drop the meta hints (the sub-agent previously
+    /// skipped extraction entirely and silently dropped timeout hints). Returns a
+    /// rejection (leaving the call uncleaned) when validation fails; otherwise the
+    /// extracted meta and a tool call with meta keys stripped.
+    /// <see cref="DispatchingToolExecutor"/> resolves the tool once and runs the real
+    /// schema-aware checks; the default here validates nothing and extracts exact-match,
+    /// for test fakes.
+    /// </summary>
+    ToolCallInterpretation InterpretToolCall(FunctionCallContent toolCall)
+    {
+        var (meta, cleaned) = PrepareToolCall(toolCall);
+        return new ToolCallInterpretation(ValidateToolCall(toolCall), meta, cleaned);
+    }
+
+    /// <summary>
+    /// Extracts per-call meta (<c>_rationale</c>/<c>_timeout_seconds</c>/<c>_background</c>)
+    /// and returns it alongside a tool call with the meta keys stripped — extraction
+    /// ONLY, no validation (used by the persistence path, which records the model's
+    /// message regardless). <see cref="DispatchingToolExecutor"/> resolves meta names
+    /// schema-aware: a key that binds to the tool's own declared parameter is forwarded,
+    /// never hijacked as meta. The default here is exact-match so test fakes need not
+    /// implement it.
+    /// </summary>
+    (ToolCallMeta? Meta, FunctionCallContent Cleaned) PrepareToolCall(FunctionCallContent toolCall)
+        => ToolCallMetaExtractor.Extract(toolCall);
 
     /// <summary>
     /// Return the liveness mode for the resolved tool. Unknown tools and test
@@ -59,6 +89,15 @@ public interface IToolExecutor
 /// accurately instead of misreporting a rejected call as executed.
 /// </summary>
 public sealed record ToolArgumentRejection(string Message, string DenyReason);
+
+/// <summary>
+/// Result of <see cref="IToolExecutor.InterpretToolCall"/>: either a
+/// <paramref name="Rejection"/> (the call must not run) or the extracted
+/// <paramref name="Meta"/> plus the <paramref name="Cleaned"/> tool call with meta
+/// keys stripped. On rejection, <paramref name="Cleaned"/> is the original call.
+/// </summary>
+public sealed record ToolCallInterpretation(
+    ToolArgumentRejection? Rejection, ToolCallMeta? Meta, FunctionCallContent Cleaned);
 
 /// <summary>
 /// Audit entry for tool invocations. Logged regardless of allow/deny.

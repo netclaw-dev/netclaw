@@ -66,6 +66,16 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
+        // Session-scoped breadcrumbs: the sub-agent's own actor logs go through
+        // Akka's async logger bridge, where the diagnostics AsyncLocal is gone, so
+        // they never reach session.log. These parent-side lines run synchronously
+        // under the parent session scope, so the spawn lifecycle (request → outcome,
+        // including every early rejection) is always visible in the session transcript.
+        using var diagnosticsScope = SessionDiagnosticsContext.Push(context.SessionId);
+        _logger.LogInformation(
+            "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars})",
+            profile.Name, task.Length);
+
         if (context.SpawnChildActor is null)
         {
             _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available", profile.Name);
@@ -131,7 +141,36 @@ public sealed class SubAgentSpawner
             _approvalService,
             SubAgentMaxToolIterations);
         var actorName = $"subagent-{definition.Name}-{runId}";
-        var subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
+        IActorRef subAgent;
+        try
+        {
+            subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
+        }
+        catch (Exception ex)
+        {
+            // The child actor was never created (session actor ActorOf failed or the
+            // spawn ask timed out). Record it to the session transcript before the
+            // exception propagates to the tool pipeline.
+            _logger.LogError(
+                ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId})",
+                profile.Name, runId);
+            // Balance the IsStarted=true notification above: the non-streaming path
+            // (activitySink is null) relies solely on OnSubAgentActivity, so without
+            // a terminal event the session UI shows a sub-agent stuck in "Started".
+            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            {
+                RunId = runId,
+                AgentName = definition.Name.Value,
+                IsStarted = false,
+                Success = false
+            });
+            activitySink?.TryComplete();
+            throw;
+        }
+
+        _logger.LogInformation(
+            "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
+            profile.Name, runId);
 
         var sw = Stopwatch.StartNew();
         try
@@ -189,8 +228,8 @@ public sealed class SubAgentSpawner
             });
 
             _logger.LogInformation(
-                "SubAgent [{AgentName}] completed (success={Success}, duration={Duration}ms)",
-                profile.Name, result.Success, sw.ElapsedMilliseconds);
+                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
+                profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
 
             return result;
         }
@@ -209,7 +248,7 @@ public sealed class SubAgentSpawner
                 Duration = sw.Elapsed
             });
 
-            _logger.LogError(ex, "SubAgent [{AgentName}] spawn failed", profile.Name);
+            _logger.LogError(ex, "SubAgent [{AgentName}] run failed (runId={RunId})", profile.Name, runId);
             return new SubAgentResult
             {
                 Success = false,
