@@ -32,6 +32,18 @@ public sealed class ToolLivenessValidatorTests
         Assert.Contains("Opaque", ex.Message);
     }
 
+    [Fact]
+    public void Throws_when_a_tool_resolves_self_monitoring_without_declaring_it()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ToolLivenessValidator.AssertSelfMonitoringConsistency([new UndeclaredSelfMonitoringTool()]));
+
+        // A tool self-monitoring at runtime but never declared would be drained with no
+        // watchdog — the guard must catch this reverse direction too.
+        Assert.Contains("UndeclaredSelfMonitoringTool", ex.Message);
+        Assert.Contains("SelfMonitoring", ex.Message);
+    }
+
     // Declares SelfMonitoring and resolves SelfMonitoring — consistent.
     [NetclawTool("good_sm", "consistent", Liveness = ToolLivenessMode.SelfMonitoring)]
     private sealed class ConsistentSelfMonitoringTool : StubTool
@@ -44,7 +56,14 @@ public sealed class ToolLivenessValidatorTests
     [NetclawTool("drifted_sm", "drift", Liveness = ToolLivenessMode.SelfMonitoring)]
     private sealed class DriftedTool : StubTool;
 
-    // No [NetclawTool] attribute — the validator skips it.
+    // Resolves SelfMonitoring but does NOT declare it via the attribute — the reverse
+    // drift: would be drained with no watchdog.
+    private sealed class UndeclaredSelfMonitoringTool : StubTool
+    {
+        public override ToolLivenessMode LivenessMode => ToolLivenessMode.SelfMonitoring;
+    }
+
+    // No [NetclawTool] attribute and resolves Opaque — consistent; the validator skips it.
     private sealed class UnattributedTool : StubTool;
 
     private abstract class StubTool : INetclawTool

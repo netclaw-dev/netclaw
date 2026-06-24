@@ -27,22 +27,31 @@ public static class ToolLivenessValidator
         List<string>? mismatches = null;
         foreach (var tool in tools)
         {
-            var declared = tool.GetType().GetCustomAttribute<NetclawToolAttribute>()?.Liveness;
-            if (declared == ToolLivenessMode.SelfMonitoring
-                && tool.LivenessMode != ToolLivenessMode.SelfMonitoring)
+            var declaredSelfMonitoring =
+                tool.GetType().GetCustomAttribute<NetclawToolAttribute>()?.Liveness == ToolLivenessMode.SelfMonitoring;
+            var resolvedSelfMonitoring = tool.LivenessMode == ToolLivenessMode.SelfMonitoring;
+
+            // Both directions matter: a tool that declares SelfMonitoring but resolves
+            // to a wall-clock mode would be killed mid-run, and a tool that resolves
+            // SelfMonitoring without declaring it would be drained with NO watchdog at
+            // all (the parent does not supervise self-monitoring tools). The declaration
+            // and the runtime mode must agree exactly.
+            if (declaredSelfMonitoring != resolvedSelfMonitoring)
             {
                 (mismatches ??= []).Add(
-                    $"{tool.Name} ({tool.GetType().Name}): declared SelfMonitoring, resolved {tool.LivenessMode}");
+                    $"{tool.Name} ({tool.GetType().Name}): declared "
+                    + $"{(declaredSelfMonitoring ? "SelfMonitoring" : "non-SelfMonitoring")}, "
+                    + $"resolved {tool.LivenessMode}");
             }
         }
 
         if (mismatches is not null)
         {
             throw new InvalidOperationException(
-                "Tool liveness misconfiguration — the following tool(s) declare SelfMonitoring but resolve to a "
-                + "different mode, which would place them on a wall-clock watchdog and can kill a healthy "
-                + "self-monitoring run: " + string.Join("; ", mismatches)
-                + ". This usually means stale generated code; rebuild the tool's project.");
+                "Tool liveness misconfiguration — the following tool(s) have a SelfMonitoring declaration that "
+                + "disagrees with their resolved LivenessMode. A self-monitoring tool runs with NO parent watchdog, "
+                + "so the declaration and the runtime mode must match exactly: " + string.Join("; ", mismatches)
+                + ". This usually means stale generated code or a hand-rolled LivenessMode override.");
         }
     }
 }
