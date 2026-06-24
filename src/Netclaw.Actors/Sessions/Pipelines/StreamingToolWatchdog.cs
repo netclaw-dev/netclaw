@@ -106,15 +106,6 @@ internal static class StreamingToolWatchdog
                     case ToolCompletedUpdate completed:
                         return completed.Result;
                     case ToolActivityUpdate activity:
-                        // An explicit suspend (a tool blocked on human approval) pauses
-                        // the watchdog in EVERY mode. A human-in-the-loop wait is an
-                        // external block, not the tool running away on its own output, so
-                        // it must never burn the budget — including WallClock. This is
-                        // deliberately NOT mode-gated: ordinary per-item resets stay
-                        // mode-gated in ApplyItemReset (WallClock still ignores those), but
-                        // the explicit approval-pause signal is honored everywhere.
-                        if (activity.SuspendsInactivityWatchdog)
-                            Volatile.Write(ref budgetTicks, TimeSpan.Zero.Ticks);
                         onActivity?.Invoke(activity);
                         break;
                 }

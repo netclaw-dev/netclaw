@@ -663,7 +663,7 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task SubAgent_approval_wait_activity_suspends_parent_tool_watchdog()
+    public async Task SubAgent_surfaces_approval_wait_and_resolution_to_parent_stream()
     {
         var fakeTool = new FakeNetclawTool("shell_execute", "ok");
         var policy = CreateApprovalRequiredPolicy();
@@ -694,19 +694,21 @@ public class SubAgentActorTests : TestKit
             },
             ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
+        // The sub-agent surfaces its approval state to the parent stream so the run
+        // stays visible while a human is in the loop. (Pausing the parent watchdog
+        // is no longer a flag on the activity — the parent no longer wall-clock-
+        // supervises a self-monitoring sub-agent.)
         await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        var waitingActivity = await ReadActivityAsync(
+        await ReadActivityAsync(
             activityChannel.Reader,
             "awaiting human approval",
             TestContext.Current.CancellationToken);
-        Assert.True(waitingActivity.SuspendsInactivityWatchdog);
 
         releaseSignal.SetResult(ParentApprovalDecision.ApprovedOnce);
-        var resolvedActivity = await ReadActivityAsync(
+        await ReadActivityAsync(
             activityChannel.Reader,
             "approval resolved",
             TestContext.Current.CancellationToken);
-        Assert.False(resolvedActivity.SuspendsInactivityWatchdog);
 
         var result = await runTask;
         Assert.True(result.Success, $"Expected success but got: {result.Output}");
