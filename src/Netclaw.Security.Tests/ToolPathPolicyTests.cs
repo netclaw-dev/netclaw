@@ -158,6 +158,8 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
+            "/home/user/.netclaw/skills/.system",
+            "/home/user/.netclaw/skills/.server-feeds",
         };
         var readDeny = new[]
         {
@@ -174,6 +176,8 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
+            "/home/user/.netclaw/skills/.system",
+            "/home/user/.netclaw/skills/.server-feeds",
         };
         return new ToolPathPolicy(writeDeny, readDeny, shellIndicators);
     }
@@ -183,6 +187,8 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
     [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
+    [InlineData("/home/user/.netclaw/skills/.system/my-skill/SKILL.md")]
+    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/SKILL.md")]
     public void IsDenied_blocks_control_plane_files(string path)
     {
         var policy = CreateProductionPolicy();
