@@ -71,9 +71,11 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     }
 
     /// <summary>
-    /// Streaming entry point: the sub-agent's liveness/progress activity is
-    /// surfaced as the tool call's stream, so the parent's per-call watchdog
-    /// keeps a long-but-healthy delegated run alive.
+    /// Streaming entry point: the sub-agent's liveness/progress activity is surfaced
+    /// as the tool call's stream for visibility. The parent applies NO watchdog to
+    /// this call — spawn_agent is self-monitoring, so the sub-agent owns its own
+    /// liveness and the parent simply drains the stream to its terminal item (see
+    /// <c>SessionToolExecutionPipeline</c>).
     /// </summary>
     public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,

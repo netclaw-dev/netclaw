@@ -77,7 +77,6 @@ internal static class StreamingToolWatchdog
             PollInterval,
             PollInterval);
 
-        string? result = null;
         var enumerator = stream.GetAsyncEnumerator(watchdogCts.Token);
         try
         {
@@ -116,7 +115,7 @@ internal static class StreamingToolWatchdog
 
         // A stream that ends with no completion item violates the tool-call
         // contract — fail loudly rather than synthesizing a result.
-        return result ?? throw new InvalidOperationException(
+        throw new InvalidOperationException(
             $"Tool '{toolName}' stream ended without a completion item.");
     }
 

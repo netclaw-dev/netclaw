@@ -390,9 +390,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Self_monitoring_tool_runs_to_completion_without_a_parent_timeout()
     {
-        // Self-monitoring tools are drained with no parent watchdog, so a quiet
-        // window — even a long one — never trips a timeout.
-        var time = new FakeTimeProvider();
+        // Self-monitoring tools are drained with NO parent watchdog — there is no
+        // clock on this path at all. The run is bounded only by its own completion
+        // (here) or caller cancellation (next test); the pipeline never times it out.
         var executor = new SelfMonitoringStreamingExecutor();
         var probe = CreateTestProbe("self-monitoring-probe");
 
@@ -402,7 +402,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             new SessionId("D1/self-monitoring-test"),
             source: null,
             auditLogger: null,
-            timeProvider: time,
+            timeProvider: TimeProvider.System,
             sessionDir: Path.GetTempPath(),
             maxInlineToolResultChars: 4096,
             timeout: TimeSpan.FromSeconds(1),
@@ -412,8 +412,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ct: TestContext.Current.CancellationToken);
 
         await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromSeconds(10));
-        await Task.Yield();
+        // Nothing has completed it and there is no timer to trip, so it stays running.
         Assert.False(pipelineTask.IsCompleted);
 
         executor.Complete("self-ok");
@@ -425,6 +424,44 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal("self-ok", result.Content);
+    }
+
+    [Fact]
+    public async Task Self_monitoring_tool_is_bounded_only_by_caller_cancellation()
+    {
+        // A self-monitoring tool that never completes is ended ONLY by caller (turn/
+        // user) cancellation — no parent watchdog exists. The cancel must surface as a
+        // failed batch (ToolExecutionFailed), NOT as a tool-result error fed back to the
+        // model as if the sub-agent had failed.
+        var executor = new SelfMonitoringStreamingExecutor();
+        var probe = CreateTestProbe("self-monitoring-cancel-probe");
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
+            new SessionId("D1/self-monitoring-cancel-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(1),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            ct: cts.Token);
+
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.False(pipelineTask.IsCompleted); // never completes on its own
+
+        cts.Cancel();
+
+        var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.IsType<TimeoutException>(failed.Cause);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 
     [Fact]
