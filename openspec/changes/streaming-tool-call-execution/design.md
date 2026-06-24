@@ -111,6 +111,25 @@ activity items.
   response from a stalled stream, the same conflation the LLM watchdog already
   resolved (`two-phase-streaming-timeout`).
 
+**Update — liveness refined to two classes (#1472 / PR #1481, "addition through
+subtraction"):** the two-phase watchdog above proved to be the wrong shape for
+self-monitoring tools. A self-monitoring tool (e.g. `spawn_agent`) already owns a
+complete internal liveness model — its own prefill / no-progress watchdog plus a
+guaranteed terminal result — so a parent watchdog is a second, redundant timer that
+can only mis-fire (it was killing healthy sub-agents mid-approval). The final model:
+
+- **Opaque** tools keep one wall-clock budget; streamed output does not extend it.
+  (The inter-item reset was dropped — it let a chatty tool live forever.)
+- **Self-monitoring** tools get NO parent watchdog at all. The pipeline drains the
+  stream to its terminal item (`DrainToCompletionAsync`); the call is bounded only
+  by the tool's own watchdog or caller (turn/user) cancellation. The `FirstItemOnly`
+  startup guard is removed, and an unanswered human approval blocks the run until it
+  is answered or the turn is cancelled (a foreground sub-agent waits — by design).
+
+A startup assertion (`ToolLivenessValidator`) enforces that a tool's declared
+liveness class matches its resolved mode in **both** directions, since an
+unsupervised drain is only safe for a tool that genuinely owns its liveness.
+
 ### D4. `ProcessingWatchdog` reverts to LLM-only; the batch tool watchdog is removed
 
 **Decision:** `LlmSessionActor.HandleToolCallResponse` no longer arms a

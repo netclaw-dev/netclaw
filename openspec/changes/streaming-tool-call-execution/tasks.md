@@ -100,3 +100,19 @@
 - **Acceptance:** full `Netclaw.Actors.Tests` / `Netclaw.Configuration.Tests`
   suites pass; eval suite passes; manual repro confirms a heavy `spawn_agent` no
   longer dies mid-stream and parallel spawns with one wedged do not hang the turn
+
+## Phase H: Liveness consolidation (#1472 / PR #1481)
+
+- [x] Opaque tools bounded by one wall-clock budget; drop the inter-item reset
+- [x] Self-monitoring tools drained with no parent watchdog (`DrainToCompletionAsync`);
+  remove the `FirstItemOnly` startup-guard budget
+- [x] `ToolLivenessValidator` startup assertion — declared vs resolved liveness must
+  match in BOTH directions, else fail loud
+- [x] Delete the `SuspendsInactivityWatchdog` flag (no parent watchdog left to pause)
+- [x] Caller cancellation of a self-monitoring drain surfaces as a failed batch, not a
+  tool-result error fed to the model
+- [x] Tests: self-monitoring runs-to-completion + bounded-only-by-caller-cancellation;
+  liveness-validator both directions
+- [ ] Re-run `./evals/run-evals.sh` (Subagents category) on the consolidated build
+- **Acceptance:** a self-monitoring tool is never killed by a parent timer; opaque
+  tools still time out at their wall-clock budget; the subagent eval passes

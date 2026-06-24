@@ -29,38 +29,62 @@ therefore behave identically to its current non-streaming behavior.
 - **THEN** it emits one or more activity items while working
 - **AND** it finishes with exactly one terminal completion item
 
-### Requirement: Per-call two-phase inactivity watchdog
+### Requirement: Per-call liveness by tool class
 
-Each tool call SHALL be monitored by its own two-phase inactivity watchdog in the
-tool-execution layer: a first-item budget bounding the time to the first
-`ToolCallUpdate`, and an inter-item budget that resets on every subsequent item.
-When a budget elapses the watchdog SHALL cancel that call, and the call SHALL
-yield a terminal error result identifying the tool and the timeout.
+How a tool call is bounded SHALL depend on the tool's declared liveness class.
 
-The watchdog SHALL be per call. Parallel tool calls SHALL be monitored
+An **opaque** tool (the default) SHALL be bounded by one wall-clock budget applied
+to the whole call. Streamed output SHALL NOT extend that budget — a chatty stream
+cannot keep an opaque tool alive past its budget. When the budget elapses the
+watchdog SHALL cancel the call, and the call SHALL yield a terminal error result
+identifying the tool and the timeout.
+
+A **self-monitoring** tool (e.g. `spawn_agent`) owns its liveness end to end and
+SHALL NOT be supervised by the parent at all. The tool-execution layer SHALL drain
+such a call to its terminal completion item with no parent watchdog; the call is
+bounded only by the tool's own internal watchdog (which SHALL produce a terminal
+result on stall) or by caller (turn/user) cancellation. A self-monitoring tool's
+declared class MUST match its resolved liveness mode in both directions; a mismatch
+SHALL fail loudly at startup rather than leave a tool unsupervised at runtime.
+
+Budgets and draining SHALL be per call. Parallel tool calls SHALL be monitored
 independently — activity on one call SHALL NOT extend the budget of another.
 
-#### Scenario: Stalled stream trips the inter-item budget
+#### Scenario: A chatty opaque stream still times out at its budget
 
-- **GIVEN** a streaming tool call that has emitted at least one activity item
-- **WHEN** no further item arrives within the inter-item budget
+- **GIVEN** an opaque streaming tool call emitting steady output
+- **WHEN** its wall-clock budget elapses
 - **THEN** the watchdog cancels the call
 - **AND** the call yields a terminal error naming the tool and the timeout
 
-#### Scenario: Slow first item trips the first-item budget
+#### Scenario: A self-monitoring call is not bounded by a parent watchdog
 
-- **GIVEN** a tool call that has emitted no items yet
-- **WHEN** the first-item budget elapses
-- **THEN** the watchdog cancels the call
-- **AND** the call yields a terminal error naming the tool and the timeout
+- **GIVEN** a self-monitoring tool call (e.g. `spawn_agent`)
+- **WHEN** it runs longer than any prior parent budget, including a long quiet window
+- **THEN** the parent does not cancel it
+- **AND** it ends only on its own terminal item or caller cancellation
 
-#### Scenario: A healthy call does not mask a stalled sibling
+#### Scenario: A stalled self-monitoring tool is terminated by its own watchdog
 
-- **GIVEN** two tool calls executing in parallel
-- **AND** one is emitting activity items steadily
-- **AND** the other has gone silent past its inter-item budget
+- **GIVEN** a self-monitoring tool whose work stalls with no progress
+- **WHEN** its own internal watchdog fires
+- **THEN** the tool yields a terminal error result naming the stall reason
+- **AND** the parent receives that terminal item without having supervised the call
+
+#### Scenario: A healthy opaque call does not mask a stalled sibling
+
+- **GIVEN** two opaque tool calls executing in parallel
+- **AND** one is emitting output steadily
+- **AND** the other has gone silent past its wall-clock budget
 - **THEN** the silent call is timed out independently
 - **AND** the healthy call continues unaffected
+
+#### Scenario: A tool that resolves self-monitoring without declaring it is rejected at startup
+
+- **GIVEN** a tool whose resolved liveness mode is self-monitoring
+- **AND** it does not declare `SelfMonitoring` via its `[NetclawTool(Liveness=…)]` attribute
+- **THEN** startup validation fails loudly
+- **AND** the tool is never drained unsupervised
 
 ### Requirement: Only the terminal result enters the conversation
 
