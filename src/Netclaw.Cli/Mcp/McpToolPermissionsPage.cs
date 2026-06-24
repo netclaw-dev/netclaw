@@ -177,15 +177,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithAutoScroll(AutoScrollPolicy.None)
             .WithContent(_toolRowsNode);
         _toolScrollNode.Fill();
-        // ScrollableContainerNode.Render ignores bounds.Y and writes relative to the
-        // context's (0,0). Hosting it inside a borderless PanelNode ensures the
-        // PanelNode calls context.CreateSubContext(bounds) first, so the scroll
-        // container receives a context already offset to its actual screen position.
-        layout = layout.WithChild(
-            new PanelNode()
-                .WithBorder(BorderStyle.None)
-                .WithContent(_toolScrollNode)
-                .Fill());
+        layout = layout.WithChild(_toolScrollNode.Fill());
 
         return layout;
     }
