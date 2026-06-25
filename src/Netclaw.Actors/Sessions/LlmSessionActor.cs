@@ -88,7 +88,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
     private bool _processingStateActive;
-    private ApprovalTurnState _approvalTurnState = ApprovalTurnState.None;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
@@ -263,7 +262,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyTurnRecorded(evt);
             _pendingToolInteractions.Clear();
             _resolvedToolApprovals.Clear();
-            ClearApprovalTurnState();
+            ClearCurrentTurnContext();
             ClearActiveToolBatchTracking();
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
@@ -273,7 +272,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt);
             _pendingToolInteractions.Clear();
             _resolvedToolApprovals.Clear();
-            ClearApprovalTurnState();
+            ClearCurrentTurnContext();
             ClearActiveToolBatchTracking();
         });
         Recover<ToolBatchStarted>(ApplyToolBatchStarted);
@@ -990,7 +989,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _resolvedToolApprovals.Clear();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
-        MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }
 
@@ -1376,7 +1374,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         else
         {
-            ClearApprovalTurnState();
+            ClearCurrentTurnContext();
             TransitionTo(SessionPhase.Ready);
         }
 
@@ -2118,7 +2116,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        ClearApprovalTurnState();
+        ClearCurrentTurnContext();
         TransitionTo(SessionPhase.Ready);
     }
 
@@ -2206,8 +2204,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // API, which would otherwise wedge every subsequent turn.
         if (_pendingToolInteractions.Count > 0)
         {
-            if (_approvalTurnState is WaitingApprovalTurn waiting)
-                _approvalTurnState = new AbandoningApprovalTurn(waiting.Context, "superseded_by_new_message");
             var abandoned = BuildToolBatchAbandonedEvent();
             Persist(abandoned, evt =>
             {
@@ -2251,7 +2247,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _sessionId,
             _activeTurnId ?? new Protocol.TurnId(IdGen.ShortId()),
             cmd.Source);
-        _approvalTurnState = new RunningApprovalTurn(_currentTurnContext);
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(_currentTurnContext);
         PersistAdoptedContextIfNeeded(cmd.Source);
 
@@ -3343,8 +3338,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.Candidates);
         _resolvedToolApprovals.Remove(evt.CallId);
 
+        // Restore the parked turn context so a later re-drive authorizes the
+        // approval at the audience/boundary the request was originally made under.
         if (persistApprovalState && turnContext is not null)
-            RecordWaitingApprovalState(turnContext, evt.CallId, recovered: _phase.Current == SessionPhase.Recovering);
+            _currentTurnContext = turnContext;
         else if (persistApprovalState && restoreFailure is not null)
             _log.Warning(
                 "Approval request {CallId} could not restore turn context: {Reason}",
@@ -3352,37 +3349,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 restoreFailure);
     }
 
-    private void RecordWaitingApprovalState(TurnContext context, string callId, bool recovered)
-    {
-        var pendingCallIds = _approvalTurnState is WaitingApprovalTurn waiting
-            ? new HashSet<string>(waiting.PendingCallIds, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
-        pendingCallIds.Add(callId);
-
-        _currentTurnContext = context;
-        _approvalTurnState = new WaitingApprovalTurn(context, pendingCallIds, recovered);
-    }
-
-    private void MarkApprovalRedrive(PendingToolInteraction pending, string callId)
-    {
-        if (pending.TurnContext is null)
-            return;
-
-        _currentTurnContext = pending.TurnContext;
-        _approvalTurnState = new RedrivingApprovalTurn(pending.TurnContext, callId);
-    }
-
-    private void MarkApprovalRunningAfterRedrive()
-    {
-        if (_approvalTurnState is RedrivingApprovalTurn redriving)
-            _approvalTurnState = new RunningApprovalTurn(redriving.Context);
-    }
-
-    private void ClearApprovalTurnState()
-    {
-        _approvalTurnState = ApprovalTurnState.None;
-        _currentTurnContext = null;
-    }
+    private void ClearCurrentTurnContext() => _currentTurnContext = null;
 
     private void ApplyToolApprovalResolved(ToolApprovalResolved evt)
     {
@@ -3391,12 +3358,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             : ApprovalDecision.Denied;
 
         if (_pendingToolInteractions.Remove(evt.CallId, out var pending))
-        {
             _resolvedToolApprovals[evt.CallId] = new ResolvedToolApproval(pending, decision);
-
-            if (_pendingToolInteractions.Count == 0 && pending.TurnContext is not null)
-                _approvalTurnState = new RunningApprovalTurn(pending.TurnContext);
-        }
     }
 
     private void ApplyToolBatchAbandoned(ToolBatchAbandoned evt)
@@ -3410,7 +3372,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             });
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
-        ClearApprovalTurnState();
+        ClearCurrentTurnContext();
         ClearActiveToolBatchTracking();
     }
 
@@ -4156,7 +4118,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTurnContext = turnContext;
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(turnContext);
         BindTurnTelemetry(turnContext);
-        MarkApprovalRedrive(pending, callId);
 
         TransitionTo(SessionPhase.Processing);
         DispatchToolBatch(
@@ -4208,7 +4169,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
-        ClearApprovalTurnState();
+        ClearCurrentTurnContext();
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();
@@ -4531,7 +4492,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ClearActiveToolBatchTracking();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, resultCount);
-        MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }
 

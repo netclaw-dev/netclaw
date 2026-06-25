@@ -48,24 +48,6 @@ internal sealed record ToolInteractionRequestDispatch(
     SessionProtocol.ToolInteractionRequest Request,
     bool PersistApprovalState) : INoSerializationVerificationNeeded;
 
-internal abstract record ApprovalTurnState : INoSerializationVerificationNeeded
-{
-    public static ApprovalTurnState None { get; } = new NoActiveApprovalTurn();
-}
-
-internal sealed record NoActiveApprovalTurn : ApprovalTurnState;
-
-internal sealed record RunningApprovalTurn(TurnContext Context) : ApprovalTurnState;
-
-internal sealed record WaitingApprovalTurn(
-    TurnContext Context,
-    ISet<string> PendingCallIds,
-    bool Recovered) : ApprovalTurnState;
-
-internal sealed record RedrivingApprovalTurn(TurnContext Context, string CallId) : ApprovalTurnState;
-
-internal sealed record AbandoningApprovalTurn(TurnContext Context, string Reason) : ApprovalTurnState;
-
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
     IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride);
