@@ -15,6 +15,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Security;
 using Netclaw.Tools;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Daemon.Reminders;
 

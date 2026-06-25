@@ -44,9 +44,22 @@ public sealed record SubAgentDefinition
 }
 
 /// <summary>
+/// External message contract for <see cref="SubAgentActor"/>: spawn request and result.
+/// </summary>
+public static class SubAgentProtocol
+{
+    /// <summary>Marker for subagent commands.</summary>
+    public interface ISubAgentCommand : INoSerializationVerificationNeeded;
+
+    /// <summary>Marker for subagent responses.</summary>
+    public interface ISubAgentResponse : INoSerializationVerificationNeeded;
+
+// ===== Commands =====
+
+/// <summary>
 /// Message sent to a <see cref="SubAgentActor"/> to begin execution.
 /// </summary>
-public sealed record RunSubAgent : INoSerializationVerificationNeeded
+public sealed record RunSubAgent : ISubAgentCommand
 {
     /// <summary>The task for the subagent to perform (becomes part of the user message).</summary>
     public required string Task { get; init; }
@@ -150,10 +163,12 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     public ChannelWriter<ToolActivityUpdate>? ActivitySink { get; init; }
 }
 
+// ===== Responses =====
+
 /// <summary>
 /// Result returned by a <see cref="SubAgentActor"/> when execution completes.
 /// </summary>
-public sealed record SubAgentResult : INoSerializationVerificationNeeded
+public sealed record SubAgentResult : ISubAgentResponse
 {
     /// <summary>Whether the subagent completed successfully.</summary>
     public required bool Success { get; init; }
@@ -173,4 +188,5 @@ public sealed record SubAgentResult : INoSerializationVerificationNeeded
     /// Total number of structured findings returned before parent-session review.
     /// </summary>
     public int FindingsCount { get; init; }
+}
 }

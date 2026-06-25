@@ -20,6 +20,7 @@ using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -388,9 +389,11 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
-    public async Task Self_monitoring_tool_uses_first_item_guard_not_inter_item_timeout()
+    public async Task Self_monitoring_tool_runs_to_completion_without_a_parent_timeout()
     {
-        var time = new FakeTimeProvider();
+        // Self-monitoring tools are drained with NO parent watchdog — there is no
+        // clock on this path at all. The run is bounded only by its own completion
+        // (here) or caller cancellation (next test); the pipeline never times it out.
         var executor = new SelfMonitoringStreamingExecutor();
         var probe = CreateTestProbe("self-monitoring-probe");
 
@@ -400,7 +403,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             new SessionId("D1/self-monitoring-test"),
             source: null,
             auditLogger: null,
-            timeProvider: time,
+            timeProvider: TimeProvider.System,
             sessionDir: Path.GetTempPath(),
             maxInlineToolResultChars: 4096,
             timeout: TimeSpan.FromSeconds(1),
@@ -410,8 +413,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ct: TestContext.Current.CancellationToken);
 
         await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromSeconds(10));
-        await Task.Yield();
+        // Nothing has completed it and there is no timer to trip, so it stays running.
         Assert.False(pipelineTask.IsCompleted);
 
         executor.Complete("self-ok");
@@ -426,36 +428,41 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
-    public async Task Self_monitoring_tool_still_times_out_when_startup_never_emits()
+    public async Task Self_monitoring_tool_is_bounded_only_by_caller_cancellation()
     {
-        var time = new FakeTimeProvider();
-        var executor = new SelfMonitoringNeverStartsExecutor();
-        var probe = CreateTestProbe("self-monitoring-startup-probe");
+        // A self-monitoring tool that never completes is ended ONLY by caller (turn/
+        // user) cancellation — no parent watchdog exists. The cancel must surface as a
+        // failed batch (ToolExecutionFailed), NOT as a tool-result error fed back to the
+        // model as if the sub-agent had failed.
+        var executor = new SelfMonitoringStreamingExecutor();
+        var probe = CreateTestProbe("self-monitoring-cancel-probe");
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
-            new SessionId("D1/self-monitoring-startup-test"),
+            new SessionId("D1/self-monitoring-cancel-test"),
             source: null,
             auditLogger: null,
-            timeProvider: time,
+            timeProvider: TimeProvider.System,
             sessionDir: Path.GetTempPath(),
             maxInlineToolResultChars: 4096,
             timeout: TimeSpan.FromSeconds(1),
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+            ct: cts.Token);
 
-        time.Advance(TimeSpan.FromSeconds(2));
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.False(pipelineTask.IsCompleted); // never completes on its own
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+        cts.Cancel();
+
+        var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
+        Assert.IsType<TimeoutException>(failed.Cause);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        var result = Assert.Single(completed.ToolResults);
-        Assert.Contains("startup activity", result.Content);
     }
 
     [Fact]
@@ -735,26 +742,6 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             Started.TrySetResult();
             yield return new ToolActivityUpdate("calling the model");
             yield return new ToolCompletedUpdate(await _completion.Task.WaitAsync(ct));
-        }
-    }
-
-    private sealed class SelfMonitoringNeverStartsExecutor : IToolExecutor
-    {
-        public ToolLivenessMode GetLivenessMode(FunctionCallContent toolCall) => ToolLivenessMode.SelfMonitoring;
-
-        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
-            => throw new NotSupportedException("SelfMonitoringNeverStartsExecutor is streaming-only.");
-
-        public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
-            FunctionCallContent toolCall,
-            ToolExecutionContext? context = null,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
-            yield break;
         }
     }
 

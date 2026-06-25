@@ -7,6 +7,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
 

@@ -18,6 +18,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -1989,6 +1990,6 @@ internal sealed class UnusedSessionPipeline : ISessionPipeline
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
         => Task.CompletedTask;
 
-    public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
-        => Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+    public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+        => Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
 }

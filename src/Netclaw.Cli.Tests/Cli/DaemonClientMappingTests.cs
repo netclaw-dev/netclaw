@@ -7,6 +7,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tests.Cli;
 

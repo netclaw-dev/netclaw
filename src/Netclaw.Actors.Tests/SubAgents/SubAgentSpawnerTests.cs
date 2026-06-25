@@ -15,6 +15,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 
 namespace Netclaw.Actors.Tests.SubAgents;
 

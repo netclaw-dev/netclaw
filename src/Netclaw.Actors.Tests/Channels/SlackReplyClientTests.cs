@@ -11,6 +11,7 @@ using SlackNet.Blocks;
 using SlackNet.Events;
 using SlackNet.WebApi;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
 

@@ -11,6 +11,7 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tui;
 

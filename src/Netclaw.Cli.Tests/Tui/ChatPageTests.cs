@@ -13,6 +13,7 @@ using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tests.Tui;
 

@@ -13,6 +13,7 @@ using Termina.Layout;
 using Termina.Reactive;
 using Termina.Rendering;
 using Termina.Terminal;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tui;
 

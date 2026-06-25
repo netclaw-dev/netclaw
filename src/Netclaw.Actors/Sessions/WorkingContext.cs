@@ -11,7 +11,7 @@ namespace Netclaw.Actors.Sessions;
 /// <summary>
 /// Durable session state for "what the agent is currently working on."
 /// Persisted through <see cref="SessionSnapshot"/> and
-/// <see cref="Protocol.SessionCompacted"/> events so it survives compaction,
+/// <see cref="SessionProtocol.SessionCompacted"/> events so it survives compaction,
 /// actor recovery, and daemon restart without depending on the observer LLM
 /// to reconstruct it.
 ///

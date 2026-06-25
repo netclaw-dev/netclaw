@@ -267,20 +267,6 @@ message SessionSnapshotProto {
   reserved 9;
 }
 
-// ── Broadcasts ──
-
-message TurnBroadcastProto {
-  SessionIdProto session_id = 1;
-  SerializableChatMessageProto assistant_reply = 2;
-  int64 broadcast_at_ms = 3;
-}
-
-message CompactionBroadcastProto {
-  SessionIdProto session_id = 1;
-  string summary = 2;
-  int64 compacted_at_ms = 3;
-}
-
 // ── Session state ──
 
 message WorkingContextProto {

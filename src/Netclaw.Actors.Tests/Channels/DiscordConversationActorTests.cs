@@ -16,6 +16,7 @@ using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
 

@@ -15,6 +15,7 @@ using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
 

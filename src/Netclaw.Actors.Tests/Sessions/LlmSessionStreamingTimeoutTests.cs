@@ -14,6 +14,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

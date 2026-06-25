@@ -11,6 +11,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Tests.Jobs;
 

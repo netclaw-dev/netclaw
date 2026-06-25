@@ -8,6 +8,7 @@ using Netclaw.Channels.Slack;
 using Netclaw.Tools;
 using SlackNet.Blocks;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
 

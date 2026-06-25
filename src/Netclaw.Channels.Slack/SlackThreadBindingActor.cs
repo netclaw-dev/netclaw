@@ -20,6 +20,8 @@ using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 using SlackNet.Blocks;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Channels.Slack;
 
@@ -1312,7 +1314,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         // already-resolved banner — both surfaced by the #939 code review. The
         // session is the authority on whether the call is still pending and
         // whether the sender is allowed. Only redraw on CommandAck.
-        ICommandReply feedbackResult;
+        ISessionResponse feedbackResult;
         try
         {
             using var feedbackCts = new CancellationTokenSource(OperationTimeout);
@@ -1350,7 +1352,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 break;
 
             default:
-                // ICommandReply is sealed-by-convention to Ack/Nack. Defensive guard.
+                // ISessionResponse is sealed-by-convention to Ack/Nack. Defensive guard.
                 _log.Warning(
                     "Slack approval response for call {CallId} returned unexpected feedback result {ResultType}",
                     message.CallId,

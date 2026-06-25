@@ -14,6 +14,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -272,7 +273,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         Assert.Equal(callId, request.CallId.Value);
         Assert.Equal([ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny], request.Options.Select(o => o.Key.Value).ToArray());
 
-        var invalidReply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        var invalidReply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
         {
             SessionId = sessionId,
             CallId = new Netclaw.Tools.ToolCallId(callId),
@@ -287,7 +288,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("not available", warning.Text, StringComparison.OrdinalIgnoreCase);
 
-        var validReply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        var validReply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
         {
             SessionId = sessionId,
             CallId = new Netclaw.Tools.ToolCallId(callId),
@@ -352,7 +353,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var reply = await sessionManager.Ask<ICommandReply>(new ToolInteractionTextResponse
+        var reply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionTextResponse
         {
             SessionId = sessionId,
             Text = "A",

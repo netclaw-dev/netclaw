@@ -6,6 +6,7 @@
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
 

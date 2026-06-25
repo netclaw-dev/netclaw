@@ -41,15 +41,7 @@ public interface ToolCallUpdate;
 /// <param name="OutputChunk">
 /// Optional incremental output (e.g. streamed shell stdout) for live display.
 /// </param>
-public sealed record ToolActivityUpdate(string Phase, string? OutputChunk = null) : ToolCallUpdate
-{
-    /// <summary>
-    /// True when the tool is intentionally blocked on external input, such as a
-    /// human approval prompt. This only affects reset-on-item watchdog mode;
-    /// opaque wall-clock budgets are not extended by activity.
-    /// </summary>
-    public bool SuspendsInactivityWatchdog { get; init; }
-}
+public sealed record ToolActivityUpdate(string Phase, string? OutputChunk = null) : ToolCallUpdate;
 
 /// <summary>
 /// The terminal item of a tool-call stream. Its <see cref="Result"/> is the only

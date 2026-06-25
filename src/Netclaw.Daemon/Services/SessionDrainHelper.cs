@@ -8,6 +8,7 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Services;
 

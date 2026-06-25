@@ -176,27 +176,31 @@ public class SpawnAgentStreamingTests : TestKit
                 ["task"] = "Summarize the project."
             });
 
+        // spawn_agent is self-monitoring, so the parent drains it with no watchdog at
+        // all — a long quiet window can never trip a timeout; the sub-agent owns its
+        // own liveness and always yields a terminal item.
         Assert.Equal(ToolLivenessMode.SelfMonitoring, executor.GetLivenessMode(spawnCall));
 
-        var time = new FakeTimeProvider();
-        var firstActivitySeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var task = StreamingToolWatchdog.ConsumeAsync(
-            executor.ExecuteStreamAsync(spawnCall, ctx, TestContext.Current.CancellationToken),
-            "spawn_agent",
-            ToolWatchdogBudget.FirstItemOnly(TimeSpan.FromSeconds(1)),
-            time,
-            onActivity: _ => firstActivitySeen.TrySetResult(),
-            TestContext.Current.CancellationToken);
+        async Task<string?> DrainAsync()
+        {
+            string? completed = null;
+            await foreach (var update in executor.ExecuteStreamAsync(spawnCall, ctx, TestContext.Current.CancellationToken))
+            {
+                if (update is ToolCompletedUpdate done)
+                    completed = done.Result;
+            }
+            return completed;
+        }
 
-        await firstActivitySeen.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromSeconds(10));
-        await Task.Yield();
+        var drain = DrainAsync();
 
-        Assert.False(task.IsCompleted);
+        // The drain cannot finish until the sub-agent produces its terminal result.
+        Assert.False(drain.IsCompleted);
 
         fakeClient.Complete("summary complete");
 
-        var result = await task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        var result = await drain.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.NotNull(result);
         Assert.Contains("summary complete", result);
     }
 

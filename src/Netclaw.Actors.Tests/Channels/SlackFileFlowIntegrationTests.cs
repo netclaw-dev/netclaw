@@ -28,6 +28,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet.Blocks;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
 
@@ -1484,10 +1485,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             return Task.CompletedTask;
         }
 
-        public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+        public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
         {
             Feedback.Add(feedback);
-            return Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+            return Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
         }
     }
 

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Netclaw.Actors.Protocol;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 

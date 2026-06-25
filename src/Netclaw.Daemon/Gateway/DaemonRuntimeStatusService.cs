@@ -18,6 +18,7 @@ using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Services;
 using Netclaw.Tools;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Daemon.Gateway;
 

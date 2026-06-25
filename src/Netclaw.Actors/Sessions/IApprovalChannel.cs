@@ -10,7 +10,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
-/// Approval decision from the user in response to a <see cref="Protocol.ToolInteractionRequest"/>.
+/// Approval decision from the user in response to a <see cref="SessionProtocol.ToolInteractionRequest"/>.
 /// </summary>
 public enum ApprovalDecision
 {

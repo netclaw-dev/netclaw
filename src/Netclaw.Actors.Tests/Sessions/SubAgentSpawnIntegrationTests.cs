@@ -19,6 +19,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -331,7 +332,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(source.Principal, request.RequesterPrincipal);
         Assert.Contains(request.Options, o => o.Key.Value == ApprovalOptionKeys.ApproveOnce);
 
-        var approvalReply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        var approvalReply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
         {
             SessionId = sessionId,
             CallId = request.CallId,
@@ -421,7 +422,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var reply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        var reply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
         {
             SessionId = sessionId,
             CallId = request.CallId,

@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

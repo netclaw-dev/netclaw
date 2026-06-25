@@ -9,6 +9,7 @@ using Akka.Streams.Dsl;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
@@ -44,6 +45,6 @@ internal sealed class ScriptedSessionPipeline(
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-    public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default) =>
-        Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+    public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default) =>
+        Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
 }

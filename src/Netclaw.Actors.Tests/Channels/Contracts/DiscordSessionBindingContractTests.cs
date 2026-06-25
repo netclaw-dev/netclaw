@@ -14,6 +14,7 @@ using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
@@ -566,7 +567,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ => [])
         {
             ResponseFactory = (_, _) =>
-                Task.FromResult<ICommandReply>(CommandNack.For(sid, ApprovalNackReasons.WrongRequester))
+                Task.FromResult<ISessionResponse>(CommandNack.For(sid, ApprovalNackReasons.WrongRequester))
         };
         var actor = CreateBindingActor(sid, pipeline, detector);
 
@@ -599,7 +600,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ => [])
         {
             ResponseFactory = (_, _) =>
-                Task.FromResult<ICommandReply>(CommandNack.For(sid, "no_pending_call"))
+                Task.FromResult<ISessionResponse>(CommandNack.For(sid, "no_pending_call"))
         };
         var actor = CreateBindingActor(sid, pipeline, detector);
 

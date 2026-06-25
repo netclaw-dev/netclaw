@@ -10,15 +10,14 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 internal enum ToolWatchdogResetMode
 {
     ResetOnItem,
-    WallClock,
-    FirstItemOnly
+    WallClock
 }
 
 /// <summary>
 /// Budget for one tool-call stream. Opaque tools use <see cref="WallClock"/> so
-/// output cannot keep them alive forever. Self-monitoring tools use
-/// <see cref="FirstItemOnly"/> so the parent only bounds the blind startup
-/// window; after that, the tool's own watchdog reports terminal success/failure.
+/// output cannot keep them alive forever. (Self-monitoring tools are not watched by
+/// the parent at all — they own their liveness and are drained without a budget;
+/// see <c>SessionToolExecutionPipeline</c>.)
 /// </summary>
 internal readonly record struct ToolWatchdogBudget(TimeSpan FirstItem, TimeSpan InterItem, ToolWatchdogResetMode ResetMode)
 {
@@ -29,7 +28,6 @@ internal readonly record struct ToolWatchdogBudget(TimeSpan FirstItem, TimeSpan 
 
     public static ToolWatchdogBudget Flat(TimeSpan budget) => new(budget, budget, ToolWatchdogResetMode.ResetOnItem);
     public static ToolWatchdogBudget WallClock(TimeSpan budget) => new(budget, budget, ToolWatchdogResetMode.WallClock);
-    public static ToolWatchdogBudget FirstItemOnly(TimeSpan budget) => new(budget, TimeSpan.Zero, ToolWatchdogResetMode.FirstItemOnly);
 }
 
 /// <summary>
@@ -79,7 +77,6 @@ internal static class StreamingToolWatchdog
             PollInterval,
             PollInterval);
 
-        string? result = null;
         var enumerator = stream.GetAsyncEnumerator(watchdogCts.Token);
         try
         {
@@ -106,15 +103,6 @@ internal static class StreamingToolWatchdog
                     case ToolCompletedUpdate completed:
                         return completed.Result;
                     case ToolActivityUpdate activity:
-                        // An explicit suspend (a tool blocked on human approval) pauses
-                        // the watchdog in EVERY mode. A human-in-the-loop wait is an
-                        // external block, not the tool running away on its own output, so
-                        // it must never burn the budget — including WallClock. This is
-                        // deliberately NOT mode-gated: ordinary per-item resets stay
-                        // mode-gated in ApplyItemReset (WallClock still ignores those), but
-                        // the explicit approval-pause signal is honored everywhere.
-                        if (activity.SuspendsInactivityWatchdog)
-                            Volatile.Write(ref budgetTicks, TimeSpan.Zero.Ticks);
                         onActivity?.Invoke(activity);
                         break;
                 }
@@ -127,7 +115,7 @@ internal static class StreamingToolWatchdog
 
         // A stream that ends with no completion item violates the tool-call
         // contract — fail loudly rather than synthesizing a result.
-        return result ?? throw new InvalidOperationException(
+        throw new InvalidOperationException(
             $"Tool '{toolName}' stream ended without a completion item.");
     }
 
@@ -143,9 +131,6 @@ internal static class StreamingToolWatchdog
                 Volatile.Write(ref budgetTicks, budget.InterItem.Ticks);
                 Volatile.Write(ref lastActivity, timeProvider.GetTimestamp());
                 break;
-            case ToolWatchdogResetMode.FirstItemOnly:
-                Volatile.Write(ref budgetTicks, TimeSpan.Zero.Ticks);
-                break;
             case ToolWatchdogResetMode.WallClock:
                 break;
         }
@@ -157,8 +142,6 @@ internal static class StreamingToolWatchdog
         {
             ToolWatchdogResetMode.WallClock =>
                 $"Tool '{toolName}' exceeded execution budget of {timeout.TotalSeconds:F0}s and was stopped.",
-            ToolWatchdogResetMode.FirstItemOnly =>
-                $"Tool '{toolName}' produced no startup activity for {timeout.TotalSeconds:F0}s and was stopped.",
             _ =>
                 $"Tool '{toolName}' produced no activity for {timeout.TotalSeconds:F0}s and was stopped. It may be stuck — please try again, or simplify the request."
         };

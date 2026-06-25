@@ -17,6 +17,8 @@ using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
@@ -630,8 +632,8 @@ public abstract class SessionBindingContractTests : TestKit
             ResponseFactory = (feedback, _) =>
             {
                 return feedback is ToolInteractionTextResponse
-                    ? Task.FromResult<ICommandReply>(CommandNack.For(sid, ApprovalNackReasons.NoHistory))
-                    : Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+                    ? Task.FromResult<ISessionResponse>(CommandNack.For(sid, ApprovalNackReasons.NoHistory))
+                    : Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
             }
         };
 

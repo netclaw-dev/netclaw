@@ -8,6 +8,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
 

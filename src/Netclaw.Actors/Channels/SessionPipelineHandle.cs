@@ -10,6 +10,7 @@ using Akka.Streams;
 using Akka.Streams.Dsl;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Channels;
 

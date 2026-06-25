@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using static Netclaw.Actors.Sessions.SessionProtocol;
+
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>

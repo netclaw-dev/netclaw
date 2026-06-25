@@ -10,19 +10,41 @@ using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
-internal sealed record GetUnapprovedPatterns(
-    SessionId? SessionId,
-    TrustAudience Audience,
-    ToolName ToolName,
-    IReadOnlyList<ApprovalCandidate> Candidates,
-    string? Cwd);
+/// <summary>
+/// Internal cross-actor message contract between the session pipeline and
+/// <c>ToolApprovalActor</c>. Assembly-internal: not a public protocol surface.
+/// </summary>
+internal static class ToolApprovalProtocol
+{
+    /// <summary>Marker for tool-approval commands.</summary>
+    internal interface IToolApprovalCommand;
 
-internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result);
+    /// <summary>Marker for tool-approval queries.</summary>
+    internal interface IToolApprovalQuery;
 
-internal sealed record RecordToolApproval(
-    SessionId SessionId,
-    TrustAudience Audience,
-    ToolName ToolName,
-    IReadOnlyList<string> Patterns,
-    bool Persistent,
-    string? Cwd);
+    /// <summary>Marker for tool-approval responses.</summary>
+    internal interface IToolApprovalResponse;
+
+    // ===== Queries =====
+
+    internal sealed record GetUnapprovedPatterns(
+        SessionId? SessionId,
+        TrustAudience Audience,
+        ToolName ToolName,
+        IReadOnlyList<ApprovalCandidate> Candidates,
+        string? Cwd) : IToolApprovalQuery;
+
+    // ===== Responses =====
+
+    internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result) : IToolApprovalResponse;
+
+    // ===== Commands =====
+
+    internal sealed record RecordToolApproval(
+        SessionId SessionId,
+        TrustAudience Audience,
+        ToolName ToolName,
+        IReadOnlyList<string> Patterns,
+        bool Persistent,
+        string? Cwd) : IToolApprovalCommand;
+}

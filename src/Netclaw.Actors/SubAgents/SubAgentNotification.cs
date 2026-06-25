@@ -16,7 +16,7 @@ public enum SubAgentPhase
 
 /// <summary>
 /// Notification emitted by tools that spawn subagents, relayed by the session
-/// as <see cref="Protocol.SubAgentOutput"/> events to subscribers.
+/// as <see cref="SessionProtocol.SubAgentOutput"/> events to subscribers.
 /// </summary>
 public sealed record SubAgentNotification
 {

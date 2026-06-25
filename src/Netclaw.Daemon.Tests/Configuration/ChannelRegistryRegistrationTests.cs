@@ -16,6 +16,7 @@ using Netclaw.Channels.Slack.Tools;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 

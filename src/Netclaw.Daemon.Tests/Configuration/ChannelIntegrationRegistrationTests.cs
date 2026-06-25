@@ -21,6 +21,7 @@ using Netclaw.Daemon.Tests.Services;
 using Netclaw.Security;
 using Xunit;
 using ChannelType = Netclaw.Actors.Channels.ChannelType;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 
@@ -155,8 +156,8 @@ public sealed class ChannelIntegrationRegistrationTests
         public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
-            => Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+        public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+            => Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
     }
 
     private sealed class SafePromptInjectionDetector : IPromptInjectionDetector

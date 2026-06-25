@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Daemon.Gateway;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Services;
 

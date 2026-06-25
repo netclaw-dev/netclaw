@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using SlackNet.Blocks;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Slack;
 

@@ -15,6 +15,7 @@ using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Services;
 using Netclaw.Tests.Utilities;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Services;
 

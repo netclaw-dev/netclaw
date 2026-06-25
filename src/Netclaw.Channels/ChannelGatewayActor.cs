@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels;
 

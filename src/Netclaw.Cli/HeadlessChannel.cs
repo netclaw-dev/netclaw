@@ -15,6 +15,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Cli.Daemon;
 using R3;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli;
 

@@ -7,6 +7,7 @@ using System.Diagnostics;
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Security;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Jobs;
 

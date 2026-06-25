@@ -10,6 +10,7 @@ using Google.Protobuf;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Serialization;
 
@@ -29,8 +30,6 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string SessionTitleSetManifest = "sts-v1";
     private const string SessionCompactedManifest = "sc-v1";
     private const string SessionSnapshotManifest = "ss-v1";
-    private const string TurnBroadcastManifest = "tb-v1";
-    private const string CompactionBroadcastManifest = "cb-v1";
     private const string WorkingContextManifest = "wc-v1";
     private const string ReminderIdManifest = "rid-v1";
     private const string ReminderDeliveryManifest = "rd-v1";
@@ -59,8 +58,6 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(SessionTitleSet)] = SessionTitleSetManifest,
         [typeof(SessionCompacted)] = SessionCompactedManifest,
         [typeof(SessionSnapshot)] = SessionSnapshotManifest,
-        [typeof(TurnBroadcast)] = TurnBroadcastManifest,
-        [typeof(CompactionBroadcast)] = CompactionBroadcastManifest,
         [typeof(WorkingContext)] = WorkingContextManifest,
         [typeof(ReminderId)] = ReminderIdManifest,
         [typeof(ReminderDelivery)] = ReminderDeliveryManifest,
@@ -121,10 +118,6 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.SessionCompactedProto.Parser.ParseFrom(bytes)),
             SessionSnapshotManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionSnapshotProto.Parser.ParseFrom(bytes)),
-            TurnBroadcastManifest => NetclawProtoMapper.FromProto(
-                Proto.TurnBroadcastProto.Parser.ParseFrom(bytes)),
-            CompactionBroadcastManifest => NetclawProtoMapper.FromProto(
-                Proto.CompactionBroadcastProto.Parser.ParseFrom(bytes)),
             WorkingContextManifest => NetclawProtoMapper.FromProto(
                 Proto.WorkingContextProto.Parser.ParseFrom(bytes)),
             ReminderIdManifest => NetclawProtoMapper.FromProto(

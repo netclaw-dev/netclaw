@@ -8,6 +8,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Mattermost;
 

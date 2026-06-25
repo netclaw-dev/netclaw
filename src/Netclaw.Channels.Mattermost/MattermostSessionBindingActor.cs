@@ -19,6 +19,8 @@ using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 using IOPath = System.IO.Path;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Channels.Mattermost;
 
@@ -745,7 +747,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return false;
         }
 
-        ICommandReply feedbackResult;
+        ISessionResponse feedbackResult;
         try
         {
             using var feedbackCts = new CancellationTokenSource(OperationTimeout);
@@ -849,7 +851,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return;
         }
 
-        ICommandReply feedbackResult;
+        ISessionResponse feedbackResult;
         using var feedbackCts = new CancellationTokenSource(OperationTimeout);
         try
         {
@@ -882,7 +884,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 break;
 
             default:
-                // Unreachable: ICommandReply is implemented only by CommandAck
+                // Unreachable: ISessionResponse is implemented only by CommandAck
                 // and CommandNack. Kept as a defensive guard so an unexpected
                 // future implementer surfaces a structured Nack instead of an
                 // unobservable null reference.

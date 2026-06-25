@@ -8,6 +8,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Discord;
 

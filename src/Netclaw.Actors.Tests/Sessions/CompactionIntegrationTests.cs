@@ -14,6 +14,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

@@ -11,6 +11,7 @@ using Akka.Streams.Dsl;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
@@ -56,7 +57,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     }
 
     public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
-    public Func<IWithSessionId, CancellationToken, Task<ICommandReply>>? ResponseFactory { get; set; }
+    public Func<IWithSessionId, CancellationToken, Task<ISessionResponse>>? ResponseFactory { get; set; }
 
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
@@ -134,11 +135,11 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         return Task.CompletedTask;
     }
 
-    public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+    public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
         lock (_feedbackLock) _recordedFeedback.Add(feedback);
         var response = ResponseFactory?.Invoke(feedback, ct)
-            ?? Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+            ?? Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
         return response;
     }
 }

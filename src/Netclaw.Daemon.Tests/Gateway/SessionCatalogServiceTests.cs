@@ -12,6 +12,7 @@ using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Gateway;
 

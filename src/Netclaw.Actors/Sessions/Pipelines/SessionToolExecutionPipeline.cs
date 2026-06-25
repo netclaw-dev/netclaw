@@ -16,6 +16,8 @@ using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Sessions.Pipelines;
 
@@ -167,6 +169,9 @@ internal static class SessionToolExecutionPipeline
         }
         catch (OperationCanceledException ex)
         {
+            // The tool-execution token is cancelled both by caller (turn/user) supersede
+            // and by the session's own timeout watchdog; surface either as a failed
+            // batch (the watchdog message is the authoritative one).
             self.Tell(new ToolExecutionFailed
             {
                 Cause = new TimeoutException(
@@ -581,6 +586,14 @@ internal static class SessionToolExecutionPipeline
                 DenyReason = ex.DenyReason
             });
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller (turn/user) cancellation is not a tool failure. Self-monitoring
+            // tools are bounded only by ct, so this is the normal cancel path; let it
+            // propagate so the turn aborts cleanly instead of feeding the model an
+            // "Error executing tool: The operation was canceled." result.
+            throw;
+        }
         catch (Exception ex)
         {
             sw.Stop();
@@ -633,19 +646,25 @@ internal static class SessionToolExecutionPipeline
 
         try
         {
-            // Opaque tools are bounded by one wall-clock budget. Self-monitoring
-            // tools (spawn_agent) are only bounded until their first stream item;
-            // after that, their own internal watchdogs must return terminal
-            // success or failure.
-            var livenessMode = executor.GetLivenessMode(toolCall);
-            var budget = livenessMode == ToolLivenessMode.SelfMonitoring
-                ? ToolWatchdogBudget.FirstItemOnly(timeout)
-                : ToolWatchdogBudget.WallClock(timeout);
+            var stream = executor.ExecuteStreamAsync(toolCall, context, cancellationToken);
+
+            // Self-monitoring tools (spawn_agent) own their liveness end to end and
+            // always drive their stream to a terminal item, so the parent does not
+            // supervise them at all — it drains to that terminal item under caller
+            // (turn/user) cancellation only. For spawn_agent the terminal item is
+            // produced by SpawnAgentTool's stream, which completes when SpawnAsync
+            // returns; SpawnAsync's finally unconditionally completes the activity
+            // channel, and SubAgentActor.PostStop guarantees the reply that lets
+            // SpawnAsync return even on a crash. (Note: PostStop alone only unblocks
+            // the spawner Ask — the terminal stream item depends on that finally
+            // running.) Opaque tools remain bounded by one wall-clock budget.
+            if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
+                return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 
             return await StreamingToolWatchdog.ConsumeAsync(
-                executor.ExecuteStreamAsync(toolCall, context, cancellationToken),
+                stream,
                 toolCall.Name,
-                budget,
+                ToolWatchdogBudget.WallClock(timeout),
                 timeProvider,
                 onActivity: null,
                 cancellationToken);
@@ -665,6 +684,24 @@ internal static class SessionToolExecutionPipeline
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Drains a self-monitoring tool's stream to its terminal completion item with no
+    /// parent watchdog. The tool owns its own liveness and always produces a terminal
+    /// item; the only bound is caller (turn/user) cancellation.
+    /// </summary>
+    private static async Task<string> DrainToCompletionAsync(
+        IAsyncEnumerable<ToolCallUpdate> stream, string toolName, CancellationToken cancellationToken)
+    {
+        await foreach (var update in stream.WithCancellation(cancellationToken))
+        {
+            if (update is ToolCompletedUpdate completed)
+                return completed.Result;
+        }
+
+        throw new InvalidOperationException(
+            $"Tool '{toolName}' stream ended without a completion item.");
     }
 
     private static bool SetsEqual(IReadOnlySet<string> left, IReadOnlySet<string> right)

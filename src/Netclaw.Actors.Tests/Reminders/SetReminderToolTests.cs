@@ -15,6 +15,7 @@ using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Tests.Reminders;
 

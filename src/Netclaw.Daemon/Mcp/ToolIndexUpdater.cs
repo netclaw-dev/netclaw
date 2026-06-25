@@ -61,6 +61,12 @@ internal sealed class ToolIndexUpdater : IHostedService
             _subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader,
             _loggerFactory.CreateLogger<SpawnAgentTool>()));
 
+        // Fail loud at startup if a self-monitoring tool (e.g. spawn_agent) silently
+        // resolved to a wall-clock-supervised mode — that would let the parent kill a
+        // healthy sub-agent mid-run. See ToolLivenessValidator.
+        ToolLivenessValidator.AssertSelfMonitoringConsistency(
+            _toolRegistry.GetAllRegistrations().Select(r => r.Tool));
+
         _shadowCatalogWriter.WriteCatalogs();
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
 

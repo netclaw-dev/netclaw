@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Channels;
 
@@ -158,7 +159,7 @@ public interface ISessionPipeline
     /// responsible for time-bounding the wait via <paramref name="ct"/>; pass
     /// a linked CTS with <c>CancelAfter(timeout)</c> if a deadline is needed.
     /// </summary>
-    Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default);
+    Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -307,10 +308,10 @@ public sealed class SessionPipeline : ISessionPipeline
         sessionManager.Tell(feedback, ActorRefs.NoSender);
     }
 
-    public async Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+    public async Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
         var sessionManager = await _sessionManagerProvider.GetAsync(ct);
-        return await sessionManager.Ask<ICommandReply>(feedback, ct);
+        return await sessionManager.Ask<ISessionResponse>(feedback, ct);
     }
 
     private static SendUserMessage MapToCommand(

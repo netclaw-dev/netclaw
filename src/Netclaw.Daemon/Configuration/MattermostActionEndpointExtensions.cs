@@ -13,6 +13,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Mattermost;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -195,7 +196,7 @@ public static class MattermostActionEndpointExtensions
             {
                 using var askCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 askCts.CancelAfter(TimeSpan.FromSeconds(10));
-                var reply = await gateway.Ask<ICommandReply>(interaction, askCts.Token);
+                var reply = await gateway.Ask<ISessionResponse>(interaction, askCts.Token);
 
                 return reply switch
                 {

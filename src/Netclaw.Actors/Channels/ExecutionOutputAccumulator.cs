@@ -7,6 +7,7 @@ using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Channels;
 

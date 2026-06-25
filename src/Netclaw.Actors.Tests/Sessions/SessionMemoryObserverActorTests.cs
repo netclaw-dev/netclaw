@@ -15,6 +15,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Hosting;
 using VerifyXunit;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

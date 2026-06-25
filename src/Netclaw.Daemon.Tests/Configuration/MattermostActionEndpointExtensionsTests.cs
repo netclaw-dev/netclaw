@@ -23,6 +23,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Mattermost;
 using Netclaw.Daemon.Configuration;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 

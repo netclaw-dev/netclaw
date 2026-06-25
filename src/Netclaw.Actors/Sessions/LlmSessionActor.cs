@@ -24,6 +24,9 @@ using Netclaw.Actors.Tools;
 using Netclaw.Security;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.SubAgents.SubAgentProtocol;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -1425,8 +1428,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _jobReapPending = true;
                 var reapEpoch = ++_jobReapEpoch;
-                jobManager.Ask<Jobs.SessionJobsReaped>(
-                        new Jobs.KillJobsForSession(_sessionId), JobReapAckTimeout)
+                jobManager.Ask<SessionJobsReaped>(
+                        new KillJobsForSession(_sessionId), JobReapAckTimeout)
                     .PipeTo(Self,
                         success: ack => new JobReapResolved(reapEpoch, ack.ReapedCount, null),
                         failure: ex => new JobReapResolved(reapEpoch, 0, ex));
@@ -3332,13 +3335,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             AdoptedSpeakerIds = msg.AdoptedSpeakerIds,
             Cwd = msg.Cwd,
             OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
-            Candidates = msg.Candidates
-                .Select(c => new ToolApprovalRequested.ApprovalCandidateRecord
-                {
-                    Verb = c.Verb,
-                    Directory = c.Directory
-                })
-                .ToArray(),
+            Candidates = msg.Candidates,
             TurnContext = _currentTurnContext?.ToRecord(),
             RequestedAtMs = NowMs()
         };
@@ -3385,7 +3382,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             turnContext,
             restoreFailure,
             evt.OptionKeys,
-            evt.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray());
+            evt.Candidates);
         _resolvedToolApprovals.Remove(evt.CallId);
 
         if (persistApprovalState && turnContext is not null)

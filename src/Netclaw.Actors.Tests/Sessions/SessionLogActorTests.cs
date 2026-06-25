@@ -13,6 +13,7 @@ using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

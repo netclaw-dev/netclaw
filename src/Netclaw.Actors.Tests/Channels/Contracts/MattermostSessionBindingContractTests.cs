@@ -15,6 +15,7 @@ using Netclaw.Channels.Mattermost;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 

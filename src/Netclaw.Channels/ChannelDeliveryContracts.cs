@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels;
 

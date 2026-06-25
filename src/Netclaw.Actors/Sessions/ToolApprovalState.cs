@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -44,7 +45,7 @@ internal sealed record PendingToolInteraction(
 // shape; PersistApprovalState is session routing policy that decides whether the
 // prompt becomes durable parent-session approval state.
 internal sealed record ToolInteractionRequestDispatch(
-    Protocol.ToolInteractionRequest Request,
+    SessionProtocol.ToolInteractionRequest Request,
     bool PersistApprovalState) : INoSerializationVerificationNeeded;
 
 internal abstract record ApprovalTurnState : INoSerializationVerificationNeeded
