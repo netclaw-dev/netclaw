@@ -15,14 +15,16 @@ namespace Netclaw.Providers.SelfHosted;
 /// endpoint (<c>/v1/models</c> and the llama.cpp-only <c>/props</c>) and
 /// dispatching to a backend strategy that knows how to parse the
 /// concrete server's response shape. Strategies are evaluated in
-/// priority order — vLLM first, llama.cpp second, generic last.
+/// priority order — ds4 first, vLLM second, llama.cpp third, generic last.
 /// </summary>
 public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolver
 {
-    // Strategy order is meaningful: vLLM signals are more specific
-    // than llama.cpp's, and the generic fallback matches anything.
+    // Strategy order is meaningful: ds4 and vLLM signals are exact
+    // (owned_by markers), llama.cpp's are looser (any /props response),
+    // and the generic fallback matches anything.
     private static readonly IReadOnlyList<IOpenAiBackendStrategy> Strategies =
     [
+        new Ds4BackendStrategy(),
         new VllmBackendStrategy(),
         new LlamaCppBackendStrategy(),
         new GenericOpenAiBackendStrategy(),

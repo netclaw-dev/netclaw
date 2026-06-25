@@ -77,7 +77,8 @@ dotnet run --project samples/Netclaw.Demo.AppHost
 ### Prerequisites
 
 - An LLM provider — [Ollama](https://ollama.com/) (local, default),
-  [OpenRouter](https://openrouter.ai/), or any OpenAI-compatible endpoint.
+  [OpenRouter](https://openrouter.ai/), [DwarfStar/ds4](https://github.com/antirez/ds4)
+  (local DeepSeek V4 on Apple Silicon / CUDA), or any OpenAI-compatible endpoint.
   See the full [provider documentation](https://netclaw.dev/configuration/managed-providers/)
   for all supported options.
 

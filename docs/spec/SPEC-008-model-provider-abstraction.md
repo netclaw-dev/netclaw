@@ -25,6 +25,9 @@ Session actors depend on provider-neutral chat client behavior.
 - Anthropic direct
 - OpenAI direct
 - Ollama via OpenAI-compatible local endpoint
+- DwarfStar (ds4) — local DeepSeek V4 engine via the `openai-compatible`
+  provider type; its OpenRouter-shaped `context_length` metadata is read by a
+  dedicated backend strategy in the capability resolver
 
 ## Configuration Model
 

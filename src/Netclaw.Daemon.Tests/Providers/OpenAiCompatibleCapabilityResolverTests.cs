@@ -19,6 +19,8 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
     [Theory]
     [InlineData("{\"id\":\"Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf\",\"meta\":{\"n_ctx\":131072,\"n_ctx_train\":262144}}", 131_072)]
     [InlineData("{\"id\":\"Qwen/Qwen3.6-VL-30B-FP8\",\"max_model_len\":256000}", 256_000)]
+    [InlineData("{\"id\":\"deepseek-v4-flash\",\"owned_by\":\"ds4.c\",\"context_length\":262144}", 262_144)]
+    [InlineData("{\"id\":\"deepseek-v4-pro\",\"owned_by\":\"ds4.c\",\"top_provider\":{\"context_length\":196608}}", 196_608)]
     public void ParseModels_ReadsSelfHostedContextMetadata(string modelJson, int expectedContextWindow)
     {
         var json = $$"""
@@ -166,6 +168,65 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.Null(result.ContextWindowTokens);
         Assert.Null(result.InputModalities);
         Assert.Null(result.OutputModalities);
+    }
+
+    [Fact]
+    public void ResolveFromProbe_Ds4Shape_DispatchesToDs4Strategy_EvenWithProps()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "deepseek-v4-flash",
+              "object": "model",
+              "owned_by": "ds4.c",
+              "context_length": 262144,
+              "top_provider": { "context_length": 262144 }
+            }
+          ]
+        }
+        """;
+        // A proxy in front of ds4 may answer /props; the ds4 strategy is
+        // ordered before llama.cpp so the owned_by signal still wins.
+        const string propsJson = """
+        { "default_generation_settings": { "n_ctx": 4096 } }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
+            "deepseek-v4-flash", modelsJson, propsJson);
+
+        Assert.NotNull(result);
+        Assert.Equal(262_144, result.ContextWindowTokens);
+        Assert.Equal(ModelModality.Text, result.InputModalities);
+        Assert.Equal(ModelModality.Text, result.OutputModalities);
+    }
+
+    [Fact]
+    public void ResolveFromProbe_Ds4Shape_DispatchesToDs4Strategy_EvenWithMaxModelLen()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "deepseek-v4-flash",
+              "object": "model",
+              "owned_by": "ds4.c",
+              "max_model_len": 4096,
+              "context_length": 262144
+            }
+          ]
+        }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
+            "deepseek-v4-flash", modelsJson, propsJson: null);
+
+        Assert.NotNull(result);
+        Assert.Equal(262_144, result.ContextWindowTokens);
+        Assert.Equal(ModelModality.Text, result.InputModalities);
+        Assert.Equal(ModelModality.Text, result.OutputModalities);
     }
 
     [Fact]
