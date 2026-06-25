@@ -1119,7 +1119,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 {
                     var delivered = _postedThisTurn || _uploadedFileThisTurn;
                     reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey.Value,
+                        sourceReminderKey,
                         ChannelType.Slack,
                         Delivered: delivered,
                         FailureReason: delivered ? null : "Slack post did not succeed",
@@ -1471,7 +1471,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return;
 
         foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key.Value, ChannelType.Slack, Delivered: false, FailureReason: reason));
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Slack, Delivered: false, FailureReason: reason));
 
         _reminderDeliveryObservers.Clear();
     }

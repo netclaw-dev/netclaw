@@ -337,12 +337,12 @@ public sealed record SessionState
                 Role = ChatRole.User,
                 Content = $"{SystemNudgePrefix} {nudge}]",
                 // Snapshot, never alias. The model-input media nudge is built from
-                // LlmSessionActor._pendingModelInputMediaReferences, a mutable
-                // accumulator the actor Clear()s immediately after handing it off.
+                // the caller's media accumulator (ModelInputMediaBuffer.DrainSnapshot),
+                // which reuses/empties its backing list across batches.
                 // SerializableChatMessage is an immutable persistence type that must
-                // own its media list — without this copy the subsequent Clear()
-                // empties the nudge's attachments before the next LLM call hydrates
-                // them, so a tool-loaded image silently never reaches the model.
+                // own its media list — without this copy the caller's reuse could
+                // empty the nudge's attachments before the next LLM call hydrates
+                // them, so a tool-loaded image would silently never reach the model.
                 MediaReferences = [.. mediaReferences]
             }
             : new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };

@@ -19,36 +19,37 @@ namespace Netclaw.Actors.Sessions.Handlers;
 /// </summary>
 internal sealed class InFlightTurnDedup
 {
-    private readonly HashSet<ReminderId> _reminders = [];
-    private readonly HashSet<BackgroundJobId> _backgroundJobs = [];
+    // Both ledgers share one guard implementation so the reserve/complete/lookup
+    // semantics (notably: reserve ignores empty ids, complete/lookup don't) can't
+    // drift between the reminder and background-job paths.
+    private readonly InFlightSet<ReminderId> _reminders = new(id => id.Value);
+    private readonly InFlightSet<BackgroundJobId> _backgroundJobs = new(id => id.Value);
 
-    public bool IsReminderInFlight(ReminderId? reminderId) =>
-        reminderId is { } id && _reminders.Contains(id);
+    public bool IsReminderInFlight(ReminderId? reminderId) => _reminders.Contains(reminderId);
+    public void ReserveReminder(ReminderId? reminderId) => _reminders.Reserve(reminderId);
+    public void CompleteReminder(ReminderId? reminderId) => _reminders.Remove(reminderId);
 
-    public void ReserveReminder(ReminderId? reminderId)
+    public bool IsBackgroundJobInFlight(BackgroundJobId? backgroundJobId) => _backgroundJobs.Contains(backgroundJobId);
+    public void ReserveBackgroundJob(BackgroundJobId? backgroundJobId) => _backgroundJobs.Reserve(backgroundJobId);
+    public void CompleteBackgroundJob(BackgroundJobId? backgroundJobId) => _backgroundJobs.Remove(backgroundJobId);
+
+    private sealed class InFlightSet<T>(Func<T, string> valueOf)
+        where T : struct
     {
-        if (reminderId is { } id && !string.IsNullOrEmpty(id.Value))
-            _reminders.Add(id);
-    }
+        private readonly HashSet<T> _ids = [];
 
-    public void CompleteReminder(ReminderId? reminderId)
-    {
-        if (reminderId is { } id)
-            _reminders.Remove(id);
-    }
+        public bool Contains(T? id) => id is { } value && _ids.Contains(value);
 
-    public bool IsBackgroundJobInFlight(BackgroundJobId? backgroundJobId) =>
-        backgroundJobId is { } id && _backgroundJobs.Contains(id);
+        public void Reserve(T? id)
+        {
+            if (id is { } value && !string.IsNullOrEmpty(valueOf(value)))
+                _ids.Add(value);
+        }
 
-    public void ReserveBackgroundJob(BackgroundJobId? backgroundJobId)
-    {
-        if (backgroundJobId is { } id && !string.IsNullOrEmpty(id.Value))
-            _backgroundJobs.Add(id);
-    }
-
-    public void CompleteBackgroundJob(BackgroundJobId? backgroundJobId)
-    {
-        if (backgroundJobId is { } id)
-            _backgroundJobs.Remove(id);
+        public void Remove(T? id)
+        {
+            if (id is { } value)
+                _ids.Remove(value);
+        }
     }
 }

@@ -1200,7 +1200,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
                 {
                     reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey.Value,
+                        sourceReminderKey,
                         ChannelType.Discord,
                         Delivered: _deliveredThisTurn,
                         FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
@@ -1439,7 +1439,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
 
         foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key.Value, ChannelType.Discord, Delivered: false, FailureReason: reason));
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Discord, Delivered: false, FailureReason: reason));
 
         _reminderDeliveryObservers.Clear();
     }

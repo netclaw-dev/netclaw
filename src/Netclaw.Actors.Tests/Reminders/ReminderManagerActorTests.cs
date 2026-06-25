@@ -659,7 +659,7 @@ public class ReminderManagerActorTests : TestKit
             // Channel reports the post failed — execution must report failure
             // (so Akka.Reminders redelivers) without acking the envelope.
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value.Value,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Slack,
                 Delivered: false,
                 FailureReason: "channel API down"));
@@ -740,7 +740,7 @@ public class ReminderManagerActorTests : TestKit
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value.Value,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Slack,
                 Delivered: true,
                 ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
@@ -1024,7 +1024,7 @@ public class ReminderManagerActorTests : TestKit
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value.Value,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Discord,
                 Delivered: true,
                 ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));

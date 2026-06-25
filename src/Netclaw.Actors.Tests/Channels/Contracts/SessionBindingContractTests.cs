@@ -286,7 +286,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(reminderKey), result.ReminderDeliveryKey);
         Assert.Equal(ExpectedChannelType, result.ChannelType);
         Assert.True(result.Delivered);
     }
@@ -316,7 +316,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(reminderKey), result.ReminderDeliveryKey);
         Assert.Equal(ExpectedChannelType, result.ChannelType);
         Assert.False(result.Delivered);
 
@@ -355,11 +355,11 @@ public abstract class SessionBindingContractTests : TestKit
 
         var resultA = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(keyA, resultA.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(keyA), resultA.ReminderDeliveryKey);
 
         var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(keyB, resultB.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(keyB), resultB.ReminderDeliveryKey);
     }
 
     // Regression for the misleading-fallback bug: when the real content post

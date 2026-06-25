@@ -17,19 +17,24 @@ namespace Netclaw.Actors.Sessions.Handlers;
 /// </summary>
 internal sealed class ModelInputMediaBuffer
 {
-    private readonly List<SerializableMediaReference> _pending = [];
+    private List<SerializableMediaReference> _pending = [];
 
     public void Add(IEnumerable<SerializableMediaReference> references) => _pending.AddRange(references);
 
-    /// <summary>Returns the buffered references and clears the buffer.</summary>
+    /// <summary>
+    /// Hands off the buffered references and resets the buffer to empty. The
+    /// existing list is returned by reference and the buffer adopts a fresh one,
+    /// so no copy is made here — the consumer (AddSystemNudge / BuildNudgeMessage)
+    /// makes the single defensive copy the immutable persistence type needs.
+    /// </summary>
     public IReadOnlyList<SerializableMediaReference> DrainSnapshot()
     {
         if (_pending.Count == 0)
             return [];
 
-        var snapshot = _pending.ToArray();
-        _pending.Clear();
-        return snapshot;
+        var drained = _pending;
+        _pending = [];
+        return drained;
     }
 
     public void Clear() => _pending.Clear();

@@ -321,7 +321,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             && _reminderDeliveryObservers.Remove(sourceReminderKey, out var observer))
         {
             observer.Tell(new ReminderDeliveryResult(
-                sourceReminderKey.Value,
+                sourceReminderKey,
                 _channelType,
                 Delivered: delivered,
                 FailureReason: delivered ? null : "SignalR client did not receive the reply",
@@ -341,7 +341,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             return;
 
         foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key.Value, _channelType, Delivered: false, FailureReason: reason));
+            observer.Tell(new ReminderDeliveryResult(key, _channelType, Delivered: false, FailureReason: reason));
 
         _reminderDeliveryObservers.Clear();
     }

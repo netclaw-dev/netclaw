@@ -1171,7 +1171,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
                 {
                     reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey.Value,
+                        sourceReminderKey,
                         ChannelType.Mattermost,
                         Delivered: _deliveredThisTurn,
                         FailureReason: _deliveredThisTurn ? null : "Mattermost post did not succeed",
@@ -1379,7 +1379,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return;
 
         foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key.Value, ChannelType.Mattermost, Delivered: false, FailureReason: reason));
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Mattermost, Delivered: false, FailureReason: reason));
 
         _reminderDeliveryObservers.Clear();
     }
