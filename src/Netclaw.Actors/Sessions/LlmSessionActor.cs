@@ -77,7 +77,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // In-flight reminder/background-job dedup (transient; rebuilt from journal on recovery).
     private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
-    private readonly List<AITool> _availableTools = [];
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ResolvedToolApproval> _resolvedToolApprovals = new(StringComparer.Ordinal);
     // Live-only coordination for the currently executing streamed tool batch.
@@ -93,7 +92,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
-    private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
+    // Owns the exposed tool list (base + discovered) and lease-based eviction.
     private readonly DiscoveredToolCache _discoveredToolCache = new();
 
     // Last observed input token count from LLM response (for compaction trigger)
@@ -255,9 +254,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _fullRegistry = tools?.ToolRegistry;
         if (_fullRegistry is not null)
         {
-            _availableTools.AddRange(_fullRegistry.GetAlwaysLoadedTools());
+            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetAlwaysLoadedTools());
         }
-        _baseToolCount = _availableTools.Count;
 
         // ── Recovery handlers ──
         Recover<TurnRecorded>(evt =>
@@ -638,7 +636,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             // Evict discovered tools to prevent a poisoned tool set from cascading
             // across turns (e.g., oversized Notion schemas causing repeated 502s).
-            _discoveredToolCache.EvictAll(_availableTools, _baseToolCount);
+            _discoveredToolCache.EvictAll();
             TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
 
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
@@ -1235,7 +1233,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _lastInputTokenCount = 0;
             _startupContextInjected = false;
             _recallManager.ResetForCompaction();
-            _discoveredToolCache.EvictAll(_availableTools, _baseToolCount);
+            _discoveredToolCache.EvictAll();
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId,
@@ -2282,7 +2280,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _turnState.ResetForNewTurn();
         _discoveredToolCache.PrepareForNewTurn(
-            _availableTools, _baseToolCount,
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
             _fullRegistry);
@@ -2780,10 +2777,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private IReadOnlyList<AITool> ResolveExposedToolsForCurrentTurn()
     {
-        if (_toolAccessPolicy is null || _fullRegistry is null || _availableTools.Count == 0)
-            return _availableTools;
+        var availableTools = _discoveredToolCache.AvailableTools;
+        if (_toolAccessPolicy is null || _fullRegistry is null || availableTools.Count == 0)
+            return availableTools;
 
-        return _toolAccessPolicy.FilterExposedTools(_availableTools, _fullRegistry, _currentTrustContext);
+        return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, _currentTrustContext);
     }
 
     /// <summary>
@@ -3145,7 +3143,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private bool HasFileReadGranted()
     {
-        foreach (var tool in _availableTools)
+        foreach (var tool in _discoveredToolCache.AvailableTools)
         {
             if (tool is AIFunction fn && string.Equals(fn.Name, FileReadTool.ToolName, StringComparison.Ordinal))
                 return true;
@@ -3200,18 +3198,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _discoveredToolCache.Remember(canonicalName, tool,
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount);
-        AddAvailableToolIfMissing(canonicalName, tool.ToAITool());
+        if (_discoveredToolCache.AddIfMissing(tool.ToAITool()))
+            _log.Info("Dynamically loaded tool '{ToolName}' into session", canonicalName);
         return true;
-    }
-
-    private void AddAvailableToolIfMissing(string toolName, AITool aiTool)
-    {
-        if (_availableTools.Any(existing =>
-            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
-            return;
-
-        _availableTools.Add(aiTool);
-        _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
     }
 
     private SessionSnapshot BuildSnapshot()
