@@ -1250,11 +1250,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private static string BuildSystemPrompt(SubAgentDefinition definition)
     {
-        var basePrompt = string.IsNullOrWhiteSpace(definition.ProjectInstructions)
-            ? definition.SystemPrompt
-            : SystemPromptAssembler.Assemble(agents: definition.SystemPrompt, projectInstructions: definition.ProjectInstructions);
+        // Assemble the identity stack that sub-agents inherit from the parent session:
+        // 1. Embedded AGENTS.md (operating rules, safety, grounding constraints)
+        // 2. Project instructions (workspace/domain context from the parent's working directory)
+        var basePrompt = SystemPromptAssembler.Assemble(
+            agents: definition.OperatingRules,
+            projectInstructions: definition.ProjectInstructions);
 
-        return string.Concat(basePrompt.TrimEnd(), "\n\n", HeadlessExecutionContract);
+        // Append the sub-agent's own system prompt (markdown body + optional skill overlay)
+        var rolePrompt = string.IsNullOrWhiteSpace(basePrompt)
+            ? definition.SystemPrompt
+            : string.Concat(basePrompt.TrimEnd(), "\n\n", definition.SystemPrompt);
+
+        // Append the headless execution contract — always at the bottom
+        return string.Concat(rolePrompt.TrimEnd(), "\n\n", HeadlessExecutionContract);
     }
 
     private sealed class SubAgentCancelled
