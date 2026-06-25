@@ -18,7 +18,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class FileReadToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly FileReadTool _tool = new(new ToolConfig());
+    private readonly FileReadTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
     private readonly string _sessionDir;
 
     public FileReadToolTests()
@@ -221,7 +221,7 @@ public class FileReadToolTests : IDisposable
     [Fact]
     public async Task Large_file_is_truncated_with_continuation_hint()
     {
-        var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 100 });
+        var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 100 }, new NetclawPaths(), new ToolPathPolicy([]));
         var filePath = Path.Combine(_dir.Path, "large.txt");
         await File.WriteAllTextAsync(filePath, new string('x', 500), TestContext.Current.CancellationToken);
 
@@ -239,7 +239,7 @@ public class FileReadToolTests : IDisposable
     [Fact]
     public async Task Paginated_read_truncated_by_char_limit_includes_continuation_hint()
     {
-        var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 50 });
+        var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 50 }, new NetclawPaths(), new ToolPathPolicy([]));
         var filePath = Path.Combine(_dir.Path, "paged.txt");
         var lines = Enumerable.Range(1, 20).Select(i => $"Line {i:D2} content here");
         await File.WriteAllLinesAsync(filePath, lines, TestContext.Current.CancellationToken);
@@ -275,7 +275,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(filePath, """{"secret": "value"}""", TestContext.Current.CancellationToken);
 
         var policy = new ToolPathPolicy([filePath]);
-        var tool = new FileReadTool(new ToolConfig(), policy);
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), policy);
         var args = ToolInput.Create("Path", filePath);
 
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
@@ -320,7 +320,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(skillFile, "# Test Skill", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_dir.Path);
-        var tool = new FileReadTool(new ToolConfig(), paths: paths);
+        var tool = new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", skillFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
@@ -341,7 +341,7 @@ public class FileReadToolTests : IDisposable
         var scan = SkillScanner.Scan(paths.SkillsDirectory);
         registry.ReplaceAll(scan.AcceptedSkills, scan.Issues);
 
-        var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
+        var tool = new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([]), skillRegistry: registry, sessionMetrics: metrics);
 
         await tool.ExecuteAsync(ToolInput.Create("Path", skillFile), CreateTeamContext(), CancellationToken.None);
 
@@ -359,7 +359,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_sessionDir, "notes.txt");
         await File.WriteAllTextAsync(filePath, "notes", TestContext.Current.CancellationToken);
 
-        var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
+        var tool = new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([]), skillRegistry: registry, sessionMetrics: metrics);
 
         await tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
 
@@ -375,7 +375,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(soulFile, "# Soul", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_dir.Path);
-        var tool = new FileReadTool(new ToolConfig(), paths: paths);
+        var tool = new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", soulFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
@@ -391,7 +391,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(secretFile, "secret data", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_dir.Path);
-        var tool = new FileReadTool(new ToolConfig(), paths: paths);
+        var tool = new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", secretFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
@@ -410,7 +410,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(skillFile, "# Test Skill", TestContext.Current.CancellationToken);
 
         // No paths injected — no global read roots
-        var tool = new FileReadTool(new ToolConfig());
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", skillFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
@@ -434,7 +434,7 @@ public class FileReadToolTests : IDisposable
             }
         };
         var paths = new NetclawPaths(_dir.Path);
-        var tool = new FileReadTool(config, paths: paths);
+        var tool = new FileReadTool(config, paths, new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", dataFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
@@ -458,7 +458,7 @@ public class FileReadToolTests : IDisposable
             }
         };
         // No NetclawPaths injected — literal paths should still resolve
-        var tool = new FileReadTool(config);
+        var tool = new FileReadTool(config, new NetclawPaths(), new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Path", dataFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);

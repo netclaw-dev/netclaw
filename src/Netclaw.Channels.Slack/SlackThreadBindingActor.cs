@@ -45,7 +45,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
     // Keyed (not a single field) because multiple reminders can target the
     // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
+    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
     // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
@@ -285,8 +285,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         // second concurrent reminder to this session can't overwrite the
         // first's observer before its turn reaches TurnCompleted.
         if (message.Source.DeliveryObserver is { } deliveryObserver
-            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
-            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
+            && message.Source.ReminderId is { } reminderKey
+            && !string.IsNullOrWhiteSpace(reminderKey.Value))
+            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
 
         try
         {
@@ -1112,12 +1113,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     AdvanceCursor(pendingTs);
                 _pendingCursorTs = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
-                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
+                if (completed.SourceReminderId is { } sourceReminderKey
+                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
+                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
                 {
                     var delivered = _postedThisTurn || _uploadedFileThisTurn;
                     reminderObserver.Tell(new ReminderDeliveryResult(
-                        completed.SourceReminderId,
+                        sourceReminderKey,
                         ChannelType.Slack,
                         Delivered: delivered,
                         FailureReason: delivered ? null : "Slack post did not succeed",

@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class FileListToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly FileListTool _tool = new(new ToolConfig());
+    private readonly FileListTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
     private readonly string _sessionDir;
 
     public FileListToolTests()
@@ -73,7 +73,7 @@ public sealed class FileListToolTests : IDisposable
     {
         var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(Path.Combine(paths.WorkspacesDirectory, "project-a"));
-        var tool = new FileListTool(new ToolConfig(), paths);
+        var tool = new FileListTool(new ToolConfig(), paths, new ToolPathPolicy([]));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Path", paths.WorkspacesDirectory), CreateTeamContext(), CancellationToken.None);
@@ -111,7 +111,7 @@ public sealed class FileListToolTests : IDisposable
         Directory.CreateDirectory(protectedDir);
 
         var policy = new ToolPathPolicy([protectedDir]);
-        var tool = new FileListTool(new ToolConfig(), pathPolicy: policy);
+        var tool = new FileListTool(new ToolConfig(), new NetclawPaths(), policy);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Path", protectedDir),
@@ -134,7 +134,7 @@ public sealed class FileListToolTests : IDisposable
         await File.WriteAllTextAsync(visibleFile, "visible", TestContext.Current.CancellationToken);
 
         var policy = new ToolPathPolicy([protectedDir], [protectedFile, protectedDir], [protectedDir]);
-        var tool = new FileListTool(new ToolConfig(), pathPolicy: policy);
+        var tool = new FileListTool(new ToolConfig(), new NetclawPaths(), policy);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Path", _sessionDir),

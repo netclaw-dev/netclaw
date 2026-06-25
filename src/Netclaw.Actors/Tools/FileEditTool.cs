@@ -25,7 +25,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
 {
     public const string ToolName = "file_edit";
 
-    private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
@@ -35,16 +35,10 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         [property: Description("Replace all occurrences instead of just the first (default: false)")] bool? ReplaceAll = null,
         [property: Description("Full content to write to the file, creating parent directories if needed. Mutually exclusive with OldString/NewString.")] string? Content = null);
 
-    public FileEditTool(ToolPathPolicy? pathPolicy = null)
+    public FileEditTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
         _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(new ToolConfig());
-    }
-
-    public FileEditTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
-    {
-        _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -83,7 +77,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
             return accessError;
 
-        if (_pathPolicy?.IsDenied(authorizedPath) == true)
+        if (_pathPolicy.IsDenied(authorizedPath))
             return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
 
         try
@@ -115,7 +109,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
             return accessError;
 
-        if (_pathPolicy?.IsDenied(authorizedPath) == true)
+        if (_pathPolicy.IsDenied(authorizedPath))
             return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
 
         if (!File.Exists(authorizedPath))

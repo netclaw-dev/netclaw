@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Reminders;
 using Netclaw.Media;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -91,7 +92,7 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             TurnNumber = msg.TurnNumber,
             TurnOutcome = msg.Outcome.ToString().ToLowerInvariant(),
-            SourceReminderId = msg.SourceReminderId
+            SourceReminderId = msg.SourceReminderId?.Value
         },
 
         SessionTitleOutput msg => new SessionOutputDto
@@ -268,7 +269,7 @@ public static class SessionOutputDtoMapper
                 Outcome = Enum.TryParse<TurnOutcome>(dto.TurnOutcome, ignoreCase: true, out var outcome)
                     ? outcome
                     : TurnOutcome.Completed,
-                SourceReminderId = dto.SourceReminderId
+                SourceReminderId = dto.SourceReminderId is null ? null : new ReminderId(dto.SourceReminderId)
             },
             SessionOutputTypes.SessionTitle => new SessionTitleOutput(dto.Title ?? string.Empty)
             {

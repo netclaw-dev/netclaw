@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class FileEditToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly FileEditTool _tool = new(new ToolConfig());
+    private readonly FileEditTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
     private readonly string _sessionDir;
 
     public FileEditToolTests()
@@ -120,7 +120,7 @@ public class FileEditToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "secrets.json");
         await File.WriteAllTextAsync(filePath, "secret data", TestContext.Current.CancellationToken);
         var policy = new ToolPathPolicy([filePath]);
-        var tool = new FileEditTool(new ToolConfig(), policy);
+        var tool = new FileEditTool(new ToolConfig(), new NetclawPaths(), policy);
 
         var result = await tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "secret", "NewString", "public"), CreatePersonalContext(), CancellationToken.None);
 

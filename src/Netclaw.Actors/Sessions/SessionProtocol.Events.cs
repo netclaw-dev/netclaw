@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -37,7 +39,7 @@ public static partial class SessionProtocol
         /// (<see cref="SessionState.ProcessedReminderIds"/>) from
         /// event replay.
         /// </summary>
-        public string? SourceReminderId { get; init; }
+        public ReminderId? SourceReminderId { get; init; }
 
         /// <summary>
         /// Populated when this turn originated from a background job result delivery.
@@ -45,7 +47,7 @@ public static partial class SessionProtocol
         /// <see cref="Channels.MessageSource.BackgroundJobId"/> by the
         /// background job manager. Null for regular user turns.
         /// </summary>
-        public string? SourceBackgroundJobId { get; init; }
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
 
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 

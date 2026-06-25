@@ -35,7 +35,7 @@ public class ToolArgumentValidatorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(

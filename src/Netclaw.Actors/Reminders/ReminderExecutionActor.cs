@@ -52,7 +52,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
     private bool _awaitingDeliveryResult;
-    private string? _expectedReminderDeliveryKey;
+    private ReminderId? _expectedReminderDeliveryKey;
     private ICancelable? _deliveryTimeoutCancelable;
 
     private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
@@ -229,7 +229,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     SourceKind = new SourceKind("reminder")
                 },
                 ReceivedAt = _dispatchedAt,
-                ReminderId = reminderDeliveryKey,
+                ReminderId = new ReminderId(reminderDeliveryKey),
                 // Only reminders that gate on delivery need a confirmation
                 // channel. The binding actor tells this ref a
                 // ReminderDeliveryResult on turn completion; leaving it null
@@ -265,7 +265,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                             // the ReminderDeliveryResult message it is waiting
                             // for. Arm state + a backstop timer and return; the
                             // result (or timeout) is handled as a normal message.
-                            BeginAwaitingDeliveryResult(reminderDeliveryKey);
+                            BeginAwaitingDeliveryResult(new ReminderId(reminderDeliveryKey));
                             break;
                         }
 
@@ -310,7 +310,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// processing and can handle the <see cref="ReminderDeliveryResult"/> the
     /// binding actor tells it (or the <see cref="DeliveryBackstopTimeout"/>).
     /// </summary>
-    private void BeginAwaitingDeliveryResult(string reminderDeliveryKey)
+    private void BeginAwaitingDeliveryResult(ReminderId reminderDeliveryKey)
     {
         _awaitingDeliveryResult = true;
         _expectedReminderDeliveryKey = reminderDeliveryKey;
@@ -323,7 +323,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private void HandleDeliveryResult(ReminderDeliveryResult result)
     {
-        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is not { } expectedKey)
             return;
 
         // Correlate on the delivery key alone. The result was told point-to-
@@ -332,7 +332,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         // ChannelType too would only fail closed (e.g. a cold SignalR actor
         // reports its default Tui rather than the origin SignalR), silently
         // dropping a valid result and stalling on the backstop.
-        if (!string.Equals(result.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+        if (result.ReminderDeliveryKey != expectedKey)
             return;
 
         _awaitingDeliveryResult = false;
@@ -372,10 +372,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private void HandleDeliveryBackstopTimeout(DeliveryBackstopTimeout msg)
     {
-        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is not { } expectedKey)
             return;
 
-        if (!string.Equals(msg.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+        if (msg.ReminderDeliveryKey != expectedKey)
             return;
 
         _awaitingDeliveryResult = false;
@@ -620,5 +620,5 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// arrives within <see cref="DeliveryObservedTimeout"/> (e.g. the binding
     /// actor crashed mid-turn).
     /// </summary>
-    private sealed record DeliveryBackstopTimeout(string ReminderDeliveryKey) : INoSerializationVerificationNeeded;
+    private sealed record DeliveryBackstopTimeout(ReminderId ReminderDeliveryKey) : INoSerializationVerificationNeeded;
 }

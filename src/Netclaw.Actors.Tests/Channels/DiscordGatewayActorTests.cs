@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
@@ -251,7 +252,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 {
                     SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
                 },
-                ReminderId = "rem-1"
+                ReminderId = new ReminderId("rem-1")
             });
 
         gateway.Tell(turn);
@@ -285,7 +286,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 {
                     SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
                 },
-                ReminderId = "rem-1"
+                ReminderId = new ReminderId("rem-1")
             });
 
         gateway.Tell(turn, TestActor);

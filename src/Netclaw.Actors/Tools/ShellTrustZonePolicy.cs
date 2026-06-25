@@ -19,7 +19,7 @@ public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
 {
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
-    public ShellTrustZonePolicy(ToolConfig toolConfig, NetclawPaths? paths = null)
+    public ShellTrustZonePolicy(ToolConfig toolConfig, NetclawPaths paths)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(toolConfig, paths);
     }

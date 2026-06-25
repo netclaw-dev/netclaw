@@ -13,8 +13,12 @@ internal sealed class ScopedFileAccessPolicy
 {
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
+    private readonly Lazy<string?> _cachedWorkspacesRoot;
 
-    public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths? paths = null)
+    // paths is required (not nullable): the workspaces/global-read roots are
+    // sourced from it, and a null would silently drop them — the exact silent
+    // fallback that let autonomous workspace access break unnoticed (#1493).
+    public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths paths)
     {
         _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
         _cachedGlobalReadRoots = new Lazy<IReadOnlyList<string>>(() =>
@@ -22,6 +26,11 @@ internal sealed class ScopedFileAccessPolicy
                 .Select(PathUtility.Normalize)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray());
+        _cachedWorkspacesRoot = new Lazy<string?>(() =>
+        {
+            var workspaces = _profileResolver.ResolveWorkspacesDirectory();
+            return string.IsNullOrWhiteSpace(workspaces) ? null : PathUtility.Normalize(workspaces);
+        });
     }
 
     public bool TryResolveReadPath(string rawPath, ToolExecutionContext context, out string fullPath, out string error)
@@ -191,12 +200,16 @@ internal sealed class ScopedFileAccessPolicy
     /// <summary>
     /// Resolves the autonomous filesystem zone from the data already on the
     /// execution context: the per-session directory and the current project
-    /// directory. Write/attach access is confined to those; read access additionally
-    /// includes the non-sensitive global read roots (skills, identity, workspaces)
-    /// that interactive non-Public audiences already receive, so an autonomous
-    /// session can still read across the project tree but only write within its
-    /// session or current project. No additional plumbing — both fields and the
-    /// cached read roots already exist on this policy.
+    /// directory, always present for both reads and writes. Read access
+    /// additionally includes the non-sensitive global read roots (skills,
+    /// identity, workspaces). Write/attach access additionally includes the
+    /// configured <em>workspaces</em> directory only — the operator's designated
+    /// writable working area — but NOT skills/identity, which are system-managed
+    /// (an autonomous session must never rewrite its own identity or skills).
+    /// Plain file writes are not gated by the interactive approval system, so
+    /// confining them to session+project blocked legitimate cross-run state in
+    /// the workspace without a security benefit. No additional plumbing — the
+    /// cached read roots and workspaces root already exist on this policy.
     /// </summary>
     private IReadOnlyList<string> ResolveAutonomousZone(ToolExecutionContext context, AccessKind accessKind)
     {
@@ -210,6 +223,8 @@ internal sealed class ScopedFileAccessPolicy
 
         if (accessKind == AccessKind.Read)
             roots.AddRange(_cachedGlobalReadRoots.Value);
+        else if (_cachedWorkspacesRoot.Value is { } workspacesRoot)
+            roots.Add(workspacesRoot);
 
         return roots
             .Select(PathUtility.Normalize)

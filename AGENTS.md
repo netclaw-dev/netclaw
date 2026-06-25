@@ -193,6 +193,19 @@ manifest or installer feed.
   to the primitive defeats the purpose. Use `.Value` for explicit access and
   explicit casts where truly needed. If a value object can silently become a
   string, it provides no more safety than a raw string.
+- **Optional/nullable parameters are rare by default — make dependencies
+  required.** A constructor or method parameter should be optional (nullable or
+  defaulted) only when its absence is a genuine, intended runtime state the
+  callee handles explicitly (a real feature toggle: "no search backend
+  configured" → no web-search tool). NEVER add an optional parameter for
+  backward/source compatibility or to avoid updating call sites — update the
+  call sites instead. This is acute for security-relevant dependencies (path
+  roots, deny-list / access / command policies): a nullable security dependency
+  consumed with `?.` (`_policy?.IsDenied(p) == true`, `if (_policy is not null)`)
+  means a null silently **disables the check** — exactly how trust-zone and
+  privilege-escalation bugs hide. Require it so the type system guarantees it is
+  always present; if it is unconditionally constructed in production, there is no
+  justification for letting it be null.
 - **Comments: skip noise, keep signal.** Don't narrate what code does when
   identifiers already say it (`// increment counter`). Do write comments
   that help a human reviewer scanning in isolation: security gate

@@ -164,12 +164,19 @@ needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
 restarts.
 
 **Path restrictions:** A trusted verb runs wherever the creating audience's
-file-access policy allows — the same scoping `file_write` uses. A Personal
-reminder/webhook (the default when created from a Personal session) has
-unrestricted filesystem access; a Team or Public one is confined to its session
-directory — and cannot run `shell_execute` at all, since shell is Personal-only.
-Protected paths — `secrets.json`, `.netclaw/keys`, `config/webhooks` — are always
-denied regardless of audience or pre-approval.
+file-access policy allows — the same scoping `file_write` uses. Reminders and
+webhooks run autonomously (no live human approver), so even a Personal one is
+confined to an *autonomous zone* rather than the blanket access an interactive
+Personal session gets. Inside that zone it can **read** its session directory,
+the current project, and the shared read roots (skills, identity, workspaces),
+and can **write** to its session directory, the current project, and the
+**workspaces** directory — the designated working area for persisted state, so a
+reminder can keep a dedup/state file there across runs. It cannot write outside
+those — notably not to the system-managed skills or identity trees. A Team or
+Public reminder/webhook is confined to its session directory and cannot run
+`shell_execute` at all, since shell is Personal-only. Protected paths —
+`secrets.json`, `.netclaw/keys`, `config/webhooks` — are always denied regardless
+of audience or pre-approval.
 
 **If a reminder fails with `command_not_pre_approved`:** The verb is not in the
 approval store as a global wildcard. Run

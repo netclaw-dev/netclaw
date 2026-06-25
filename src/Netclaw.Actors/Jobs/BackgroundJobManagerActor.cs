@@ -431,7 +431,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                 SourceKind = new SourceKind(BackgroundJobManagerActor.SourceKind)
             },
             ReceivedAt = _timeProvider.GetUtcNow(),
-            BackgroundJobId = jobDeliveryKey
+            BackgroundJobId = new BackgroundJobId(jobDeliveryKey)
         };
 
         var deliverMsg = new DeliverTrustedSessionTurn(sessionId, content, source);

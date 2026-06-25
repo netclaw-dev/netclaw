@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
@@ -147,13 +149,13 @@ public sealed record MessageSource
     /// is recorded. This field is runtime-only — <see cref="MessageSource"/>
     /// is never serialized.
     /// </summary>
-    public string? ReminderId { get; init; }
+    public ReminderId? ReminderId { get; init; }
 
     /// <summary>
     /// Ephemeral dedup key for background-job-originated deliveries.
     /// Format is <c>"bg-job:{jobId}"</c>. Null for regular user messages.
     /// </summary>
-    public string? BackgroundJobId { get; init; }
+    public BackgroundJobId? BackgroundJobId { get; init; }
 
     /// <summary>
     /// Optional reply target for ack-gated trusted deliveries. When set,

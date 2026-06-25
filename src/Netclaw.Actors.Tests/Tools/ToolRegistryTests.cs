@@ -293,7 +293,7 @@ public class ToolRegistryTests
         // must not mangle them in either direction.
         var config = new ToolConfig();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
 
         Assert.Equal("shell_execute", registry.ToCanonicalName("shell_execute"));
         Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));

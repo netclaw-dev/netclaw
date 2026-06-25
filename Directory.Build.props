@@ -9,24 +9,32 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.24.2</VersionPrefix>
-    <VersionSuffix>beta.1</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.24.2-beta.1 — Schema-aware meta argument coercion, reliability fixes, and performance improvements
+    <VersionSuffix></VersionSuffix>
+    <PackageReleaseNotes>Netclaw v0.24.2 — DwarfStar provider support, sub-agent operating rule inheritance, systemd update reliability, and reliability improvements
 
 **Features**
 
+* **DwarfStar (ds4) provider support** — Added DwarfStar as a supported provider via the OpenAI-compatible backend strategy. ([#1349](https://github.com/netclaw-dev/netclaw/pull/1349))
+
+* **Sub-agents inherit embedded AGENTS.md operating rules** — Sub-agents spawned by a parent session now inherit the embedded `AGENTS.md` operating rules from the parent's identity context, ensuring consistent operating constraints across the agent hierarchy. ([#1490](https://github.com/netclaw-dev/netclaw/pull/1490))
+
 * **Schema-aware meta argument coercion** — ChatGPT-trained models (Qwen3.6, etc.) were being hard-rejected for using non-canonical meta argument names (`TimeoutSeconds` vs `_timeout_seconds`). This adds schema-aware near-miss resolution that coercively maps model-supplied key variants to canonical names when no real tool parameter shadows them. Fixes "tool was NOT executed" errors that pushed models off tools and into sandbox-style output. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
 
-* **Preserve per-call meta hints across tool-batch re-drive** — Tool calls awaiting approval that passivate and cold-recover were losing meta hints (`_timeout_seconds`, `_rationale`, `_background`), silently falling back to defaults. Fixes a pre-existing bug where the re-drive path never reinjected persisted MetaJson. Long-running tools approved after session recovery now respect the original timeout.
+* **Preserve per-call meta hints across tool-batch re-drive** — Tool calls awaiting approval that passivate and cold-recover were losing meta hints (`_timeout_seconds`, `_rationale`, `_background`), silently falling back to defaults. Long-running tools approved after session recovery now respect the original timeout. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
 
 **Bug Fixes**
 
-* **Subagents: honor approval-pause in every tool-watchdog mode** — In WallClock mode (applied to every opaque tool), the human-approval pause was ignored: the wall-clock budget kept ticking through a human approval, killing healthy tools mid-wait when humans took longer than the budget. Prevents premature tool termination during human-in-the-loop approvals. ([#1473](https://github.com/netclaw-dev/netclaw/pull/1473))
+* **Subagents: fixed premature kill by parent watchdog during approval waits** — Sub-agents waiting for human approval were incorrectly killed by the parent session's inactivity watchdog. Sub-agents now manage their own liveness end-to-end and are no longer subject to parent-side timeouts. ([#1481](https://github.com/netclaw-dev/netclaw/pull/1481))
 
-* **Skills: block agent mutations to server-feed skill directories** — Agents could freely edit/delete/write files into `.server-feeds/` skill directories via both `skill_manage` and direct file-write tools. Changes were silently overwritten on the next sync cycle. Two enforcement layers added: `skill_manage` guard + `ToolPathPolicy` write-deny for server-feed paths. Prevents wasted agent effort and misleading session state from server-feed mutations. ([#1466](https://github.com/netclaw-dev/netclaw/pull/1466))
+* **Subagents: honor approval-pause in every tool-watchdog mode** — In WallClock mode (applied to every opaque tool), the human-approval pause was ignored: the wall-clock budget kept ticking through a human approval, killing healthy tools mid-wait when humans took longer than the budget. Prevents premature tool termination during human-in-the-loop approvals. ([#1473](https://github.com/netclaw-dev/netclaw/pull/1473))
 
 * **Subagents: record spawn lifecycle in the session transcript** — Sub-agent actor logs went through Akka's async logger bridge and were lost because `SessionDiagnosticsContext.AsyncLocal` was gone. Spawns that failed early (guard rejection, watchdog kill, child-actor failure) left the session transcript completely silent. Parent-side breadcrumbs now log spawn lifecycle under the parent session scope. ([#1468](https://github.com/netclaw-dev/netclaw/pull/1468))
 
+* **Skills: block agent mutations to server-feed skill directories** — Agents could freely edit/delete/write files into `.server-feeds/` skill directories via both `skill_manage` and direct file-write tools. Changes were silently overwritten on the next sync cycle. Two enforcement layers added: `skill_manage` guard + `ToolPathPolicy` write-deny for server-feed paths. Prevents wasted agent effort and misleading session state from server-feed mutations. ([#1466](https://github.com/netclaw-dev/netclaw/pull/1466))
+
 * **Providers: refresh inference OAuth tokens** — OpenAI Copilot and other inference providers with OAuth tokens now refresh tokens at runtime rather than relying on stale tokens. Includes Copilot probe-time token refresh. Prevents authentication failures during long-running sessions when tokens expire. ([#1465](https://github.com/netclaw-dev/netclaw/pull/1465))
+
+* **`netclaw update` no longer crash-loops systemd on Linux** — On Linux hosts with Netclaw installed as a systemd `--user` service, `netclaw update` was restarting the daemon as a detached process (bypassing systemd). This left the still-enabled systemd unit in a permanent crash-loop — every 5 seconds it tried to start, failed because the detached daemon held the exclusive lock file, and retried indefinitely (restart counters in the tens of thousands). `netclaw update` now delegates start/stop to `systemctl --user` when an enabled user unit exists. ([#1469](https://github.com/netclaw-dev/netclaw/pull/1469))
 
 **Performance**
 
@@ -36,9 +44,9 @@
 
 * **Bump MessagePack from 2.5.301 to 3.1.7** — Major version bump with serialization improvements. Please test your workflows after upgrading. ([#1420](https://github.com/netclaw-dev/netclaw/pull/1420))
 
-* **Bump Anthropic SDK** — 12.29.1 → 12.30.0 (semver-minor). ([#1460](https://github.com/netclaw-dev/netclaw/pull/1460))
+* **Bump Termina from 0.14.0-beta3 to 0.14.0** — TUI framework promoted to stable; includes a fix for the MCP tool permissions page layout. ([#1480](https://github.com/netclaw-dev/netclaw/pull/1480), [#1483](https://github.com/netclaw-dev/netclaw/pull/1483))
 
-* **Bump Aspire.Hosting.Testing** — 13.4.4 → 13.4.6 (semver-patch). ([#1462](https://github.com/netclaw-dev/netclaw/pull/1462))</PackageReleaseNotes>
+* **Bump Anthropic SDK** — 12.29.1 → 12.30.0 (semver-minor). ([#1460](https://github.com/netclaw-dev/netclaw/pull/1460))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

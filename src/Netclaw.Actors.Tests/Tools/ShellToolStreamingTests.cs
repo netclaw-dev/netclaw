@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class ShellToolStreamingTests
 {
-    private readonly ShellTool _tool = new(new ToolConfig());
+    private readonly ShellTool _tool = new(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
     private static async Task<(List<ToolActivityUpdate> Activities, ToolCompletedUpdate? Completion)>
         CollectStreamAsync(ShellTool tool, IDictionary<string, object?> args,
@@ -109,7 +109,7 @@ public class ShellToolStreamingTests
     [Fact]
     public async Task Output_clamping_preserved_in_completion_result()
     {
-        var tool = new ShellTool(new ToolConfig { MaxOutputChars = 100 });
+        var tool = new ShellTool(new ToolConfig { MaxOutputChars = 100 }, new ToolPathPolicy([]), new ShellCommandPolicy());
         // Generate output much larger than the 100-char budget
         var cmd = OperatingSystem.IsWindows()
             ? "for /L %i in (1,1,10000) do @echo %i"
@@ -137,7 +137,7 @@ public class ShellToolStreamingTests
     public async Task Hard_deny_yields_immediate_error_completion()
     {
         var policy = new ShellCommandPolicy(["kill"], []);
-        var tool = new ShellTool(new ToolConfig(), commandPolicy: policy);
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), policy);
         var args = ToolInput.Create("Command", "kill -9 1");
         var (activities, completion) = await CollectStreamAsync(tool, args, ct: TestContext.Current.CancellationToken);
 

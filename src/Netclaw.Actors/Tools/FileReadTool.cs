@@ -36,7 +36,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     public override bool SuppressOutputRedaction => true;
 
     private readonly ToolConfig _config;
-    private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
     private readonly SkillRegistry? _skillRegistry;
     private readonly ISessionMetrics? _sessionMetrics;
@@ -49,8 +49,8 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
     public FileReadTool(
         ToolConfig config,
-        ToolPathPolicy? pathPolicy = null,
-        NetclawPaths? paths = null,
+        NetclawPaths paths,
+        ToolPathPolicy pathPolicy,
         SkillRegistry? skillRegistry = null,
         ISessionMetrics? sessionMetrics = null,
         ILogger<FileReadTool>? logger = null)
@@ -74,7 +74,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
             return accessError;
 
-        if (_pathPolicy?.IsReadDenied(authorizedPath) == true)
+        if (_pathPolicy.IsReadDenied(authorizedPath))
             return FileToolErrors.CredentialReadDenied(authorizedPath);
 
         if (!File.Exists(authorizedPath))

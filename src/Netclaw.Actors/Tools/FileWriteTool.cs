@@ -29,14 +29,9 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
         [property: Description("Absolute path to the file to write")] string Path,
         [property: Description("Content to write to the file")] string Content);
 
-    public FileWriteTool(ToolPathPolicy? pathPolicy = null)
+    public FileWriteTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
-        _editTool = new FileEditTool(pathPolicy);
-    }
-
-    public FileWriteTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
-    {
-        _editTool = new FileEditTool(config, pathPolicy);
+        _editTool = new FileEditTool(config, paths, pathPolicy);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

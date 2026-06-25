@@ -253,7 +253,7 @@ public class BackgroundJobManagerActorTests : TestKit
         Assert.Contains(logPath, delivery.Content);
         Assert.Contains("Server running on", delivery.Content);
         Assert.Equal(TrustAudience.Personal, delivery.Source.Audience);
-        Assert.Equal($"bg-job:{orphanId.Value}", delivery.Source.BackgroundJobId);
+        Assert.Equal(new BackgroundJobId($"bg-job:{orphanId.Value}"), delivery.Source.BackgroundJobId);
     }
 
     [Fact]

@@ -159,10 +159,12 @@ internal static class NetclawProtoMapper
             AssistantReply = ToProto(evt.AssistantReply),
             RecordedAtMs = evt.RecordedAtMs
         };
-        if (evt.SourceReminderId is not null)
-            proto.SourceReminderId = evt.SourceReminderId;
-        if (evt.SourceBackgroundJobId is not null)
-            proto.SourceBackgroundJobId = evt.SourceBackgroundJobId;
+        // Value objects map to the existing string proto fields, so the on-disk
+        // form is byte-identical to the pre-value-object representation.
+        if (evt.SourceReminderId is { } reminderId)
+            proto.SourceReminderId = reminderId.Value;
+        if (evt.SourceBackgroundJobId is { } backgroundJobId)
+            proto.SourceBackgroundJobId = backgroundJobId.Value;
         return proto;
     }
 
@@ -172,8 +174,8 @@ internal static class NetclawProtoMapper
         UserMessage = FromProto(proto.UserMessage),
         AssistantReply = FromProto(proto.AssistantReply),
         RecordedAtMs = proto.RecordedAtMs,
-        SourceReminderId = proto.HasSourceReminderId ? proto.SourceReminderId : null,
-        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? proto.SourceBackgroundJobId : null
+        SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : (ReminderId?)null,
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null
     };
 
     // ── SessionTitleSet ──

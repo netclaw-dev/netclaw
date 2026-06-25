@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class ShellToolTests
 {
-    private readonly ShellTool _tool = new(new ToolConfig());
+    private readonly ShellTool _tool = new(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
     [Fact]
     public async Task Execute_echo_returns_output()
@@ -48,7 +48,7 @@ public class ShellToolTests
     [Fact]
     public async Task Timeout_kills_long_running_process()
     {
-        var tool = new ShellTool(new ToolConfig());
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var args = ToolInput.Create("Command", "sleep 100");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
@@ -64,7 +64,7 @@ public class ShellToolTests
     [Fact]
     public async Task Requested_timeout_overrides_default_timeout()
     {
-        var tool = new ShellTool(new ToolConfig());
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var args = ToolInput.Create("Command", "sleep 1");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
@@ -87,7 +87,7 @@ public class ShellToolTests
         // exception. On Unix the command also spawns a background child that
         // inherits stdout/stderr; if the tree kill regresses, that child keeps
         // the pipe write-ends open and the test never completes.
-        var tool = new ShellTool(new ToolConfig());
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var command = OperatingSystem.IsWindows()
             ? "ping 127.0.0.1 -n 120 > nul"
             : "sleep 120 & wait";
@@ -111,7 +111,7 @@ public class ShellToolTests
         // inline-budget bound + spill happen centrally in DispatchingToolExecutor
         // (covered by DispatchingToolExecutorTests). `echo` is a builtin on both
         // bash and cmd.exe; a long literal is deterministic on stdout.
-        var tool = new ShellTool(new ToolConfig());
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var args = ToolInput.Create("Command", $"echo {new string('x', 200)}");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
@@ -378,7 +378,7 @@ public class ShellToolTests
     {
         var secretsPath = "/home/user/.netclaw/config/secrets.json";
         var policy = new ToolPathPolicy([secretsPath]);
-        var tool = new ShellTool(new ToolConfig(), policy);
+        var tool = new ShellTool(new ToolConfig(), policy, new ShellCommandPolicy());
 
         var args = ToolInput.Create("Command", $"cat {secretsPath}");
 
@@ -394,7 +394,7 @@ public class ShellToolTests
     {
         var secretsPath = "/home/user/.netclaw/config/secrets.json";
         var policy = new ToolPathPolicy([secretsPath]);
-        var tool = new ShellTool(new ToolConfig(), policy);
+        var tool = new ShellTool(new ToolConfig(), policy, new ShellCommandPolicy());
 
         var args = ToolInput.Create("Command", "cat ~/.netclaw/config/*.json");
 
@@ -408,7 +408,7 @@ public class ShellToolTests
     public async Task Hard_deny_blocks_daemon_stop()
     {
         var commandPolicy = new ShellCommandPolicy();
-        var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
         var args = ToolInput.Create("Command", "netclaw daemon stop");
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
@@ -420,7 +420,7 @@ public class ShellToolTests
     public async Task Hard_deny_blocks_kill_command()
     {
         var commandPolicy = new ShellCommandPolicy();
-        var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
+        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
         var args = ToolInput.Create("Command", "kill -9 12345");
         var result = await tool.ExecuteAsync(args, CancellationToken.None);

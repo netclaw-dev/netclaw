@@ -41,14 +41,14 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     public override int InlineOutputBudgetChars => 2000;
 
     private readonly ToolConfig _config;
-    private readonly ToolPathPolicy? _pathPolicy;
-    private readonly ShellCommandPolicy? _commandPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
+    private readonly ShellCommandPolicy _commandPolicy;
 
     public record Params(
         [property: Description("The shell command to execute")] string Command,
         [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
 
-    public ShellTool(ToolConfig config, ToolPathPolicy? pathPolicy = null, ShellCommandPolicy? commandPolicy = null)
+    public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
     {
         _config = config;
         _pathPolicy = pathPolicy;
@@ -63,14 +63,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
 
-        if (_commandPolicy is not null)
-        {
-            var commandDecision = _commandPolicy.Evaluate(args.Command);
-            if (!commandDecision.Allowed)
-                return $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}";
-        }
+        var commandDecision = _commandPolicy.Evaluate(args.Command);
+        if (!commandDecision.Allowed)
+            return $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}";
 
-        if (_pathPolicy?.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory) == true)
+        if (_pathPolicy.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory))
             return "Error: Command references a protected file path. Access denied by security policy.";
 
         var isWindows = OperatingSystem.IsWindows();
@@ -296,18 +293,15 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            if (_commandPolicy is not null)
+            var commandDecision = _commandPolicy.Evaluate(args.Command);
+            if (!commandDecision.Allowed)
             {
-                var commandDecision = _commandPolicy.Evaluate(args.Command);
-                if (!commandDecision.Allowed)
-                {
-                    output.TryWrite(new ToolCompletedUpdate(
-                        $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}"));
-                    return;
-                }
+                output.TryWrite(new ToolCompletedUpdate(
+                    $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}"));
+                return;
             }
 
-            if (_pathPolicy?.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory) == true)
+            if (_pathPolicy.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory))
             {
                 output.TryWrite(new ToolCompletedUpdate(
                     "Error: Command references a protected file path. Access denied by security policy."));

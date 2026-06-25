@@ -15,6 +15,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -1660,7 +1661,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
         },
         ReceivedAt = _timeProvider.GetUtcNow(),
-        ReminderId = reminderId
+        ReminderId = new ReminderId(reminderId)
     };
 }
 
