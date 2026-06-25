@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
@@ -141,7 +142,7 @@ public sealed record ChannelInput
     /// <see cref="MessageSource.ReminderId"/> by
     /// <see cref="MessageSourceFactory"/>. Null for regular inbound ingress.
     /// </summary>
-    public string? ReminderId { get; init; }
+    public ReminderId? ReminderId { get; init; }
 
     /// <summary>
     /// Ephemeral ack reply target. Set by channel leaf actors when handling

@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions;
@@ -743,7 +744,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Principal = PrincipalClassification.VerifiedAutomation,
             Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
             ReceivedAt = DateTimeOffset.UtcNow,
-            ReminderId = reminderId
+            ReminderId = reminderId is null ? null : new ReminderId(reminderId)
         };
     }
 

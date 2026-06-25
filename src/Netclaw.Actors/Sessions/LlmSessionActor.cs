@@ -12,8 +12,10 @@ using Akka.Persistence;
 using Netclaw.Actors.Hosting;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions.Handlers;
@@ -72,8 +74,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Transient state (not persisted)
     private readonly List<SendUserMessage> _buffer = [];
-    private readonly HashSet<string> _inFlightReminderIds = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _inFlightBackgroundJobIds = new(StringComparer.Ordinal);
+    // In-flight reminder/background-job dedup (transient; rebuilt from journal on recovery).
+    private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
     private readonly List<AITool> _availableTools = [];
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
@@ -2047,13 +2049,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Persist(turnEvent, evt =>
         {
-            CompleteReminderInFlight(evt.SourceReminderId);
-            CompleteBackgroundJobInFlight(evt.SourceBackgroundJobId);
+            _inFlightDedup.CompleteReminder(evt.SourceReminderId);
+            _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
 
             var processed = _state.ProcessedReminderIds;
-            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
             {
-                processed = processed.Add(evt.SourceReminderId);
+                processed = processed.Add(reminderId);
             }
 
             _state = (_state with
@@ -2196,8 +2198,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        ReserveInFlightReminderId(reminderId);
-        ReserveInFlightBackgroundJobId(bgJobId);
+        _inFlightDedup.ReserveReminder(reminderId);
+        _inFlightDedup.ReserveBackgroundJob(bgJobId);
 
         // A new inbound message while a tool batch is still parked on an
         // approval gate means the user abandoned that approval. This is only
@@ -2326,66 +2328,38 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TransitionTo(SessionPhase.Processing);
     }
 
-    private bool IsReminderDedupHit(string? reminderId, bool includeBuffered)
+    private bool IsReminderDedupHit(ReminderId? reminderId, bool includeBuffered)
     {
-        if (string.IsNullOrEmpty(reminderId))
+        if (reminderId is not { } id || string.IsNullOrEmpty(id.Value))
             return false;
 
-        if (_state.ProcessedReminderIds.Contains(reminderId))
+        if (_state.ProcessedReminderIds.Contains(id))
             return true;
 
-        if (_inFlightReminderIds.Contains(reminderId))
-            return true;
-
-        if (!includeBuffered)
-            return false;
-
-        return _buffer.Any(buffered =>
-            !string.IsNullOrEmpty(buffered.Source?.ReminderId)
-            && string.Equals(buffered.Source!.ReminderId, reminderId, StringComparison.Ordinal));
-    }
-
-    private void ReserveInFlightReminderId(string? reminderId)
-    {
-        if (!string.IsNullOrEmpty(reminderId))
-            _inFlightReminderIds.Add(reminderId);
-    }
-
-    private void CompleteReminderInFlight(string? reminderId)
-    {
-        if (!string.IsNullOrEmpty(reminderId))
-            _inFlightReminderIds.Remove(reminderId);
-    }
-
-    private bool IsBackgroundJobDedupHit(string? bgJobId, bool includeBuffered)
-    {
-        if (string.IsNullOrEmpty(bgJobId))
-            return false;
-
-        if (_state.ProcessedBackgroundJobIds.Contains(bgJobId))
-            return true;
-
-        if (_inFlightBackgroundJobIds.Contains(bgJobId))
+        if (_inFlightDedup.IsReminderInFlight(id))
             return true;
 
         if (!includeBuffered)
             return false;
 
-        return _buffer.Any(buffered =>
-            !string.IsNullOrEmpty(buffered.Source?.BackgroundJobId)
-            && string.Equals(buffered.Source!.BackgroundJobId, bgJobId, StringComparison.Ordinal));
+        return _buffer.Any(buffered => buffered.Source?.ReminderId == id);
     }
 
-    private void ReserveInFlightBackgroundJobId(string? bgJobId)
+    private bool IsBackgroundJobDedupHit(BackgroundJobId? bgJobId, bool includeBuffered)
     {
-        if (!string.IsNullOrEmpty(bgJobId))
-            _inFlightBackgroundJobIds.Add(bgJobId);
-    }
+        if (bgJobId is not { } id || string.IsNullOrEmpty(id.Value))
+            return false;
 
-    private void CompleteBackgroundJobInFlight(string? bgJobId)
-    {
-        if (!string.IsNullOrEmpty(bgJobId))
-            _inFlightBackgroundJobIds.Remove(bgJobId);
+        if (_state.ProcessedBackgroundJobIds.Contains(id))
+            return true;
+
+        if (_inFlightDedup.IsBackgroundJobInFlight(id))
+            return true;
+
+        if (!includeBuffered)
+            return false;
+
+        return _buffer.Any(buffered => buffered.Source?.BackgroundJobId == id);
     }
 
     private bool ShouldCompact()
@@ -3133,13 +3107,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Persist(turnEvent, evt =>
         {
-            CompleteReminderInFlight(evt.SourceReminderId);
-            CompleteBackgroundJobInFlight(evt.SourceBackgroundJobId);
+            _inFlightDedup.CompleteReminder(evt.SourceReminderId);
+            _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
 
             var processed = _state.ProcessedReminderIds;
-            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
             {
-                processed = processed.Add(evt.SourceReminderId);
+                processed = processed.Add(reminderId);
             }
 
             _state = (_state with
@@ -4244,8 +4218,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
-        CompleteReminderInFlight(_currentTurnSource?.ReminderId);
-        CompleteBackgroundJobInFlight(_currentTurnSource?.BackgroundJobId);
+        _inFlightDedup.CompleteReminder(_currentTurnSource?.ReminderId);
+        _inFlightDedup.CompleteBackgroundJob(_currentTurnSource?.BackgroundJobId);
         CancelAndDisposeToolExecutionCts();
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();

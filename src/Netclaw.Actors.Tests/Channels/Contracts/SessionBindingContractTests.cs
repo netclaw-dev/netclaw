@@ -276,7 +276,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(reminderKey) }
         ], reactive: true);
 
         var observer = CreateTestProbe();
@@ -305,7 +305,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(reminderKey) }
         ], reactive: true);
 
         SetReplyClientThrows(new InvalidOperationException("channel API down"));
@@ -339,9 +339,9 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply A") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = keyA },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(keyA) },
             new TextOutput("reply B") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = keyB }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = new ReminderId(keyB) }
         ], reactive: true);
 
         var observerA = CreateTestProbe();
@@ -412,7 +412,7 @@ public abstract class SessionBindingContractTests : TestKit
                 SourceKind = new SourceKind("reminder")
             },
             ReceivedAt = DateTimeOffset.UnixEpoch,
-            ReminderId = reminderKey,
+            ReminderId = new ReminderId(reminderKey),
             DeliveryObserver = deliveryObserver
         };
 

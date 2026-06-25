@@ -229,7 +229,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     SourceKind = new SourceKind("reminder")
                 },
                 ReceivedAt = _dispatchedAt,
-                ReminderId = reminderDeliveryKey,
+                ReminderId = new ReminderId(reminderDeliveryKey),
                 // Only reminders that gate on delivery need a confirmation
                 // channel. The binding actor tells this ref a
                 // ReminderDeliveryResult on turn completion; leaving it null
