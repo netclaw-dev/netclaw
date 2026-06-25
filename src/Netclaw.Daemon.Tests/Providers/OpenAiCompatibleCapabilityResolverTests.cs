@@ -203,6 +203,33 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
     }
 
     [Fact]
+    public void ResolveFromProbe_Ds4Shape_DispatchesToDs4Strategy_EvenWithMaxModelLen()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "deepseek-v4-flash",
+              "object": "model",
+              "owned_by": "ds4.c",
+              "max_model_len": 4096,
+              "context_length": 262144
+            }
+          ]
+        }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
+            "deepseek-v4-flash", modelsJson, propsJson: null);
+
+        Assert.NotNull(result);
+        Assert.Equal(262_144, result.ContextWindowTokens);
+        Assert.Equal(ModelModality.Text, result.InputModalities);
+        Assert.Equal(ModelModality.Text, result.OutputModalities);
+    }
+
+    [Fact]
     public void ResolveFromProbe_UnknownShape_FallsThroughToGenericStrategy()
     {
         const string modelsJson = """

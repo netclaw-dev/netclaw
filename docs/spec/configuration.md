@@ -96,7 +96,7 @@ keys used by model references.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `Type` | string | `"ollama"` | Provider SDK to use. Currently supported: `ollama`. Future: `openrouter`, `openai`, `anthropic`. |
+| `Type` | string | `"ollama"` | Provider SDK to use. Supported: `ollama`, `openai-compatible`, `openrouter`, `openai`, `anthropic`, `github-copilot`, `veniceai`. |
 | `Endpoint` | string | `"http://localhost:11434"` | Base URL for the provider API. |
 | `ApiKey` | string? | `null` | API key. Should go in `secrets.json` or an environment variable. |
 

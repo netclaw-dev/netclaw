@@ -23,7 +23,7 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "openai-compatible";
-    public string DisplayName => "llama.cpp / vLLM / ds4";
+    public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
     public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
