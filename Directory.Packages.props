@@ -86,6 +86,11 @@
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="Aspire.Hosting.Testing" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="CommunityToolkit.Aspire.Hosting.Ollama" Version="$(CommunityToolkitAspireVersion)" />
+    <!-- Transitive security pin: Aspire 13.4.x pulls MessagePack 2.5.192, which
+         trips NU1903 (GHSA-hv8m-jj95-wg3x, LZ4 decompression AccessViolation).
+         Keep this on the patched 3.x line already used by dev until Aspire ships
+         a non-vulnerable transitive dependency on its own. -->
+    <PackageVersion Include="MessagePack" Version="3.1.7" />
   </ItemGroup>
   <!-- Image normalization (Netclaw.Media). SkiaSharp ships Windows/macOS native
        assets in the base package; Linux needs the explicit headless native asset
@@ -106,13 +111,7 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.300" />
   </ItemGroup>
-  <!-- Transitive security pin: Aspire.Hosting.AppHost → StreamJsonRpc pulls in
-       MessagePack 2.5.192, flagged by NuGetAudit (GHSA-hv8m-jj95-wg3x, LZ4
-       decompression DoS). Netclaw uses MessagePack nowhere — this is sample-only
-       Aspire tooling RPC — but pin to the patched v2 (2.5.301) to clear the audit. -->
-  <ItemGroup>
-    <PackageVersion Include="MessagePack" Version="3.1.7" />
-  </ItemGroup>
+
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2
        memory corruption in aggregate-term handling). No patched version of

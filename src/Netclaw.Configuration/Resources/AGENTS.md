@@ -234,7 +234,7 @@ Identity configuration lives in `{{IDENTITY_DIR}}/`:
 
 | File | Purpose |
 |------|---------|
-| `{{SOUL_PATH}}` | Personality, tone, user profile |
+| `{{SOUL_PATH}}` | Agent personality & tone; foundational user grounding (name, timezone) |
 | `{{AGENTS_PATH}}` | Operating rules, meta-guidance (this file) |
 | `{{TOOLING_PATH}}` | Host environment capabilities |
 
@@ -246,9 +246,10 @@ Keep top-level files concise. For depth, create detail files in matching subdire
 
 | Information Type | Destination |
 |-----------------|-------------|
-| Personal facts (name, family, preferences) | `SOUL.md` |
-| Operating rules, workflow preferences | `AGENTS.md` |
+| Agent personality & tone; user's name/timezone (set at init) | `SOUL.md` |
+| Agent operating rules & conventions | `AGENTS.md` |
 | Environment capabilities, tool configs | `TOOLING.md` |
+| Durable facts & preferences about the user (favorites, family, history, working preferences) | Memory tools (`store_memory`, `find_memories`) |
 | World knowledge, project details, solutions | Memory tools (`store_memory`, `find_memories`) |
 | Procedures, reusable workflows | Skill files in `{{SKILLS_DIR}}/` |
 

@@ -111,7 +111,8 @@ public sealed class SubAgentSpawner
             Tools = tools,
             ModelRole = profile.ModelRole,
             EmitStructuredFindings = profile.EmitStructuredFindings,
-            ProjectInstructions = ResolveProjectInstructions(context)
+            ProjectInstructions = ResolveProjectInstructions(context),
+            OperatingRules = ResolveOperatingRules(context)
         };
 
         var runId = Guid.NewGuid().ToString("N");
@@ -314,5 +315,15 @@ public sealed class SubAgentSpawner
             return null;
 
         return _promptProvider.GetProjectInstructions(context.Audience, context.ProjectDirectory);
+    }
+
+    private string? ResolveOperatingRules(ToolExecutionContext context)
+    {
+        // Sub-agents inherit the embedded AGENTS.md operating rules from the
+        // parent session's trust audience. This gives them the same safety,
+        // grounding, and policy constraints as main agents (Resource Hard Deny,
+        // search citation policy, grounding rules, "I don't know" policy, etc.)
+        // without exposing personal identity layers (SOUL.md, TOOLING.md).
+        return _promptProvider.GetOperatingRules(context.Audience);
     }
 }

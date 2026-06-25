@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, or cross-session memory. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.4.1"
+  version: "1.5.0"
 ---
 
 # Netclaw Memory
@@ -109,9 +109,13 @@ context.
 
 ## Identity vs Memory
 
-Do not put project facts, research, or tool findings in identity files.
-`SOUL.md` is only for narrow identity/profile updates. Everything else
-goes through the memory pipeline.
+Identity files (`SOUL.md`, `AGENTS.md`, `TOOLING.md`) define **the agent** —
+persona, tone, operating rules, and the foundational user grounding set at init
+(name, timezone). Do **not** put project facts, research, tool findings, or
+**durable facts and preferences about the user** (favorites, family, history,
+working preferences) in identity files — those go through the **memory pipeline**
+(`store_memory`) and are recalled when relevant. A user asking you to "remember" a
+preference is a memory write, not a `SOUL.md` edit.
 
 If unsure, load `netclaw-operations` for the identity-vs-memory triage guide.
 

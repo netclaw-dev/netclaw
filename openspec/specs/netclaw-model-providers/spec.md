@@ -16,6 +16,8 @@ The system SHALL default to OpenRouter during first-run setup.
 ### Requirement: Multi-provider support
 
 The system SHALL support selecting one provider profile from a supported set.
+Supported provider type keys SHALL include `ollama`, `openai-compatible`,
+`openrouter`, `openai`, `anthropic`, `github-copilot`, and `veniceai`.
 All provider interactions SHALL use the Microsoft.Extensions.AI `IChatClient`
 abstraction layer, ensuring provider-agnostic model access throughout the
 application.
@@ -27,7 +29,8 @@ and `OutputModalities` fields populated from provider responses.
 #### Scenario: Switch provider
 
 - **GIVEN** OpenRouter is configured
-- **WHEN** operator selects Anthropic, OpenAI, or Ollama profile
+- **WHEN** operator selects Anthropic, OpenAI, Ollama, OpenAI-compatible,
+  OpenRouter, GitHub Copilot, or Venice.ai profile
 - **THEN** runtime uses selected provider through the `IChatClient` interface
   after validation
 
@@ -53,6 +56,16 @@ and `OutputModalities` fields populated from provider responses.
 - **THEN** the returned `DiscoveredModel` records SHALL include
   `InputModalities` and `OutputModalities` populated from
   `architecture.input_modalities` and `architecture.output_modalities`
+
+#### Scenario: OpenAI-compatible discovery includes backend context metadata
+
+- **GIVEN** an OpenAI-compatible provider is configured
+- **WHEN** model discovery runs via `ProviderProbe`
+- **THEN** the returned `DiscoveredModel` records SHALL include context-window
+  metadata when the backend exposes a known field shape, including vLLM
+  `max_model_len`, DwarfStar/ds4 `context_length` or
+  `top_provider.context_length`, and llama.cpp `meta.n_ctx` or
+  `meta.n_ctx_train`
 
 ### Requirement: Optional live smoke provider checks
 
@@ -318,4 +331,3 @@ by Copilot with `HTTP 400 "Authorization header is badly formatted"`.
 - **THEN** the SDK's credential auth policy emits the exchanged Copilot token,
   not the placeholder, because the shared credential was updated before the auth
   policy ran
-

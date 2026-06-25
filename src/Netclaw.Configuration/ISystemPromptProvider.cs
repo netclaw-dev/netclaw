@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ISystemPromptProvider.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -24,6 +24,13 @@ public interface ISystemPromptProvider
     /// Returns null when no project instructions are available for the audience.
     /// </summary>
     string? GetProjectInstructions(TrustAudience audience, string? projectDirectory);
+
+    /// <summary>
+    /// Get the embedded AGENTS.md operating rules for the given audience.
+    /// Returns null for Public audience; substituted content for Team/Personal.
+    /// Used by sub-agents to inherit the core safety/operating policy layer.
+    /// </summary>
+    string? GetOperatingRules(TrustAudience audience);
 }
 
 /// <summary>
@@ -81,6 +88,8 @@ public sealed class StaticSystemPromptProvider : ISystemPromptProvider
     public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => _prompt;
 
     public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory) => null;
+
+    public string? GetOperatingRules(TrustAudience audience) => null;
 }
 
 /// <summary>
@@ -93,6 +102,8 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
     public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => string.Empty;
 
     public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory) => null;
+
+    public string? GetOperatingRules(TrustAudience audience) => null;
 }
 
 /// <summary>
@@ -205,6 +216,14 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
             return null;
 
         return TryReadProjectIdentityFile(projectDirectory);
+    }
+
+    public string? GetOperatingRules(TrustAudience audience)
+    {
+        if (audience == TrustAudience.Public)
+            return null;
+
+        return SubstitutePlaceholders(CachedAgents.Value);
     }
 
     /// <summary>

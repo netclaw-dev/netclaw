@@ -79,6 +79,26 @@ it, as the highest-priority detection source.
 - **AND** map array values (`"text"`, `"image"`, `"audio"`, `"video"`) to
   corresponding `ModelModality` flags
 
+#### Scenario: OpenAI-compatible backend strategy detection
+
+- **GIVEN** a model is configured on an `openai-compatible` provider
+- **WHEN** capabilities are resolved for that model
+- **THEN** the system SHALL probe `/v1/models` and the optional llama.cpp
+  `/props` endpoint
+- **AND** dispatch the probe to the first matching backend strategy in priority
+  order: DwarfStar/ds4, vLLM, llama.cpp, generic OpenAI-compatible
+
+#### Scenario: DwarfStar ds4 context detection
+
+- **GIVEN** an OpenAI-compatible `/v1/models` entry for the configured model
+  has `owned_by: "ds4.c"`
+- **WHEN** capabilities are resolved for that model
+- **THEN** the DwarfStar/ds4 strategy SHALL match before broader backend
+  heuristics
+- **AND** context window SHALL be read from top-level `context_length`, falling
+  back to `top_provider.context_length`
+- **AND** input and output modalities SHALL resolve to `Text`
+
 ### Requirement: OpenRouter oracle for cross-provider lookup
 
 The system SHALL use OpenRouter's public `GET /api/v1/models` endpoint as a

@@ -75,19 +75,29 @@ jobs:
 
       - name: Validate R2 uploads
         run: |
-          # Spot-check: fetch the first skill URL from the manifest and verify it resolves
-          url=$(python3 -c "
+          # Spot-check that uploaded objects resolve: the first skill's SKILL.md AND
+          # the first reference (files[]) entry. Validating a files[] URL is what
+          # confirms multi-file / progressive-disclosure skills publish end-to-end,
+          # not just the top-level SKILL.md.
+          python3 - <<'PY' > urls-to-validate.txt
           import json
           m = json.load(open('feeds/skills/.system/manifest.json'))
-          print(m['skills'][0]['url'])
-          ")
-          echo "Validating R2 URL: $url"
-          status=$(curl -sSL -o /dev/null -w "%{http_code}" "$url")
-          if [ "$status" != "200" ]; then
-            echo "Validation failed: $url returned HTTP $status" >&2
-            exit 1
-          fi
-          echo "R2 validation passed"
+          print('skill', m['skills'][0]['url'])
+          for s in m['skills']:
+              files = s.get('files') or []
+              if files:
+                  print('reference', files[0]['url'])
+                  break
+          PY
+          while read -r kind url; do
+            echo "Validating $kind URL: $url"
+            status=$(curl -sSL -o /dev/null -w "%{http_code}" "$url")
+            if [ "$status" != "200" ]; then
+              echo "Validation failed: $kind $url returned HTTP $status" >&2
+              exit 1
+            fi
+          done < urls-to-validate.txt
+          echo "R2 validation passed (skill + reference file)"
 
       - name: Validate custom-domain manifest propagation
         run: |

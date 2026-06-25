@@ -9,7 +9,6 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
-using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
@@ -24,11 +23,10 @@ namespace Netclaw.Actors.Tests.SubAgents;
 /// <summary>
 /// Regression guard for the default-interface-method dispatch gap that let
 /// <c>spawn_agent</c> bypass its streaming override and run the non-streaming
-/// path — emitting zero activity items, so the parent's per-call watchdog
-/// killed healthy sub-agents at the flat tool timeout. Exercises the full
-/// chain: <see cref="DispatchingToolExecutor"/> → <c>INetclawTool</c> dispatch
-/// → <see cref="SpawnAgentTool"/> → <see cref="SubAgentActor"/> →
-/// <see cref="StreamingToolWatchdog"/>.
+/// path — emitting zero activity items. Exercises the full chain:
+/// <see cref="DispatchingToolExecutor"/> → <c>INetclawTool</c> dispatch →
+/// <see cref="SpawnAgentTool"/> → <see cref="SubAgentActor"/>, drained the way
+/// the production pipeline drains a self-monitoring tool.
 /// </summary>
 public class SpawnAgentStreamingTests : TestKit
 {
@@ -98,22 +96,30 @@ public class SpawnAgentStreamingTests : TestKit
                 ["task"] = "Summarize the project."
             });
 
+        // Drain the stream the way the production pipeline drains a self-monitoring
+        // tool, collecting activity items along the way.
         var activity = new List<ToolActivityUpdate>();
-        var result = await StreamingToolWatchdog.ConsumeAsync(
-            executor.ExecuteStreamAsync(spawnCall, ctx, TestContext.Current.CancellationToken),
-            "spawn_agent",
-            ToolWatchdogBudget.Flat(TimeSpan.FromSeconds(30)),
-            TimeProvider.System,
-            onActivity: activity.Add,
-            TestContext.Current.CancellationToken);
+        string? result = null;
+        await foreach (var update in executor.ExecuteStreamAsync(spawnCall, ctx, TestContext.Current.CancellationToken))
+        {
+            switch (update)
+            {
+                case ToolActivityUpdate a:
+                    activity.Add(a);
+                    break;
+                case ToolCompletedUpdate done:
+                    result = done.Result;
+                    break;
+            }
+        }
 
         // The DIM dispatch gap ran spawn_agent on the non-streaming path: zero
-        // activity items, so the watchdog saw only silence and killed healthy
-        // sub-agents at the flat budget. The streaming override emits progress.
+        // activity items. The streaming override emits progress.
         Assert.NotEmpty(activity);
 
         // The terminal result still flows through — a successful sub-agent run,
         // not a "Subagent '...' failed: ..." message from FormatResult.
+        Assert.NotNull(result);
         Assert.NotEmpty(result);
         Assert.DoesNotContain("failed", result, StringComparison.OrdinalIgnoreCase);
     }
