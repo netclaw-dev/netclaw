@@ -198,6 +198,84 @@ public sealed class ProviderCommandTests : IDisposable
     }
 
     [Fact]
+    public void BuildGitHubCopilotVendorOptions_ExplicitEnterpriseHost_ReturnsMinimalOptions()
+    {
+        var writer = new StringWriter();
+
+        var ok = ProviderCommand.TryBuildGitHubCopilotVendorOptions(
+            "github-copilot",
+            "https://example.ghe.com",
+            "https://api.example.ghe.com",
+            includeAmbientEnvironment: false,
+            writer,
+            out var vendorOptions,
+            out var authOptions);
+
+        Assert.True(ok, writer.ToString());
+        Assert.NotNull(vendorOptions);
+        Assert.Equal("https://example.ghe.com", vendorOptions!["GitHubHost"]);
+        Assert.Equal("https://api.example.ghe.com", vendorOptions["GitHubApiBase"]);
+        Assert.DoesNotContain("CopilotApiBase", vendorOptions.Keys);
+        Assert.DoesNotContain("CopilotTokenExchangePath", vendorOptions.Keys);
+        Assert.Equal(new Uri("https://example.ghe.com"), authOptions!.GitHubHost);
+    }
+
+    [Fact]
+    public void BuildGitHubCopilotVendorOptions_RejectsGitHubOptionsForOtherProviders()
+    {
+        var writer = new StringWriter();
+
+        var ok = ProviderCommand.TryBuildGitHubCopilotVendorOptions(
+            "openrouter",
+            "https://example.ghe.com",
+            null,
+            includeAmbientEnvironment: false,
+            writer,
+            out _,
+            out _);
+
+        Assert.False(ok);
+        Assert.Contains("github-copilot", writer.ToString());
+    }
+
+    [Fact]
+    public void BuildGitHubCopilotVendorOptions_AmbientEnvironmentRequiresOptIn()
+    {
+        var previous = Environment.GetEnvironmentVariable("COPILOT_GH_HOST");
+        try
+        {
+            Environment.SetEnvironmentVariable("COPILOT_GH_HOST", "example.ghe.com");
+            var writer = new StringWriter();
+
+            var noAmbient = ProviderCommand.TryBuildGitHubCopilotVendorOptions(
+                "github-copilot",
+                null,
+                null,
+                includeAmbientEnvironment: false,
+                writer,
+                out var noAmbientVendorOptions,
+                out _);
+            var ambient = ProviderCommand.TryBuildGitHubCopilotVendorOptions(
+                "github-copilot",
+                null,
+                null,
+                includeAmbientEnvironment: true,
+                writer,
+                out var ambientVendorOptions,
+                out _);
+
+            Assert.True(noAmbient, writer.ToString());
+            Assert.Null(noAmbientVendorOptions);
+            Assert.True(ambient, writer.ToString());
+            Assert.Equal("https://example.ghe.com", ambientVendorOptions!["GitHubHost"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("COPILOT_GH_HOST", previous);
+        }
+    }
+
+    [Fact]
     public async Task Remove_UnreferencedProvider_Succeeds()
     {
         // Arrange: add a provider

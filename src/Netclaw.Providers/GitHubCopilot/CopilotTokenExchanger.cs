@@ -33,9 +33,6 @@ public sealed class CopilotTokenExchanger(
     TimeProvider? timeProvider = null,
     ProviderOAuthTokenRefreshService? tokenRefreshService = null)
 {
-    private static readonly Uri TokenEndpoint =
-        new("https://api.github.com/copilot_internal/v2/token");
-
     private const string ComponentName = "copilot-token";
 
     // Refresh slightly before the server-reported expiry so chat calls in
@@ -64,7 +61,7 @@ public sealed class CopilotTokenExchanger(
         var oauthToken = entry.OAuthAccessToken.RequireValid(
             "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
 
-        return await GetTokenAsync(oauthToken, ct);
+        return await GetTokenAsync(oauthToken, GitHubCopilotAuthResolver.Resolve(entry).CopilotTokenExchangeEndpoint, ct);
     }
 
     /// <summary>
@@ -87,12 +84,12 @@ public sealed class CopilotTokenExchanger(
             oauth,
             ct);
 
-        return await GetTokenAsync(oauthToken, ct);
+        return await GetTokenAsync(oauthToken, GitHubCopilotAuthResolver.Resolve(entry).CopilotTokenExchangeEndpoint, ct);
     }
 
-    private async Task<string> GetTokenAsync(SensitiveString oauthToken, CancellationToken ct)
+    private async Task<string> GetTokenAsync(SensitiveString oauthToken, Uri tokenEndpoint, CancellationToken ct)
     {
-        var slot = slots.GetOrAdd(HashKey(oauthToken.Value), _ => new CacheSlot());
+        var slot = slots.GetOrAdd(HashKey(oauthToken.Value, tokenEndpoint), _ => new CacheSlot());
 
         if (IsFresh(slot.Token))
             return slot.Token!.Token;
@@ -105,7 +102,7 @@ public sealed class CopilotTokenExchanger(
             if (IsFresh(slot.Token))
                 return slot.Token!.Token;
 
-            var fresh = await ExchangeAsync(oauthToken.Value, ct);
+            var fresh = await ExchangeAsync(oauthToken.Value, tokenEndpoint, ct);
             slot.Token = fresh;
             return fresh.Token;
         }
@@ -118,9 +115,9 @@ public sealed class CopilotTokenExchanger(
     private bool IsFresh(CachedToken? cached) =>
         cached is { } c && c.ExpiresAt - RefreshBuffer > time.GetUtcNow();
 
-    private async Task<CachedToken> ExchangeAsync(string oauthToken, CancellationToken ct)
+    private async Task<CachedToken> ExchangeAsync(string oauthToken, Uri tokenEndpoint, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, TokenEndpoint);
+        using var request = new HttpRequestMessage(HttpMethod.Get, tokenEndpoint);
 
         // The exchange endpoint requires the full editor-integration header
         // contract — Copilot-Integration-Id is what tells GitHub's gateway
@@ -155,13 +152,13 @@ public sealed class CopilotTokenExchanger(
         if (!response.IsSuccessStatusCode)
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange failed at {TokenEndpoint} with "
+                $"GitHub Copilot token exchange failed at {tokenEndpoint} with "
                 + $"HTTP {(int)response.StatusCode}: {Truncate(body)}");
         }
 
         var parsed = JsonSerializer.Deserialize<TokenResponse>(body)
             ?? throw new InvalidOperationException(
-                $"Empty token response from {TokenEndpoint}.");
+                $"Empty token response from {tokenEndpoint}.");
 
         // System.Text.Json doesn't enforce required-ness on positional record
         // parameters by default, so a {} response would deserialize to
@@ -178,14 +175,14 @@ public sealed class CopilotTokenExchanger(
         if (string.IsNullOrWhiteSpace(parsed.Token))
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange at {TokenEndpoint} returned a "
+                $"GitHub Copilot token exchange at {tokenEndpoint} returned a "
                 + "payload with no 'token' field.");
         }
 
         if (parsed.ExpiresAt <= 0)
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange at {TokenEndpoint} returned an "
+                $"GitHub Copilot token exchange at {tokenEndpoint} returned an "
                 + $"invalid 'expires_at' value ({parsed.ExpiresAt}).");
         }
 
@@ -197,9 +194,9 @@ public sealed class CopilotTokenExchanger(
     private static string Truncate(string body) =>
         body.Length > 512 ? body[..512] + "…" : body;
 
-    private static string HashKey(string token)
+    private static string HashKey(string token, Uri tokenEndpoint)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{tokenEndpoint}\n{token}"));
         return Convert.ToHexString(bytes);
     }
 

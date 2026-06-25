@@ -4,10 +4,14 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
 using R3;
@@ -122,6 +126,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public AuthMethod NewAuthMethod { get; set; } = AuthMethod.None;
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
+    public IReadOnlyDictionary<string, object?>? NewVendorOptions { get; set; }
     private bool _newProviderPersisted;
 
     // ── OAuth flow (shared coordinator) ──
@@ -447,6 +452,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderType = type;
         NewProviderName = DetailProvider.ConfiguredName;
         NewEndpoint = DetailProvider.Entry?.Endpoint;
+        NewVendorOptions = string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase)
+                           && DetailProvider.Entry is not null
+            ? GitHubCopilotAuthResolver.ToVendorOptions(DetailProvider.Entry)
+            : null;
         IsFixFlow = true;
 
         var oauthMethod = descriptor.Auth.SupportedAuthMethods
@@ -464,6 +473,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         if (method == AuthMethod.OAuthDevice)
         {
+            if (!TryBuildOAuthFlowEntry(out var oauthEntry, out var error))
+            {
+                StatusMessage.Value = error;
+                RequestRedraw();
+                return;
+            }
+
             CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
             NotifyStateChanged();
             ProbeElapsedSeconds.Value = 0;
@@ -473,7 +489,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 CurrentState.Value = ProviderManagerState.AddValidating;
                 NotifyStateChanged();
                 StartProbe();
-            });
+            }, oauthEntry);
             _ = RunProbeTimerAsync(ct);
             return;
         }
@@ -497,6 +513,40 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         CurrentState.Value = ProviderManagerState.AddCredentials;
         NotifyStateChanged();
+    }
+
+    private bool TryBuildOAuthFlowEntry(out ProviderEntry? entry, out string error)
+    {
+        entry = null;
+        error = string.Empty;
+        if (!string.Equals(NewProviderType, "github-copilot", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (IsFixFlow && DetailProvider?.Entry is { } existing)
+        {
+            entry = existing;
+            return true;
+        }
+
+        if (!GitHubCopilotAuthResolver.TryResolveSetupOptions(
+                gitHubHost: null,
+                gitHubApiBase: null,
+                includeAmbientEnvironment: true,
+                out var setupOptions,
+                out var setupError))
+        {
+            error = setupError ?? "GitHub Copilot enterprise host settings are invalid.";
+            return false;
+        }
+
+        NewVendorOptions = GitHubCopilotAuthResolver.ToVendorOptions(setupOptions);
+        entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+        };
+        entry.SetVendorOptions(ToJsonObject(NewVendorOptions));
+        return true;
     }
 
     /// <summary>
@@ -541,6 +591,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewApiKey = FixApiKey
             ?? DetailProvider.Entry?.ApiKey?.Value
             ?? DetailProvider.Entry?.OAuthAccessToken?.Value;
+        NewVendorOptions = string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase)
+                           && DetailProvider.Entry is not null
+            ? GitHubCopilotAuthResolver.ToVendorOptions(DetailProvider.Entry)
+            : null;
         IsFixFlow = true;
 
         CurrentState.Value = ProviderManagerState.AddValidating;
@@ -1074,6 +1128,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             entry.ApiKey = new SensitiveString(NewApiKey);
         }
 
+        entry.SetVendorOptions(ToJsonObject(NewVendorOptions));
+
         return entry;
     }
 
@@ -1090,7 +1146,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             NewEndpoint,
             OAuth.Result,
             NewApiKey,
-            _registry);
+            _registry,
+            vendorOptions: NewVendorOptions);
     }
 
     // ── Helpers ──
@@ -1127,10 +1184,19 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewAuthMethod = AuthMethod.None;
         NewApiKey = null;
         NewEndpoint = null;
+        NewVendorOptions = null;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         IsFixFlow = false;
         _newProviderPersisted = false;
+    }
+
+    private static JsonObject? ToJsonObject(IReadOnlyDictionary<string, object?>? vendorOptions)
+    {
+        if (vendorOptions is null || vendorOptions.Count == 0)
+            return null;
+
+        return JsonNode.Parse(JsonSerializer.Serialize(vendorOptions, JsonDefaults.ConfigFile))?.AsObject();
     }
 
     private void NotifyStateChanged()

@@ -50,8 +50,7 @@ public sealed class GitHubCopilotProviderPlugin(
         // token) on every call. The "placeholder" is overwritten before the
         // first request goes out.
         var credential = new ApiKeyCredential("placeholder");
-        var oauth = Descriptor.Auth.GetOAuthConfig()
-                    ?? throw new InvalidOperationException("GitHub Copilot OAuth configuration is missing.");
+        var oauth = GitHubCopilotDescriptor.CreateOAuthAuth(entry);
         options.AddPolicy(
             new CopilotRequestPolicy(tokenExchanger, entry, credential, model.Provider, oauth),
             PipelinePosition.PerCall);
