@@ -189,6 +189,39 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task System_prompt_layers_operating_rules_before_project_role_and_headless_contract()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition() with
+        {
+            OperatingRules = "Operating rules: never invent runtime facts.",
+            ProjectInstructions = "Project rules: prefer C#.",
+            SystemPrompt = "You are a test agent.\n\n[Skill Overlay]\nUse focused analysis."
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var systemPrompt = fakeClient.LastReceivedMessages!.Single(m => m.Role == ChatRole.System).Text;
+
+        AssertPromptOrder(
+            systemPrompt,
+            "Operating rules: never invent runtime facts.",
+            "Project rules: prefer C#.",
+            "You are a test agent.",
+            "[Skill Overlay]",
+            "[Subagent Execution Contract]");
+        Assert.EndsWith(
+            "Always end by emitting a final output for the parent session.",
+            systemPrompt.TrimEnd(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Spawn_without_audience_fails_fast_with_unsuccessful_result()
     {
         var fakeClient = new FakeChatClient();
@@ -918,6 +951,18 @@ public class SubAgentActorTests : TestKit
             .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
             .Single(r => r.CallId == callId)
             .Result?.ToString();
+    }
+
+    private static void AssertPromptOrder(string prompt, params string[] markers)
+    {
+        var previousIndex = -1;
+        foreach (var marker in markers)
+        {
+            var index = prompt.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Expected prompt to contain marker: {marker}");
+            Assert.True(index > previousIndex, $"Expected marker '{marker}' to appear after the previous marker.");
+            previousIndex = index;
+        }
     }
 
     private static async Task<ToolActivityUpdate> ReadActivityAsync(

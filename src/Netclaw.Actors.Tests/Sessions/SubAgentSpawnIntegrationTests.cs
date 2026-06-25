@@ -26,6 +26,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 {
     private const string MainIdentityMarker = "You are a test assistant with subagent support.";
+    private const string OperatingRulesMarker = "[embedded agents] Sub-agents inherit operating rules.";
     private const string AgentsLayerMarker = "[agents] This marker should never appear in routed subagent calls.";
 
     private readonly RecordingRoleChatClientProvider _clientProvider = new();
@@ -38,6 +39,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
     protected override void ConfigureSessionServices(IServiceCollection services)
     {
+        var promptProvider = new TestSystemPromptProvider(MainIdentityMarker, OperatingRulesMarker);
         services.AddSingleton<IChatClientProvider>(_clientProvider);
         services.AddSingleton(new ModelCapabilities
         {
@@ -53,7 +55,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 TitleGenerationInterval = 0,
             }
         });
-        services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(MainIdentityMarker));
+        services.AddSingleton<ISystemPromptProvider>(promptProvider);
         services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(
         [
             new StaticContextLayerProvider(AgentsLayerMarker, ContextLayerTiming.OnceAtStart)
@@ -174,7 +176,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             registry,
             toolAccessPolicy,
             approvalService: null,
-            new StaticSystemPromptProvider(MainIdentityMarker),
+            promptProvider,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
@@ -253,6 +255,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
         Assert.Contains(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
+            && m.Text.Contains(OperatingRulesMarker, StringComparison.Ordinal)
             && m.Text.Contains("You are a summarizer.", StringComparison.Ordinal)
             && m.Text.Contains("headless, non-interactive worker", StringComparison.Ordinal));
         Assert.Contains(subagentCall, m =>
@@ -834,5 +837,15 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         public ContextLayerTiming Timing => timing;
 
         public string GetContextLayer(TrustAudience audience) => content;
+    }
+
+    private sealed class TestSystemPromptProvider(string systemPrompt, string operatingRules) : ISystemPromptProvider
+    {
+        public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => systemPrompt;
+
+        public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory) => null;
+
+        public string? GetOperatingRules(TrustAudience audience)
+            => audience == TrustAudience.Public ? null : operatingRules;
     }
 }
