@@ -33,7 +33,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(baseConfig);
+        registry.WithFirstPartyTools(baseConfig, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -55,7 +55,7 @@ public class DispatchingToolExecutorTests
         restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "file_list", "file_write", "file_edit", "attach_file", "shell_execute"];
         restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_list", "attach_file"];
         var restrictedRegistry = new ToolRegistry();
-        restrictedRegistry.WithFirstPartyTools(restrictedConfig);
+        restrictedRegistry.WithFirstPartyTools(restrictedConfig, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
         _restrictedExecutor = new DispatchingToolExecutor(
             restrictedRegistry,
             new ToolAccessPolicy(
@@ -329,7 +329,7 @@ public class DispatchingToolExecutorTests
         config.AudienceProfiles.Personal.AllowedTools = ["file_read", "file_write", "attach_file"];
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -364,7 +364,7 @@ public class DispatchingToolExecutorTests
         config.AudienceProfiles.Personal.AllowedTools.Add("shell_execute");
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -532,7 +532,7 @@ public class DispatchingToolExecutorTests
         var registry = new ToolRegistry();
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-webhook-tools-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
-        registry.WithFirstPartyTools(config, toolAccessPolicy: policy, paths: paths, webhookRouteStore: new WebhookRouteStore(paths));
+        registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
         var teamContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
         {
@@ -571,7 +571,7 @@ public class DispatchingToolExecutorTests
         var registry = new ToolRegistry();
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-public-tools-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
-        registry.WithFirstPartyTools(config, toolAccessPolicy: policy, paths: paths, webhookRouteStore: new WebhookRouteStore(paths));
+        registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
         var publicContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
         {
@@ -636,7 +636,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
         try
@@ -706,7 +706,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -762,7 +762,7 @@ public class DispatchingToolExecutorTests
             };
 
             var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config);
+            registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
             var executor = new DispatchingToolExecutor(
                 registry,
@@ -832,7 +832,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var system = ActorSystem.Create($"tool-approval-filtered-once-{Guid.NewGuid():N}");
         try
@@ -909,7 +909,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var tempFile = Path.GetTempFileName();
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
@@ -970,7 +970,7 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config);
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
         var system = ActorSystem.Create($"tool-approval-session-{Guid.NewGuid():N}");
         try

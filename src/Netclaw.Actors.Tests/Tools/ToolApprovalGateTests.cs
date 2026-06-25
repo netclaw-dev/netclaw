@@ -42,7 +42,7 @@ public sealed class ToolApprovalGateTests
     private static INetclawTool ShellTool()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        return new ShellTool(config);
+        return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
     }
 
     [Fact]
@@ -182,8 +182,8 @@ public sealed class ToolApprovalGateTests
             fileApprovalMatcher: new FilePathApprovalMatcher(ControlPlaneRoot));
     }
 
-    private static INetclawTool FileWriteToolInstance() => new FileWriteTool();
-    private static INetclawTool FileEditToolInstance() => new FileEditTool();
+    private static INetclawTool FileWriteToolInstance() => new FileWriteTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
+    private static INetclawTool FileEditToolInstance() => new FileEditTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
     [Fact]
     public void file_write_to_netclaw_json_requires_approval_under_fail_closed_default()
@@ -742,7 +742,7 @@ public sealed class ToolApprovalGateTests
         };
 
         // Real policy — Personal profile resolves WriteFiles.Mode == All.
-        var trustZone = new ShellTrustZonePolicy(config);
+        var trustZone = new ShellTrustZonePolicy(config, new NetclawPaths());
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(

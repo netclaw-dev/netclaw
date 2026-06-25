@@ -15,7 +15,10 @@ internal sealed class ScopedFileAccessPolicy
     private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
     private readonly Lazy<string?> _cachedWorkspacesRoot;
 
-    public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths? paths = null)
+    // paths is required (not nullable): the workspaces/global-read roots are
+    // sourced from it, and a null would silently drop them — the exact silent
+    // fallback that let autonomous workspace access break unnoticed (#1493).
+    public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths paths)
     {
         _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
         _cachedGlobalReadRoots = new Lazy<IReadOnlyList<string>>(() =>

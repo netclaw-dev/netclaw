@@ -28,18 +28,18 @@ public static class ToolRegistrationExtensions
     public static ToolRegistry WithFirstPartyTools(
         this ToolRegistry registry,
         ToolConfig config,
+        NetclawPaths paths,
+        ToolPathPolicy pathPolicy,
+        ShellCommandPolicy shellCommandPolicy,
         ISearchBackend? searchBackend = null,
-        ToolPathPolicy? pathPolicy = null,
-        ShellCommandPolicy? shellCommandPolicy = null,
         ToolAccessPolicy? toolAccessPolicy = null,
-        NetclawPaths? paths = null,
         WebhookRouteStore? webhookRouteStore = null)
     {
         registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
-        registry.Register(new FileReadTool(config, pathPolicy, paths));
+        registry.Register(new FileReadTool(config, paths, pathPolicy));
         registry.Register(new FileListTool(config, paths, pathPolicy));
-        registry.Register(new FileWriteTool(config, pathPolicy, paths));
-        registry.Register(new FileEditTool(config, pathPolicy, paths));
+        registry.Register(new FileWriteTool(config, paths, pathPolicy));
+        registry.Register(new FileEditTool(config, paths, pathPolicy));
         registry.Register(new AttachFileTool(config, paths));
         if (webhookRouteStore is not null)
         {

@@ -36,7 +36,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
         [property: Description("Absolute path to the project root directory.")]
         string Path);
 
-    public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths? paths = null)
+    public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths paths)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }

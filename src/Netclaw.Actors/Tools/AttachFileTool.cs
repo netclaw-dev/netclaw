@@ -28,12 +28,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         [property: Description("Absolute path to the file to attach")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
-    public AttachFileTool()
-        : this(new ToolConfig())
-    {
-    }
-
-    public AttachFileTool(ToolConfig config, NetclawPaths? paths = null)
+    public AttachFileTool(ToolConfig config, NetclawPaths paths)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }

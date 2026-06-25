@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class FileWriteToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly FileWriteTool _tool = new(new ToolConfig());
+    private readonly FileWriteTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
     private readonly string _sessionDir;
 
     public FileWriteToolTests()
@@ -100,7 +100,7 @@ public class FileWriteToolTests : IDisposable
     {
         var filePath = Path.Combine(_dir.Path, "secrets.json");
         var policy = new ToolPathPolicy([filePath]);
-        var tool = new FileWriteTool(new ToolConfig(), policy);
+        var tool = new FileWriteTool(new ToolConfig(), new NetclawPaths(), policy);
 
         var args = ToolInput.Create("Path", filePath, "Content", "malicious content");
 
