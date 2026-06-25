@@ -124,19 +124,18 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     private (string? Error, SubAgentProfile? Profile) Resolve(Params args, ToolExecutionContext context)
     {
         // Rejections here return a (sometimes deliberately opaque) error string to
-        // the model. Mirror the real reason to the session transcript under the
-        // parent session scope so an operator can tell *why* a spawn was refused —
-        // the "This tool is not available." string hides the audience-vs-disabled
-        // distinction from the model on purpose.
-        using var diagnosticsScope = SessionDiagnosticsContext.Push(context.SessionId);
+        // the model. Mirror the real reason to the session transcript — each line
+        // carries the session id, so the log sink routes it to session.log — so an
+        // operator can tell *why* a spawn was refused; the "This tool is not
+        // available." string hides the audience-vs-disabled distinction on purpose.
 
         // Defense-in-depth: block subagent spawning for Public audience or when
         // the subagent subsystem is disabled.
         if (context.Audience == TrustAudience.Public || !_subAgentConfig.Enabled)
         {
             _logger?.LogWarning(
-                "spawn_agent refused (agent={Agent}, audience={Audience}, subsystemEnabled={Enabled})",
-                args.Agent, context.Audience, _subAgentConfig.Enabled);
+                "spawn_agent refused (agent={Agent}, audience={Audience}, subsystemEnabled={Enabled}, session={SessionId})",
+                args.Agent, context.Audience, _subAgentConfig.Enabled, context.SessionId);
             return ("Error: This tool is not available.", null);
         }
 
@@ -153,8 +152,8 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         {
             var available = _registry.GetUserFacing();
             _logger?.LogWarning(
-                "spawn_agent refused: agent '{Agent}' not found or not user-facing (availableCount={Count})",
-                args.Agent, available.Count);
+                "spawn_agent refused: agent '{Agent}' not found or not user-facing (availableCount={Count}, session={SessionId})",
+                args.Agent, available.Count, context.SessionId);
             if (available.Count == 0)
                 return ($"Error: No subagents are available. Agent '{args.Agent}' not found. Author one at {_paths.AgentsDirectory}/*.md or define a skill with metadata.subagent once #661 lands.", null);
 

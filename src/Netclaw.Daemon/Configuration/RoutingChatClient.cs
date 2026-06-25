@@ -64,12 +64,12 @@ public sealed class RoutingChatClient : IChatClient
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !isLast)
             {
                 EmitFailover(ex);
-                LogWithSession(LogLevel.Warning, ex, "LLM provider failed, failing over to next candidate");
+                _logger.Log(LogLevel.Warning, ex, "LLM provider failed, failing over to next candidate");
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 EmitUnreachable(ex, candidates.Count);
-                LogWithSession(LogLevel.Error, ex, UnreachableMessage(candidates.Count));
+                _logger.Log(LogLevel.Error, ex, UnreachableMessage(candidates.Count));
                 throw;
             }
         }
@@ -137,12 +137,12 @@ public sealed class RoutingChatClient : IChatClient
             if (isLast)
             {
                 EmitUnreachable(failure, candidates.Count);
-                LogWithSession(LogLevel.Error, failure, UnreachableMessage(candidates.Count));
+                _logger.Log(LogLevel.Error, failure, UnreachableMessage(candidates.Count));
                 ExceptionDispatchInfo.Capture(failure).Throw();
             }
 
             EmitFailover(failure);
-            LogWithSession(LogLevel.Warning, failure, "LLM provider failed, failing over to next candidate");
+            _logger.Log(LogLevel.Warning, failure, "LLM provider failed, failing over to next candidate");
             // outer loop advances to the next candidate
         }
     }
@@ -180,13 +180,6 @@ public sealed class RoutingChatClient : IChatClient
             AlertSeverity.Critical,
             context: new Dictionary<string, string> { ["error"] = ex.Message }));
 
-    // Failover/outage events are logged here, outside any per-pipeline LoggingChatClient
-    // scope, so attach the session id so they correlate by session in Seq.
-    private void LogWithSession(LogLevel level, Exception ex, string message)
-    {
-        using (SessionLoggingScope.Begin(_logger))
-            _logger.Log(level, ex, message);
-    }
 }
 
 /// <summary>

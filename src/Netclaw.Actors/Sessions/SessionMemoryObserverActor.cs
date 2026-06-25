@@ -348,7 +348,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         try
         {
             using var cts = new CancellationTokenSource(timeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var messages = new List<ChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System, DistillationSystemPrompt),

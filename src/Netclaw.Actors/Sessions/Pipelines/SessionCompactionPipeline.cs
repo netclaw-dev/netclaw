@@ -173,7 +173,6 @@ internal static class SessionCompactionPipeline
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(sidecarTimeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var observerMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,

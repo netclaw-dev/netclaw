@@ -34,16 +34,19 @@ What to expect inside `session.log`:
   cross-referencing two files.
 - Two line shapes: session output audit lines (`User:`, `Assistant:`,
   `Thinking:`, `Tool call:`, `Tool result:`, `Usage:`, `Turn N completed`,
-  etc.) and `Diagnostic:` lines from MEL providers (LLM client, HTTP,
-  retry middleware) emitted under a session diagnostics scope.
+  etc.) and `Diagnostic:` lines. A diagnostic line reaches `session.log`
+  when its log event carries the session id; actor logs are tagged with it
+  automatically (`SessionId`), so session- and sub-agent-actor lifecycle
+  lines (startup, guards, timeouts, cancellation, completion) appear here —
+  routed by the tag on the line, not by any ambient context.
 - Best-effort observability. Individual lines may be dropped on transient
   IO errors and logged at Debug level in the daemon log; this is not a
   transactional audit trail. Cross-check the daemon log for warnings
   if a critical line appears missing.
-- Sidecar paths (compaction, title generation, sub-agents, memory
-  distillation) currently bypass the session diagnostics scope, so their
-  internal diagnostics may not appear in `session.log` even though their
-  output audit lines do. Tracked in netclaw-dev/netclaw#920.
+- Not everything is session-tagged: the LLM-client / HTTP / retry / failover
+  decorators log their internal diagnostics without a session id, so those
+  land in `daemon.log` only. For deep LLM-call internals, read `daemon.log`
+  (filter by the `SessionId` attribute where the line carries one).
 
 | Symptom | Check |
 |---------|-------|

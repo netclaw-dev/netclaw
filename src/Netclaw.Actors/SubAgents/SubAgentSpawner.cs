@@ -67,19 +67,17 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
-        // Session-scoped breadcrumbs: the sub-agent's own actor logs go through
-        // Akka's async logger bridge, where the diagnostics AsyncLocal is gone, so
-        // they never reach session.log. These parent-side lines run synchronously
-        // under the parent session scope, so the spawn lifecycle (request → outcome,
-        // including every early rejection) is always visible in the session transcript.
-        using var diagnosticsScope = SessionDiagnosticsContext.Push(context.SessionId);
+        // Session-scoped breadcrumbs: each parent-side line carries the session id as a
+        // structured field, so the log sink routes the spawn lifecycle (request →
+        // outcome, including early rejections that happen before the child actor even
+        // exists) into the parent's session.log alongside the sub-agent's own actor logs.
         _logger.LogInformation(
-            "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars})",
-            profile.Name, task.Length);
+            "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars}, session={SessionId})",
+            profile.Name, task.Length, context.SessionId);
 
         if (context.SpawnChildActor is null)
         {
-            _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available", profile.Name);
+            _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available (session={SessionId})", profile.Name, context.SessionId);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -93,8 +91,8 @@ public sealed class SubAgentSpawner
         if (tools.Count == 0)
         {
             _logger.LogWarning(
-                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
-                profile.Name);
+                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn (session={SessionId})",
+                profile.Name, context.SessionId);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -153,8 +151,8 @@ public sealed class SubAgentSpawner
             // spawn ask timed out). Record it to the session transcript before the
             // exception propagates to the tool pipeline.
             _logger.LogError(
-                ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId})",
-                profile.Name, runId);
+                ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId}, session={SessionId})",
+                profile.Name, runId, context.SessionId);
             // Balance the IsStarted=true notification above: the non-streaming path
             // (activitySink is null) relies solely on OnSubAgentActivity, so without
             // a terminal event the session UI shows a sub-agent stuck in "Started".
@@ -170,8 +168,8 @@ public sealed class SubAgentSpawner
         }
 
         _logger.LogInformation(
-            "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
-            profile.Name, runId);
+            "SubAgent [{AgentName}] child actor spawned (runId={RunId}, session={SessionId}); dispatching RunSubAgent",
+            profile.Name, runId, context.SessionId);
 
         var sw = Stopwatch.StartNew();
         try
@@ -229,8 +227,8 @@ public sealed class SubAgentSpawner
             });
 
             _logger.LogInformation(
-                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
-                profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
+                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms, session={SessionId})",
+                profile.Name, runId, result.Success, sw.ElapsedMilliseconds, context.SessionId);
 
             return result;
         }
@@ -249,7 +247,7 @@ public sealed class SubAgentSpawner
                 Duration = sw.Elapsed
             });
 
-            _logger.LogError(ex, "SubAgent [{AgentName}] run failed (runId={RunId})", profile.Name, runId);
+            _logger.LogError(ex, "SubAgent [{AgentName}] run failed (runId={RunId}, session={SessionId})", profile.Name, runId, context.SessionId);
             return new SubAgentResult
             {
                 Success = false,
@@ -283,8 +281,8 @@ public sealed class SubAgentSpawner
                 // Sub-agents without certain tools may be unable to complete
                 // their tasks, and this information is important for debugging.
                 _logger.LogInformation(
-                    "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy",
-                    profile.Name, tool.Name);
+                    "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy (session={SessionId})",
+                    profile.Name, tool.Name, context.SessionId);
             }
         }
 

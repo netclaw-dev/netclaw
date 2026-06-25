@@ -33,7 +33,6 @@ internal static class SessionLlmInvoker
         // so sidecar calls (compaction, title gen) that bypass this invoker
         // naturally omit the header and round-robin across backends.
         SessionAffinityContext.SessionId = sessionId.Value;
-        using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
         try
         {
             var response = await StreamAsync(client, messages, options, self, callId, cancellationToken);

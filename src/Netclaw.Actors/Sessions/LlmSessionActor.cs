@@ -1737,7 +1737,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         try
         {
             using var cts = new CancellationTokenSource(timeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var extractionMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,

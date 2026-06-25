@@ -298,7 +298,6 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         try
         {
             using var cts = new CancellationTokenSource(LlmTimeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
 
             var messages = new List<ChatMessage>
             {

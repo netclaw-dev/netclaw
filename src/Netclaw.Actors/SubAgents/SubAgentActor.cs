@@ -258,10 +258,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
             // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
             // "/subagent/..." suffix to recover the parent. SessionId matches the key the
-            // session/channel actors already use (see SessionLoggingScope), so sub-agent
-            // and parent logs share one filterable attribute; SubSessionId isolates a
-            // single run within that session.
-            var parentSessionId = SessionDiagnosticsContext.NormalizeSessionId(scopeId);
+            // session/channel actors already tag their loggers with, so sub-agent and
+            // parent logs share one filterable attribute (and route to the same
+            // session.log); SubSessionId isolates a single run within that session.
+            var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
             var enrichedLog = Context.GetLogger();
             if (!string.IsNullOrWhiteSpace(parentSessionId))
                 enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
@@ -903,10 +903,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         try
         {
-            // Sub-agents share the parent's diagnostics scope: SessionDiagnosticsContext
-            // strips the "/subagent/..." suffix back to the parent id. Null is intentional
-            // for sub-agents that run outside any session.
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId?.Value);
 
             // Use streaming to match the main session path. The non-streaming
             // GetResponseAsync path drops reasoning content for some providers

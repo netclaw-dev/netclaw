@@ -43,7 +43,6 @@ internal static class SessionTitleGenerator
         try
         {
             using var cts = new CancellationTokenSource(timeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var messages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.User,

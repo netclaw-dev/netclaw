@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
 // Netclaw's LoggingChatClient collides with Microsoft.Extensions.AI.LoggingChatClient
@@ -92,32 +91,6 @@ public sealed class LoggingChatClientTests
 
         Assert.Contains(logs, l => l.Contains("LLM prompt dump:"));
         Assert.Contains(logs, l => l.Contains("role=user"));
-    }
-
-    [Fact]
-    public async Task Streaming_attaches_SessionId_scope_from_diagnostics_context()
-    {
-        var logger = new ScopeCapturingLogger();
-        var client = new LoggingChatClient(new FakeChatClient(streaming: true), logger);
-
-        using (SessionDiagnosticsContext.Push("ch/thread"))
-        {
-            await Drain(client);
-        }
-
-        Assert.True(logger.HasSessionScope("ch/thread"));
-    }
-
-    [Fact]
-    public async Task Streaming_without_session_context_attaches_no_scope()
-    {
-        Assert.Null(SessionDiagnosticsContext.SessionId);
-        var logger = new ScopeCapturingLogger();
-        var client = new LoggingChatClient(new FakeChatClient(streaming: true), logger);
-
-        await Drain(client);
-
-        Assert.False(logger.HasAnySessionScope());
     }
 
     private static async Task Drain(IChatClient client)

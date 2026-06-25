@@ -39,7 +39,6 @@ public sealed class LoggingChatClient : DelegatingChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
     {
-        using var sessionScope = SessionLoggingScope.Begin(_logger);
         var messageList = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         LogPromptDiagnostics(messageList, options);
 

@@ -14,14 +14,12 @@ using Xunit;
 namespace Netclaw.Actors.Tests.SubAgents;
 
 /// <summary>
-/// Regression coverage for sub-agent spawn observability. A sub-agent's own actor
-/// logs go through Akka's async logger bridge, where the diagnostics AsyncLocal is
-/// gone, so they never reach the per-session <c>session.log</c>. The spawn lifecycle
-/// is instead recorded by parent-side breadcrumbs that must run while the parent
-/// session scope is active — otherwise a refused or failed spawn is invisible in the
-/// session transcript. These tests assert the scope is active at log time, which is
-/// exactly the condition <c>RollingFileLoggerProvider</c> uses to route a line to
-/// <c>session.log</c>.
+/// Regression coverage for sub-agent spawn observability. The spawn lifecycle is
+/// recorded by parent-side breadcrumbs that carry the session id as a structured log
+/// field — exactly what <c>RollingFileLoggerProvider</c> reads off the log event to
+/// route a line to the per-session <c>session.log</c>. These tests assert each
+/// breadcrumb carries the session id; otherwise a refused or failed spawn would be
+/// invisible in the session transcript.
 /// </summary>
 public sealed class SubAgentSpawnObservabilityTests : IDisposable
 {
@@ -113,6 +111,17 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             TState state,
             Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception), SessionDiagnosticsContext.SessionId));
+            => Entries.Add((logLevel, formatter(state, exception), ExtractSessionId(state)));
+
+        // Mirror RollingFileLoggerProvider: read the session id off the structured log
+        // state (the {SessionId} field the breadcrumbs carry), not an ambient context.
+        private static string? ExtractSessionId<TState>(TState state)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object?>> fields)
+                foreach (var field in fields)
+                    if (field.Key == "SessionId" && field.Value is { } value)
+                        return value.ToString();
+            return null;
+        }
     }
 }
