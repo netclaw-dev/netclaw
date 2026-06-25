@@ -65,6 +65,14 @@ internal sealed class ToolAudienceProfileResolver
         return roots;
     }
 
+    /// <summary>
+    /// Resolves the operator-configured workspaces directory — the designated
+    /// writable working area shared across sessions. Returns null when
+    /// <see cref="_paths"/> is unavailable (e.g. a policy constructed without
+    /// paths), so callers fail closed rather than inventing a default root.
+    /// </summary>
+    public string? ResolveWorkspacesDirectory() => _paths?.WorkspacesDirectory;
+
     public bool IsToolAllowed(ToolName toolName, ToolExecutionContext? context)
     {
         if (!IsProfileManagedTool(toolName))

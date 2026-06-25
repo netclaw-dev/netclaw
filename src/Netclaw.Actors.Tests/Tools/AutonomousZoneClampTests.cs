@@ -111,18 +111,46 @@ public sealed class AutonomousZoneClampTests : IDisposable
     }
 
     [Fact]
-    public void Autonomous_personal_can_read_but_not_write_outside_current_project()
+    public void Autonomous_personal_can_write_workspaces_but_not_identity_or_skills()
     {
-        // Reads reach the non-sensitive global read roots (incl. workspaces), so an
-        // autonomous session can read across the project tree; writes stay confined
-        // to its session + current project, not the whole workspace tree.
+        // The workspace is the operator's designated writable working area, so an
+        // autonomous session may persist cross-run state there (e.g. a dedup file).
+        // Skills and identity are system-managed: readable via the global read
+        // roots, but never writable by an autonomous session — it must not be able
+        // to rewrite its own identity or skills.
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
         var ctx = Ctx(TrustAudience.Personal, autonomous: true);
 
-        var sibling = Path.Combine(_paths.WorkspacesDirectory, "other-project", "RELEASE_NOTES.md");
+        var workspaceFile = Path.Combine(_paths.WorkspacesDirectory, "gotowebinar-last-run.json");
+        var identityFile = Path.Combine(_paths.IdentityDirectory, "SOUL.md");
+        var skillFile = Path.Combine(_paths.SkillsDirectory, "netclaw-operations", "SKILL.md");
 
-        Assert.True(policy.TryResolveReadPath(sibling, ctx, out _, out var e), e);
-        Assert.False(policy.TryResolveWritePath(sibling, ctx, out _, out _));
+        // Reads reach all three global read roots.
+        Assert.True(policy.TryResolveReadPath(workspaceFile, ctx, out _, out var er1), er1);
+        Assert.True(policy.TryResolveReadPath(identityFile, ctx, out _, out var er2), er2);
+
+        // Writes reach the workspace but NOT the system-managed identity/skills trees.
+        Assert.True(policy.TryResolveWritePath(workspaceFile, ctx, out _, out var ew1), ew1);
+        Assert.False(policy.TryResolveWritePath(identityFile, ctx, out _, out _));
+        Assert.False(policy.TryResolveWritePath(skillFile, ctx, out _, out _));
+    }
+
+    [Fact]
+    public void Autonomous_personal_can_write_under_configured_custom_workspaces_dir()
+    {
+        // Cross-boundary contract: the daemon passes Workspaces:Directory into
+        // NetclawPaths(workspacesDirectory:), and the autonomous write zone must
+        // honor that configured location — not a hardcoded default — so persisted
+        // state lands where the operator pointed it.
+        var customWorkspaces = Path.Combine(_dir.Path, "custom-ws");
+        Directory.CreateDirectory(customWorkspaces);
+        var paths = new NetclawPaths(_dir.Path, customWorkspaces);
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), paths);
+        var ctx = Ctx(TrustAudience.Personal, autonomous: true);
+
+        var stateFile = Path.Combine(customWorkspaces, "state.json");
+
+        Assert.True(policy.TryResolveWritePath(stateFile, ctx, out _, out var e), e);
     }
 
     [Fact]

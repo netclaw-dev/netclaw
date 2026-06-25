@@ -33,9 +33,9 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
     {
     }
 
-    public AttachFileTool(ToolConfig config)
+    public AttachFileTool(ToolConfig config, NetclawPaths? paths = null)
     {
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

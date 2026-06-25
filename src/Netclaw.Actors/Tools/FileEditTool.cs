@@ -35,16 +35,16 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         [property: Description("Replace all occurrences instead of just the first (default: false)")] bool? ReplaceAll = null,
         [property: Description("Full content to write to the file, creating parent directories if needed. Mutually exclusive with OldString/NewString.")] string? Content = null);
 
-    public FileEditTool(ToolPathPolicy? pathPolicy = null)
+    public FileEditTool(ToolPathPolicy? pathPolicy = null, NetclawPaths? paths = null)
     {
         _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(new ToolConfig());
+        _fileAccessPolicy = new ScopedFileAccessPolicy(new ToolConfig(), paths);
     }
 
-    public FileEditTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
+    public FileEditTool(ToolConfig config, ToolPathPolicy? pathPolicy = null, NetclawPaths? paths = null)
     {
         _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

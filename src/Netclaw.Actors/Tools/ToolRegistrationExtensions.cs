@@ -38,9 +38,9 @@ public static class ToolRegistrationExtensions
         registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
         registry.Register(new FileListTool(config, paths, pathPolicy));
-        registry.Register(new FileWriteTool(config, pathPolicy));
-        registry.Register(new FileEditTool(config, pathPolicy));
-        registry.Register(new AttachFileTool(config));
+        registry.Register(new FileWriteTool(config, pathPolicy, paths));
+        registry.Register(new FileEditTool(config, pathPolicy, paths));
+        registry.Register(new AttachFileTool(config, paths));
         if (webhookRouteStore is not null)
         {
             registry.Register(new SetWebhookTool(webhookRouteStore));
@@ -50,7 +50,7 @@ public static class ToolRegistrationExtensions
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));
-        registry.Register(new SetWorkingDirectoryTool(config));
+        registry.Register(new SetWorkingDirectoryTool(config, paths));
 
         // Register search_tools and load_tool meta-tools (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry, toolAccessPolicy));
