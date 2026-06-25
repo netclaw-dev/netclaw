@@ -83,7 +83,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Live-only coordination for the currently executing streamed tool batch.
     // Durable recovery derives unanswered calls from _state.History.
     private readonly ActiveToolBatchTracker _activeToolBatch = new();
-    private readonly List<SerializableMediaReference> _pendingModelInputMediaReferences = [];
+    // Media loaded by tools for model-visible inspection during a streamed tool
+    // batch; drained into a system nudge when the batch completes.
+    private readonly ModelInputMediaBuffer _mediaBuffer = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
     private bool _processingStateActive;
@@ -558,7 +560,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
-            _pendingModelInputMediaReferences.Clear();
+            _mediaBuffer.Clear();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
@@ -3277,13 +3279,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!alreadyRecorded)
         {
             _state = _state with { History = _state.History.Add(evt.ToolResult) };
-            if (evt.ToolResult.MediaReferences.Count > 0)
-                _pendingModelInputMediaReferences.AddRange(evt.ToolResult.MediaReferences);
+            _mediaBuffer.Add(evt.ToolResult.MediaReferences);
 
             if (_activeToolBatch.HasAllResults)
             {
-                AddModelInputMediaNudge(_pendingModelInputMediaReferences);
-                _pendingModelInputMediaReferences.Clear();
+                AddModelInputMediaNudge(_mediaBuffer.DrainSnapshot());
             }
         }
     }
@@ -3433,7 +3433,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void ClearActiveToolBatchTracking()
     {
         _activeToolBatch.Clear();
-        _pendingModelInputMediaReferences.Clear();
+        _mediaBuffer.Clear();
     }
 
     private void MaybeSnapshot()
@@ -4494,8 +4494,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CompleteToolBatch(int resultCount)
     {
-        AddModelInputMediaNudge(_pendingModelInputMediaReferences);
-        _pendingModelInputMediaReferences.Clear();
+        AddModelInputMediaNudge(_mediaBuffer.DrainSnapshot());
 
         var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
 
