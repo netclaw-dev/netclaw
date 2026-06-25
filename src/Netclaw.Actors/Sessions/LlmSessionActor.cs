@@ -201,7 +201,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private SessionState _state = SessionState.Empty;
 
     // Explicit state machine phase (metadata + validation layer over Become())
-    private SessionPhase _currentPhase = SessionPhase.Recovering;
+    private readonly SessionPhaseMachine _phase = new();
 
     public override string PersistenceId { get; }
     public ITimerScheduler Timers { get; set; } = null!;
@@ -342,12 +342,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private void TransitionTo(SessionPhase target)
     {
-        if (!IsLegalTransition(_currentPhase, target))
+        if (!_phase.TryTransition(target, out var from))
             throw new InvalidOperationException(
-                $"Illegal session phase transition: {_currentPhase} → {target}");
+                $"Illegal session phase transition: {_phase.Current} → {target}");
 
-        var from = _currentPhase;
-        _currentPhase = target;
         _log.Info("session_phase_transition from={From} to={To}", from, target);
 
         EmitProcessingStateForPhase(target);
@@ -372,9 +370,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 throw new ArgumentOutOfRangeException(nameof(target), target, null);
         }
     }
-
-    private static bool IsLegalTransition(SessionPhase from, SessionPhase to)
-        => SessionPhaseTransitions.IsLegal(from, to);
 
     private void EmitProcessingStateForPhase(SessionPhase phase)
     {
@@ -2475,7 +2470,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // If replay found an approval decision but no durable tool result,
             // do not replay the approved side effect after restart. Close the
             // orphaned tool_use blocks so the next user turn has valid history.
-            if (_currentPhase == SessionPhase.Ready)
+            if (_phase.Current == SessionPhase.Ready)
             {
                 if (!AbandonResolvedToolBatchAfterRecovery())
                     AbandonInterruptedToolBatchAfterRecovery();
@@ -3360,7 +3355,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _resolvedToolApprovals.Remove(evt.CallId);
 
         if (persistApprovalState && turnContext is not null)
-            RecordWaitingApprovalState(turnContext, evt.CallId, recovered: _currentPhase == SessionPhase.Recovering);
+            RecordWaitingApprovalState(turnContext, evt.CallId, recovered: _phase.Current == SessionPhase.Recovering);
         else if (persistApprovalState && restoreFailure is not null)
             _log.Warning(
                 "Approval request {CallId} could not restore turn context: {Reason}",
@@ -4672,7 +4667,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _restartDrainRequested = true;
         _restartDrainReplyTo = Sender;
 
-        if (_currentPhase == SessionPhase.Ready)
+        if (_phase.Current == SessionPhase.Ready)
             TransitionTo(SessionPhase.Passivating);
     }
 
