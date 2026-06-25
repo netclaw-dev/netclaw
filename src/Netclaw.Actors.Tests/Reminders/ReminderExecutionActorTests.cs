@@ -240,6 +240,44 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.ToolCalls));
     }
 
+    [Fact]
+    public async Task Mode_A_wedged_session_is_failed_by_stall_backstop_releasing_the_guard()
+    {
+        // #1492 regression: a Channel-delivery (Mode A) reminder whose session
+        // wedges — stops producing output without ever emitting TurnCompleted or
+        // Error — used to hold the duplicate-execution guard forever (the actor
+        // had no execution ceiling). The stall backstop must conclude it as a
+        // failure so the parent clears _activeExecutions and the next fire runs.
+        var originalTimeout = ReminderExecutionActor.ExecutionStallTimeout;
+        ReminderExecutionActor.ExecutionStallTimeout = TimeSpan.FromMilliseconds(250);
+        try
+        {
+            // Emits one non-terminal output, then goes silent forever — no
+            // TurnCompleted/Error ever arrives.
+            var pipeline = new ScriptedSessionPipeline(sessionId =>
+            [
+                new TextOutput("Working on it...") { SessionId = sessionId }
+            ]);
+
+            var definition = CreateDefinition("mode-a-stall");
+            var probe = CreateTestProbe();
+            Sys.ActorOf(
+                Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+                "exec-mode-a-stall");
+
+            var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.False(completed.Success);
+            Assert.Equal("mode-a-stall", completed.Id.Value);
+            Assert.Contains("stalled", completed.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            ReminderExecutionActor.ExecutionStallTimeout = originalTimeout;
+        }
+    }
+
     private static ReminderDefinition CreateDefinition(string id)
     {
         var now = TimeProvider.System.GetUtcNow();

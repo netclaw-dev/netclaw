@@ -37,6 +37,20 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// </summary>
     internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// Backstop inactivity ceiling for the Mode A (Channel / own-pipeline) path.
+    /// The actor runs its own session pipeline and concludes when it emits
+    /// <c>TurnCompleted</c>/<c>Error</c>; if the session wedges and stops
+    /// producing output without ever reaching a terminal signal, nothing else
+    /// stops this actor, so it would hold the duplicate-execution guard forever
+    /// (see #1492). A <see cref="ReceiveTimeout"/> reset by every session output
+    /// fires after this much silence and concludes the run as failed, releasing
+    /// the guard so the next fire can run. Reset by real output, so it never
+    /// preempts a live turn. Mode B (CurrentSession) does NOT arm this — its wait
+    /// is bounded separately by <see cref="DeliveryObservedTimeout"/>.
+    /// </summary>
+    internal static TimeSpan ExecutionStallTimeout = TimeSpan.FromMinutes(20);
+
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
     private readonly ReminderHistoryStore _historyStore;
@@ -100,6 +114,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         Receive<ExecutionStarted>(_ => { });
         Receive<ReminderDeliveryResult>(HandleDeliveryResult);
         Receive<DeliveryBackstopTimeout>(HandleDeliveryBackstopTimeout);
+        Receive<ReceiveTimeout>(_ => HandleExecutionStall());
     }
 
     protected override void PreStart()
@@ -166,6 +181,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             });
 
             inputQueue.Complete();
+
+            // Arm the Mode A stall backstop: the pipeline now streams output to
+            // this actor, each ExecutionOutput resets the ReceiveTimeout, and a
+            // terminal TurnCompleted/Error stops us first. If the session wedges
+            // and goes silent without a terminal signal, this fires and releases
+            // the duplicate-execution guard instead of hanging forever (#1492).
+            Context.SetReceiveTimeout(ExecutionStallTimeout);
         }
         catch (Exception ex)
         {
@@ -541,12 +563,27 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         }
     }
 
+    private void HandleExecutionStall()
+    {
+        if (_completed)
+            return;
+
+        var elapsed = _timeProvider.GetUtcNow() - _dispatchedAt;
+        _log.Warning(
+            "ReminderExecution Stalled: execution_id={0} reminder_id={1} title={2} no session output for {3} (elapsed={4}); concluding as failed to release the execution guard.",
+            _executionId, _definition.Id, _definition.Title, ExecutionStallTimeout, elapsed);
+        ReportAndStop(false, $"Reminder execution stalled: no session output for {ExecutionStallTimeout}.");
+    }
+
     private void ReportAndStop(bool success, string? errorMessage = null)
     {
         if (_completed)
             return;
 
         _completed = true;
+
+        // Disarm the Mode A stall backstop so it cannot fire during the drain.
+        Context.SetReceiveTimeout(null);
 
         var durationMs = (long)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalMilliseconds;
         _pendingHistory = new HistoryRecord(
