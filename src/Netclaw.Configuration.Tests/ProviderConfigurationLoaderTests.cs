@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -79,6 +80,30 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
         Assert.NotNull(options);
         Assert.True(options!.DisableThinking);
         Assert.Equal("fast", options.Mode);
+    }
+
+    [Fact]
+    public void GetVendorOptions_DeserializesGitHubCopilotAuthOptions()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:copilot-ghe:Type"] = "github-copilot",
+                ["Providers:copilot-ghe:VendorOptions:GitHubHost"] = "https://my-company-ghe.ghe.com",
+                ["Providers:copilot-ghe:VendorOptions:GitHubApiBase"] = "https://api.my-company-ghe.ghe.com",
+                ["Providers:copilot-ghe:VendorOptions:CopilotTokenExchangePath"] = "/copilot_internal/v2/token",
+                ["Providers:copilot-ghe:VendorOptions:AuthMode"] = "Environment",
+            })
+            .Build();
+
+        var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+        var options = providers["copilot-ghe"].GetVendorOptions<GitHubCopilotAuthOptions>();
+
+        Assert.NotNull(options);
+        Assert.Equal(GitHubCopilotAuthMode.Environment, options!.AuthMode);
+        Assert.Equal(new Uri("https://my-company-ghe.ghe.com"), options.GitHubHost);
+        Assert.Equal(new Uri("https://api.my-company-ghe.ghe.com"), options.GitHubApiBase);
+        Assert.Equal("/copilot_internal/v2/token", options.CopilotTokenExchangePath);
     }
 
     [Fact]

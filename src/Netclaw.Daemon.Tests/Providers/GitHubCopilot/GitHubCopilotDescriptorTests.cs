@@ -18,7 +18,7 @@ public sealed class GitHubCopilotDescriptorTests
     private const string TokenExchangeUrl = "https://api.github.com/copilot_internal/v2/token";
     private const string ModelsUrl = "https://api.githubcopilot.com/models";
 
-    private static ProviderEntry OAuthEntry(string token = "oauth-1") =>
+    private static ProviderEntry OAuthEntry(string token = "gho_1") =>
         new()
         {
             Type = "github-copilot",

@@ -112,6 +112,35 @@ public class LlmFailureClassifierTests
     }
 
     [Fact]
+    public void SdkClientResultException_400_SurfacesMalformedRequestDetail()
+    {
+        var ex = new FakeClientResultException(
+            400,
+            "Service request failed.",
+            new FakeRawResponse("{\"error\":{\"message\":\"tools is not supported\"}}"));
+
+        var message = LlmFailureClassifier.ExtractUserMessage(ex, Model);
+
+        Assert.Contains("HTTP 400", message);
+        Assert.Contains("malformed", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tools is not supported", message);
+    }
+
+    [Fact]
+    public void SdkClientResultException_400_RedactsSensitiveDetail()
+    {
+        var ex = new FakeClientResultException(
+            400,
+            "Service request failed.",
+            new FakeRawResponse("bad token Bearer github_pat_secretvalue"));
+
+        var message = LlmFailureClassifier.ExtractUserMessage(ex, Model);
+
+        Assert.Contains("Bearer [redacted]", message);
+        Assert.DoesNotContain("github_pat_secretvalue", message);
+    }
+
+    [Fact]
     public void UnknownException_SurfacesTypeAndTruncatedMessage()
     {
         var ex = new InvalidOperationException("something specific went wrong");
@@ -144,5 +173,20 @@ public class LlmFailureClassifierTests
 
         Assert.Contains("test-model", message);
         Assert.Contains("8000", message);
+    }
+
+    private sealed class FakeClientResultException(
+        int status,
+        string message,
+        FakeRawResponse? rawResponse = null) : Exception(message)
+    {
+        public int Status { get; } = status;
+
+        public FakeRawResponse? GetRawResponse() => rawResponse;
+    }
+
+    private sealed class FakeRawResponse(string content)
+    {
+        public object Content { get; } = content;
     }
 }

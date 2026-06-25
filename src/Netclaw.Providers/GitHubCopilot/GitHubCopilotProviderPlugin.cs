@@ -31,9 +31,11 @@ public sealed class GitHubCopilotProviderPlugin(
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
-        var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
-            ? Descriptor.DefaultEndpoint
-            : entry.Endpoint.TrimEnd('/');
+        var authOptions = GitHubCopilotDescriptor.ResolveOptions(entry);
+        var endpointOverride = GitHubCopilotDescriptor.NormalizeCopilotEndpointOverride(entry.Endpoint);
+        var endpoint = string.IsNullOrWhiteSpace(endpointOverride)
+            ? authOptions.CopilotApiBase.ToString().TrimEnd('/')
+            : endpointOverride;
 
         var options = new OpenAIClientOptions
         {
@@ -50,13 +52,39 @@ public sealed class GitHubCopilotProviderPlugin(
         // token) on every call. The "placeholder" is overwritten before the
         // first request goes out.
         var credential = new ApiKeyCredential("placeholder");
-        var oauth = Descriptor.Auth.GetOAuthConfig()
-                    ?? throw new InvalidOperationException("GitHub Copilot OAuth configuration is missing.");
+        var oauth = GitHubCopilotDescriptor.CreateOAuthAuth(authOptions);
         options.AddPolicy(
             new CopilotRequestPolicy(tokenExchanger, entry, credential, model.Provider, oauth),
             PipelinePosition.PerCall);
+        options.AddPolicy(new CopilotChatRequestSanitizerPolicy(), PipelinePosition.BeforeTransport);
 
         var client = new OpenAIClient(credential, options);
         return client.GetChatClient(model.ModelId).AsIChatClient();
+    }
+}
+
+internal sealed class CopilotChatRequestSanitizerPolicy : PipelinePolicy
+{
+    public override void Process(
+        PipelineMessage message,
+        IReadOnlyList<PipelinePolicy> pipeline,
+        int currentIndex)
+    {
+        RemoveRejectedHeaders(message);
+        ProcessNext(message, pipeline, currentIndex);
+    }
+
+    public override ValueTask ProcessAsync(
+        PipelineMessage message,
+        IReadOnlyList<PipelinePolicy> pipeline,
+        int currentIndex)
+    {
+        RemoveRejectedHeaders(message);
+        return ProcessNextAsync(message, pipeline, currentIndex);
+    }
+
+    private static void RemoveRejectedHeaders(PipelineMessage message)
+    {
+        message.Request.Headers.Remove("X-GitHub-Api-Version");
     }
 }

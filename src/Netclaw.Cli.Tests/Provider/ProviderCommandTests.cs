@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ProviderCommandTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -176,11 +176,8 @@ public sealed class ProviderCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Add_OAuthOnlyProvider_WithoutAuthFlag_RefusesAndGuides()
+    public async Task Add_CopilotProvider_WithoutCredentialChoice_RefusesAndGuides()
     {
-        // GitHub Copilot supports only OAuthDevice. Without --auth oauth-device
-        // we must not silently write an entry with no credentials — fail loudly
-        // and tell the operator how to authenticate.
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "add", "my-copilot", "github-copilot"],
             _paths, output: _output);
@@ -188,13 +185,49 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.Equal(1, exitCode);
         var output = _output.ToString();
         Assert.Contains("--auth oauth-device", output);
-        Assert.Contains("requires OAuth device flow", output);
+        Assert.Contains("--api-key", output);
 
         // No partial entry written to netclaw.json
         Assert.False(File.Exists(_paths.NetclawConfigPath)
             && ReadConfigFile(_paths.NetclawConfigPath).RootElement
                 .TryGetProperty("Providers", out var providers)
             && providers.TryGetProperty("my-copilot", out _));
+    }
+
+    [Fact]
+    public async Task Add_CopilotGheEnvironmentMode_WritesVendorOptionsWithoutSecret()
+    {
+        var exitCode = await ProviderCommand.RunAsync(
+            [
+                "provider", "add", "copilot-ghe", "github-copilot",
+                "--auth", "api-key",
+                "--copilot-auth-mode", "environment",
+                "--github-host", "https://my-company-ghe.ghe.com",
+                "--github-api-base", "https://api.my-company-ghe.ghe.com",
+                "--copilot-api-base", "https://copilot-api.my-company-ghe.ghe.com",
+                "--copilot-token-exchange-path", "/copilot_internal/v2/token"
+            ],
+            _paths,
+            output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var provider = config.RootElement.GetProperty("Providers").GetProperty("copilot-ghe");
+        Assert.Equal("github-copilot", provider.GetProperty("Type").GetString());
+        Assert.Equal("ApiKey", provider.GetProperty("AuthMethod").GetString());
+        var options = provider.GetProperty("VendorOptions");
+        Assert.Equal("Environment", options.GetProperty("AuthMode").GetString());
+        Assert.Equal("https://my-company-ghe.ghe.com", options.GetProperty("GitHubHost").GetString());
+        Assert.Equal("https://api.my-company-ghe.ghe.com", options.GetProperty("GitHubApiBase").GetString());
+        Assert.Equal("https://copilot-api.my-company-ghe.ghe.com", options.GetProperty("CopilotApiBase").GetString());
+        Assert.Equal("/copilot_internal/v2/token", options.GetProperty("CopilotTokenExchangePath").GetString());
+
+        Assert.False(File.Exists(_paths.SecretsPath));
+
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("Environment",
+            loaded["copilot-ghe"].VendorOptions?["AuthMode"]?.GetValue<string>());
     }
 
     [Fact]
@@ -315,8 +348,8 @@ public sealed class ProviderCommandTests : IDisposable
                 DateTimeOffset.UtcNow.AddHours(1),
                 new SensitiveString("openai-account")),
             apiKey: null,
-            registry,
-            protector);
+            registry: registry,
+            protector: protector);
 
         ProviderCredentialWriter.WriteProvider(
             _paths,
@@ -330,8 +363,8 @@ public sealed class ProviderCommandTests : IDisposable
                 DateTimeOffset.UtcNow.AddHours(1),
                 null),
             apiKey: null,
-            registry,
-            protector);
+            registry: registry,
+            protector: protector);
 
         using var config = ReadConfigFile(_paths.NetclawConfigPath);
         var configProviders = config.RootElement.GetProperty("Providers");

@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
@@ -44,6 +46,10 @@ internal static class LlmFailureClassifier
         if (httpEx is not null)
             return FormatHttpFailure(httpEx);
 
+        var clientResultEx = FindSdkResponseException(cause);
+        if (clientResultEx is not null)
+            return FormatSdkResponseFailure(clientResultEx);
+
         // Final catch-all. Surfacing the exception type + a truncated message
         // beats the historical "please try again" wall — at minimum the
         // operator sees what kind of failure it was.
@@ -64,6 +70,106 @@ internal static class LlmFailureClassifier
             not null   => $"LLM provider returned HTTP {status}: {Truncate(ex.Message)}",
             null       => $"LLM provider transport error: {Truncate(ex.Message)}. Check provider configuration and connectivity.",
         };
+    }
+
+    private static string FormatSdkResponseFailure(Exception ex)
+    {
+        var status = ReadIntProperty(ex, "Status");
+        var detail = ExtractSdkResponseDetail(ex);
+        var message = string.IsNullOrWhiteSpace(detail) ? ex.Message : detail;
+
+        return status switch
+        {
+            400 => $"LLM provider rejected the request as malformed (HTTP 400): {Truncate(RedactSensitive(message))}",
+            401 or 403 => $"LLM provider rejected the request (HTTP {status}): authentication failed or revoked. Re-run 'netclaw provider add <name> ...' or check stored credentials.",
+            429 => "LLM provider rate-limited the request (HTTP 429). Wait a moment and try again.",
+            >= 500 => $"LLM provider returned a server error (HTTP {status}). The provider may be overloaded. Please try again.",
+            > 0 => $"LLM provider returned HTTP {status}: {Truncate(RedactSensitive(message))}",
+            _ => $"LLM provider request failed: {Truncate(RedactSensitive(message))}",
+        };
+    }
+
+    // OpenAI/System.ClientModel exceptions live in provider SDK assemblies,
+    // not in Netclaw.Actors. Keep this boundary dependency-free by matching the
+    // stable exception shape (ClientResultException + Status) instead of adding
+    // a direct reference just to improve operator diagnostics.
+    private static Exception? FindSdkResponseException(Exception? ex)
+    {
+        while (ex is not null)
+        {
+            var type = ex.GetType();
+            if (type.Name.Contains("ClientResultException", StringComparison.Ordinal)
+                && ReadIntProperty(ex, "Status") is not null)
+            {
+                return ex;
+            }
+
+            ex = ex.InnerException;
+        }
+
+        return null;
+    }
+
+    // Reflection here is intentionally narrow: public integer properties only.
+    // It lets us read SDK status codes without broad dynamic dispatch or a new
+    // actors-layer package dependency.
+    private static int? ReadIntProperty(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public);
+        var value = property?.GetValue(instance);
+        return value switch
+        {
+            int i => i,
+            uint u when u <= int.MaxValue => (int)u,
+            _ => null,
+        };
+    }
+
+    // ClientResultException.GetRawResponse().Content contains the provider's
+    // real error body. For GHE/Copilot this is the difference between a generic
+    // HTTP 400 and actionable messages like invalid API version, token stamp,
+    // or model policy failures. Treat it as optional because SDKs can throw
+    // before a response body exists.
+    private static string? ExtractSdkResponseDetail(Exception ex)
+    {
+        try
+        {
+            var rawResponse = ex.GetType()
+                .GetMethod("GetRawResponse", BindingFlags.Instance | BindingFlags.Public, Type.EmptyTypes)
+                ?.Invoke(ex, null);
+            var content = rawResponse?.GetType()
+                .GetProperty("Content", BindingFlags.Instance | BindingFlags.Public)
+                ?.GetValue(rawResponse);
+            var text = content?.ToString();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch (TargetInvocationException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    // Error bodies can echo auth headers or configured GitHub tokens. Redact
+    // before forwarding details to chat/log surfaces; truncation alone is not
+    // enough when a secret appears near the start of the message.
+    private static string RedactSensitive(string value)
+    {
+        var redacted = Regex.Replace(
+            value,
+            @"Bearer\s+[^\s,'""}]+",
+            "Bearer [redacted]",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.Replace(
+            redacted,
+            @"github_pat_[A-Za-z0-9_]+",
+            "github_pat_[redacted]",
+            RegexOptions.CultureInvariant);
     }
 
     private static string Truncate(string? s) =>

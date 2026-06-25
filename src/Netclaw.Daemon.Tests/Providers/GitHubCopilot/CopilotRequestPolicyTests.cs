@@ -17,7 +17,7 @@ namespace Netclaw.Daemon.Tests.Providers.GitHubCopilot;
 
 public sealed class CopilotRequestPolicyTests
 {
-    private static ProviderEntry OAuthEntry(string token = "oauth-1") =>
+    private static ProviderEntry OAuthEntry(string token = "gho_1") =>
         new()
         {
             Type = "github-copilot",
@@ -25,16 +25,23 @@ public sealed class CopilotRequestPolicyTests
             OAuthAccessToken = new SensitiveString(token),
         };
 
-    private static CopilotTokenExchanger ExchangerReturning(string copilotToken)
+    private static CopilotTokenExchanger ExchangerReturning(string copilotToken, string? copilotApiBase = null)
     {
         var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                JsonSerializer.Serialize(new
-                {
-                    token = copilotToken,
-                    expires_at = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds(),
-                }),
+                copilotApiBase is null
+                    ? JsonSerializer.Serialize(new
+                    {
+                        token = copilotToken,
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds(),
+                    })
+                    : JsonSerializer.Serialize(new
+                    {
+                        token = copilotToken,
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds(),
+                        endpoints = new { api = copilotApiBase },
+                    }),
                 Encoding.UTF8,
                 "application/json"),
         });
@@ -42,7 +49,7 @@ public sealed class CopilotRequestPolicyTests
     }
 
     [Fact]
-    public async Task ProcessAsync_AppliesThreeCopilotHeaders()
+    public async Task ProcessAsync_AppliesCopilotHeaders()
     {
         var policy = new CopilotRequestPolicy(
             ExchangerReturning("copilot-bearer"), OAuthEntry(), new ApiKeyCredential("placeholder"));
@@ -62,13 +69,15 @@ public sealed class CopilotRequestPolicyTests
 
         // The policy does NOT set Authorization — the SDK's credential auth
         // policy owns that header (see CopilotRequestPolicy remarks). The policy
-        // sets only the three Copilot-required custom headers.
+        // sets the Copilot-required custom headers.
         message.Request.Headers.TryGetValue("copilot-integration-id", out var integrationId);
         Assert.Equal("vscode-chat", integrationId);
 
         message.Request.Headers.TryGetValue("editor-version", out var editorVersion);
-        Assert.False(string.IsNullOrWhiteSpace(editorVersion),
-            "editor-version header must be present");
+        Assert.Equal($"Netclaw/{BuildInfo.Version}", editorVersion);
+
+        message.Request.Headers.TryGetValue("Editor-Plugin-Version", out var pluginVersion);
+        Assert.Equal($"netclaw/{BuildInfo.Version}", pluginVersion);
 
         message.Request.Headers.TryGetValue("openai-intent", out var intent);
         Assert.Equal("conversation-agent", intent);
@@ -97,6 +106,27 @@ public sealed class CopilotRequestPolicyTests
 
         credential.Deconstruct(out var key);
         Assert.Equal("copilot-real", key);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TokenEndpointMetadata_RewritesCopilotApiBase()
+    {
+        var policy = new CopilotRequestPolicy(
+            ExchangerReturning("copilot-real", "https://prod-sdc-01.api.githubcopilot.com"),
+            OAuthEntry(),
+            new ApiKeyCredential("placeholder"));
+
+        var clientPipeline = ClientPipeline.Create(new ClientPipelineOptions());
+        using var message = clientPipeline.CreateMessage();
+        message.Request.Method = "POST";
+        message.Request.Uri = new Uri("https://api.githubcopilot.com/chat/completions");
+
+        IReadOnlyList<PipelinePolicy> pipeline = [policy, new TerminalCapturingPolicy(() => { })];
+
+        await policy.ProcessAsync(message, pipeline, 0);
+
+        Assert.Equal("https://prod-sdc-01.api.githubcopilot.com/chat/completions",
+            message.Request.Uri.ToString());
     }
 
     [Fact]

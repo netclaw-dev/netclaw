@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Netclaw.Configuration.Http;
 
@@ -30,7 +29,6 @@ public static class NetclawHttpClientBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(component);
 
-        builder.Services.TryAddTransient<NetclawHeadersHandler>();
         return builder.AddHttpMessageHandler(_ => new NetclawHeadersHandler(component));
     }
 }

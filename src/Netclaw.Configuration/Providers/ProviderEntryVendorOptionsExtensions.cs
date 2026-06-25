@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Netclaw.Configuration.Providers;
 
@@ -14,7 +15,8 @@ public static class ProviderEntryVendorOptionsExtensions
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
     };
 
     public static T? GetVendorOptions<T>(this ProviderEntry entry)

@@ -374,9 +374,9 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             EndpointInput,
             OAuth.Result,
             ApiKeyInput,
-            _registry,
+            registry: _registry,
             // Protector for this config's keys directory, not the process-wide static service locator.
-            SecretsProtection.CreateProtector(paths));
+            protector: SecretsProtection.CreateProtector(paths));
     }
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)

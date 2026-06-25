@@ -13,7 +13,7 @@ namespace Netclaw.Providers.GitHubCopilot;
 /// Pipeline policy for <c>api.githubcopilot.com</c>. On every outbound
 /// request it resolves a fresh Copilot API token via
 /// <see cref="CopilotTokenExchanger"/> (cached, with a 2-minute refresh
-/// buffer) and adds the three custom headers the Copilot API rejects
+/// buffer) and adds the custom headers the Copilot API rejects
 /// requests without.
 /// </summary>
 /// <remarks>
@@ -60,14 +60,27 @@ internal sealed class CopilotRequestPolicy(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
         var token = providerName is not null && oauth is not null
-            ? await exchanger.GetTokenAsync(providerName, entry, oauth, message.CancellationToken)
-            : await exchanger.GetTokenAsync(entry, message.CancellationToken);
+            ? await exchanger.GetAccessTokenAsync(providerName, entry, oauth, message.CancellationToken)
+            : await exchanger.GetAccessTokenAsync(entry, message.CancellationToken);
 
         // Refresh the credential the SDK's auth policy reads downstream, so it
         // emits "Authorization: Bearer {token}" with our short-lived token.
-        credential.Update(token);
+        credential.Update(token.Token);
+        if (token.CopilotApiBase is not null)
+            RewriteCopilotApiBase(message, token.CopilotApiBase);
+
         ApplyCopilotHeaders(message);
         await ProcessNextAsync(message, pipeline, currentIndex);
+    }
+
+    private static void RewriteCopilotApiBase(PipelineMessage message, Uri copilotApiBase)
+    {
+        var current = message.Request.Uri
+            ?? throw new InvalidOperationException("Cannot route GitHub Copilot request because the SDK request URI is missing.");
+        var builder = new UriBuilder(copilotApiBase);
+        builder.Path = current.AbsolutePath;
+        builder.Query = current.Query.TrimStart('?');
+        message.Request.Uri = builder.Uri;
     }
 
     private static void ApplyCopilotHeaders(PipelineMessage message)
@@ -79,7 +92,8 @@ internal sealed class CopilotRequestPolicy(
         // registered identifier we can use until we register a Netclaw
         // integration with GitHub.
         headers.Set("copilot-integration-id", "vscode-chat");
-        headers.Set("editor-version", "Netclaw/1.0");
+        headers.Set("editor-version", $"Netclaw/{BuildInfo.Version}");
+        headers.Set("Editor-Plugin-Version", $"netclaw/{BuildInfo.Version}");
         headers.Set("openai-intent", "conversation-agent");
     }
 }

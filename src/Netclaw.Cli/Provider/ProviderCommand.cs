@@ -4,10 +4,12 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
 
@@ -114,6 +116,11 @@ internal static class ProviderCommand
         string? apiKey = null;
         string? endpoint = null;
         string? authFlag = null;
+        string? githubHost = null;
+        string? githubApiBase = null;
+        string? copilotApiBase = null;
+        string? copilotTokenExchangePath = null;
+        string? copilotAuthMode = null;
 
         for (var i = 4; i < args.Length; i++)
         {
@@ -132,6 +139,36 @@ internal static class ProviderCommand
             if (args[i] is "--auth" && i + 1 < args.Length)
             {
                 authFlag = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--github-host" && i + 1 < args.Length)
+            {
+                githubHost = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--github-api-base" && i + 1 < args.Length)
+            {
+                githubApiBase = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--copilot-api-base" && i + 1 < args.Length)
+            {
+                copilotApiBase = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--copilot-token-exchange-path" && i + 1 < args.Length)
+            {
+                copilotTokenExchangePath = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--copilot-auth-mode" && i + 1 < args.Length)
+            {
+                copilotAuthMode = args[++i];
                 continue;
             }
         }
@@ -156,9 +193,27 @@ internal static class ProviderCommand
         }
 
         var supportedAuth = descriptor.Auth.SupportedAuthMethods;
+        if (!TryBuildGitHubCopilotVendorOptions(
+                type,
+                githubHost,
+                githubApiBase,
+                copilotApiBase,
+                copilotTokenExchangePath,
+                copilotAuthMode,
+                requestedAuthMethod,
+                apiKey,
+                writer,
+                out var vendorOptions,
+                out var gitHubCopilotAuthMode))
+        {
+            return 1;
+        }
+
+        if (gitHubCopilotAuthMode == GitHubCopilotAuthMode.Environment)
+            requestedAuthMethod ??= AuthMethod.ApiKey;
 
         if (ShouldDefaultToOAuthDevice(type, apiKey, requestedAuthMethod, supportedAuth))
-            return await RunOAuthDeviceFlowAsync(name, type, endpoint, descriptor, paths, writer);
+            return await RunOAuthDeviceFlowAsync(name, type, endpoint, descriptor, paths, writer, null);
 
         // Handle --auth oauth-device explicitly
         if (requestedAuthMethod == AuthMethod.OAuthDevice)
@@ -169,7 +224,14 @@ internal static class ProviderCommand
                 return 1;
             }
 
-            return await RunOAuthDeviceFlowAsync(name, type, endpoint, descriptor, paths, writer);
+            return await RunOAuthDeviceFlowAsync(
+                name,
+                type,
+                endpoint,
+                descriptor,
+                paths,
+                writer,
+                vendorOptions);
         }
 
         if (requestedAuthMethod == AuthMethod.ApiKey && !supportedAuth.Contains(AuthMethod.ApiKey))
@@ -197,6 +259,11 @@ internal static class ProviderCommand
         }
 
         if (supportedAuth.Contains(AuthMethod.ApiKey) && apiKey is not null)
+        {
+            authMethod = AuthMethod.ApiKey;
+        }
+        else if (string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase)
+                 && gitHubCopilotAuthMode == GitHubCopilotAuthMode.Environment)
         {
             authMethod = AuthMethod.ApiKey;
         }
@@ -228,7 +295,10 @@ internal static class ProviderCommand
 
         ProviderCredentialWriter.WriteProvider(
             paths, name, type, authMethod, endpoint,
-            oauthResult: null, apiKey: apiKey, registry);
+            oauthResult: null,
+            apiKey: apiKey,
+            vendorOptions: vendorOptions,
+            registry: registry);
 
         writer.WriteLine($"Added provider '{name}' ({type})");
         WriteProviderGuidance(descriptor, writer);
@@ -246,13 +316,163 @@ internal static class ProviderCommand
            && string.Equals(providerType, "openai", StringComparison.OrdinalIgnoreCase)
            && supportedAuth.Contains(AuthMethod.OAuthDevice);
 
+    private static bool TryBuildGitHubCopilotVendorOptions(
+        string providerType,
+        string? githubHost,
+        string? githubApiBase,
+        string? copilotApiBase,
+        string? copilotTokenExchangePath,
+        string? copilotAuthMode,
+        AuthMethod? requestedAuthMethod,
+        string? apiKey,
+        TextWriter writer,
+        out IReadOnlyDictionary<string, object?>? vendorOptions,
+        out GitHubCopilotAuthMode authMode)
+    {
+        vendorOptions = null;
+        authMode = GitHubCopilotAuthMode.OAuthDevice;
+        var hasCopilotOptions = githubHost is not null
+                                || githubApiBase is not null
+                                || copilotApiBase is not null
+                                || copilotTokenExchangePath is not null
+                                || copilotAuthMode is not null;
+
+        if (!string.Equals(providerType, "github-copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasCopilotOptions)
+            {
+                writer.WriteLine("Error: GitHub Copilot host/auth options can only be used with provider type 'github-copilot'.");
+                return false;
+            }
+
+            return true;
+        }
+
+        if (!TryParseGitHubCopilotAuthMode(copilotAuthMode, out authMode))
+        {
+            writer.WriteLine($"Error: Unknown GitHub Copilot auth mode '{copilotAuthMode}'.");
+            writer.WriteLine("GitHub Copilot auth modes: oauth-device, environment, api-key, github-app-user");
+            return false;
+        }
+
+        if (copilotAuthMode is null
+            && (requestedAuthMethod == AuthMethod.ApiKey || !string.IsNullOrWhiteSpace(apiKey)))
+        {
+            authMode = GitHubCopilotAuthMode.ApiKey;
+        }
+
+        var options = new Dictionary<string, object?>();
+        if (githubHost is not null)
+        {
+            if (!Uri.TryCreate(githubHost, UriKind.Absolute, out _))
+            {
+                writer.WriteLine($"Error: --github-host must be an absolute URI, got '{githubHost}'.");
+                return false;
+            }
+
+            options["GitHubHost"] = githubHost;
+        }
+
+        if (githubApiBase is not null)
+        {
+            if (!Uri.TryCreate(githubApiBase, UriKind.Absolute, out _))
+            {
+                writer.WriteLine($"Error: --github-api-base must be an absolute URI, got '{githubApiBase}'.");
+                return false;
+            }
+
+            options["GitHubApiBase"] = githubApiBase;
+        }
+
+        if (copilotApiBase is not null)
+        {
+            if (!Uri.TryCreate(copilotApiBase, UriKind.Absolute, out _))
+            {
+                writer.WriteLine($"Error: --copilot-api-base must be an absolute URI, got '{copilotApiBase}'.");
+                return false;
+            }
+
+            options["CopilotApiBase"] = copilotApiBase;
+        }
+
+        if (copilotTokenExchangePath is not null)
+        {
+            if (string.IsNullOrWhiteSpace(copilotTokenExchangePath))
+            {
+                writer.WriteLine("Error: --copilot-token-exchange-path cannot be empty.");
+                return false;
+            }
+
+            options["CopilotTokenExchangePath"] = copilotTokenExchangePath;
+        }
+
+        if (authMode != GitHubCopilotAuthMode.OAuthDevice || options.Count > 0)
+            options["AuthMode"] = authMode.ToString();
+
+        vendorOptions = options.Count == 0 ? null : options;
+        return true;
+    }
+
+    private static bool TryParseGitHubCopilotAuthMode(
+        string? value,
+        out GitHubCopilotAuthMode mode)
+    {
+        mode = GitHubCopilotAuthMode.OAuthDevice;
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "oauth-device":
+            case "oauthdevice":
+            case "oauth":
+                mode = GitHubCopilotAuthMode.OAuthDevice;
+                return true;
+            case "environment":
+            case "env":
+                mode = GitHubCopilotAuthMode.Environment;
+                return true;
+            case "api-key":
+            case "apikey":
+                mode = GitHubCopilotAuthMode.ApiKey;
+                return true;
+            case "github-app-user":
+            case "githubappuser":
+            case "app-user":
+                mode = GitHubCopilotAuthMode.GitHubAppUser;
+                return true;
+            default:
+                return Enum.TryParse(value, ignoreCase: true, out mode);
+        }
+    }
+
+    private static GitHubCopilotAuthOptions BuildGitHubCopilotOptions(
+        IReadOnlyDictionary<string, object?>? vendorOptions)
+    {
+        if (vendorOptions is null || vendorOptions.Count == 0)
+            return new GitHubCopilotAuthOptions();
+
+        var json = JsonSerializer.Serialize(vendorOptions, JsonDefaults.EnumAware);
+        return JsonSerializer.Deserialize<GitHubCopilotAuthOptions>(json, JsonDefaults.EnumAware)
+               ?? new GitHubCopilotAuthOptions();
+    }
+
     private static async Task<int> RunOAuthDeviceFlowAsync(
         string name, string type, string? endpoint,
-        IProviderDescriptor descriptor, NetclawPaths paths, TextWriter writer)
+        IProviderDescriptor descriptor,
+        NetclawPaths paths,
+        TextWriter writer,
+        IReadOnlyDictionary<string, object?>? vendorOptions)
     {
         endpoint ??= descriptor.DefaultEndpoint;
 
         var oauth = descriptor.Auth.GetOAuthConfig();
+        if (string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            oauth = GitHubCopilotDescriptor.CreateOAuthAuth(
+                BuildGitHubCopilotOptions(vendorOptions));
+        }
+
         if (oauth is null)
         {
             writer.WriteLine($"Error: Provider '{type}' does not support OAuth.");
@@ -300,7 +520,9 @@ internal static class ProviderCommand
 
             ProviderCredentialWriter.WriteProvider(
                 paths, name, type, AuthMethod.OAuthDevice, endpoint,
-                oauthResult: result, apiKey: null);
+                oauthResult: result,
+                apiKey: null,
+                vendorOptions: vendorOptions);
 
             writer.WriteLine($"Added provider '{name}' ({type}) with OAuth authentication.");
             return 0;
@@ -392,6 +614,12 @@ internal static class ProviderCommand
             {
                 var entry = JsonSerializer.Deserialize<ProviderEntry>(prop.Value.GetRawText(), JsonDefaults.EnumAware)
                     ?? new ProviderEntry();
+                if (prop.Value.TryGetProperty(nameof(ProviderEntry.VendorOptions), out var vendorOptions)
+                    && vendorOptions.ValueKind == JsonValueKind.Object)
+                {
+                    entry.SetVendorOptions(JsonNode.Parse(vendorOptions.GetRawText())?.AsObject());
+                }
+
                 result[prop.Name] = entry;
             }
         }
@@ -517,6 +745,11 @@ internal static class ProviderCommand
         writer.WriteLine("  --api-key <key>       API key (or prompted interactively)");
         writer.WriteLine("  --endpoint <url>      Custom endpoint URL");
         writer.WriteLine("  --auth <method>       Auth method: api-key, oauth-device");
+        writer.WriteLine("  --github-host <url>   GitHub/GHE auth host for github-copilot");
+        writer.WriteLine("  --github-api-base <url> GitHub/GHE API host for github-copilot token exchange");
+        writer.WriteLine("  --copilot-api-base <url> GitHub Copilot chat/models API host for github-copilot");
+        writer.WriteLine("  --copilot-token-exchange-path <path> GitHub Copilot token exchange path");
+        writer.WriteLine("  --copilot-auth-mode <mode> github-copilot mode: oauth-device, environment, api-key, github-app-user");
         writer.WriteLine();
         writer.WriteLine("Provider types: " + string.Join(", ", registry.KnownTypeKeys));
         writer.WriteLine();
@@ -524,6 +757,7 @@ internal static class ProviderCommand
         writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://my-gpu-server:11434");
         writer.WriteLine("  netclaw provider add my-anthropic anthropic --api-key sk-ant-...");
         writer.WriteLine("  netclaw provider add my-openai openai --auth oauth-device");
+        writer.WriteLine("  netclaw provider add copilot-ghe github-copilot --auth api-key --copilot-auth-mode environment --github-host https://example.ghe.com --github-api-base https://api.example.ghe.com --copilot-api-base https://api.githubcopilot.com");
         writer.WriteLine("  netclaw provider rename my-ollama lab-a100");
         writer.WriteLine("  netclaw provider remove my-ollama");
         return 0;

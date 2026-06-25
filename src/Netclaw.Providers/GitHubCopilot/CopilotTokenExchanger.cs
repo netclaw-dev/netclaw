@@ -12,6 +12,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using Netclaw.Providers.OAuth;
 
 namespace Netclaw.Providers.GitHubCopilot;
@@ -33,9 +34,6 @@ public sealed class CopilotTokenExchanger(
     TimeProvider? timeProvider = null,
     ProviderOAuthTokenRefreshService? tokenRefreshService = null)
 {
-    private static readonly Uri TokenEndpoint =
-        new("https://api.github.com/copilot_internal/v2/token");
-
     private const string ComponentName = "copilot-token";
 
     // Refresh slightly before the server-reported expiry so chat calls in
@@ -61,10 +59,10 @@ public sealed class CopilotTokenExchanger(
     public async Task<string> GetTokenAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
-        var oauthToken = entry.OAuthAccessToken.RequireValid(
-            "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
-
-        return await GetTokenAsync(oauthToken, ct);
+        var options = ResolveOptions(entry);
+        var source = CreateTokenSource(entry, options);
+        var token = await GetAccessTokenAsync(source, options, ct);
+        return token.Token;
     }
 
     /// <summary>
@@ -78,24 +76,43 @@ public sealed class CopilotTokenExchanger(
         OAuthAuth oauth,
         CancellationToken ct = default)
     {
-        if (tokenRefreshService is null)
-            return await GetTokenAsync(entry, ct);
-
-        var oauthToken = await tokenRefreshService.GetValidAccessTokenAsync(
-            providerName,
-            entry,
-            oauth,
-            ct);
-
-        return await GetTokenAsync(oauthToken, ct);
+        var options = ResolveOptions(entry);
+        var source = CreateTokenSource(entry, options, providerName, oauth);
+        var token = await GetAccessTokenAsync(source, options, ct);
+        return token.Token;
     }
 
-    private async Task<string> GetTokenAsync(SensitiveString oauthToken, CancellationToken ct)
+    internal async Task<CopilotAccessToken> GetAccessTokenAsync(
+        ProviderEntry entry, CancellationToken ct = default)
     {
-        var slot = slots.GetOrAdd(HashKey(oauthToken.Value), _ => new CacheSlot());
+        var options = ResolveOptions(entry);
+        var source = CreateTokenSource(entry, options);
+        return await GetAccessTokenAsync(source, options, ct);
+    }
+
+    internal async Task<CopilotAccessToken> GetAccessTokenAsync(
+        string providerName,
+        ProviderEntry entry,
+        OAuthAuth oauth,
+        CancellationToken ct = default)
+    {
+        var options = ResolveOptions(entry);
+        var source = CreateTokenSource(entry, options, providerName, oauth);
+        return await GetAccessTokenAsync(source, options, ct);
+    }
+
+    private async Task<CopilotAccessToken> GetAccessTokenAsync(
+        IGitHubAccessTokenSource tokenSource,
+        GitHubCopilotAuthOptions options,
+        CancellationToken ct)
+    {
+        var gitHubToken = await tokenSource.GetAsync(ct);
+        GitHubCopilotTokenValidator.Validate(gitHubToken.Value, options.AuthMode);
+
+        var slot = slots.GetOrAdd(HashKey(gitHubToken.Value, options.TokenExchangeEndpoint), _ => new CacheSlot());
 
         if (IsFresh(slot.Token))
-            return slot.Token!.Token;
+            return slot.Token!;
 
         await slot.Lock.WaitAsync(ct);
         try
@@ -103,11 +120,11 @@ public sealed class CopilotTokenExchanger(
             // Re-check under the lock — a previous caller may have refreshed
             // while we were waiting.
             if (IsFresh(slot.Token))
-                return slot.Token!.Token;
+                return slot.Token!;
 
-            var fresh = await ExchangeAsync(oauthToken.Value, ct);
+            var fresh = await ExchangeAsync(gitHubToken.Value, options.TokenExchangeEndpoint, ct);
             slot.Token = fresh;
-            return fresh.Token;
+            return fresh;
         }
         finally
         {
@@ -115,12 +132,12 @@ public sealed class CopilotTokenExchanger(
         }
     }
 
-    private bool IsFresh(CachedToken? cached) =>
+    private bool IsFresh(CopilotAccessToken? cached) =>
         cached is { } c && c.ExpiresAt - RefreshBuffer > time.GetUtcNow();
 
-    private async Task<CachedToken> ExchangeAsync(string oauthToken, CancellationToken ct)
+    private async Task<CopilotAccessToken> ExchangeAsync(string gitHubToken, Uri tokenEndpoint, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, TokenEndpoint);
+        using var request = new HttpRequestMessage(HttpMethod.Get, tokenEndpoint);
 
         // The exchange endpoint requires the full editor-integration header
         // contract — Copilot-Integration-Id is what tells GitHub's gateway
@@ -139,7 +156,7 @@ public sealed class CopilotTokenExchanger(
         if (!request.Headers.Contains(NetclawUserAgent.ComponentHeader))
             request.Headers.TryAddWithoutValidation(NetclawUserAgent.ComponentHeader, ComponentName);
 
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oauthToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", gitHubToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.TryAddWithoutValidation("Editor-Version", $"Netclaw/{BuildInfo.Version}");
         request.Headers.TryAddWithoutValidation("Editor-Plugin-Version", $"netclaw/{BuildInfo.Version}");
@@ -155,13 +172,12 @@ public sealed class CopilotTokenExchanger(
         if (!response.IsSuccessStatusCode)
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange failed at {TokenEndpoint} with "
+                $"GitHub Copilot token exchange failed at {tokenEndpoint} with "
                 + $"HTTP {(int)response.StatusCode}: {Truncate(body)}");
         }
 
-        var parsed = JsonSerializer.Deserialize<TokenResponse>(body)
-            ?? throw new InvalidOperationException(
-                $"Empty token response from {TokenEndpoint}.");
+        using var parsed = JsonDocument.Parse(body);
+        var root = parsed.RootElement;
 
         // System.Text.Json doesn't enforce required-ness on positional record
         // parameters by default, so a {} response would deserialize to
@@ -175,35 +191,162 @@ public sealed class CopilotTokenExchanger(
         // token-shaped string, and exception messages can land in logs or
         // bug reports. The endpoint URL and the missing-field indicator
         // are sufficient for diagnostics.
-        if (string.IsNullOrWhiteSpace(parsed.Token))
+        if (!TryReadString(root, "token", out var token) || string.IsNullOrWhiteSpace(token))
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange at {TokenEndpoint} returned a "
+                $"GitHub Copilot token exchange at {tokenEndpoint} returned a "
                 + "payload with no 'token' field.");
         }
 
-        if (parsed.ExpiresAt <= 0)
+        if (!TryReadInt64(root, "expires_at", out var expiresAt) || expiresAt <= 0)
         {
             throw new InvalidOperationException(
-                $"GitHub Copilot token exchange at {TokenEndpoint} returned an "
-                + $"invalid 'expires_at' value ({parsed.ExpiresAt}).");
+                $"GitHub Copilot token exchange at {tokenEndpoint} returned an "
+                + $"invalid 'expires_at' value ({expiresAt}).");
         }
 
-        return new CachedToken(
-            parsed.Token,
-            DateTimeOffset.FromUnixTimeSeconds(parsed.ExpiresAt));
+        return new CopilotAccessToken(
+            token,
+            DateTimeOffset.FromUnixTimeSeconds(expiresAt),
+            TryReadCopilotApiBase(root));
+    }
+
+    private static bool TryReadString(JsonElement element, string propertyName, out string? value)
+    {
+        value = null;
+        if (!element.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString();
+        return true;
+    }
+
+    private static bool TryReadInt64(JsonElement element, string propertyName, out long value)
+    {
+        value = 0;
+        return element.TryGetProperty(propertyName, out var property)
+               && property.ValueKind == JsonValueKind.Number
+               && property.TryGetInt64(out value);
+    }
+
+    private static Uri? TryReadCopilotApiBase(JsonElement root)
+    {
+        foreach (var propertyName in new[]
+                 {
+                     "copilot_api_base",
+                     "copilotApiBase",
+                     "copilot_api_endpoint",
+                     "api_endpoint",
+                     "endpoint"
+                 })
+        {
+            if (TryReadString(root, propertyName, out var value)
+                && TryNormalizeCopilotApiBase(value, out var uri))
+            {
+                return uri;
+            }
+        }
+
+        if (!root.TryGetProperty("endpoints", out var endpoints)
+            || endpoints.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var propertyName in new[] { "api", "chat", "copilot", "proxy" })
+        {
+            if (TryReadString(endpoints, propertyName, out var value)
+                && TryNormalizeCopilotApiBase(value, out var uri))
+            {
+                return uri;
+            }
+        }
+
+        foreach (var endpoint in endpoints.EnumerateObject())
+        {
+            if (!endpoint.Name.Contains("api", StringComparison.OrdinalIgnoreCase)
+                && !endpoint.Name.Contains("chat", StringComparison.OrdinalIgnoreCase)
+                && !endpoint.Name.Contains("copilot", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (endpoint.Value.ValueKind == JsonValueKind.String
+                && TryNormalizeCopilotApiBase(endpoint.Value.GetString(), out var uri))
+            {
+                return uri;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryNormalizeCopilotApiBase(string? value, out Uri? uri)
+    {
+        uri = null;
+        if (string.IsNullOrWhiteSpace(value)
+            || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var parsed)
+            || parsed.Scheme is not ("https" or "http"))
+        {
+            return false;
+        }
+
+        var builder = new UriBuilder(parsed);
+        var path = builder.Path.TrimEnd('/');
+        if (path.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Path = path[..^"/chat/completions".Length];
+        }
+        else if (path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Path = path[..^"/models".Length];
+        }
+
+        uri = new Uri(builder.Uri.ToString().TrimEnd('/'));
+        return true;
     }
 
     private static string Truncate(string body) =>
         body.Length > 512 ? body[..512] + "…" : body;
 
-    private static string HashKey(string token)
+    private static string HashKey(string token, Uri tokenEndpoint)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{tokenEndpoint}\n{token}"));
         return Convert.ToHexString(bytes);
     }
 
-    private sealed record CachedToken(string Token, DateTimeOffset ExpiresAt);
+    private IGitHubAccessTokenSource CreateTokenSource(
+        ProviderEntry entry,
+        GitHubCopilotAuthOptions options,
+        string? providerName = null,
+        OAuthAuth? oauth = null)
+        => options.AuthMode switch
+        {
+            GitHubCopilotAuthMode.OAuthDevice => new StoredOAuthTokenSource(
+                entry,
+                providerName,
+                oauth,
+                tokenRefreshService),
+            GitHubCopilotAuthMode.Environment => new EnvironmentGitHubTokenSource(options),
+            GitHubCopilotAuthMode.ApiKey => new ConfiguredGitHubTokenSource(
+                entry,
+                options,
+                "GitHub token is required for GitHub Copilot ApiKey auth. "
+                + "Set Providers:<name>:ApiKey or VendorOptions:GitHubToken."),
+            GitHubCopilotAuthMode.GitHubAppUser => new ConfiguredGitHubTokenSource(
+                entry,
+                options,
+                "GitHub App user token is required for GitHub Copilot GitHubAppUser auth. "
+                + "Set Providers:<name>:ApiKey or VendorOptions:GitHubToken."),
+            _ => throw new InvalidOperationException(
+                $"Unsupported GitHub Copilot auth mode '{options.AuthMode}'.")
+        };
+
+    private static GitHubCopilotAuthOptions ResolveOptions(ProviderEntry entry) =>
+        GitHubCopilotDescriptor.ResolveOptions(entry);
 
     // Volatile so the lock-free fast-path read in GetTokenAsync sees the
     // store from a previous caller's refresh without acquiring the lock.
@@ -211,16 +354,17 @@ public sealed class CopilotTokenExchanger(
     // threads on weak-memory architectures (ARM) requires the barrier.
     private sealed class CacheSlot
     {
-        private CachedToken? token;
-        public CachedToken? Token
+        private CopilotAccessToken? token;
+        public CopilotAccessToken? Token
         {
             get => Volatile.Read(ref token);
             set => Volatile.Write(ref token, value);
         }
         public SemaphoreSlim Lock { get; } = new(1, 1);
     }
-
-    private sealed record TokenResponse(
-        [property: JsonPropertyName("token")] string Token,
-        [property: JsonPropertyName("expires_at")] long ExpiresAt);
 }
+
+internal sealed record CopilotAccessToken(
+    string Token,
+    DateTimeOffset ExpiresAt,
+    Uri? CopilotApiBase);

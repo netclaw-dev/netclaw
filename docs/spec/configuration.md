@@ -99,6 +99,45 @@ keys used by model references.
 | `Type` | string | `"ollama"` | Provider SDK to use. Supported: `ollama`, `openai-compatible`, `openrouter`, `openai`, `anthropic`, `github-copilot`, `veniceai`. |
 | `Endpoint` | string | `"http://localhost:11434"` | Base URL for the provider API. |
 | `ApiKey` | string? | `null` | API key. Should go in `secrets.json` or an environment variable. |
+| `VendorOptions` | object? | `null` | Provider-owned options. For GitHub Copilot, this is where GitHub/GHE auth hosts and token-source mode live. |
+
+GitHub Copilot keeps three endpoints separate:
+
+| Concern | Field | Default |
+|---------|-------|---------|
+| Copilot model API | `Endpoint` | `https://api.githubcopilot.com` |
+| GitHub login/device host | `VendorOptions.GitHubHost` | `https://github.com` |
+| GitHub API/token exchange host | `VendorOptions.GitHubApiBase` | `https://api.github.com` |
+
+GHE.com with environment-token auth:
+
+```json
+{
+  "Providers": {
+    "copilot-ghe": {
+      "Type": "github-copilot",
+      "Endpoint": "https://api.githubcopilot.com",
+      "AuthMethod": "ApiKey",
+      "VendorOptions": {
+        "GitHubHost": "https://example.ghe.com",
+        "GitHubApiBase": "https://api.example.ghe.com",
+        "CopilotTokenExchangePath": "/copilot_internal/v2/token",
+        "AuthMode": "Environment"
+      }
+    }
+  }
+}
+```
+
+For `AuthMode: "Environment"`, Netclaw reads the first non-empty token from
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. For configured-token
+auth, set `AuthMode: "ApiKey"` and store a fine-grained PAT (`github_pat_...`)
+or user token in `Providers:<name>:ApiKey` via `secrets.json`.
+
+When `VendorOptions.GitHubHost` or `VendorOptions.GitHubApiBase` are omitted,
+GitHub Copilot also honors common GitHub host environment variables:
+`COPILOT_GH_HOST`, `GH_HOST`, `GHE_HOST`, `GITHUB_SERVER_URL`, and
+`GITHUB_API_URL`.
 
 ### Models
 
@@ -485,6 +524,12 @@ export NETCLAW_Models__Main__ModelId="anthropic/claude-sonnet-4"
 
 # Set a provider API key
 export NETCLAW_Providers__openrouter__ApiKey="sk-or-v1-..."
+
+# Use GitHub Copilot through GHE.com with an environment token
+export NETCLAW_Providers__copilot-ghe__VendorOptions__AuthMode="Environment"
+export NETCLAW_Providers__copilot-ghe__VendorOptions__GitHubHost="https://example.ghe.com"
+export NETCLAW_Providers__copilot-ghe__VendorOptions__GitHubApiBase="https://api.example.ghe.com"
+export COPILOT_GITHUB_TOKEN="github_pat_..."
 
 # Set Slack tokens
 export NETCLAW_Slack__BotToken="xoxb-..."

@@ -239,6 +239,12 @@ $ netclaw provider add --name my-anthropic --type anthropic --auth-method api-ke
 API key: ****
 Provider 'my-anthropic' configured.
 
+$ netclaw provider add copilot-ghe github-copilot --auth api-key \
+  --copilot-auth-mode environment \
+  --github-host https://example.ghe.com \
+  --github-api-base https://api.example.ghe.com
+Provider 'copilot-ghe' configured. Runtime reads COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+
 $ netclaw provider list
 Name            Type         Auth         Status
 my-anthropic    anthropic    API key      ✓ valid

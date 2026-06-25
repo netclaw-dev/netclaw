@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ProviderEntry.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -38,4 +38,7 @@ public sealed class ProviderEntry
     /// <see cref="ProviderConfigurationLoader"/>.
     /// </remarks>
     public JsonObject? VendorOptions { get; internal set; }
+
+    public void SetVendorOptions(JsonObject? vendorOptions) =>
+        VendorOptions = vendorOptions;
 }

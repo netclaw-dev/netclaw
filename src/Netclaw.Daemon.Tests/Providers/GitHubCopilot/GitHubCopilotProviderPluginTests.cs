@@ -7,6 +7,7 @@ using System.ClientModel.Primitives;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers.GitHubCopilot;
@@ -50,7 +51,7 @@ public sealed class GitHubCopilotProviderPluginTests
         {
             Type = "github-copilot",
             AuthMethod = AuthMethod.OAuthDevice,
-            OAuthAccessToken = new SensitiveString("oauth-1"),
+            OAuthAccessToken = new SensitiveString("gho_1"),
         };
         var model = new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" };
 
@@ -70,7 +71,7 @@ public sealed class GitHubCopilotProviderPluginTests
         {
             Type = "github-copilot",
             AuthMethod = AuthMethod.OAuthDevice,
-            OAuthAccessToken = new SensitiveString("oauth-1"),
+            OAuthAccessToken = new SensitiveString("gho_1"),
             Endpoint = "https://copilot-proxy.example.com/",
         };
         var model = new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" };
@@ -78,6 +79,65 @@ public sealed class GitHubCopilotProviderPluginTests
         var client = plugin.CreateChatClient(entry, model);
 
         Assert.NotNull(client);
+    }
+
+    [Fact]
+    public async Task CreateChatClient_CopilotApiBaseVendorOption_UsesConfiguredEndpoint()
+    {
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("gho_1"),
+        };
+        entry.SetVendorOptions(new JsonObject
+        {
+            ["CopilotApiBase"] = "https://copilot-api.example.ghe.com",
+        });
+
+        var capture = await CaptureStreamingRequestAsync(entry, options: null);
+
+        Assert.Equal("https://copilot-api.example.ghe.com/chat/completions", capture.Uri);
+    }
+
+    [Fact]
+    public async Task CreateChatClient_DefaultEndpointWithCopilotApiBaseVendorOption_UsesConfiguredEndpoint()
+    {
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("gho_1"),
+            Endpoint = "https://api.githubcopilot.com",
+        };
+        entry.SetVendorOptions(new JsonObject
+        {
+            ["CopilotApiBase"] = "https://copilot-api.example.ghe.com",
+        });
+
+        var capture = await CaptureStreamingRequestAsync(entry, options: null);
+
+        Assert.Equal("https://copilot-api.example.ghe.com/chat/completions", capture.Uri);
+    }
+
+    [Fact]
+    public async Task CreateChatClient_CustomEndpointWithCopilotApiBaseVendorOption_UsesCustomEndpoint()
+    {
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("gho_1"),
+            Endpoint = "https://copilot-proxy.example.com/",
+        };
+        entry.SetVendorOptions(new JsonObject
+        {
+            ["CopilotApiBase"] = "https://copilot-api.example.ghe.com",
+        });
+
+        var capture = await CaptureStreamingRequestAsync(entry, options: null);
+
+        Assert.Equal("https://copilot-proxy.example.com/chat/completions", capture.Uri);
     }
 
     [Fact]
@@ -122,7 +182,7 @@ public sealed class GitHubCopilotProviderPluginTests
         {
             Type = "github-copilot",
             AuthMethod = AuthMethod.OAuthDevice,
-            OAuthAccessToken = new SensitiveString("oauth-1"),
+            OAuthAccessToken = new SensitiveString("gho_1"),
         };
         var client = plugin.CreateChatClient(
             entry, new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" });
@@ -132,6 +192,108 @@ public sealed class GitHubCopilotProviderPluginTests
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Bearer copilot-real", sentAuthorization);
+    }
+
+    [Fact]
+    public async Task CreateChatClient_StreamingRequest_UsesCopilotWireContract()
+    {
+        var capture = await CaptureStreamingRequestAsync(options: null);
+
+        Assert.Equal(HttpMethod.Post, capture.Method);
+        Assert.Equal("https://api.githubcopilot.com/chat/completions", capture.Uri);
+        Assert.Equal("Bearer copilot-real", capture.Authorization);
+        Assert.Equal("vscode-chat", capture.Header("copilot-integration-id"));
+        Assert.Equal($"Netclaw/{BuildInfo.Version}", capture.Header("editor-version"));
+        Assert.Equal($"netclaw/{BuildInfo.Version}", capture.Header("Editor-Plugin-Version"));
+        Assert.Null(capture.Header("X-GitHub-Api-Version"));
+        Assert.Equal("conversation-agent", capture.Header("openai-intent"));
+
+        using var body = JsonDocument.Parse(capture.Body);
+        Assert.Equal("gpt-4o", body.RootElement.GetProperty("model").GetString());
+        Assert.True(body.RootElement.GetProperty("stream").GetBoolean());
+        Assert.False(body.RootElement.TryGetProperty("tools", out _));
+    }
+
+    [Fact]
+    public async Task CreateChatClient_StreamingRequest_WithTools_SendsToolPayload()
+    {
+        var options = new ChatOptions
+        {
+            Tools = [AIFunctionFactory.Create((string query) => query, "search_docs", "Search docs")]
+        };
+
+        var capture = await CaptureStreamingRequestAsync(options);
+
+        using var body = JsonDocument.Parse(capture.Body);
+        Assert.True(body.RootElement.GetProperty("stream").GetBoolean());
+        var tool = body.RootElement.GetProperty("tools").EnumerateArray().Single();
+        Assert.Equal("function", tool.GetProperty("type").GetString());
+        Assert.Equal("search_docs", tool.GetProperty("function").GetProperty("name").GetString());
+    }
+
+    private static async Task<CapturedRequest> CaptureStreamingRequestAsync(ChatOptions? options)
+        => await CaptureStreamingRequestAsync(new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("gho_1"),
+        }, options);
+
+    private static async Task<CapturedRequest> CaptureStreamingRequestAsync(ProviderEntry entry, ChatOptions? options)
+    {
+        CapturedRequest? captured = null;
+        var captureHandler = new FakeHttpMessageHandler(req =>
+        {
+            captured = CapturedRequest.From(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    MinimalStreamingChatCompletion, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var exchanger = ExchangerReturning("copilot-real");
+        var descriptor = new GitHubCopilotDescriptor(new HttpClient(), exchanger);
+        var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
+        {
+            TransportOverride = new HttpClientPipelineTransport(new HttpClient(captureHandler)),
+        };
+
+        var client = plugin.CreateChatClient(
+            entry, new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" });
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            options,
+            TestContext.Current.CancellationToken))
+        {
+        }
+
+        return captured ?? throw new InvalidOperationException("The streaming request was not captured.");
+    }
+
+    private sealed record CapturedRequest(
+        HttpMethod Method,
+        string Uri,
+        string? Authorization,
+        Dictionary<string, string> Headers,
+        string Body)
+    {
+        public string? Header(string name) => Headers.GetValueOrDefault(name);
+
+        public static CapturedRequest From(HttpRequestMessage request)
+        {
+            var headers = request.Headers
+                .ToDictionary(h => h.Key, h => string.Join(",", h.Value), StringComparer.OrdinalIgnoreCase);
+            return new CapturedRequest(
+                request.Method,
+                request.RequestUri!.ToString(),
+                request.Headers.Authorization?.ToString(),
+                headers,
+                request.Content?.ReadAsStringAsync(TestContext.Current.CancellationToken)
+                    .GetAwaiter()
+                    .GetResult() ?? string.Empty);
+        }
     }
 
     private const string MinimalChatCompletionJson =
@@ -150,5 +312,15 @@ public sealed class GitHubCopilotProviderPluginTests
           ],
           "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
         }
+        """;
+
+    private const string MinimalStreamingChatCompletion =
+        """
+        data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}
+
+        data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """;
 }

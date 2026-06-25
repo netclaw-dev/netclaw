@@ -6,6 +6,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 
 namespace Netclaw.Providers.GitHubCopilot;
 
@@ -24,24 +25,15 @@ public sealed class GitHubCopilotDescriptor(
     public string DefaultEndpoint => "https://api.githubcopilot.com";
     public string ModelListingPath => "/models";
 
-    public IProviderAuth Auth { get; } = new OAuthAuth
+    public IProviderAuth Auth { get; } = new MultiAuth
     {
-        SupportedAuthMethods = [AuthMethod.OAuthDevice],
-        TokenEndpoint = new Uri("https://github.com/login/oauth/access_token"),
-        DeviceEndpoint = new Uri("https://github.com/login/device/code"),
-
-        // OAuth App client_id borrowed from the Neovim Copilot plugin. The
-        // /copilot_internal/v2/token exchange endpoint is gated to a small
-        // allowlist of editor-integration OAuth Apps (VS Code, Neovim,
-        // JetBrains, gh CLI); a Netclaw-owned GitHub App was rejected with
-        // HTTP 403 "Resource not accessible by integration" regardless of
-        // configured permissions. Every community Copilot client (avante.nvim,
-        // copilot.lua, CodeAlta) takes the same posture. Replace if/when
-        // Netclaw gets its own OAuth App allowlisted by GitHub, or when we
-        // migrate to the documented Copilot SDK pathway.
-        ClientId = "Iv1.b507a08c87ecfe98",
-        Scope = "read:user",
-        UseProprietaryDeviceFlow = false,
+        SupportedAuthMethods = [AuthMethod.OAuthDevice, AuthMethod.ApiKey],
+        OAuth = CreateOAuthAuth(new GitHubCopilotAuthOptions()),
+        AuthMethodLabels = new Dictionary<AuthMethod, string>
+        {
+            [AuthMethod.OAuthDevice] = "GitHub OAuth device flow",
+            [AuthMethod.ApiKey] = "GitHub token or environment token",
+        },
     };
 
     // Fallback model set used only when /models is unreachable so the
@@ -60,7 +52,9 @@ public sealed class GitHubCopilotDescriptor(
     public async Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
-        if (entry.OAuthAccessToken.IsNullOrEmpty())
+        var options = ResolveOptions(entry);
+        if (options.AuthMode == GitHubCopilotAuthMode.OAuthDevice
+            && entry.OAuthAccessToken.IsNullOrEmpty())
         {
             return new ProviderProbeResult(false,
                 "GitHub OAuth token is required. Run "
@@ -93,13 +87,19 @@ public sealed class GitHubCopilotDescriptor(
                 $"GitHub Copilot token exchange failed: {ex.Message}",
                 []);
         }
+        catch (NotSupportedException ex)
+        {
+            return new ProviderProbeResult(false,
+                $"GitHub Copilot token exchange failed: {ex.Message}",
+                []);
+        }
 
         var modelsResult = await ProbeHelpers.ExecuteProbeAsync(
             httpClient,
             "GitHub Copilot",
-            DefaultEndpoint,
+            options.CopilotApiBase.ToString().TrimEnd('/'),
             ModelListingPath,
-            entry.Endpoint,
+            NormalizeCopilotEndpointOverride(entry.Endpoint),
             ApplyCopilotRequestHeaders(copilotToken),
             ParseCopilotModels,
             ct);
@@ -113,6 +113,114 @@ public sealed class GitHubCopilotDescriptor(
         }
 
         return modelsResult;
+    }
+
+    public static OAuthAuth CreateOAuthAuth(GitHubCopilotAuthOptions options) => new()
+    {
+        SupportedAuthMethods = [AuthMethod.OAuthDevice],
+        TokenEndpoint = options.OAuthTokenEndpoint,
+        DeviceEndpoint = options.OAuthDeviceEndpoint,
+
+        // OAuth App client_id borrowed from the Neovim Copilot plugin. The
+        // /copilot_internal/v2/token exchange endpoint is gated to a small
+        // allowlist of editor-integration OAuth Apps (VS Code, Neovim,
+        // JetBrains, gh CLI); a Netclaw-owned GitHub App was rejected with
+        // HTTP 403 "Resource not accessible by integration" regardless of
+        // configured permissions. Every community Copilot client (avante.nvim,
+        // copilot.lua, CodeAlta) takes the same posture. Replace if/when
+        // Netclaw gets its own OAuth App allowlisted by GitHub, or when we
+        // migrate to the documented Copilot SDK pathway.
+        ClientId = "Iv1.b507a08c87ecfe98",
+        Scope = "read:user",
+        UseProprietaryDeviceFlow = false,
+    };
+
+    internal static string? NormalizeCopilotEndpointOverride(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return null;
+
+        var normalized = endpoint.TrimEnd('/');
+        return string.Equals(normalized, new GitHubCopilotAuthOptions().CopilotApiBase.ToString().TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase)
+            ? null
+            : normalized;
+    }
+
+    public static GitHubCopilotAuthOptions ResolveOptions(ProviderEntry entry)
+    {
+        var options = entry.GetVendorOptions<GitHubCopilotAuthOptions>() ?? new GitHubCopilotAuthOptions();
+        options = ApplyEnvironmentHostDefaults(options);
+        if (entry.AuthMethod != AuthMethod.ApiKey
+            || options.AuthMode != GitHubCopilotAuthMode.OAuthDevice)
+        {
+            return options;
+        }
+
+        return new GitHubCopilotAuthOptions
+        {
+            CopilotApiBase = options.CopilotApiBase,
+            GitHubHost = options.GitHubHost,
+            GitHubApiBase = options.GitHubApiBase,
+            CopilotTokenExchangePath = options.CopilotTokenExchangePath,
+            AuthMode = GitHubCopilotAuthMode.ApiKey,
+            GitHubToken = options.GitHubToken,
+            TokenEnvVars = options.TokenEnvVars,
+        };
+    }
+
+    private static GitHubCopilotAuthOptions ApplyEnvironmentHostDefaults(GitHubCopilotAuthOptions options)
+    {
+        var defaultOptions = new GitHubCopilotAuthOptions();
+        var gitHubHost = options.GitHubHost == defaultOptions.GitHubHost
+            ? ReadUriEnvironment("COPILOT_GH_HOST", "GH_HOST", "GHE_HOST", "GITHUB_SERVER_URL") ?? options.GitHubHost
+            : options.GitHubHost;
+        var gitHubApiBase = options.GitHubApiBase == defaultOptions.GitHubApiBase
+            ? ReadUriEnvironment("GITHUB_API_URL") ?? BuildApiBaseFromHost(gitHubHost) ?? options.GitHubApiBase
+            : options.GitHubApiBase;
+
+        if (gitHubHost == options.GitHubHost && gitHubApiBase == options.GitHubApiBase)
+            return options;
+
+        return new GitHubCopilotAuthOptions
+        {
+            CopilotApiBase = options.CopilotApiBase,
+            GitHubHost = gitHubHost,
+            GitHubApiBase = gitHubApiBase,
+            CopilotTokenExchangePath = options.CopilotTokenExchangePath,
+            AuthMode = options.AuthMode,
+            GitHubToken = options.GitHubToken,
+            TokenEnvVars = options.TokenEnvVars,
+        };
+    }
+
+    private static Uri? BuildApiBaseFromHost(Uri gitHubHost)
+    {
+        if (string.Equals(gitHubHost.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return new Uri($"https://api.{gitHubHost.Host}");
+    }
+
+    private static Uri? ReadUriEnvironment(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            var normalized = value.Contains("://", StringComparison.Ordinal)
+                ? value.Trim()
+                : $"https://{value.Trim()}";
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+                return uri;
+
+            throw new InvalidOperationException(
+                $"Environment variable {name} must be an absolute GitHub host URI or hostname.");
+        }
+
+        return null;
     }
 
     private static Action<HttpRequestMessage> ApplyCopilotRequestHeaders(string copilotToken) =>

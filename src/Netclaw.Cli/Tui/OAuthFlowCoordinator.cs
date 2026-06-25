@@ -8,6 +8,7 @@ using System.Text.Json;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
 using R3;
@@ -370,7 +371,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         }
 
         var descriptor = _registry.Get(providerType);
-        var oauth = descriptor.Auth.GetOAuthConfig();
+        var oauth = ResolveOAuthConfig(providerType, descriptor);
         if (oauth is null || oauth.DeviceEndpoint is null)
         {
             ErrorMessage = "Provider does not support OAuth device flow.";
@@ -441,5 +442,22 @@ public sealed class OAuthFlowCoordinator : IDisposable
         {
             Cancel();
         }
+    }
+
+    private static OAuthAuth? ResolveOAuthConfig(string providerType, IProviderDescriptor descriptor)
+    {
+        if (!string.Equals(providerType, "github-copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            return descriptor.Auth.GetOAuthConfig();
+        }
+
+        var entry = new ProviderEntry
+        {
+            Type = providerType,
+            AuthMethod = AuthMethod.OAuthDevice,
+        };
+
+        var options = GitHubCopilotDescriptor.ResolveOptions(entry);
+        return GitHubCopilotDescriptor.CreateOAuthAuth(options);
     }
 }

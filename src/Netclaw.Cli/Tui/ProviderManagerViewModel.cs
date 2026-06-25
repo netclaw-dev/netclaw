@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ProviderManagerViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -1090,7 +1090,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             NewEndpoint,
             OAuth.Result,
             NewApiKey,
-            _registry);
+            registry: _registry);
     }
 
     // ── Helpers ──

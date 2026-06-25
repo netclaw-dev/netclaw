@@ -46,6 +46,7 @@ internal static class ProviderCredentialWriter
         string? endpoint,
         OAuthDeviceFlowResult? oauthResult,
         string? apiKey,
+        IReadOnlyDictionary<string, object?>? vendorOptions = null,
         ProviderDescriptorRegistry? registry = null,
         ISecretsProtector? protector = null)
     {
@@ -70,6 +71,9 @@ internal static class ProviderCredentialWriter
 
         if (!string.IsNullOrWhiteSpace(endpoint))
             providerEntry["Endpoint"] = endpoint;
+
+        if (vendorOptions is not null && vendorOptions.Count > 0)
+            providerEntry["VendorOptions"] = vendorOptions;
 
         // OAuthTokenExpiry goes in netclaw.json (NOT secrets) — see class remarks.
         if (oauthResult?.ExpiresAt is { } expiresAt)
