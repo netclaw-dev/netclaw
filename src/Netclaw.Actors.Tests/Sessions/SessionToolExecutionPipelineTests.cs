@@ -334,15 +334,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             ct: TestContext.Current.CancellationToken);
 
-        // Real-time: the slow tool's per-call watchdog trips ~1-2s in (1s budget
-        // plus the 1s poll interval). The ceiling stays tight so a regression —
-        // a watchdog that never fires — surfaces fast rather than hanging.
+        // Real-time: the slow tool's per-call budget token trips ~1s in (the 1s
+        // wall-clock budget). The ceiling stays tight so a regression — a budget
+        // that never fires — surfaces fast rather than hanging.
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(8),
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        // Each call has its own watchdog: the stalled one is timed out
+        // Each call has its own budget token: the stalled one is timed out
         // independently, the healthy one returns, and the batch is not failed
         // wholesale — both produce a tool-result message.
         Assert.Equal(2, completed.ToolResults.Count);
@@ -351,6 +351,39 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("fast_tool-ok", fast.Content);
         Assert.Contains("slow_tool", slow.Content);
         Assert.Contains("exceeded execution budget", slow.Content);
+    }
+
+    [Fact]
+    public async Task Opaque_tool_stream_without_a_completion_item_surfaces_an_error()
+    {
+        var executor = new ParallelStreamingExecutor();
+        var probe = CreateTestProbe("no-completion-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-nc", "no_completion_tool", new Dictionary<string, object?>())],
+            new SessionId("D1/no-completion-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        // A stream that ends without a completion item fails loudly as a per-tool
+        // error result — not a hang, not a wholesale batch failure.
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal("no_completion_tool", result.Name);
+        Assert.Contains("without a completion item", result.Content);
     }
 
     [Fact]
@@ -688,8 +721,17 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         {
             if (toolCall.Name == "slow_tool")
             {
-                // Never produces an item — the per-call watchdog must time it out.
+                // Never produces an item — the per-call budget must time it out.
                 await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
+            }
+
+            if (toolCall.Name == "no_completion_tool")
+            {
+                // Yields activity but no completion item — violates the tool-call
+                // contract; the pipeline must surface a loud error, not hang.
+                await Task.Yield();
+                yield return new ToolActivityUpdate("working");
+                yield break;
             }
 
             await Task.Yield();
