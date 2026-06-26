@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentProtocol.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -41,6 +41,12 @@ public sealed record SubAgentDefinition
     /// Optional project-scoped identity content inherited from the parent session.
     /// </summary>
     public string? ProjectInstructions { get; init; }
+
+    /// <summary>
+    /// Embedded AGENTS.md operating rules inherited from the parent session's trust audience.
+    /// Provides sub-agents with the same safety, grounding, and policy constraints as main agents.
+    /// </summary>
+    public string? OperatingRules { get; init; }
 }
 
 /// <summary>

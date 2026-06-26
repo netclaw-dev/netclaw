@@ -27,12 +27,12 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
     private const int MaxEntries = 1000;
 
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
-    private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
         [property: Description("Absolute path to the directory to list")] string Path);
 
-    public FileListTool(ToolConfig config, NetclawPaths? paths = null, ToolPathPolicy? pathPolicy = null)
+    public FileListTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
         _pathPolicy = pathPolicy;
@@ -52,7 +52,7 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
             return Task.FromResult(accessError);
 
-        if (_pathPolicy?.IsReadDenied(authorizedPath) == true)
+        if (_pathPolicy.IsReadDenied(authorizedPath))
             return Task.FromResult(FileToolErrors.CredentialReadDenied(authorizedPath));
 
         if (!Directory.Exists(authorizedPath))

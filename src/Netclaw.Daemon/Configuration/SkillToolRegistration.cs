@@ -30,7 +30,7 @@ internal static class SkillToolRegistration
         var skillIndexLayer = services.GetRequiredService<SkillIndexContextLayer>();
         var paths = services.GetRequiredService<NetclawPaths>();
         var toolConfig = services.GetRequiredService<ToolConfig>();
-        var pathPolicy = services.GetService<ToolPathPolicy>();
+        var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
         var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
         var metrics = services.GetService<ISessionMetrics>();
@@ -40,7 +40,7 @@ internal static class SkillToolRegistration
         var skillSyncConfig = services.GetService<SkillSyncConfig>();
         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
-        registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics,
+        registry.Replace(new FileReadTool(toolConfig, paths, pathPolicy, skillRegistry, metrics,
             loggerFactory.CreateLogger<FileReadTool>()));
 
         registry.WithSkillTools(

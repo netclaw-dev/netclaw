@@ -98,7 +98,7 @@ public class BackgroundJobIntegrationTests : TestKit
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
         Assert.Equal("background-job", delivered.Source.Provenance.SourceKind?.Value);
         Assert.NotNull(delivered.Source.BackgroundJobId);
-        Assert.StartsWith("bg-job:", delivered.Source.BackgroundJobId);
+        Assert.StartsWith("bg-job:", delivered.Source.BackgroundJobId!.Value.Value);
 
         await AwaitAssertAsync(() =>
         {

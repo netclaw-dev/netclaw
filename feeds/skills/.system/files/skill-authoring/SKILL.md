@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.7.0"
+  version: "1.7.1"
 ---
 
 # Skill Authoring
@@ -34,7 +34,7 @@ Create a skill when you notice a **repeating pattern** (done 2+ times):
 
 Do **not** create a skill for:
 - One-time facts or observations (use `store_memory` instead)
-- Personal preferences or profile data (use identity files: SOUL.md, AGENTS.md)
+- Durable user facts or preferences (use `store_memory`, not identity files)
 - Tool availability information (already in the tool index)
 
 ## Skill File Format

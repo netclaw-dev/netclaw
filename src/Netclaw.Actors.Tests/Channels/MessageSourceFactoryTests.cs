@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
@@ -41,7 +42,7 @@ public sealed class MessageSourceFactoryTests : TestKit
                 ?? new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
             Contents = [new TextContent("hello")],
             ReceivedAt = DateTimeOffset.UtcNow,
-            ReminderId = reminderId,
+            ReminderId = reminderId is null ? null : new ReminderId(reminderId),
             AckTarget = ackTarget,
             DefaultDeliveryTarget = defaultDeliveryTarget,
             RequestedDeliveryTarget = requestedDeliveryTarget,
@@ -96,7 +97,7 @@ public sealed class MessageSourceFactoryTests : TestKit
         var result = MessageSourceFactory.Create(
             input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, new Netclaw.Actors.Protocol.TurnId("turn-1"));
 
-        Assert.Equal("check-pr:1712000000000", result.ReminderId);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), result.ReminderId);
         Assert.Same(probe.Ref, result.AckTarget);
     }
 

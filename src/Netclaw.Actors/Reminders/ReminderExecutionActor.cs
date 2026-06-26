@@ -37,6 +37,20 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// </summary>
     internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// Backstop inactivity ceiling for the Mode A (Channel / own-pipeline) path.
+    /// The actor runs its own session pipeline and concludes when it emits
+    /// <c>TurnCompleted</c>/<c>Error</c>; if the session wedges and stops
+    /// producing output without ever reaching a terminal signal, nothing else
+    /// stops this actor, so it would hold the duplicate-execution guard forever
+    /// (see #1492). A <see cref="ReceiveTimeout"/> reset by every session output
+    /// fires after this much silence and concludes the run as failed, releasing
+    /// the guard so the next fire can run. Reset by real output, so it never
+    /// preempts a live turn. Mode B (CurrentSession) does NOT arm this — its wait
+    /// is bounded separately by <see cref="DeliveryObservedTimeout"/>.
+    /// </summary>
+    internal static TimeSpan ExecutionStallTimeout = TimeSpan.FromMinutes(20);
+
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
     private readonly ReminderHistoryStore _historyStore;
@@ -52,7 +66,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
     private bool _awaitingDeliveryResult;
-    private string? _expectedReminderDeliveryKey;
+    private ReminderId? _expectedReminderDeliveryKey;
     private ICancelable? _deliveryTimeoutCancelable;
 
     private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
@@ -100,6 +114,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         Receive<ExecutionStarted>(_ => { });
         Receive<ReminderDeliveryResult>(HandleDeliveryResult);
         Receive<DeliveryBackstopTimeout>(HandleDeliveryBackstopTimeout);
+        Receive<ReceiveTimeout>(_ => HandleExecutionStall());
     }
 
     protected override void PreStart()
@@ -166,6 +181,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             });
 
             inputQueue.Complete();
+
+            // Arm the Mode A stall backstop: the pipeline now streams output to
+            // this actor, each ExecutionOutput resets the ReceiveTimeout, and a
+            // terminal TurnCompleted/Error stops us first. If the session wedges
+            // and goes silent without a terminal signal, this fires and releases
+            // the duplicate-execution guard instead of hanging forever (#1492).
+            Context.SetReceiveTimeout(ExecutionStallTimeout);
         }
         catch (Exception ex)
         {
@@ -229,7 +251,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     SourceKind = new SourceKind("reminder")
                 },
                 ReceivedAt = _dispatchedAt,
-                ReminderId = reminderDeliveryKey,
+                ReminderId = new ReminderId(reminderDeliveryKey),
                 // Only reminders that gate on delivery need a confirmation
                 // channel. The binding actor tells this ref a
                 // ReminderDeliveryResult on turn completion; leaving it null
@@ -265,7 +287,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                             // the ReminderDeliveryResult message it is waiting
                             // for. Arm state + a backstop timer and return; the
                             // result (or timeout) is handled as a normal message.
-                            BeginAwaitingDeliveryResult(reminderDeliveryKey);
+                            BeginAwaitingDeliveryResult(new ReminderId(reminderDeliveryKey));
                             break;
                         }
 
@@ -310,7 +332,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// processing and can handle the <see cref="ReminderDeliveryResult"/> the
     /// binding actor tells it (or the <see cref="DeliveryBackstopTimeout"/>).
     /// </summary>
-    private void BeginAwaitingDeliveryResult(string reminderDeliveryKey)
+    private void BeginAwaitingDeliveryResult(ReminderId reminderDeliveryKey)
     {
         _awaitingDeliveryResult = true;
         _expectedReminderDeliveryKey = reminderDeliveryKey;
@@ -323,7 +345,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private void HandleDeliveryResult(ReminderDeliveryResult result)
     {
-        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is not { } expectedKey)
             return;
 
         // Correlate on the delivery key alone. The result was told point-to-
@@ -332,7 +354,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         // ChannelType too would only fail closed (e.g. a cold SignalR actor
         // reports its default Tui rather than the origin SignalR), silently
         // dropping a valid result and stalling on the backstop.
-        if (!string.Equals(result.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+        if (result.ReminderDeliveryKey != expectedKey)
             return;
 
         _awaitingDeliveryResult = false;
@@ -372,10 +394,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private void HandleDeliveryBackstopTimeout(DeliveryBackstopTimeout msg)
     {
-        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is not { } expectedKey)
             return;
 
-        if (!string.Equals(msg.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+        if (msg.ReminderDeliveryKey != expectedKey)
             return;
 
         _awaitingDeliveryResult = false;
@@ -541,12 +563,27 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         }
     }
 
+    private void HandleExecutionStall()
+    {
+        if (_completed)
+            return;
+
+        var elapsed = _timeProvider.GetUtcNow() - _dispatchedAt;
+        _log.Warning(
+            "ReminderExecution Stalled: execution_id={0} reminder_id={1} title={2} no session output for {3} (elapsed={4}); concluding as failed to release the execution guard.",
+            _executionId, _definition.Id, _definition.Title, ExecutionStallTimeout, elapsed);
+        ReportAndStop(false, $"Reminder execution stalled: no session output for {ExecutionStallTimeout}.");
+    }
+
     private void ReportAndStop(bool success, string? errorMessage = null)
     {
         if (_completed)
             return;
 
         _completed = true;
+
+        // Disarm the Mode A stall backstop so it cannot fire during the drain.
+        Context.SetReceiveTimeout(null);
 
         var durationMs = (long)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalMilliseconds;
         _pendingHistory = new HistoryRecord(
@@ -620,5 +657,5 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// arrives within <see cref="DeliveryObservedTimeout"/> (e.g. the binding
     /// actor crashed mid-turn).
     /// </summary>
-    private sealed record DeliveryBackstopTimeout(string ReminderDeliveryKey) : INoSerializationVerificationNeeded;
+    private sealed record DeliveryBackstopTimeout(ReminderId ReminderDeliveryKey) : INoSerializationVerificationNeeded;
 }

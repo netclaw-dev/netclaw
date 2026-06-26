@@ -11,6 +11,7 @@ using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -91,7 +92,7 @@ public sealed class ChannelPipelineAckTargetTests : TestKit
         SenderId = new SenderId("user-1"),
         Contents = [new TextContent("hello")],
         ReceivedAt = DateTimeOffset.UtcNow,
-        ReminderId = reminderId,
+        ReminderId = reminderId is null ? null : new ReminderId(reminderId),
         AckTarget = ackTarget,
         Audience = TrustAudience.Public,
         Boundary = TrustBoundary.Public,

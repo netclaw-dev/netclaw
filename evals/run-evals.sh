@@ -910,6 +910,17 @@ assert_skill_scheduling_knowledge() {
     stdout_contains 'cron' && daemon_log_skill_loaded 'netclaw-operations'
 }
 
+# Two-hop progressive disclosure: the model must (1) load netclaw-operations, then
+# (2) call skill_read_resource on references/scheduling.md to recover a detail that
+# lives ONLY in the reference file (the auto-disable threshold + alert name), never
+# in the slim SKILL.md index. Catches a model that loads the index but skips the
+# second hop — the failure mode that silently regresses smaller local agents.
+assert_skill_progressive_disclosure() {
+    daemon_log_skill_loaded 'netclaw-operations' \
+        && stdout_tool_called 'skill_read_resource' \
+        && { stdout_contains 'ReminderAutoDisabled' || stdout_contains '5 consecutive'; }
+}
+
 assert_skill_memory_knowledge() {
     stdout_contains 'durable' && stdout_contains 'evidence' && daemon_log_skill_loaded 'netclaw-memory'
 }
@@ -978,8 +989,16 @@ assert_memory_recall_active() {
     daemon_log_contains 'turn_memory_recall.*degraded=False'
 }
 
+# Per the netclaw-agent-memory spec, durable user preferences are memory documents,
+# not identity-file edits. The invariant under test: the preference is routed to
+# memory and NOT written to an identity file (SOUL.md). The eval memory store is
+# shared across runs, so after the first store the model correctly recognizes the
+# fact is already in durable memory rather than re-storing it — both are correct
+# routing. The hard failure we guard against is a SOUL.md (file_edit/file_write) edit.
 assert_memory_identity_preference_routing() {
-    stdout_contains 'SOUL\.md' && (stdout_tool_called 'file_edit' || stdout_tool_called 'file_write')
+    ! stdout_tool_called 'file_edit' \
+        && ! stdout_tool_called 'file_write' \
+        && { stdout_tool_called 'store_memory' || stdout_contains 'memory'; }
 }
 
 assert_memory_explicit_store() {
@@ -1394,6 +1413,9 @@ run_all() {
         "What scheduling formats do Netclaw reminders support?" \
         "Explain the different schedule types I can use with reminders"
 
+    run_case skill_progressive_disclosure "reads reference via skill_read_resource (2nd hop)" \
+        "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
+
     run_case skill_memory_knowledge "knows memory classes from skill" \
         "What types of memory do you have? Explain the differences and how long each lasts." \
         "How does your memory system work? What are the different memory classes?"
@@ -1479,7 +1501,7 @@ run_all() {
     run_case memory_recall_active "recall active, not degraded" \
         "What do you know about me?"
 
-    run_case memory_identity_preference_routing "personal preference routed to SOUL.md" \
+    run_case memory_identity_preference_routing "durable user preference routed to memory, not SOUL.md" \
         "Please remember this new preference for future conversations: my favorite color is chartreuse. Use whichever persistent storage path Netclaw's identity-vs-memory rules require, then acknowledge once you've saved it."
 
     run_case memory_explicit_store "explicit remember request uses store_memory" \

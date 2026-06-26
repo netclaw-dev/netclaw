@@ -510,7 +510,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
         Assert.Equal(TrustBoundary.TrustedInstance, delivered.Source.Boundary);
         Assert.NotNull(delivered.Source.ReminderId);
-        Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId);
+        Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId!.Value.Value);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
         Assert.Equal("reminder", delivered.Source.Provenance.SourceKind?.Value);
 
@@ -659,7 +659,7 @@ public class ReminderManagerActorTests : TestKit
             // Channel reports the post failed — execution must report failure
             // (so Akka.Reminders redelivers) without acking the envelope.
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Slack,
                 Delivered: false,
                 FailureReason: "channel API down"));
@@ -710,7 +710,7 @@ public class ReminderManagerActorTests : TestKit
 
         var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}", delivered.Source.ReminderId);
+        Assert.Equal(new ReminderId($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}"), delivered.Source.ReminderId);
     }
 
     [Fact]
@@ -740,7 +740,7 @@ public class ReminderManagerActorTests : TestKit
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Slack,
                 Delivered: true,
                 ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
@@ -1024,7 +1024,7 @@ public class ReminderManagerActorTests : TestKit
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
             delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!,
+                delivered.Source.ReminderId!.Value,
                 ChannelType.Discord,
                 Delivered: true,
                 ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));

@@ -16,7 +16,7 @@ public class GeneratedToolSchemaMetaTests
     [Fact]
     public void Generated_schema_includes_rationale_as_required_string()
     {
-        var tool = new FileReadTool(new ToolConfig());
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]));
         var schema = tool.ParameterSchema;
         var props = schema.GetProperty("properties");
 
@@ -31,7 +31,7 @@ public class GeneratedToolSchemaMetaTests
     [Fact]
     public void Generated_schema_includes_timeout_seconds_as_optional_integer()
     {
-        var tool = new FileReadTool(new ToolConfig());
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]));
         var schema = tool.ParameterSchema;
         var props = schema.GetProperty("properties");
 
@@ -46,7 +46,7 @@ public class GeneratedToolSchemaMetaTests
     [Fact]
     public void Generated_schema_includes_background_as_optional_boolean()
     {
-        var tool = new FileReadTool(new ToolConfig());
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]));
         var schema = tool.ParameterSchema;
         var props = schema.GetProperty("properties");
 
@@ -61,7 +61,7 @@ public class GeneratedToolSchemaMetaTests
     [Fact]
     public void Generated_ParseArguments_ignores_meta_fields()
     {
-        var tool = new FileReadTool(new ToolConfig());
+        var tool = new FileReadTool(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]));
         var args = ToolInput.Create("Path", "/tmp/test.txt", "_rationale", "reading config file", "_timeout_seconds", 30, "_background", false);
 
         // ParseArguments should succeed and ignore meta fields

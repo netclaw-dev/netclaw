@@ -657,17 +657,26 @@ internal static class SessionToolExecutionPipeline
             // channel, and SubAgentActor.PostStop guarantees the reply that lets
             // SpawnAsync return even on a crash. (Note: PostStop alone only unblocks
             // the spawner Ask — the terminal stream item depends on that finally
-            // running.) Opaque tools remain bounded by one wall-clock budget.
+            // running.)
             if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
                 return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 
-            return await StreamingToolWatchdog.ConsumeAsync(
-                stream,
-                toolCall.Name,
-                ToolWatchdogBudget.WallClock(timeout),
-                timeProvider,
-                onActivity: null,
-                cancellationToken);
+            // Opaque tools are bounded by one wall-clock budget. A TimeProvider-driven
+            // timeout token (no hand-rolled timer, no volatile) cancels the drain when the
+            // budget elapses; it is per call, so a slow tool times out without affecting
+            // its siblings.
+            using var budgetCts = new CancellationTokenSource(timeout, timeProvider);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
+            try
+            {
+                return await DrainToCompletionAsync(stream, toolCall.Name, linkedCts.Token);
+            }
+            catch (OperationCanceledException)
+                when (budgetCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Tool '{toolCall.Name}' exceeded execution budget of {timeout.TotalSeconds:F0}s and was stopped.");
+            }
         }
         finally
         {
@@ -687,9 +696,11 @@ internal static class SessionToolExecutionPipeline
     }
 
     /// <summary>
-    /// Drains a self-monitoring tool's stream to its terminal completion item with no
-    /// parent watchdog. The tool owns its own liveness and always produces a terminal
-    /// item; the only bound is caller (turn/user) cancellation.
+    /// Drains a tool's stream to its terminal completion item under the supplied
+    /// cancellation token. Self-monitoring tools pass the caller (turn/user) token
+    /// directly — they own their liveness; opaque tools pass a token also linked to a
+    /// wall-clock budget. A stream that ends without a completion item violates the
+    /// tool-call contract and fails loudly.
     /// </summary>
     private static async Task<string> DrainToCompletionAsync(
         IAsyncEnumerable<ToolCallUpdate> stream, string toolName, CancellationToken cancellationToken)

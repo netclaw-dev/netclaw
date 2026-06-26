@@ -276,7 +276,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(reminderKey) }
         ], reactive: true);
 
         var observer = CreateTestProbe();
@@ -286,7 +286,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(reminderKey), result.ReminderDeliveryKey);
         Assert.Equal(ExpectedChannelType, result.ChannelType);
         Assert.True(result.Delivered);
     }
@@ -305,7 +305,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(reminderKey) }
         ], reactive: true);
 
         SetReplyClientThrows(new InvalidOperationException("channel API down"));
@@ -316,7 +316,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(reminderKey), result.ReminderDeliveryKey);
         Assert.Equal(ExpectedChannelType, result.ChannelType);
         Assert.False(result.Delivered);
 
@@ -339,9 +339,9 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply A") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = keyA },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(keyA) },
             new TextOutput("reply B") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = keyB }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = new ReminderId(keyB) }
         ], reactive: true);
 
         var observerA = CreateTestProbe();
@@ -355,11 +355,11 @@ public abstract class SessionBindingContractTests : TestKit
 
         var resultA = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(keyA, resultA.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(keyA), resultA.ReminderDeliveryKey);
 
         var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(keyB, resultB.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(keyB), resultB.ReminderDeliveryKey);
     }
 
     // Regression for the misleading-fallback bug: when the real content post
@@ -412,7 +412,7 @@ public abstract class SessionBindingContractTests : TestKit
                 SourceKind = new SourceKind("reminder")
             },
             ReceivedAt = DateTimeOffset.UnixEpoch,
-            ReminderId = reminderKey,
+            ReminderId = new ReminderId(reminderKey),
             DeliveryObserver = deliveryObserver
         };
 

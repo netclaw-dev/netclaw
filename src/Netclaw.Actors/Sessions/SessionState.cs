@@ -6,6 +6,7 @@
 using System.Collections.Immutable;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -70,8 +71,8 @@ public sealed record SessionState
     /// boundaries are an explicitly accepted tradeoff; see
     /// <c>reminder-session-reentry</c> design doc D2.
     /// </summary>
-    public IImmutableSet<string> ProcessedReminderIds { get; init; } =
-        ImmutableHashSet<string>.Empty;
+    public IImmutableSet<ReminderId> ProcessedReminderIds { get; init; } =
+        ImmutableHashSet<ReminderId>.Empty;
 
     /// <summary>
     /// Background jobs this session is waiting on. Persisted to snapshot
@@ -88,16 +89,16 @@ public sealed record SessionState
     /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
     /// snapshot, rebuilds from event replay.
     /// </summary>
-    public IImmutableSet<string> ProcessedBackgroundJobIds { get; init; } =
-        ImmutableHashSet<string>.Empty;
+    public IImmutableSet<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
+        ImmutableHashSet<BackgroundJobId>.Empty;
 
     // ── Event application (pure functions) ──
 
     public SessionState Apply(TurnRecorded evt)
     {
         var processedReminders = ProcessedReminderIds;
-        if (!string.IsNullOrEmpty(evt.SourceReminderId))
-            processedReminders = processedReminders.Add(evt.SourceReminderId);
+        if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
+            processedReminders = processedReminders.Add(reminderId);
 
         // Background-job dedup/remove/prune is delegated to the single shared
         // helper so the replay path here and the live turn-completion path in
@@ -118,14 +119,14 @@ public sealed record SessionState
     /// surfaced in this turn's context block (so the agent learns of a reap
     /// exactly once instead of on every turn forever).
     /// </summary>
-    public SessionState CompleteTurnBackgroundJobBookkeeping(string? sourceBackgroundJobId)
+    public SessionState CompleteTurnBackgroundJobBookkeeping(BackgroundJobId? sourceBackgroundJobId)
     {
         var processedJobs = ProcessedBackgroundJobIds;
         var activeJobs = ActiveBackgroundJobs;
-        if (!string.IsNullOrEmpty(sourceBackgroundJobId))
+        if (sourceBackgroundJobId is { } jobId && !string.IsNullOrEmpty(jobId.Value))
         {
-            processedJobs = processedJobs.Add(sourceBackgroundJobId);
-            activeJobs = activeJobs.Remove(sourceBackgroundJobId);
+            processedJobs = processedJobs.Add(jobId);
+            activeJobs = activeJobs.Remove(jobId.Value);
         }
 
         activeJobs = PruneReaped(activeJobs);
@@ -336,12 +337,12 @@ public sealed record SessionState
                 Role = ChatRole.User,
                 Content = $"{SystemNudgePrefix} {nudge}]",
                 // Snapshot, never alias. The model-input media nudge is built from
-                // LlmSessionActor._pendingModelInputMediaReferences, a mutable
-                // accumulator the actor Clear()s immediately after handing it off.
+                // the caller's media accumulator (ModelInputMediaBuffer.DrainSnapshot),
+                // which reuses/empties its backing list across batches.
                 // SerializableChatMessage is an immutable persistence type that must
-                // own its media list — without this copy the subsequent Clear()
-                // empties the nudge's attachments before the next LLM call hydrates
-                // them, so a tool-loaded image silently never reaches the model.
+                // own its media list — without this copy the caller's reuse could
+                // empty the nudge's attachments before the next LLM call hydrates
+                // them, so a tool-loaded image would silently never reach the model.
                 MediaReferences = [.. mediaReferences]
             }
             : new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };

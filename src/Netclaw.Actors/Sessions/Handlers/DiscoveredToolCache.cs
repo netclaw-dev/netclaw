@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscoveredToolCache.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -10,29 +10,45 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
-/// Tracks MCP tools discovered via search_tools across turns, managing
-/// lease-based retention and eviction.
+/// Owns the session's exposed tool list — the always-loaded base tools plus the
+/// MCP tools discovered via search_tools — and manages lease-based retention and
+/// eviction of the discovered set across turns. Because the cache owns the list
+/// it rebuilds, callers seed the base tools once and then drive
+/// <see cref="PrepareForNewTurn"/> / <see cref="EvictAll"/> / <see cref="AddIfMissing"/>
+/// without passing the list around. Transient and actor-owned; never persisted.
 /// </summary>
 internal sealed class DiscoveredToolCache
 {
+    private readonly List<AITool> _availableTools = [];
     private readonly List<string> _order = [];
     private readonly Dictionary<string, int> _leases = new(StringComparer.Ordinal);
+    private int _baseToolCount;
 
     /// <summary>
-    /// Prepare the tool cache for a new turn: decrement leases, evict expired tools,
+    /// The tools currently exposed to the model this turn: the base tools
+    /// followed by any discovered tools with an active lease.
+    /// </summary>
+    public IReadOnlyList<AITool> AvailableTools => _availableTools;
+
+    /// <summary>
+    /// Seed the always-loaded base tools once at session start. Everything added
+    /// beyond this set is a discovered tool subject to lease-based eviction.
+    /// </summary>
+    public void SeedBaseTools(IReadOnlyList<AITool> alwaysLoadedTools)
+    {
+        _availableTools.Clear();
+        _availableTools.AddRange(alwaysLoadedTools);
+        _baseToolCount = _availableTools.Count;
+    }
+
+    /// <summary>
+    /// Prepare the tool set for a new turn: decrement leases, evict expired tools,
     /// and rebuild the available tools list from the cache.
     /// </summary>
-    /// <param name="availableTools">The mutable tools list owned by the actor.</param>
-    /// <param name="baseToolCount">Count of always-loaded tools (dynamic tools start after this index).</param>
     /// <param name="retentionTurns">Configured retention turns (0 or negative disables caching).</param>
     /// <param name="maxCount">Maximum discovered tools to retain.</param>
     /// <param name="registry">Tool registry for resolving tool instances.</param>
-    public void PrepareForNewTurn(
-        List<AITool> availableTools,
-        int baseToolCount,
-        int retentionTurns,
-        int maxCount,
-        ToolRegistry? registry)
+    public void PrepareForNewTurn(int retentionTurns, int maxCount, ToolRegistry? registry)
     {
         if (registry is null)
             return;
@@ -41,13 +57,13 @@ internal sealed class DiscoveredToolCache
         {
             _leases.Clear();
             _order.Clear();
-            TrimToBase(availableTools, baseToolCount);
+            TrimToBase();
             return;
         }
 
         if (_leases.Count == 0)
         {
-            TrimToBase(availableTools, baseToolCount);
+            TrimToBase();
             return;
         }
 
@@ -66,7 +82,7 @@ internal sealed class DiscoveredToolCache
             _order.RemoveAll(name => !_leases.ContainsKey(name));
         }
 
-        RebuildFromCache(availableTools, baseToolCount, registry);
+        RebuildFromCache(registry);
 
         // Lease countdown happens after this turn's tool set is prepared,
         // so a lease value of N keeps tools available for N future turns.
@@ -104,14 +120,15 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Evict all discovered tools and trim the available tools list back to base tools.
-    /// Used when an LLM call fails to prevent a bad tool set from poisoning subsequent turns.
+    /// Evict all discovered tools and trim the available tools list back to the
+    /// base tools. Used when an LLM call fails to prevent a bad tool set from
+    /// poisoning subsequent turns.
     /// </summary>
-    public void EvictAll(List<AITool> availableTools, int baseToolCount)
+    public void EvictAll()
     {
         _leases.Clear();
         _order.Clear();
-        TrimToBase(availableTools, baseToolCount);
+        TrimToBase();
     }
 
     /// <summary>
@@ -123,11 +140,27 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
+    /// Add a tool to the exposed list when no <see cref="AIFunction"/> with the
+    /// same name is already present. Returns <c>true</c> if it was added.
+    /// </summary>
+    public bool AddIfMissing(AITool aiTool)
+    {
+        if (_availableTools.Any(existing =>
+            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+        {
+            return false;
+        }
+
+        _availableTools.Add(aiTool);
+        return true;
+    }
+
+    /// <summary>
     /// Rebuild the available tools list from the discovered tool cache.
     /// </summary>
-    private void RebuildFromCache(List<AITool> availableTools, int baseToolCount, ToolRegistry registry)
+    private void RebuildFromCache(ToolRegistry registry)
     {
-        TrimToBase(availableTools, baseToolCount);
+        TrimToBase();
 
         foreach (var toolName in _order)
         {
@@ -138,24 +171,13 @@ internal sealed class DiscoveredToolCache
             if (tool is null)
                 continue;
 
-            AddIfMissing(availableTools, toolName, tool.ToAITool());
+            AddIfMissing(tool.ToAITool());
         }
     }
 
-    private static void TrimToBase(List<AITool> availableTools, int baseToolCount)
+    private void TrimToBase()
     {
-        if (availableTools.Count > baseToolCount)
-            availableTools.RemoveRange(baseToolCount, availableTools.Count - baseToolCount);
-    }
-
-    private static void AddIfMissing(List<AITool> availableTools, string toolName, AITool aiTool)
-    {
-        if (availableTools.Any(existing =>
-            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
-        {
-            return;
-        }
-
-        availableTools.Add(aiTool);
+        if (_availableTools.Count > _baseToolCount)
+            _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
     }
 }

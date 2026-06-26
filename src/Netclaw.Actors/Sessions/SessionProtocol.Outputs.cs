@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
@@ -167,7 +168,7 @@ public static partial class SessionProtocol
         /// Reminder delivery key (<c>{reminderId}:{fireTimestampMs}</c>) for reminder-sourced turns.
         /// Null for non-reminder turns.
         /// </summary>
-        public string? SourceReminderId { get; init; }
+        public ReminderId? SourceReminderId { get; init; }
     }
 
     /// <summary>

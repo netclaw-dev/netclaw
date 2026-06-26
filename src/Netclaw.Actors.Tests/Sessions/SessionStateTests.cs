@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -223,12 +224,12 @@ public class SessionStateTests
     [Fact]
     public void AddSystemNudge_snapshots_media_so_caller_clear_cannot_empty_it()
     {
-        // Regression: LlmSessionActor hands its mutable
-        // _pendingModelInputMediaReferences accumulator to AddSystemNudge and then
-        // Clear()s it. Without a defensive snapshot the nudge aliased that list, so
-        // the Clear() wiped the tool-loaded image before the next LLM call hydrated
-        // it — the model was told "Image loaded" but never saw the bytes and
-        // hallucinated. The nudge must retain its own copy.
+        // Regression: LlmSessionActor hands a caller-owned media accumulator
+        // (ModelInputMediaBuffer) to AddSystemNudge and then reuses/empties it.
+        // Without a defensive snapshot the nudge would alias that list, so the
+        // caller's reuse wiped the tool-loaded image before the next LLM call
+        // hydrated it — the model was told "Image loaded" but never saw the bytes
+        // and hallucinated. The nudge must retain its own copy.
         var media = new SerializableMediaReference
         {
             RelativePath = "image.png",
@@ -525,12 +526,12 @@ public class SessionStateTests
             SessionId = TestSessionId,
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "check PR" },
             AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "merged" },
-            SourceReminderId = "check-pr:1712000000000"
+            SourceReminderId = new ReminderId("check-pr:1712000000000")
         };
 
         var next = state.Apply(evt);
 
-        Assert.Contains("check-pr:1712000000000", next.ProcessedReminderIds);
+        Assert.Contains(new ReminderId("check-pr:1712000000000"), next.ProcessedReminderIds);
         Assert.Single(next.ProcessedReminderIds);
     }
 
@@ -559,7 +560,7 @@ public class SessionStateTests
             SessionId = TestSessionId,
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
             AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-            SourceReminderId = "r1:100"
+            SourceReminderId = new ReminderId("r1:100")
         });
         state = state.Apply(new TurnRecorded
         {
@@ -573,12 +574,12 @@ public class SessionStateTests
             SessionId = TestSessionId,
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r2" },
             AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-            SourceReminderId = "r2:200"
+            SourceReminderId = new ReminderId("r2:200")
         });
 
         Assert.Equal(2, state.ProcessedReminderIds.Count);
-        Assert.Contains("r1:100", state.ProcessedReminderIds);
-        Assert.Contains("r2:200", state.ProcessedReminderIds);
+        Assert.Contains(new ReminderId("r1:100"), state.ProcessedReminderIds);
+        Assert.Contains(new ReminderId("r2:200"), state.ProcessedReminderIds);
     }
 
     [Fact]
@@ -590,7 +591,7 @@ public class SessionStateTests
                 SessionId = TestSessionId,
                 UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
                 AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-                SourceReminderId = "preserved:1"
+                SourceReminderId = new ReminderId("preserved:1")
             });
 
         var compacted = state.Apply(new SessionCompacted
@@ -602,7 +603,7 @@ public class SessionStateTests
             ]
         });
 
-        Assert.Contains("preserved:1", compacted.ProcessedReminderIds);
+        Assert.Contains(new ReminderId("preserved:1"), compacted.ProcessedReminderIds);
     }
 
     [Fact]
@@ -619,7 +620,7 @@ public class SessionStateTests
                 SessionId = TestSessionId,
                 UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
                 AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-                SourceReminderId = "lost-on-snapshot:1"
+                SourceReminderId = new ReminderId("lost-on-snapshot:1")
             });
 
         Assert.NotEmpty(state.ProcessedReminderIds);

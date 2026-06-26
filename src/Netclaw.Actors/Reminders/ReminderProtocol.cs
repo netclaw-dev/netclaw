@@ -380,7 +380,7 @@ public sealed record GetReminderResponse(ReminderInfo? Reminder) : IReminderResp
 /// Optional timestamp when the outbound delivery outcome was observed.
 /// </param>
 public sealed record ReminderDeliveryResult(
-    string ReminderDeliveryKey,
+    ReminderId ReminderDeliveryKey,
     Channels.ChannelType ChannelType,
     bool Delivered,
     string? FailureReason = null,

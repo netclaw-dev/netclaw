@@ -27,12 +27,13 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <see cref="DataContent"/>.
 ///
 /// Regression: the streaming completion path
-/// (<c>LlmSessionActor.ApplyToolCallRecorded</c>) handed its mutable
-/// <c>_pendingModelInputMediaReferences</c> accumulator to the media nudge and
-/// then <c>Clear()</c>ed that same instance. Because the nudge aliased the list
-/// instead of copying it, the image reference was wiped before the follow-up
-/// LLM call hydrated it — the model was told "Image loaded" but never received
-/// the bytes and hallucinated. This test drives a real streaming tool call
+/// (<c>LlmSessionActor.ApplyToolCallRecorded</c>) drains the
+/// <c>ModelInputMediaBuffer</c> accumulator into the media nudge and then reuses
+/// that buffer for the next batch. If the nudge aliased the list instead of
+/// copying it (see <c>SessionState.BuildNudgeMessage</c>), the image reference
+/// would be wiped before the follow-up LLM call hydrated it — the model would be
+/// told "Image loaded" but never receive the bytes and hallucinate. This test
+/// drives a real streaming tool call
 /// through the actor and asserts the image bytes reach the chat client on the
 /// second call; it fails (no DataContent on call 2) without the defensive
 /// snapshot in <c>SessionState</c>. See GitHub #1264.

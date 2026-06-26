@@ -67,7 +67,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             sp.GetRequiredService<EffectivePolicyDefaults>()));
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(toolConfig);
+        registry.WithFirstPartyTools(toolConfig, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
         services.AddSingleton(registry);
     }
 

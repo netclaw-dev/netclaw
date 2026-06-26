@@ -38,7 +38,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
     // Keyed (not a single field) because multiple reminders can target the
     // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
+    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly object ReinitializeTimerKey = new();
@@ -220,8 +220,9 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             // second concurrent reminder to this session can't overwrite the
             // first's observer before its turn reaches TurnCompleted.
             if (msg.Source.DeliveryObserver is { } deliveryObserver
-                && !string.IsNullOrWhiteSpace(msg.Source.ReminderId))
-                _reminderDeliveryObservers[msg.Source.ReminderId] = deliveryObserver;
+                && msg.Source.ReminderId is { } reminderKey
+                && !string.IsNullOrWhiteSpace(reminderKey.Value))
+                _reminderDeliveryObservers[reminderKey] = deliveryObserver;
 
             try
             {
@@ -315,11 +316,12 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     /// </summary>
     private void ReportReminderDeliveryResult(TurnCompleted completed, bool delivered)
     {
-        if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
-            && _reminderDeliveryObservers.Remove(completed.SourceReminderId!, out var observer))
+        if (completed.SourceReminderId is { } sourceReminderKey
+            && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
+            && _reminderDeliveryObservers.Remove(sourceReminderKey, out var observer))
         {
             observer.Tell(new ReminderDeliveryResult(
-                completed.SourceReminderId!,
+                sourceReminderKey,
                 _channelType,
                 Delivered: delivered,
                 FailureReason: delivered ? null : "SignalR client did not receive the reply",
