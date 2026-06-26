@@ -40,7 +40,21 @@ public class McpToolResultFormatterTests
     }
 
     [Fact]
-    public void Error_result_without_text_reports_no_detail()
+    public void Error_detail_falls_back_to_structured_content_when_no_text_block()
+    {
+        // The error's actionable detail lives in structuredContent with no text
+        // block — a bare content[].text scan would drop it and report "no detail".
+        var result = Json("""{"content":[],"structuredContent":{"field":"name","reason":"required"},"isError":true}""");
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        Assert.Contains("reported a failure", message);
+        Assert.Contains("required", message);
+        Assert.DoesNotContain("no detail provided", message);
+    }
+
+    [Fact]
+    public void Error_result_without_any_detail_reports_no_detail()
     {
         var result = Json("""{"content":[],"isError":true}""");
 
@@ -50,16 +64,28 @@ public class McpToolResultFormatterTests
     }
 
     [Fact]
-    public void Non_error_json_result_is_passed_through_unchanged()
+    public void Structured_success_surfaces_clean_text_not_the_wrapper()
     {
-        // A structured (non-error) result also arrives as a JsonElement — it must
-        // NOT be reframed as a failure.
-        var result = Json("""{"value":42,"isError":false}""");
+        // Success WITH structuredContent is also serialized to a full
+        // CallToolResult; surface the readable text, not the isError:false wrapper.
+        var result = Json("""{"content":[{"type":"text","text":"42 results found"}],"structuredContent":{"count":42},"isError":false}""");
 
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        Assert.Equal("42 results found", message);
+        Assert.DoesNotContain("isError", message);
         Assert.DoesNotContain("reported a failure", message);
+    }
+
+    [Fact]
+    public void Structured_success_without_text_surfaces_the_structured_content()
+    {
+        var result = Json("""{"content":[],"structuredContent":{"count":42},"isError":false}""");
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
         Assert.Contains("42", message);
+        Assert.DoesNotContain("reported a failure", message);
     }
 
     [Fact]

@@ -12,39 +12,71 @@ namespace Netclaw.Actors.Tools;
 /// model sees.
 /// <para>
 /// The MCP SDK (<c>McpClientTool.InvokeCoreAsync</c>) returns clean
-/// <c>AIContent</c> for a successful, non-structured result — but when the
-/// server sets <c>isError: true</c> it returns the <em>entire</em>
-/// <c>CallToolResult</c> serialized as a <see cref="JsonElement"/>. Passing that
-/// through <c>ToString()</c> hands the model a raw JSON blob
-/// (<c>{"content":[{"type":"text","text":"..."}],"isError":true}</c>), which it
-/// cannot distinguish from a transport failure or a netclaw error — the exact
-/// confusion behind #1495. This extracts the error's text and surfaces it as a
-/// clear, attributed tool-error message instead.
+/// <c>AIContent</c> for a successful, single-content result — but serializes the
+/// <em>entire</em> <c>CallToolResult</c> to a <see cref="JsonElement"/> whenever
+/// it sets <c>isError: true</c> <strong>or</strong> the result carries
+/// <c>structuredContent</c>. Passing that through <c>ToString()</c> hands the
+/// model a raw JSON blob
+/// (<c>{"content":[{"type":"text","text":"..."}],"isError":true}</c>) it cannot
+/// distinguish from a transport failure or a netclaw error — the confusion behind
+/// #1495. This unwraps both shapes: errors become a clear, attributed message,
+/// and structured successes surface their actual content instead of the
+/// <c>isError:false</c> wrapper.
 /// </para>
 /// </summary>
 public static class McpToolResultFormatter
 {
     public static string Format(object? result, string toolName)
     {
-        if (result is JsonElement element && IsErrorResult(element))
+        if (result is JsonElement element && IsCallToolResult(element))
         {
-            var detail = ExtractText(element);
-            return string.IsNullOrWhiteSpace(detail)
-                ? $"Error: MCP tool '{toolName}' reported a failure (no detail provided)."
-                : $"Error: MCP tool '{toolName}' reported a failure: {detail}";
+            var detail = ExtractDetail(element);
+
+            if (IsError(element))
+            {
+                return string.IsNullOrWhiteSpace(detail)
+                    ? $"Error: MCP tool '{toolName}' reported a failure (no detail provided)."
+                    : $"Error: MCP tool '{toolName}' reported a failure: {detail}";
+            }
+
+            // Structured success: surface the clean detail rather than the
+            // {content,structuredContent,isError} wrapper. Fall back to the raw
+            // element only if there is genuinely nothing extractable.
+            return string.IsNullOrWhiteSpace(detail) ? element.GetRawText() : detail;
         }
 
         return result?.ToString() ?? string.Empty;
     }
 
-    private static bool IsErrorResult(JsonElement element)
+    private static bool IsCallToolResult(JsonElement element)
         => element.ValueKind == JsonValueKind.Object
-           && element.TryGetProperty("isError", out var isError)
-           && isError.ValueKind == JsonValueKind.True;
+           && (element.TryGetProperty("content", out _) || element.TryGetProperty("isError", out _));
 
-    private static string ExtractText(JsonElement result)
+    private static bool IsError(JsonElement element)
+        => element.TryGetProperty("isError", out var isError) && isError.ValueKind == JsonValueKind.True;
+
+    /// <summary>
+    /// Prefers the human-readable text blocks, then falls back to
+    /// <c>structuredContent</c> so machine-readable detail (e.g. validation errors
+    /// returned as a JSON object with no text block) is never dropped — which a
+    /// bare <c>content[].text</c> scan would silently do.
+    /// </summary>
+    private static string ExtractDetail(JsonElement element)
     {
-        if (!result.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+        var text = JoinTextContent(element);
+        if (!string.IsNullOrWhiteSpace(text))
+            return text;
+
+        if (element.TryGetProperty("structuredContent", out var structured)
+            && structured.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+            return structured.GetRawText();
+
+        return string.Empty;
+    }
+
+    private static string JoinTextContent(JsonElement element)
+    {
+        if (!element.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
             return string.Empty;
 
         var parts = new List<string>();
