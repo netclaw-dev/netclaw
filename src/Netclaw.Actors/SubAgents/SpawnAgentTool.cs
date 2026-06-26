@@ -133,11 +133,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         // the subagent subsystem is disabled.
         if (context.Audience == TrustAudience.Public || !_subAgentConfig.Enabled)
         {
-            _logger?.LogWarning(
-                "spawn_agent refused (agent={Agent}, audience={Audience}, subsystemEnabled={Enabled}, session={SessionId})",
-                args.Agent, context.Audience, _subAgentConfig.Enabled, context.SessionId);
-            context.EmitSessionLogLine?.Invoke(
-                $"spawn_agent refused (agent={args.Agent}, audience={context.Audience}, subsystemEnabled={_subAgentConfig.Enabled})");
+            SubAgentSpawnBreadcrumbs.SpawnRefused(_logger, context, args.Agent, context.Audience, _subAgentConfig.Enabled);
             return ("Error: This tool is not available.", null);
         }
 
@@ -153,11 +149,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         if (profile is null || profile.Visibility != SubAgentVisibility.UserFacing)
         {
             var available = _registry.GetUserFacing();
-            _logger?.LogWarning(
-                "spawn_agent refused: agent '{Agent}' not found or not user-facing (availableCount={Count}, session={SessionId})",
-                args.Agent, available.Count, context.SessionId);
-            context.EmitSessionLogLine?.Invoke(
-                $"spawn_agent refused: agent '{args.Agent}' not found or not user-facing (availableCount={available.Count})");
+            SubAgentSpawnBreadcrumbs.UnknownAgentRefused(_logger, context, args.Agent, available.Count);
             if (available.Count == 0)
                 return ($"Error: No subagents are available. Agent '{args.Agent}' not found. Author one at {_paths.AgentsDirectory}/*.md or define a skill with metadata.subagent once #661 lands.", null);
 
