@@ -1678,6 +1678,11 @@ internal sealed class FakeChatClient : IChatClient
     public List<IReadOnlyList<ChatMessage>> ReceivedMessages { get; } = [];
     public List<IReadOnlyList<string>> ReceivedToolNames { get; } = [];
 
+    /// <summary>The <see cref="ChatOptions"/> object passed on each call, so tests can
+    /// assert the session actor threads a <c>SessionScopedChatOptions</c> carrier through
+    /// for per-session log correlation.</summary>
+    public List<ChatOptions?> ReceivedOptions { get; } = [];
+
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -1778,6 +1783,7 @@ internal sealed class FakeChatClient : IChatClient
 
         var messageList = messages.ToList();
         ReceivedMessages.Add(messageList);
+        ReceivedOptions.Add(options);
         ReceivedToolNames.Add(options?.Tools?
             .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
             .ToList()

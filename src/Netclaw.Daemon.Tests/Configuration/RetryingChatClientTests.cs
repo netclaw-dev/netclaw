@@ -7,6 +7,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
@@ -115,6 +116,30 @@ public sealed class RetryingChatClientTests
 
         // 1 initial + 3 retries = 4 total
         Assert.Equal(4, attempts);
+    }
+
+    [Fact]
+    public async Task RetryWarning_carries_SessionId_scope_from_options()
+    {
+        // The retry warning is the hottest failure-correlation line. It must inherit the
+        // session id from the call's options so retry storms correlate by session in Seq.
+        var attempts = 0;
+        var fake = new FakeChatClient((_, _, _) =>
+        {
+            attempts++;
+            if (attempts < 2)
+                throw new HttpRequestException("server error", null, HttpStatusCode.InternalServerError);
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        });
+        var logger = new ScopeCapturingLogger();
+        var client = new RetryingChatClient(fake, _policy, logger);
+
+        await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
     }
 
     [Fact]

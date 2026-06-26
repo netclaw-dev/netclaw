@@ -45,9 +45,18 @@ What to expect inside `session.log`:
   if a critical line appears missing.
 - Most actor and operational logs are NOT in `session.log` — only explicitly
   published lines are. An actor's own lifecycle logging, and the LLM-client /
-  HTTP / retry / failover decorator internals, go to `daemon.log` (filterable
-  by the `SessionId` structured field where the line carries one). For an
-  actor's full lifecycle or deep LLM-call internals, read `daemon.log`.
+  HTTP / retry / failover decorator internals, go to `daemon.log`. How to
+  correlate them to a session depends on the line:
+  - Actor lines carry the session id **inline** (e.g. `session=...`), so you
+    can `grep` the `daemon.log` text file by session id directly.
+  - LLM-client / retry / **provider failover & outage** decorator lines carry
+    the session id as a `SessionId` **logging-scope attribute** (filterable in
+    Seq/OTLP), not inline in the `daemon.log` text — the file sink does not
+    render scopes. Grepping the text file by session id will miss them; filter
+    on the `SessionId` field in Seq instead.
+
+  For an actor's full lifecycle or deep LLM-call internals, read `daemon.log`
+  (and Seq, for per-session LLM-pipeline correlation).
 
 | Symptom | Check |
 |---------|-------|

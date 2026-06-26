@@ -8,15 +8,18 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token
-/// usage, and errors. These diagnostics go to <c>daemon.log</c> only (the decorator
-/// is session-agnostic); they are not published to a session's <c>session.log</c>.
-/// Stateless and safe to share across sessions. Netclaw issues only streaming
-/// requests, so only the streaming path is instrumented; the inherited
+/// usage, and errors. These diagnostics go to <c>daemon.log</c> (the decorator is
+/// session-agnostic); they are not published to a session's <c>session.log</c>, but
+/// they are tagged with the owning <c>SessionId</c> — read from
+/// <see cref="SessionScopedChatOptions"/> on the call — so they correlate to a session
+/// in Seq/OTLP. Stateless and safe to share across sessions. Netclaw issues only
+/// streaming requests, so only the streaming path is instrumented; the inherited
 /// non-streaming pass-through is unused.
 /// </summary>
 public sealed class LoggingChatClient : DelegatingChatClient
@@ -40,6 +43,9 @@ public sealed class LoggingChatClient : DelegatingChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
     {
+        // Tag every line this call emits (prompt summary, timing, token usage, errors)
+        // with the owning session so they correlate in Seq. No-op for sidecar calls.
+        using var sessionScope = ChatClientSessionScope.Begin(_logger, options);
         var messageList = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         LogPromptDiagnostics(messageList, options);
 

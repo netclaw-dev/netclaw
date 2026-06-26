@@ -98,6 +98,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private IParentApprovalBridge? _approvalBridge;
     private ChannelWriter<ToolActivityUpdate>? _activitySink;
 
+    // Parent session id (scopeId with the "/subagent/..." suffix stripped). Carried on
+    // the sub-agent's ChatOptions so its LLM diagnostics correlate to the spawning
+    // session in Seq, matching the SessionId its enriched logger already uses.
+    private string? _parentSessionId;
+
     // Default wait-for-first-delta budget when the spawn message carries none
     // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
     // prefill never collapses to the tighter inter-delta budget — that collapse
@@ -262,6 +267,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // parent logs share one filterable attribute (and route to the same
             // session.log); SubSessionId isolates a single run within that session.
             var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
+            _parentSessionId = parentSessionId;
             var enrichedLog = Context.GetLogger();
             if (!string.IsNullOrWhiteSpace(parentSessionId))
                 enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
@@ -662,13 +668,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var messages = new List<AiChatMessage>(_history);
         var callId = ++_llmCallId;
 
-        ChatOptions? options = null;
+        // Carry the parent session id (when known) so the chat-client decorators
+        // correlate this sub-agent's LLM diagnostics to the spawning session in Seq,
+        // just like the main session path. Direct/test callers leave it unset.
+        ChatOptions? options = _parentSessionId is { Length: > 0 } sid
+            ? new SessionScopedChatOptions { SessionId = sid }
+            : null;
         if (!forceNoTools && _aiTools.Count > 0)
         {
-            options = new ChatOptions
-            {
-                Tools = [.. _aiTools]
-            };
+            options ??= new ChatOptions();
+            options.Tools = [.. _aiTools];
         }
 
         _log.Info(

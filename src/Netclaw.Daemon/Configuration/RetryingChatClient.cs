@@ -50,7 +50,7 @@ public sealed class RetryingChatClient : DelegatingChatClient
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested
                                        && _policy.ShouldRetry(ex, attempt))
             {
-                await BackoffAsync(ex, attempt, cancellationToken);
+                await BackoffAsync(ex, attempt, options, cancellationToken);
                 attempt++;
             }
         }
@@ -79,7 +79,7 @@ public sealed class RetryingChatClient : DelegatingChatClient
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested
                                        && _policy.ShouldRetry(ex, attempt))
             {
-                await BackoffAsync(ex, attempt, cancellationToken);
+                await BackoffAsync(ex, attempt, options, cancellationToken);
                 attempt++;
                 continue;
             }
@@ -113,18 +113,23 @@ public sealed class RetryingChatClient : DelegatingChatClient
             if (preFirstChunkFailure is null)
                 yield break; // clean completion (or a post-first-chunk throw already unwound)
 
-            await BackoffAsync(preFirstChunkFailure, attempt, cancellationToken);
+            await BackoffAsync(preFirstChunkFailure, attempt, options, cancellationToken);
             attempt++;
             // outer loop re-initiates the stream
         }
     }
 
-    private async Task BackoffAsync(Exception ex, int attempt, CancellationToken cancellationToken)
+    private async Task BackoffAsync(Exception ex, int attempt, ChatOptions? options, CancellationToken cancellationToken)
     {
         var delay = _policy.GetDelay(attempt);
-        _logger.LogWarning(ex,
-            "LLM call failed (attempt {Attempt}/{Max}), retrying in {Delay:F1}s",
-            attempt + 1, _policy.MaxRetries, delay.TotalSeconds);
+        // Retry is the hottest failure path; tag the warning with the session id (from
+        // the call's options) so retry storms correlate by session in Seq.
+        using (ChatClientSessionScope.Begin(_logger, options))
+        {
+            _logger.LogWarning(ex,
+                "LLM call failed (attempt {Attempt}/{Max}), retrying in {Delay:F1}s",
+                attempt + 1, _policy.MaxRetries, delay.TotalSeconds);
+        }
 
         await Task.Delay(delay, _timeProvider, cancellationToken);
     }

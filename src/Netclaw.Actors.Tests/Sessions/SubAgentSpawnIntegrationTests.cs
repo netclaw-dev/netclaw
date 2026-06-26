@@ -265,6 +265,15 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             m.Role == Microsoft.Extensions.AI.ChatRole.System && (m.Text?.Contains("test assistant with subagent support", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.User && (m.Text?.Contains("Use a subagent to summarize the file", StringComparison.Ordinal) ?? false));
+
+        // The session actor must thread a SessionScopedChatOptions carrier so the
+        // chat-client decorators can correlate LLM diagnostics to the session. The
+        // sub-agent call carries the *parent* session id (collapsing the scope suffix),
+        // so both the main turn and the sub-agent's LLM calls correlate to one session.
+        var mainOptions = Assert.IsType<SessionScopedChatOptions>(_clientProvider.Main.ReceivedOptions[^1]);
+        Assert.Equal(sessionId.Value, mainOptions.SessionId);
+        var subagentOptions = Assert.IsType<SessionScopedChatOptions>(_clientProvider.Compaction.ReceivedOptions[^1]);
+        Assert.Equal(sessionId.Value, subagentOptions.SessionId);
     }
 
     [Fact]

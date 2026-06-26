@@ -2747,14 +2747,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var client = _chatClient;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
-        ChatOptions? options = null;
+        // Always carry the session id so the session-agnostic chat-client decorators
+        // (logging/retry/routing) can correlate LLM diagnostics — including provider
+        // failover/outage — back to this session in Seq. Tools are attached only when
+        // the turn exposes them; an empty Tools list is wire-equivalent to no options.
+        var options = new SessionScopedChatOptions { SessionId = _sessionId.Value };
         if (!forceNoTools && exposedTools.Count > 0)
-        {
-            options = new ChatOptions
-            {
-                Tools = [.. exposedTools]
-            };
-        }
+            options.Tools = [.. exposedTools];
 
         _watchdog.Start(ProcessingWatchdog.LlmCall, _config.PrefillTimeout, Timers, _config.NoProgressTimeout);
 

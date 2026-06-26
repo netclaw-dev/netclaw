@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Sessions;
 using Netclaw.Daemon.Configuration;
 using Xunit;
 // Netclaw's LoggingChatClient collides with Microsoft.Extensions.AI.LoggingChatClient
@@ -91,6 +92,39 @@ public sealed class LoggingChatClientTests
 
         Assert.Contains(logs, l => l.Contains("LLM prompt dump:"));
         Assert.Contains(logs, l => l.Contains("role=user"));
+    }
+
+    [Fact]
+    public async Task Streaming_attaches_SessionId_scope_from_options()
+    {
+        // The decorator is session-agnostic; it learns the session from the call's
+        // SessionScopedChatOptions, replacing the deleted AsyncLocal diagnostics context.
+        var logger = new ScopeCapturingLogger();
+        var client = new LoggingChatClient(new FakeChatClient(streaming: true), logger);
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
+    }
+
+    [Fact]
+    public async Task Streaming_with_plain_options_attaches_no_scope()
+    {
+        // A sidecar/session-agnostic call carries a plain ChatOptions: no session scope.
+        var logger = new ScopeCapturingLogger();
+        var client = new LoggingChatClient(new FakeChatClient(streaming: true), logger);
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], new ChatOptions(), TestContext.Current.CancellationToken))
+        {
+        }
+
+        Assert.False(logger.HasAnySessionScope());
     }
 
     private static async Task Drain(IChatClient client)
