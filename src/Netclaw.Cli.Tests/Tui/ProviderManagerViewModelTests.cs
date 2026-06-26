@@ -836,6 +836,147 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SelectAuthMethod_GitHubCopilot_ShowsAuthHostChoiceBeforeOAuth()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderName = "my-copilot";
+        vm.NewProviderType = "github-copilot";
+
+        vm.SelectAuthMethod(AuthMethod.OAuthDevice);
+
+        Assert.Equal(ProviderManagerState.AddGitHubCopilotAuthHost, vm.CurrentState.Value);
+        Assert.Null(vm.NewVendorOptions);
+    }
+
+    [Fact]
+    public async Task GitHubCopilotPublicHost_PersistsNoVendorOptionsEvenWithAmbientGitHubHost()
+    {
+        var previous = Environment.GetEnvironmentVariable("GH_HOST");
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_HOST", "enterprise.example.com");
+            using var vm = CreateViewModel();
+            vm.NewProviderName = "my-copilot";
+            vm.NewProviderType = "github-copilot";
+            vm.NewAuthMethod = AuthMethod.OAuthDevice;
+
+            vm.SelectGitHubCopilotAuthHost(GitHubCopilotAuthHostMode.GitHubCom);
+            vm.OAuth.Result = new OAuthDeviceFlowResult(
+                new SensitiveString("oauth-access-token"),
+                null,
+                new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                null);
+            vm.SubmitCredentials();
+            await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+            var configProvider = config.RootElement
+                .GetProperty("Providers")
+                .GetProperty("my-copilot");
+            Assert.False(configProvider.TryGetProperty("VendorOptions", out _));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_HOST", previous);
+        }
+    }
+
+    [Fact]
+    public async Task GitHubCopilotEnterpriseHostOnly_PersistsDerivedVendorOptions()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderName = "copilot-ghe";
+        vm.NewProviderType = "github-copilot";
+        vm.NewAuthMethod = AuthMethod.OAuthDevice;
+
+        Assert.True(vm.TrySetGitHubCopilotEnterpriseHost("ghe.example.com", out var hostError), hostError);
+        Assert.True(vm.TryStartGitHubCopilotEnterpriseOAuth(null, out var apiError), apiError);
+        vm.OAuth.Result = new OAuthDeviceFlowResult(
+            new SensitiveString("oauth-access-token"),
+            null,
+            new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            null);
+
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var vendorOptions = config.RootElement
+            .GetProperty("Providers")
+            .GetProperty("copilot-ghe")
+            .GetProperty("VendorOptions");
+
+        Assert.Equal("https://ghe.example.com", vendorOptions.GetProperty("GitHubHost").GetString());
+        Assert.Equal("https://ghe.example.com/api/v3", vendorOptions.GetProperty("GitHubApiBase").GetString());
+    }
+
+    [Fact]
+    public async Task GitHubCopilotEnterpriseExplicitApiBase_PersistsCanonicalVendorOptions()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderName = "copilot-ghe";
+        vm.NewProviderType = "github-copilot";
+        vm.NewAuthMethod = AuthMethod.OAuthDevice;
+
+        Assert.True(vm.TrySetGitHubCopilotEnterpriseHost("https://example.ghe.com", out var hostError), hostError);
+        Assert.True(vm.TryStartGitHubCopilotEnterpriseOAuth("https://api.example.ghe.com/", out var apiError), apiError);
+        vm.OAuth.Result = new OAuthDeviceFlowResult(
+            new SensitiveString("oauth-access-token"),
+            null,
+            new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            null);
+
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var vendorOptions = config.RootElement
+            .GetProperty("Providers")
+            .GetProperty("copilot-ghe")
+            .GetProperty("VendorOptions");
+
+        Assert.Equal("https://example.ghe.com", vendorOptions.GetProperty("GitHubHost").GetString());
+        Assert.Equal("https://api.example.ghe.com", vendorOptions.GetProperty("GitHubApiBase").GetString());
+    }
+
+    [Fact]
+    public void GitHubCopilotEnterpriseHostChange_ClearsStaleExplicitApiBase()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderType = "github-copilot";
+        vm.NewGitHubCopilotHost = "https://old.ghe.example.com";
+        vm.NewGitHubCopilotApiBase = "https://api.old.ghe.example.com";
+        vm.NewVendorOptions = new Dictionary<string, object?>
+        {
+            ["GitHubHost"] = "https://old.ghe.example.com",
+            ["GitHubApiBase"] = "https://api.old.ghe.example.com",
+        };
+
+        Assert.True(vm.SubmitGitHubCopilotEnterpriseHost("https://new.ghe.example.com", out var error), error);
+
+        Assert.Equal(ProviderManagerState.AddGitHubCopilotEnterpriseApiBase, vm.CurrentState.Value);
+        Assert.Equal("https://new.ghe.example.com", vm.NewGitHubCopilotHost);
+        Assert.Null(vm.NewGitHubCopilotApiBase);
+        Assert.Null(vm.NewVendorOptions);
+    }
+
+    [Fact]
+    public void GitHubCopilotEnterpriseInputs_RejectInvalidValuesBeforeVendorOptions()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderType = "github-copilot";
+
+        Assert.False(vm.TrySetGitHubCopilotEnterpriseHost("http://ghe.example.com", out var hostError));
+        Assert.Contains("HTTPS", hostError);
+        Assert.Null(vm.NewVendorOptions);
+
+        Assert.True(vm.TrySetGitHubCopilotEnterpriseHost("ghe.example.com", out hostError), hostError);
+        Assert.False(vm.TryStartGitHubCopilotEnterpriseOAuth("http://ghe.example.com/api/v3", out var apiError));
+        Assert.Contains("HTTPS", apiError);
+        Assert.Null(vm.NewVendorOptions);
+    }
+
+    [Fact]
     public async Task SubmitCredentials_OAuthSuccess_PreservesExistingOAuthProviders()
     {
         WriteConfig(new Dictionary<string, object>

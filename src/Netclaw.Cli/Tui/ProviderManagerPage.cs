@@ -33,8 +33,11 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _authList;
+    private SelectionListNode<string>? _githubCopilotAuthHostList;
     private TextInputNode? _apiKeyInput;
     private TextInputNode? _endpointInput;
+    private TextInputNode? _githubCopilotHostInput;
+    private TextInputNode? _githubCopilotApiBaseInput;
     private TextInputNode? _nameInput;
     private TextInputNode? _renameInput;
     private SelectionListNode<string>? _confirmList;
@@ -82,6 +85,9 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 ProviderManagerState.AddSelectType => BuildAddSelectTypeView(),
                 ProviderManagerState.AddName => BuildAddNameView(),
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
+                ProviderManagerState.AddGitHubCopilotAuthHost => BuildGitHubCopilotAuthHostView(),
+                ProviderManagerState.AddGitHubCopilotEnterpriseHost => BuildGitHubCopilotEnterpriseHostView(),
+                ProviderManagerState.AddGitHubCopilotEnterpriseApiBase => BuildGitHubCopilotEnterpriseApiBaseView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
                 ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
                 ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
@@ -139,6 +145,12 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddName =>
                         " [Enter] Continue  [Esc] Cancel  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddGitHubCopilotAuthHost =>
+                        " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddGitHubCopilotEnterpriseHost =>
+                        " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddGitHubCopilotEnterpriseApiBase =>
+                        " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.Details =>
                         " [K] Update key  [N] Rename  [R] Remove  [V] Re-validate  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.RenameProvider =>
@@ -352,6 +364,107 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .WithChild(new TextNode($"  Authentication for {descriptor.DisplayName}:")
                 .WithForeground(Color.White))
             .WithChild(_authList);
+    }
+
+    private ILayoutNode BuildGitHubCopilotAuthHostView()
+    {
+        _githubCopilotAuthHostList = Layouts.SelectionList(GitHubCopilotSetupFlow.AuthHostLabels.ToList())
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _githubCopilotAuthHostList.OnFocused();
+        _lastFocusedList = _githubCopilotAuthHostList;
+
+        _githubCopilotAuthHostList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                ViewModel.SelectGitHubCopilotAuthHost(
+                    GitHubCopilotSetupFlow.ParseAuthHostLabel(selected[0]));
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  GitHub Copilot authentication host:")
+                .WithForeground(Color.White))
+            .WithChild(new TextNode("  Choose GitHub Enterprise only if your Copilot subscription is tied to GHE.")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(_githubCopilotAuthHostList);
+    }
+
+    private ILayoutNode BuildGitHubCopilotEnterpriseHostView()
+    {
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode("  GitHub Enterprise host")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode("  Enter the GitHub Enterprise web host used for OAuth.")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("  Example: https://ghe.example.com")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("").Height(1));
+
+        _githubCopilotHostInput = new TextInputNode()
+            .WithPlaceholder("https://ghe.example.com");
+        if (!string.IsNullOrWhiteSpace(ViewModel.NewGitHubCopilotHost))
+            _githubCopilotHostInput.Text = ViewModel.NewGitHubCopilotHost;
+        _githubCopilotHostInput.OnFocused();
+        _lastFocusedInput = _githubCopilotHostInput;
+
+        _githubCopilotHostInput.Submitted
+            .Subscribe(text =>
+            {
+                if (ViewModel.SubmitGitHubCopilotEnterpriseHost(text, out var error))
+                {
+                    ViewModel.ErrorMessage.Value = "";
+                    return;
+                }
+
+                ViewModel.ErrorMessage.Value = error;
+                ViewModel.RequestRedraw();
+            })
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_githubCopilotHostInput, "GitHub host"));
+        return children;
+    }
+
+    private ILayoutNode BuildGitHubCopilotEnterpriseApiBaseView()
+    {
+        var placeholder = GitHubCopilotSetupFlow.GetApiBasePlaceholder(ViewModel.NewGitHubCopilotHost);
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode("  GitHub Enterprise API base")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode("  Press Enter to use the derived API base, or type an explicit API URL.")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode($"  Derived default: {placeholder}")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("").Height(1));
+
+        _githubCopilotApiBaseInput = new TextInputNode()
+            .WithPlaceholder(placeholder);
+        if (!string.IsNullOrWhiteSpace(ViewModel.NewGitHubCopilotApiBase))
+            _githubCopilotApiBaseInput.Text = ViewModel.NewGitHubCopilotApiBase;
+        _githubCopilotApiBaseInput.OnFocused();
+        _lastFocusedInput = _githubCopilotApiBaseInput;
+
+        _githubCopilotApiBaseInput.Submitted
+            .Subscribe(text =>
+            {
+                if (!ViewModel.TryStartGitHubCopilotEnterpriseOAuth(text, out var error))
+                {
+                    ViewModel.ErrorMessage.Value = error;
+                    ViewModel.RequestRedraw();
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_githubCopilotApiBaseInput, "GitHub API base"));
+        return children;
     }
 
     private ILayoutNode BuildCredentialsView()
