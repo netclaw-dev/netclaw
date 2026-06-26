@@ -68,6 +68,20 @@ Netclaw GitHub App. On success, the long-lived GitHub OAuth token is
 persisted to `secrets.json`. A short-lived (~30 min) Copilot API token is
 minted lazily on each chat request and never written to disk.
 
+For GitHub Enterprise-backed Copilot, pass the enterprise GitHub host during
+setup:
+
+```bash
+netclaw provider add my-copilot github-copilot --auth oauth-device --github-host https://github.example.com
+```
+
+If the API base cannot be derived from the host, also pass
+`--github-api-base`. Netclaw stores the resolved non-secret values as
+`Providers.<name>.VendorOptions.GitHubHost` and `.GitHubApiBase`. Runtime
+uses those persisted values only; ambient `GH_HOST`, `GITHUB_API_URL`, and
+related GitHub environment variables are setup conveniences, not runtime
+fallbacks. The Copilot chat/model API base remains the provider `Endpoint`.
+
 If a Copilot probe or chat call returns "GitHub Copilot authorization
 expired", the stored OAuth token has been revoked. The remediation is:
 

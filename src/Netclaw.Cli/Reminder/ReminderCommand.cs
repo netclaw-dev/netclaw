@@ -59,6 +59,7 @@ internal static class ReminderCommand
             "import" => await RunImportAsync(daemonApi, args),
             "show" => await RunShowAsync(daemonApi, args),
             "history" => await RunHistoryAsync(daemonApi, args),
+            "status" => await RunStatusAsync(daemonApi, args),
             _ => WriteHelp()
         };
     }
@@ -552,6 +553,85 @@ internal static class ReminderCommand
         }
     }
 
+    private static async Task<int> RunStatusAsync(DaemonApi api, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder status <id>");
+            return 1;
+        }
+
+        var id = args[2];
+
+        try
+        {
+            using var response = await api.GetReminderStatusAsync(id);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Console.Error.WriteLine($"[FAIL] Reminder '{id}' not found.");
+                return 1;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+                return 1;
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var status = JsonSerializer.Deserialize<ReminderStatusView>(json, JsonOptions);
+            if (status is null)
+            {
+                Console.Error.WriteLine("[FAIL] could not parse status response.");
+                return 1;
+            }
+
+            Console.WriteLine($"Reminder:            {status.Id}");
+            Console.WriteLine($"Enabled:             {status.Enabled}");
+            Console.WriteLine($"Executing now:       {status.Executing}");
+            Console.WriteLine($"Next fire:           {status.NextFire ?? "not scheduled"}");
+            Console.WriteLine($"Consecutive fails:   {status.ConsecutiveFailures}");
+            Console.WriteLine($"Skipped (duplicate): {status.SkippedDuplicates}");
+
+            var history = status.RecentHistory ?? [];
+            if (history.Length == 0)
+            {
+                Console.WriteLine("Recent history:      none");
+            }
+            else
+            {
+                Console.WriteLine("Recent history (newest first):");
+                // History arrives oldest-first; reverse so the most recent runs
+                // (the ones an operator diagnosing a failure cares about) lead.
+                foreach (var r in history.Reverse())
+                {
+                    var outcome = r.Success ? "ok" : "failed";
+                    var err = string.IsNullOrEmpty(r.ErrorMessage) ? "" : $" — {r.ErrorMessage}";
+                    Console.WriteLine($"  {r.FiredAt:u}  {outcome}{err}");
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+    }
+
+    /// <summary>CLI-side projection of the daemon's reminder status JSON.</summary>
+    private sealed record ReminderStatusView(
+        string Id,
+        bool Enabled,
+        bool Executing,
+        string? NextFire,
+        int ConsecutiveFailures,
+        int SkippedDuplicates,
+        HistoryRecord[]? RecentHistory);
+
     private static int WriteHelp()
     {
         Console.WriteLine("Usage: netclaw reminder <subcommand>");
@@ -567,6 +647,7 @@ internal static class ReminderCommand
         Console.WriteLine("  validate <file>                               Validate reminder file");
         Console.WriteLine("  show <id>                                     Show reminder details");
         Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
+        Console.WriteLine("  status <id>                                   Show operational status: failures, skipped fires, in-flight");
         Console.WriteLine();
         Console.WriteLine("Create options:");
         Console.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");

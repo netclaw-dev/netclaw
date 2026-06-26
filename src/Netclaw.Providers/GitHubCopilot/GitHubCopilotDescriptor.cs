@@ -24,25 +24,34 @@ public sealed class GitHubCopilotDescriptor(
     public string DefaultEndpoint => "https://api.githubcopilot.com";
     public string ModelListingPath => "/models";
 
-    public IProviderAuth Auth { get; } = new OAuthAuth
-    {
-        SupportedAuthMethods = [AuthMethod.OAuthDevice],
-        TokenEndpoint = new Uri("https://github.com/login/oauth/access_token"),
-        DeviceEndpoint = new Uri("https://github.com/login/device/code"),
+    public IProviderAuth Auth { get; } = CreateOAuthAuth(new GitHubCopilotAuthOptions());
 
-        // OAuth App client_id borrowed from the Neovim Copilot plugin. The
-        // /copilot_internal/v2/token exchange endpoint is gated to a small
-        // allowlist of editor-integration OAuth Apps (VS Code, Neovim,
-        // JetBrains, gh CLI); a Netclaw-owned GitHub App was rejected with
-        // HTTP 403 "Resource not accessible by integration" regardless of
-        // configured permissions. Every community Copilot client (avante.nvim,
-        // copilot.lua, CodeAlta) takes the same posture. Replace if/when
-        // Netclaw gets its own OAuth App allowlisted by GitHub, or when we
-        // migrate to the documented Copilot SDK pathway.
-        ClientId = "Iv1.b507a08c87ecfe98",
-        Scope = "read:user",
-        UseProprietaryDeviceFlow = false,
-    };
+    public static OAuthAuth CreateOAuthAuth(GitHubCopilotAuthOptions options)
+    {
+        var resolved = GitHubCopilotAuthResolver.Resolve(options);
+        return new OAuthAuth
+        {
+            SupportedAuthMethods = [AuthMethod.OAuthDevice],
+            TokenEndpoint = resolved.OAuthTokenEndpoint,
+            DeviceEndpoint = resolved.DeviceEndpoint,
+
+            // OAuth App client_id borrowed from the Neovim Copilot plugin. The
+            // /copilot_internal/v2/token exchange endpoint is gated to a small
+            // allowlist of editor-integration OAuth Apps (VS Code, Neovim,
+            // JetBrains, gh CLI); a Netclaw-owned GitHub App was rejected with
+            // HTTP 403 "Resource not accessible by integration" regardless of
+            // configured permissions. Every community Copilot client (avante.nvim,
+            // copilot.lua, CodeAlta) takes the same posture. Replace if/when
+            // Netclaw gets its own OAuth App allowlisted by GitHub, or when we
+            // migrate to the documented Copilot SDK pathway.
+            ClientId = "Iv1.b507a08c87ecfe98",
+            Scope = "read:user",
+            UseProprietaryDeviceFlow = false,
+        };
+    }
+
+    public static OAuthAuth CreateOAuthAuth(ProviderEntry entry) =>
+        CreateOAuthAuth(GitHubCopilotAuthResolver.Resolve(entry).ToOptions());
 
     // Fallback model set used only when /models is unreachable so the
     // operator never sees an empty list on a transient failure.

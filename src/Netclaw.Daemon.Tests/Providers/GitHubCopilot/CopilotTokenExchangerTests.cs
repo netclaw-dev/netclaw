@@ -6,6 +6,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -306,6 +307,32 @@ public sealed class CopilotTokenExchangerTests
             captured.Headers.GetValues("Editor-Plugin-Version").Single());
         Assert.Equal("vscode-chat", captured.Headers.GetValues("Copilot-Integration-Id").Single());
         Assert.Equal("2022-11-28", captured.Headers.GetValues("X-GitHub-Api-Version").Single());
+    }
+
+    [Fact]
+    public async Task GetToken_ConfiguredGitHubApiBase_ExchangesAgainstEnterpriseEndpoint()
+    {
+        HttpRequestMessage? captured = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            captured = request;
+            return TokenResponse("copilot-ghe",
+                DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds());
+        });
+        var exchanger = new CopilotTokenExchanger(new HttpClient(handler));
+        var entry = EntryWithOAuth("gho_ghe");
+        entry.SetVendorOptions(new JsonObject
+        {
+            ["GitHubHost"] = "https://ghe.example.com",
+            ["GitHubApiBase"] = "https://ghe.example.com/api/v3",
+        });
+
+        var token = await exchanger.GetTokenAsync(entry, TestContext.Current.CancellationToken);
+
+        Assert.Equal("copilot-ghe", token);
+        Assert.Equal("https://ghe.example.com/api/v3/copilot_internal/v2/token",
+            captured!.RequestUri!.ToString());
+        Assert.Equal("Bearer gho_ghe", captured.Headers.Authorization!.ToString());
     }
 
     private static ProviderOAuthTokenRefreshService CreateRefreshService(

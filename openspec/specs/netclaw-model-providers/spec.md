@@ -232,6 +232,18 @@ memory only and never persisted to disk. The long-lived GitHub OAuth token
 SHALL be persisted via the existing `ProviderEntry.OAuthAccessToken` field
 in the secrets store.
 
+For GitHub Enterprise-backed Copilot entries, the provider MAY persist
+non-secret host settings under `ProviderEntry.VendorOptions` as
+`GitHubHost` and `GitHubApiBase`. When present, `GitHubHost` SHALL be used
+to derive the device authorization endpoint at `/login/device/code` and the
+OAuth token endpoint at `/login/oauth/access_token`; `GitHubApiBase` SHALL
+be used to derive `/copilot_internal/v2/token`. Runtime provider resolution
+SHALL use only the persisted provider entry, not ambient `GH_HOST`,
+`GITHUB_API_URL`, or related GitHub environment variables, so existing public
+GitHub Copilot entries keep the public endpoints unless explicitly
+reconfigured. Chat completion and model discovery requests SHALL continue to
+use `ProviderEntry.Endpoint`, defaulting to `https://api.githubcopilot.com`.
+
 Each request to `api.githubcopilot.com` SHALL carry these headers in
 addition to the standard `Content-Type` and `Accept`:
 
@@ -257,6 +269,18 @@ selectable" rather than implicitly non-chat.
   user code and verification URI
 - **AND** on successful authorization the GitHub OAuth token is persisted
   to the secrets store under the operator-chosen provider name
+
+#### Scenario: Operator configures GitHub Enterprise Copilot
+
+- **GIVEN** the operator runs `netclaw provider add <name> github-copilot --auth oauth-device --github-host <host>`
+- **WHEN** OAuth authorization succeeds
+- **THEN** the provider entry SHALL persist `VendorOptions.GitHubHost` and
+  `VendorOptions.GitHubApiBase` when those resolved values are not the public
+  GitHub defaults
+- **AND** the device flow and OAuth token exchange SHALL use the resolved
+  GitHub Enterprise host settings
+- **AND** Copilot chat/model requests SHALL use the provider entry's
+  `Endpoint` value
 
 #### Scenario: Chat completion against Copilot
 

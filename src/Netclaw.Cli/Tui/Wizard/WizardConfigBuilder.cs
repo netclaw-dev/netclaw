@@ -125,6 +125,9 @@ public sealed class WizardConfigBuilder
             if (!string.IsNullOrWhiteSpace(Provider.Endpoint))
                 providerEntry["Endpoint"] = Provider.Endpoint;
 
+            if (Provider.VendorOptions is not null && Provider.VendorOptions.Count > 0)
+                providerEntry["VendorOptions"] = Provider.VendorOptions;
+
             providers[Provider.TypeKey] = providerEntry;
         }
 
@@ -560,6 +563,7 @@ public sealed class ProviderConfigSection
     public required string TypeKey { get; init; }
     public AuthMethod AuthMethod { get; init; } = AuthMethod.None;
     public string? Endpoint { get; init; }
+    public IReadOnlyDictionary<string, object?>? VendorOptions { get; init; }
 }
 
 public sealed class ModelConfigSection

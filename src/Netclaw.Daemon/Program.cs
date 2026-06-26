@@ -751,6 +751,13 @@ static void ConfigureDaemonServices(
         services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
     }
 
+    // Posts reminder failure notices to the reminder's destination channel.
+    // IChannelRegistry is always registered (AddChannelRegistry below), so the
+    // real notifier is always available; it no-ops gracefully for reminders whose
+    // channel has no outbound client.
+    services.AddSingleton<Netclaw.Actors.Reminders.IReminderChannelNotifier,
+        Netclaw.Daemon.Reminders.ReminderChannelFailureNotifier>();
+
     // Daemon lifecycle notifier (startup/shutdown webhooks + logging)
     services.AddSingleton<DaemonLifecycleNotifier>();
 

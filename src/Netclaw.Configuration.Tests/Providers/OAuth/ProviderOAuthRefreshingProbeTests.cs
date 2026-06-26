@@ -4,10 +4,13 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -93,6 +96,69 @@ public sealed class ProviderOAuthRefreshingProbeTests
         Assert.Null(descriptor.ProbedAccessToken);
     }
 
+    [Fact]
+    public async Task ProbeConfiguredAsync_GitHubCopilot_RefreshesAgainstConfiguredEnterpriseHost()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        WriteGitHubCopilotProviderConfig(paths, "copilot-ghe");
+
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var requestUris = new List<string>();
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            requestUris.Add(request.RequestUri!.ToString());
+            return request.RequestUri!.ToString() switch
+            {
+                "https://ghe.example.com/login/oauth/access_token" => FakeHttpMessageHandler.JsonResponse(new
+                {
+                    access_token = "gho_ghe_new",
+                    refresh_token = "refresh-ghe-new",
+                    expires_in = 3600,
+                }),
+                "https://ghe.example.com/api/v3/copilot_internal/v2/token" => FakeHttpMessageHandler.JsonResponse(new
+                {
+                    token = "copilot-ghe",
+                    expires_at = now.AddMinutes(30).ToUnixTimeSeconds(),
+                }),
+                "https://api.githubcopilot.com/models" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """
+                        { "data": [ { "id": "gpt-4o", "capabilities": { "type": "chat" } } ] }
+                        """,
+                        Encoding.UTF8,
+                        "application/json"),
+                },
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
+        });
+        var httpClient = new HttpClient(handler);
+        var refreshService = new ProviderOAuthTokenRefreshService(
+            paths,
+            new DeviceFlowServiceFactory(
+                new OAuthDeviceFlowService(httpClient, time),
+                new OpenAiDeviceFlowService(httpClient, time)),
+            timeProvider: time);
+        var exchanger = new CopilotTokenExchanger(httpClient, time, refreshService);
+        var descriptor = new GitHubCopilotDescriptor(httpClient, exchanger);
+        var probe = new ProviderOAuthRefreshingProbe(new ProviderDescriptorRegistry([descriptor]), refreshService);
+        var entry = ExpiredGitHubCopilotEntry(now);
+
+        var result = await probe.ProbeConfiguredAsync(
+            "copilot-ghe",
+            entry,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal([
+            "https://ghe.example.com/login/oauth/access_token",
+            "https://ghe.example.com/api/v3/copilot_internal/v2/token",
+            "https://api.githubcopilot.com/models",
+        ], requestUris);
+    }
+
     private static ProviderOAuthRefreshingProbe CreateProbe(
         NetclawPaths paths,
         FakeTimeProvider time,
@@ -126,6 +192,44 @@ public sealed class ProviderOAuthRefreshingProbeTests
                 "{{providerName}}": {
                   "Type": "test-oauth",
                   "AuthMethod": "OAuthDevice"
+                }
+              }
+            }
+            """);
+    }
+
+    private static ProviderEntry ExpiredGitHubCopilotEntry(DateTimeOffset now)
+    {
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("gho_ghe_old"),
+            OAuthRefreshToken = new SensitiveString("refresh-ghe-old"),
+            OAuthTokenExpiry = now.AddMinutes(-1),
+        };
+        entry.SetVendorOptions(new JsonObject
+        {
+            ["GitHubHost"] = "https://ghe.example.com",
+            ["GitHubApiBase"] = "https://ghe.example.com/api/v3",
+        });
+        return entry;
+    }
+
+    private static void WriteGitHubCopilotProviderConfig(NetclawPaths paths, string providerName)
+    {
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, $$"""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "{{providerName}}": {
+                  "Type": "github-copilot",
+                  "AuthMethod": "OAuthDevice",
+                  "VendorOptions": {
+                    "GitHubHost": "https://ghe.example.com",
+                    "GitHubApiBase": "https://ghe.example.com/api/v3"
+                  }
                 }
               }
             }
