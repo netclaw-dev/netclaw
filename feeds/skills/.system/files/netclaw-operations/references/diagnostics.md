@@ -45,18 +45,23 @@ What to expect inside `session.log`:
   if a critical line appears missing.
 - Most actor and operational logs are NOT in `session.log` — only explicitly
   published lines are. An actor's own lifecycle logging, and the LLM-client /
-  HTTP / retry / failover decorator internals, go to `daemon.log`. How to
-  correlate them to a session depends on the line:
-  - Actor lines carry the session id **inline** (e.g. `session=...`), so you
-    can `grep` the `daemon.log` text file by session id directly.
-  - LLM-client / retry / **provider failover & outage** decorator lines carry
-    the session id as a `SessionId` **logging-scope attribute** (filterable in
-    Seq/OTLP), not inline in the `daemon.log` text — the file sink does not
-    render scopes. Grepping the text file by session id will miss them; filter
-    on the `SessionId` field in Seq instead.
+  HTTP / retry / failover decorator internals, go to `daemon.log`. How the
+  session id is carried — and so how you filter by it — depends on the line:
+  - **Seq/OTLP is the dependable filter.** Both the actor logs (session id
+    attached via `WithContext("SessionId", …)`) and the LLM-client / retry /
+    **provider failover & outage** decorator logs (attached via a `SessionId`
+    logging scope) surface `SessionId` as a structured field. Filtering on it
+    in Seq catches every one of these lines for a session.
+  - **`grep` of the `daemon.log` text file is partial.** It finds only lines
+    that template the id straight into the message (`session=…` / `{SessionId}`
+    — most service, binding, gateway, and spawn-breadcrumb lines). Lines that
+    carry the id only as a context/scope attribute (the session/sub-agent
+    actor's own lifecycle logs and the chat-client decorator internals) may not
+    render it in the text file, so a text grep can miss them — use Seq for
+    those.
 
   For an actor's full lifecycle or deep LLM-call internals, read `daemon.log`
-  (and Seq, for per-session LLM-pipeline correlation).
+  (and Seq, for reliable per-session correlation).
 
 | Symptom | Check |
 |---------|-------|

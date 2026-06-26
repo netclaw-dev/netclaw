@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
@@ -50,6 +51,35 @@ public sealed class PipelineChatClientFactoryTests
 
         Assert.Single(updates);                                              // leaf reached, output flows through
         Assert.Contains(logs, l => l.Contains("LLM streaming call completed")); // Logging middleware wired
+    }
+
+    [Fact]
+    public async Task Compose_streaming_tags_SessionId_scope_through_pipeline()
+    {
+        // Cross-cutting invariant: SessionScopedChatOptions must survive *by reference*
+        // through the composed Logging -> Retry pipeline (no decorator clones it down to a
+        // base ChatOptions), so the streaming production path still surfaces SessionId as a
+        // Seq scope. A future decorator that rebuilt options would break this test, not just
+        // a unit decorator tested in isolation.
+        var logger = new ScopeCapturingLogger();
+        var pipeline = PipelineChatClientFactory.Compose(
+            new FakeChatClient(streaming: true), _policy, new SingleLoggerFactory(logger), TimeProvider.System);
+
+        await foreach (var _ in pipeline.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
+    }
+
+    private sealed class SingleLoggerFactory(ILogger logger) : ILoggerFactory
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
     }
 
     private sealed class ListLoggerFactory : ILoggerFactory

@@ -143,6 +143,31 @@ public sealed class RetryingChatClientTests
     }
 
     [Fact]
+    public async Task StreamingRetryWarning_carries_SessionId_scope_from_options()
+    {
+        // Production only ever calls GetStreamingResponseAsync (StreamingResponseReader),
+        // so the streaming backoff path — not the non-streaming one above — is the path
+        // that must tag retry warnings with the session id.
+        var attempts = 0;
+        var fake = new FakeChatClient(streamHandler: (_, _, ct) =>
+        {
+            attempts++;
+            return ThrowBeforeChunkThenYield(attempts, failUntil: 2, ct);
+        });
+        var logger = new ScopeCapturingLogger();
+        var client = new RetryingChatClient(fake, _policy, logger);
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
+    }
+
+    [Fact]
     public async Task DoesNotRetryNonTransientErrors()
     {
         var attempts = 0;

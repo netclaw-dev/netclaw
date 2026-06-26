@@ -106,6 +106,31 @@ public sealed class RoutingChatClientTests
     }
 
     [Fact]
+    public async Task Streaming_failover_log_carries_SessionId_scope_from_options()
+    {
+        // Production takes the streaming failover path (StreamingResponseReader), so the
+        // streaming branch — not the non-streaming one above — is the one that must tag
+        // provider-failover/outage warnings with the session id.
+        var sink = new CapturingSink();
+        var logger = new ScopeCapturingLogger();
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) => SingleTextUpdateAsync("fallback", ct));
+        var client = new RoutingChatClient(
+            new StubRouter([primary, fallback]),
+            new ChatRoutingContext { Role = ModelRole.Main },
+            sink, logger, TimeProvider.System);
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
+    }
+
+    [Fact]
     public async Task DoesNotFailover_OnCancellation()
     {
         var cts = new CancellationTokenSource();
