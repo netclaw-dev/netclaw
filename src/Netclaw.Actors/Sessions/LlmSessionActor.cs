@@ -3048,6 +3048,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
 
+            // Publish the routed sub-agent's spawn lifecycle into this session's
+            // session.log, exactly as the tool-execution dispatch path does. Without
+            // it the routed-skill path drops the explicit breadcrumbs SubAgentSpawner
+            // emits — notably the spawn-failure reasons (#1467) that are otherwise
+            // invisible to an operator reading the transcript.
+            var logActor = _logActor;
+            var tp = _timeProvider;
+            var routedSessionId = _sessionId;
+            context.EmitSessionLogLine = line =>
+                logActor?.Tell(new SessionLogDiagnostic(routedSessionId, $"[{tp.GetUtcNow():o}] {line}"));
+
             context.OnSubAgentActivity = info =>
             {
                 self.Tell(new RoutedSkillSubAgentActivity(

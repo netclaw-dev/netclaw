@@ -540,6 +540,54 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Routed_slash_command_publishes_spawn_lifecycle_to_session_log()
+    {
+        // Regression: the routed-skill spawn path builds its own ToolExecutionContext
+        // and must wire EmitSessionLogLine, exactly like the tool-execution dispatch
+        // path. Without it the sub-agent spawn lifecycle (and, more importantly, spawn
+        // failures — the #1467 gap) never reach the parent's session.log. Register a
+        // probe as the session-log dispatcher before the session recovers (the actor
+        // resolves it lazily on RecoveryCompleted) and assert the breadcrumb arrives.
+        var logProbe = CreateTestProbe("routed-slash-session-log");
+        ActorRegistry.For(Sys).Register<SessionLogDispatcherActorKey>(logProbe.Ref, overwrite: true);
+
+        var sessionId = new SessionId("test-channel/routed-slash-session-log");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("routed-slash-session-log-events");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "/ops-route check daemon health",
+            Source = BuildPersonalSource()
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        // The spawner publishes "spawn requested" first, then "completed" once the
+        // routed sub-agent run returns — both must land on the dispatcher.
+        var requested = (SessionLogDiagnostic)await logProbe.FishForMessageAsync<object>(
+            m => m is SessionLogDiagnostic d
+                && d.SessionId == sessionId
+                && d.Line.Contains("SubAgent [summarizer] spawn requested", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, requested.SessionId);
+
+        await logProbe.FishForMessageAsync<object>(
+            m => m is SessionLogDiagnostic d
+                && d.SessionId == sessionId
+                && d.Line.Contains("SubAgent [summarizer] completed", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Reminder_sourced_slash_command_routes_like_normal_slash_dispatch()
     {
         var sessionId = new SessionId("test-channel/routed-slash-reminder");
