@@ -29,8 +29,30 @@ public abstract class LlmSessionTestBase : TestKit
     /// </summary>
     protected virtual bool VerifySerialization => false;
 
+    /// <summary>
+    /// Derived watchdog/timer tests override this to run the ActorSystem on
+    /// <see cref="Akka.TestKit.TestScheduler"/>, so scheduled work — including the
+    /// processing watchdog's <c>ITimerScheduler</c> timers — fires only on an
+    /// explicit <see cref="AdvanceScheduler"/>, making timeouts deterministic
+    /// instead of racing the wall clock against threadpool scheduling.
+    /// </summary>
+    protected virtual bool UseTestScheduler => false;
+
+    /// <summary>
+    /// Moves virtual scheduler time forward, synchronously delivering any
+    /// scheduler items (e.g. the processing watchdog timeout) that fall due.
+    /// Only valid when <see cref="UseTestScheduler"/> is true.
+    /// </summary>
+    protected void AdvanceScheduler(TimeSpan offset) =>
+        ((Akka.TestKit.TestScheduler)Sys.Scheduler).Advance(offset);
+
     protected sealed override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        if (UseTestScheduler)
+            builder.AddHocon(
+                "akka.scheduler.implementation = \"Akka.TestKit.TestScheduler, Akka.TestKit\"",
+                HoconAddMode.Prepend);
+
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
