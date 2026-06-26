@@ -1971,6 +1971,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             logActor?.Tell(output);
         };
 
+        // Sub-agent / tool lifecycle lines are published explicitly into this session's
+        // session.log via the dispatcher (logActor). Routing is intentional here, not
+        // inferred from log metadata at the sink.
+        Action<string> emitSessionLogLine = line =>
+            logActor?.Tell(new SessionLogDiagnostic(sessionId, $"[{tp.GetUtcNow():o}] {line}"));
+
         // Marshal child-actor spawning back onto the session actor thread.
         Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
             await self.Ask<IActorRef>(
@@ -2005,6 +2011,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             oneTimeApprovalPreSeed: oneTimeApprovalPreSeed,
             decisionOverride: decisionOverride,
             turnContext: _currentTurnContext,
+            emitSessionLogLine: emitSessionLogLine,
             ct: toolExecutionCt);
     }
 

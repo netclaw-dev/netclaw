@@ -13,10 +13,11 @@ namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token
-/// usage, and errors, and tags log lines with the ambient session id. Stateless
-/// and safe to share across sessions. Netclaw issues only streaming requests, so
-/// only the streaming path is instrumented; the inherited non-streaming
-/// pass-through is unused.
+/// usage, and errors. These diagnostics go to <c>daemon.log</c> only (the decorator
+/// is session-agnostic); they are not published to a session's <c>session.log</c>.
+/// Stateless and safe to share across sessions. Netclaw issues only streaming
+/// requests, so only the streaming path is instrumented; the inherited
+/// non-streaming pass-through is unused.
 /// </summary>
 public sealed class LoggingChatClient : DelegatingChatClient
 {

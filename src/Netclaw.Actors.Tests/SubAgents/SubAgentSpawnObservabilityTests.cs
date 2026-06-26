@@ -3,7 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -15,11 +15,11 @@ namespace Netclaw.Actors.Tests.SubAgents;
 
 /// <summary>
 /// Regression coverage for sub-agent spawn observability. The spawn lifecycle is
-/// recorded by parent-side breadcrumbs that carry the session id as a structured log
-/// field — exactly what <c>RollingFileLoggerProvider</c> reads off the log event to
-/// route a line to the per-session <c>session.log</c>. These tests assert each
-/// breadcrumb carries the session id; otherwise a refused or failed spawn would be
-/// invisible in the session transcript.
+/// published to the parent's <c>session.log</c> explicitly via
+/// <see cref="ToolExecutionContext.EmitSessionLogLine"/> (the session wires it to the
+/// session-log dispatcher). These tests capture those publishes and assert each
+/// lifecycle/rejection breadcrumb is emitted; otherwise a refused or failed spawn
+/// would be invisible in the session transcript.
 /// </summary>
 public sealed class SubAgentSpawnObservabilityTests : IDisposable
 {
@@ -37,9 +37,8 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public async Task Spawner_missing_session_context_records_breadcrumbs_under_session_scope()
+    public async Task Spawner_missing_session_context_publishes_lifecycle_to_session_log()
     {
-        var logger = new CapturingLogger<SubAgentSpawner>();
         // Only the parent-side breadcrumb path runs before the early return, so the
         // unused collaborators are never dereferenced.
         var spawner = new SubAgentSpawner(
@@ -48,31 +47,40 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             toolAccessPolicy: null!,
             approvalService: null,
             promptProvider: null!,
-            logger);
+            NullLogger<SubAgentSpawner>.Instance);
 
+        var sessionLog = new List<string>();
         // A context with a session id but no SpawnChildActor factory — the
         // "subagent tried to spawn but never launched" failure shape.
-        var context = new ToolExecutionContext(SessionId, null) { Audience = TrustAudience.Personal };
+        var context = new ToolExecutionContext(SessionId, null)
+        {
+            Audience = TrustAudience.Personal,
+            EmitSessionLogLine = sessionLog.Add
+        };
 
         var result = await spawner.SpawnAsync(
             Profile("summarizer"), "do the work", null, context, TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
-        // The spawn attempt and its failure are both visible in the session transcript.
-        Assert.Contains(logger.Entries, e => e.SessionScope == SessionId && e.Message.Contains("spawn requested"));
-        Assert.Contains(logger.Entries, e => e.SessionScope == SessionId && e.Message.Contains("no session context available"));
+        // The spawn attempt and its failure are both published to the session transcript.
+        Assert.Contains(sessionLog, line => line.Contains("spawn requested", StringComparison.Ordinal));
+        Assert.Contains(sessionLog, line => line.Contains("no session context available", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Tool_refusal_records_real_reason_under_session_scope()
+    public async Task Tool_refusal_publishes_real_reason_to_session_log()
     {
-        var logger = new CapturingLogger<SpawnAgentTool>();
         var registry = new SubAgentDefinitionRegistry();
-        var tool = new SpawnAgentTool(registry, spawner: null!, _paths, logger: logger);
+        var tool = new SpawnAgentTool(registry, spawner: null!, _paths, logger: NullLogger<SpawnAgentTool>.Instance);
 
+        var sessionLog = new List<string>();
         // Public audience is refused with a deliberately opaque model-facing string;
         // the operator-facing breadcrumb must still record the real reason.
-        var context = new ToolExecutionContext(SessionId, null) { Audience = TrustAudience.Public };
+        var context = new ToolExecutionContext(SessionId, null)
+        {
+            Audience = TrustAudience.Public,
+            EmitSessionLogLine = sessionLog.Add
+        };
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["agent"] = "summarizer", ["task"] = "do the work" },
@@ -81,11 +89,8 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
 
         Assert.Equal("Error: This tool is not available.", result);
         Assert.Contains(
-            logger.Entries,
-            e => e.Level == LogLevel.Warning
-                 && e.SessionScope == SessionId
-                 && e.Message.Contains("refused")
-                 && e.Message.Contains("Public"));
+            sessionLog,
+            line => line.Contains("refused", StringComparison.Ordinal) && line.Contains("Public", StringComparison.Ordinal));
     }
 
     private static SubAgentProfile Profile(string name) => new()
@@ -96,32 +101,4 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
         ToolNames = ["file_read"],
         Visibility = SubAgentVisibility.UserFacing
     };
-
-    private sealed class CapturingLogger<T> : ILogger<T>
-    {
-        public readonly List<(LogLevel Level, string Message, string? SessionScope)> Entries = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception), ExtractSessionId(state)));
-
-        // Mirror RollingFileLoggerProvider: read the session id off the structured log
-        // state (the {SessionId} field the breadcrumbs carry), not an ambient context.
-        private static string? ExtractSessionId<TState>(TState state)
-        {
-            if (state is IEnumerable<KeyValuePair<string, object?>> fields)
-                foreach (var field in fields)
-                    if (field.Key == "SessionId" && field.Value is { } value)
-                        return value.ToString();
-            return null;
-        }
-    }
 }

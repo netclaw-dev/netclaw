@@ -34,19 +34,20 @@ What to expect inside `session.log`:
   cross-referencing two files.
 - Two line shapes: session output audit lines (`User:`, `Assistant:`,
   `Thinking:`, `Tool call:`, `Tool result:`, `Usage:`, `Turn N completed`,
-  etc.) and `Diagnostic:` lines. A diagnostic line reaches `session.log`
-  when its log event carries the session id; actor logs are tagged with it
-  automatically (`SessionId`), so session- and sub-agent-actor lifecycle
-  lines (startup, guards, timeouts, cancellation, completion) appear here —
-  routed by the tag on the line, not by any ambient context.
+  etc.) and `Diagnostic:` lines. Diagnostic lines reach `session.log` only
+  when a producer *explicitly publishes* them — notably the sub-agent spawn
+  lifecycle (requested, child spawned, dispatched, completed/failed, and
+  guard rejections), so a failed or blocked spawn is visible here. It is an
+  explicit publish, not automatic routing of every log line.
 - Best-effort observability. Individual lines may be dropped on transient
   IO errors and logged at Debug level in the daemon log; this is not a
   transactional audit trail. Cross-check the daemon log for warnings
   if a critical line appears missing.
-- Not everything is session-tagged: the LLM-client / HTTP / retry / failover
-  decorators log their internal diagnostics without a session id, so those
-  land in `daemon.log` only. For deep LLM-call internals, read `daemon.log`
-  (filter by the `SessionId` attribute where the line carries one).
+- Most actor and operational logs are NOT in `session.log` — only explicitly
+  published lines are. An actor's own lifecycle logging, and the LLM-client /
+  HTTP / retry / failover decorator internals, go to `daemon.log` (filterable
+  by the `SessionId` structured field where the line carries one). For an
+  actor's full lifecycle or deep LLM-call internals, read `daemon.log`.
 
 | Symptom | Check |
 |---------|-------|

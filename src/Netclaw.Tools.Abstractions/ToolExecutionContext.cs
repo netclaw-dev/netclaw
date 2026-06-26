@@ -141,6 +141,14 @@ public sealed class ToolExecutionContext
     public Action<SubAgentNotificationInfo>? OnSubAgentActivity { get; set; }
 
     /// <summary>
+    /// Publishes a pre-formatted diagnostic line to the owning session's
+    /// <c>session.log</c> (via the session-log dispatcher). The session wires this so
+    /// tools/sub-agents can record session-relevant lifecycle lines explicitly. Null
+    /// when no session-log sink is wired (e.g. console/test hosts).
+    /// </summary>
+    public Action<string>? EmitSessionLogLine { get; set; }
+
+    /// <summary>
     /// Factory delegate for spawning subagent actors as children of the owning session.
     /// Wired by <c>LlmSessionActor</c> so subagents are supervised and lifecycle-managed
     /// by the session. Returns an <c>IActorRef</c>-compatible object that supports Ask.

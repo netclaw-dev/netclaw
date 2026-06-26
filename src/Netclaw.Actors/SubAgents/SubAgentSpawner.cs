@@ -67,17 +67,20 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
-        // Session-scoped breadcrumbs: each parent-side line carries the session id as a
-        // structured field, so the log sink routes the spawn lifecycle (request →
-        // outcome, including early rejections that happen before the child actor even
-        // exists) into the parent's session.log alongside the sub-agent's own actor logs.
+        // Parent-side spawn breadcrumbs. _logger lines carry session={SessionId} for
+        // daemon.log/Seq correlation; EmitSessionLogLine publishes the same lifecycle
+        // (request → outcome, including early rejections that happen before the child
+        // actor even exists) explicitly into the parent's session.log.
         _logger.LogInformation(
             "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars}, session={SessionId})",
             profile.Name, task.Length, context.SessionId);
+        context.EmitSessionLogLine?.Invoke(
+            $"SubAgent [{profile.Name}] spawn requested (taskChars={task.Length})");
 
         if (context.SpawnChildActor is null)
         {
             _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available (session={SessionId})", profile.Name, context.SessionId);
+            context.EmitSessionLogLine?.Invoke($"SubAgent [{profile.Name}] cannot spawn — no session context available");
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -93,6 +96,8 @@ public sealed class SubAgentSpawner
             _logger.LogWarning(
                 "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn (session={SessionId})",
                 profile.Name, context.SessionId);
+            context.EmitSessionLogLine?.Invoke(
+                $"SubAgent [{profile.Name}] has no tools available under the parent audience policy — cannot spawn");
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -154,6 +159,8 @@ public sealed class SubAgentSpawner
             _logger.LogError(
                 ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId}, session={SessionId})",
                 profile.Name, runId, context.SessionId);
+            context.EmitSessionLogLine?.Invoke(
+                $"SubAgent [{profile.Name}] failed to spawn child actor (runId={runId}): {ex.Message}");
             // Balance the IsStarted=true notification above: the non-streaming path
             // (activitySink is null) relies solely on OnSubAgentActivity, so without
             // a terminal event the session UI shows a sub-agent stuck in "Started".
@@ -171,6 +178,8 @@ public sealed class SubAgentSpawner
         _logger.LogInformation(
             "SubAgent [{AgentName}] child actor spawned (runId={RunId}, session={SessionId}); dispatching RunSubAgent",
             profile.Name, runId, context.SessionId);
+        context.EmitSessionLogLine?.Invoke(
+            $"SubAgent [{profile.Name}] child actor spawned (runId={runId}); dispatching RunSubAgent");
 
         var sw = Stopwatch.StartNew();
         try
@@ -230,6 +239,8 @@ public sealed class SubAgentSpawner
             _logger.LogInformation(
                 "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms, session={SessionId})",
                 profile.Name, runId, result.Success, sw.ElapsedMilliseconds, context.SessionId);
+            context.EmitSessionLogLine?.Invoke(
+                $"SubAgent [{profile.Name}] completed (runId={runId}, success={result.Success}, duration={sw.ElapsedMilliseconds}ms)");
 
             return result;
         }
@@ -249,6 +260,7 @@ public sealed class SubAgentSpawner
             });
 
             _logger.LogError(ex, "SubAgent [{AgentName}] run failed (runId={RunId}, session={SessionId})", profile.Name, runId, context.SessionId);
+            context.EmitSessionLogLine?.Invoke($"SubAgent [{profile.Name}] run failed (runId={runId}): {ex.Message}");
             return new SubAgentResult
             {
                 Success = false,

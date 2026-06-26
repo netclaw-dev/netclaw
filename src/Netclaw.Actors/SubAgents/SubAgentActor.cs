@@ -671,7 +671,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             };
         }
 
-        var sessionId = _toolExecutionContext.SessionId is null ? (SessionId?)null : new SessionId(_toolExecutionContext.SessionId);
         _log.Info(
             "SubAgent [{AgentName}] LLM call start callId={CallId} iteration={Iteration} messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
             _definition.Name,
@@ -680,7 +679,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
-        _ = InvokeLlmAsync(client, messages, options, sessionId, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
     }
 
     private IReadOnlyList<AITool> ResolveExposedAiTools()
@@ -887,23 +886,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
-        SessionId? sessionId,
         IActorRef self,
         CancellationToken ct)
-        => InvokeLlmAsync(client, messages, options, sessionId, self, callId: 0, ct);
+        => InvokeLlmAsync(client, messages, options, self, callId: 0, ct);
 
     internal static async Task InvokeLlmAsync(
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
-        SessionId? sessionId,
         IActorRef self,
         long callId,
         CancellationToken ct)
     {
         try
         {
-
             // Use streaming to match the main session path. The non-streaming
             // GetResponseAsync path drops reasoning content for some providers
             // (e.g., Qwen emits <think> blocks that surface as TextReasoningContent
