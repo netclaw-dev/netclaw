@@ -99,6 +99,7 @@ keys used by model references.
 | `Type` | string | `"ollama"` | Provider SDK to use. Supported: `ollama`, `openai-compatible`, `openrouter`, `openai`, `anthropic`, `github-copilot`, `veniceai`. |
 | `Endpoint` | string | `"http://localhost:11434"` | Base URL for the provider API. |
 | `ApiKey` | string? | `null` | API key. Should go in `secrets.json` or an environment variable. |
+| `VendorOptions` | object? | `null` | Provider-owned non-secret options. For `github-copilot`, `GitHubHost` and `GitHubApiBase` select the GitHub Enterprise host used for OAuth and Copilot token exchange; the Copilot API base remains `Endpoint`. |
 
 ### Models
 

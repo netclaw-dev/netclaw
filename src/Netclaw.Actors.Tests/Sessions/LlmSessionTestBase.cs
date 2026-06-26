@@ -85,6 +85,7 @@ public abstract class LlmSessionTestBase : TestKit
         services.AddSingleton<ReminderDefinitionStore>();
         services.AddSingleton<ReminderHistoryStore>();
         services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
+        services.AddSingleton<IReminderChannelNotifier>(NullReminderChannelNotifier.Instance);
         ConfigureSessionServices(services);
         services.AddLlmSessionCompositeRecords();
     }

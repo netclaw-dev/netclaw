@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Providers.GitHubCopilot;
 
 namespace Netclaw.Providers.OAuth;
 
@@ -49,7 +50,7 @@ public sealed class ProviderOAuthRefreshingProbe(
 
         if (entry.AuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce
             && entry.OAuthTokenExpiry is not null
-            && descriptor.Auth.GetOAuthConfig() is { } oauth)
+            && ResolveOAuthConfig(entry, descriptor) is { } oauth)
         {
             var refreshResult = await TryRefreshAsync(providerName, entry, oauth, ct);
             if (refreshResult is not null)
@@ -58,6 +59,11 @@ public sealed class ProviderOAuthRefreshingProbe(
 
         return await descriptor.ProbeAsync(entry, ct);
     }
+
+    private static OAuthAuth? ResolveOAuthConfig(ProviderEntry entry, IProviderDescriptor descriptor)
+        => string.Equals(entry.Type, "github-copilot", StringComparison.OrdinalIgnoreCase)
+            ? GitHubCopilotDescriptor.CreateOAuthAuth(entry)
+            : descriptor.Auth.GetOAuthConfig();
 
     private async Task<ProviderProbeResult?> TryRefreshAsync(
         string providerName,

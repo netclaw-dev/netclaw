@@ -73,7 +73,8 @@ public class ReminderManagerActorTests : TestKit
                     TimeProvider.System,
                     definitionStore,
                     historyStore,
-                    _notificationSink)),
+                    _notificationSink,
+                    NullReminderChannelNotifier.Instance)),
                 "reminder-manager-test");
 
             registry.Register<ReminderManagerActorKey>(reminderManager);
@@ -172,6 +173,44 @@ public class ReminderManagerActorTests : TestKit
         Assert.Equal(0, health.ScheduledCount);
         Assert.Equal(0, health.ActiveExecutions);
         Assert.Equal(0, health.FailedCount);
+    }
+
+    [Fact]
+    public async Task Status_query_returns_per_reminder_health()
+    {
+        var manager = await GetManagerAsync();
+
+        var definition = CreateDefinition("test-status", "Check status");
+        var authorization = new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test");
+        await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(status.Found);
+        Assert.True(status.Enabled);
+        Assert.False(status.Executing);
+        Assert.Equal(0, status.ConsecutiveFailures);
+        Assert.Equal(0, status.SkippedDuplicates);
+        Assert.NotNull(status.NextFire);
+        Assert.Empty(status.RecentHistory);
+    }
+
+    [Fact]
+    public async Task Status_query_for_unknown_reminder_returns_not_found()
+    {
+        var manager = await GetManagerAsync();
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(new ReminderId("does-not-exist")),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(status.Found);
+        Assert.False(status.Enabled);
+        Assert.Equal(0, status.ConsecutiveFailures);
+        Assert.Equal(0, status.SkippedDuplicates);
+        Assert.Empty(status.RecentHistory);
     }
 
     [Fact]
@@ -411,7 +450,8 @@ public class ReminderManagerActorTests : TestKit
                 TimeProvider.System,
                 store,
                 new ReminderHistoryStore(paths),
-                sink)),
+                sink,
+                NullReminderChannelNotifier.Instance)),
             "legacy-reminder-alert-manager");
 
         // The legacy-schema alert is emitted synchronously inside PreStart, and

@@ -38,4 +38,7 @@ public sealed class ProviderEntry
     /// <see cref="ProviderConfigurationLoader"/>.
     /// </remarks>
     public JsonObject? VendorOptions { get; internal set; }
+
+    public void SetVendorOptions(JsonObject? vendorOptions) =>
+        VendorOptions = vendorOptions;
 }
