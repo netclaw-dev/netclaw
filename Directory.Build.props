@@ -8,8 +8,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.24.2</VersionPrefix>
-    <VersionSuffix></VersionSuffix>
+    <VersionPrefix>0.24.3</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
     <PackageReleaseNotes>Netclaw v0.24.2 — DwarfStar provider support, sub-agent operating rule inheritance, systemd update reliability, and reliability improvements
 
 **Features**
