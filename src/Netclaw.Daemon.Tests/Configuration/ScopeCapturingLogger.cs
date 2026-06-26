@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 
@@ -15,8 +16,6 @@ namespace Netclaw.Daemon.Tests.Configuration;
 /// </summary>
 internal sealed class ScopeCapturingLogger : ILogger
 {
-    private const string SessionIdKey = "SessionId";
-
     public List<object?> Scopes { get; } = [];
 
     public void Log<TState>(
@@ -36,10 +35,10 @@ internal sealed class ScopeCapturingLogger : ILogger
     /// <summary>True if a scope tagging the given session id was opened.</summary>
     public bool HasSessionScope(string expectedId) =>
         Scopes.Any(s => s is IEnumerable<KeyValuePair<string, object>> kvps
-            && kvps.Any(kv => kv.Key == SessionIdKey && kv.Value is string v && v == expectedId));
+            && kvps.Any(kv => kv.Key == NetclawLogProperties.SessionId && kv.Value is string v && v == expectedId));
 
     /// <summary>True if any session-id scope (regardless of value) was opened.</summary>
     public bool HasAnySessionScope() =>
         Scopes.Any(s => s is IEnumerable<KeyValuePair<string, object>> kvps
-            && kvps.Any(kv => kv.Key == SessionIdKey));
+            && kvps.Any(kv => kv.Key == NetclawLogProperties.SessionId));
 }

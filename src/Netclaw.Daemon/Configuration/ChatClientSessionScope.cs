@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Daemon.Configuration;
@@ -26,10 +27,8 @@ namespace Netclaw.Daemon.Configuration;
 /// </summary>
 internal static class ChatClientSessionScope
 {
-    private const string SessionIdKey = "SessionId";
-
     public static IDisposable? Begin(ILogger logger, ChatOptions? options) =>
         options is SessionScopedChatOptions { SessionId: { Length: > 0 } sessionId }
-            ? logger.BeginScope(new[] { new KeyValuePair<string, object>(SessionIdKey, sessionId) })
+            ? logger.BeginScope(new[] { new KeyValuePair<string, object>(NetclawLogProperties.SessionId, sessionId) })
             : null;
 }

@@ -208,7 +208,7 @@ public abstract class ChannelConversationActor<TMessage> : ReceiveActor
 
         var log = Log
             .WithContext(ThreadLogContextKey, threadKey)
-            .WithContext("SessionId", sessionId.Value)
+            .WithContext(NetclawLogProperties.SessionId, sessionId.Value)
             .WithContext("TurnId", turnId)
             .WithContext(EventLogContextKey, eventId);
 

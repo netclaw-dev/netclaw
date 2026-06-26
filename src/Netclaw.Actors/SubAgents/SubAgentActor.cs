@@ -270,9 +270,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _parentSessionId = parentSessionId;
             var enrichedLog = Context.GetLogger();
             if (!string.IsNullOrWhiteSpace(parentSessionId))
-                enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
+                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SessionId, parentSessionId);
             if (!string.IsNullOrWhiteSpace(scopeId))
-                enrichedLog = enrichedLog.WithContext("SubSessionId", scopeId);
+                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SubSessionId, scopeId);
             _log = enrichedLog;
 
             // The run is bounded by a two-phase inactivity watchdog re-armed on

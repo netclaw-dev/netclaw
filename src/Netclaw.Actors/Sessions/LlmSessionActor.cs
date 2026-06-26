@@ -246,7 +246,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
-        _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
+        _log = Context.GetLogger().WithContext(NetclawLogProperties.SessionId, _sessionId.Value);
 
         // Load all non-MCP tools for initial LLM calls.
         // MCP tools are loaded dynamically via search_tools and can be retained for a
