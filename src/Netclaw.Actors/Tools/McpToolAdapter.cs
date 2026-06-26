@@ -145,7 +145,7 @@ public sealed class McpToolAdapter : INetclawTool
                 ? new AIFunctionArguments(coerced)
                 : null;
             var result = await func.InvokeAsync(aiArgs, ct);
-            return result?.ToString() ?? "";
+            return McpToolResultFormatter.Format(result, Name);
         }
         catch (Exception ex)
         {
