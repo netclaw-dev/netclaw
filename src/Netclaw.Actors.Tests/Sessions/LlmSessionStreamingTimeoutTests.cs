@@ -1,9 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="LlmSessionStreamingTimeoutTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
@@ -18,9 +19,20 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
+/// <summary>
+/// Runs the ActorSystem on <see cref="Akka.TestKit.TestScheduler"/> so the
+/// watchdog's timer fires only on an explicit <c>AdvanceScheduler</c> — no
+/// wall-clock race against threadpool scheduling. The chat client signals when its
+/// streaming method is invoked; that happens strictly after the watchdog is armed,
+/// so the test only advances once the timer exists. The success path advances
+/// nothing, so a healthy stream can never be spuriously timed out under load.
+/// </summary>
 public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : LlmSessionTestBase(output)
 {
+    private static readonly TimeSpan FirstTokenTimeout = TimeSpan.FromSeconds(2);
     private readonly StreamingTimeoutTestChatClient _chatClient = new();
+
+    protected override bool UseTestScheduler => true;
 
     protected override void ConfigureSessionServices(IServiceCollection services)
     {
@@ -32,8 +44,8 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
         });
         services.AddSingleton(new SessionConfig
         {
-            PrefillTimeout = TimeSpan.FromSeconds(2),
-            FirstTokenTimeout = TimeSpan.FromSeconds(2),
+            PrefillTimeout = FirstTokenTimeout,
+            FirstTokenTimeout = FirstTokenTimeout,
             ToolExecutionTimeout = TimeSpan.FromSeconds(10),
             SidecarLlmTimeout = TimeSpan.FromSeconds(10),
             Tuning = new SessionTuning
@@ -67,7 +79,10 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             Content = "hello"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // FirstTokenTimeout is 2s — should fire within ~3s
+        // The watchdog is armed before the stream is invoked; advance only after.
+        await _chatClient.WaitForStreamInvocationAsync(TestContext.Current.CancellationToken);
+        AdvanceScheduler(FirstTokenTimeout);
+
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.Contains("timed out", error.Message);
@@ -77,18 +92,24 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
     [Fact]
     public async Task Timeout_resets_on_delta_and_fires_after_silence()
     {
-        // Emit deltas then hang — the unified timeout (2s) resets on each delta,
-        // then fires 2s after the last one
+        // Emit deltas (each resets the liveness budget) then go silent; the timeout
+        // fires one budget after the last delta.
         _chatClient.Mode = StreamMode.EmitThenHang;
 
         var sessionId = new SessionId("streaming-timeout/delta-then-silence");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("delta-silence-sub");
 
+        // Subscribe to streaming deltas so we can observe delta PROCESSING. The
+        // watchdog re-arms on each delta before that delta is emitted, so receiving
+        // the last delta proves the last re-arm has run — only then is it safe to
+        // advance (a delta processed after the advance would re-arm the liveness
+        // timer past it, and the timeout would never fire). ErrorOutput/TurnCompleted
+        // are emitted with no required flag, so they arrive regardless of filter.
         await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
+            Filter = OutputFilter.TextStreaming
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -98,11 +119,20 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             Content = "hello"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // Deltas stream, then silence — timeout fires after FirstTokenTimeout (2s) of no activity
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(8), cancellationToken: TestContext.Current.CancellationToken);
+        await _chatClient.WaitForStreamInvocationAsync(TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(
+            m => m is TextDeltaOutput d && d.Delta.Contains("chunk3", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The stream is now silent on the virtual clock; advance one budget to fire.
+        AdvanceScheduler(FirstTokenTimeout);
+
+        var error = (ErrorOutput)await subscriber.FishForMessageAsync<object>(
+            m => m is ErrorOutput, TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.Contains("timed out", error.Message);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(
+            m => m is TurnCompleted, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -127,6 +157,8 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             Content = "hello"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
+        // Virtual time never advances, so the watchdog cannot fire — a correct stream
+        // completes regardless of how slowly the box schedules it.
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("success", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -136,7 +168,17 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
 
     private sealed class StreamingTimeoutTestChatClient : IChatClient
     {
+        // Unbounded so the producer (chat client) never blocks; SingleReader because
+        // only the test awaits invocations, one turn at a time.
+        private readonly Channel<int> _invocations =
+            Channel.CreateUnbounded<int>(new UnboundedChannelOptions { SingleReader = true });
+        private int _callCount;
+
         public StreamMode Mode { get; set; } = StreamMode.HangForever;
+
+        /// <summary>Awaits the next streaming invocation. The watchdog is already armed by then.</summary>
+        public async Task WaitForStreamInvocationAsync(CancellationToken cancellationToken)
+            => await _invocations.Reader.ReadAsync(cancellationToken);
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -149,6 +191,8 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            _invocations.Writer.TryWrite(Interlocked.Increment(ref _callCount));
+
             return Mode switch
             {
                 StreamMode.HangForever => TestStreamingHelpers.NeverCompletesAsync(CancellationToken.None),
@@ -158,7 +202,7 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             };
         }
 
-        private static async IAsyncEnumerable<ChatResponseUpdate> EmitThenHangAsync(
+        private async IAsyncEnumerable<ChatResponseUpdate> EmitThenHangAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             yield return new ChatResponseUpdate
@@ -180,7 +224,7 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             };
             await Task.Yield();
 
-            // Now hang — stream goes silent
+            // Deltas done; the stream is now silent.
             var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             await gate.Task;
             yield break;

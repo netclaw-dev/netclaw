@@ -1,8 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="LlmSessionWatchdogTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
@@ -16,9 +17,21 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
+/// <summary>
+/// Runs the ActorSystem on <see cref="Akka.TestKit.TestScheduler"/> so the
+/// processing watchdog's timer fires only on an explicit <c>AdvanceScheduler</c>
+/// instead of racing the wall clock against threadpool scheduling. The chat
+/// client signals each streaming invocation (which happens after the watchdog is
+/// armed), so the test advances virtual time only once the timer exists; a
+/// recovery turn that should succeed never advances, so it cannot be spuriously
+/// timed out under load.
+/// </summary>
 public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessionTestBase(output)
 {
+    private static readonly TimeSpan FirstTokenTimeout = TimeSpan.FromSeconds(1);
     private readonly HangingStreamingChatClient _chatClient = new();
+
+    protected override bool UseTestScheduler => true;
 
     protected override void ConfigureSessionServices(IServiceCollection services)
     {
@@ -30,8 +43,8 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
         });
         services.AddSingleton(new SessionConfig
         {
-            PrefillTimeout = TimeSpan.FromSeconds(1),
-            FirstTokenTimeout = TimeSpan.FromSeconds(1),
+            PrefillTimeout = FirstTokenTimeout,
+            FirstTokenTimeout = FirstTokenTimeout,
             ToolExecutionTimeout = TimeSpan.FromSeconds(1),
             SidecarLlmTimeout = TimeSpan.FromSeconds(1),
             Tuning = new SessionTuning
@@ -63,6 +76,9 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
             Content = "first"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
+        await _chatClient.WaitForStreamInvocationAsync(TestContext.Current.CancellationToken);
+        AdvanceScheduler(FirstTokenTimeout);
+
         var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("timed out", firstError.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -72,6 +88,9 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
             SessionId = sessionId,
             Content = "second"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await _chatClient.WaitForStreamInvocationAsync(TestContext.Current.CancellationToken);
+        AdvanceScheduler(FirstTokenTimeout);
 
         var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("timed out", secondError.Message, StringComparison.OrdinalIgnoreCase);
@@ -108,6 +127,11 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
             Content = "second"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
+        // Fire only the first turn's watchdog. The buffered second turn succeeds and
+        // is never advanced, so its (correct) recovery cannot be spuriously timed out.
+        await _chatClient.WaitForStreamInvocationAsync(TestContext.Current.CancellationToken);
+        AdvanceScheduler(FirstTokenTimeout);
+
         var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("timed out", firstError.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -121,10 +145,16 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
 
     private sealed class HangingStreamingChatClient : IChatClient
     {
+        private readonly Channel<int> _invocations =
+            Channel.CreateUnbounded<int>(new UnboundedChannelOptions { SingleReader = true });
         private int _callCount;
 
         public int CallCount => _callCount;
         public bool SucceedAfterFirstTimeout { get; set; }
+
+        /// <summary>Awaits the next streaming invocation. The watchdog is already armed by then.</summary>
+        public async Task WaitForStreamInvocationAsync(CancellationToken cancellationToken)
+            => await _invocations.Reader.ReadAsync(cancellationToken);
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -138,6 +168,7 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessi
             CancellationToken cancellationToken = default)
         {
             var callNumber = Interlocked.Increment(ref _callCount);
+            _invocations.Writer.TryWrite(callNumber);
 
             if (SucceedAfterFirstTimeout && callNumber > 1)
                 return TestStreamingHelpers.ReturnTextAsync($"recovered after timeout on call {callNumber}", cancellationToken);
