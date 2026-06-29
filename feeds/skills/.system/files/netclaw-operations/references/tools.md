@@ -92,3 +92,19 @@ Personal audience, press `M` to set a server default (`Approval` is the
 safe choice), `S` to save, then restart the daemon. Repeat for each
 audience you want to tighten. `doctor` stops warning once the default is
 set.
+
+### When an MCP tool fails
+
+A failed MCP tool call returns a plain, attributed error string — not a raw
+JSON blob — so you can act on it directly:
+
+- `Error: MCP tool 'server/tool' reported a failure: <detail>` — the **server**
+  rejected the call (e.g. bad arguments, `old_string not found`). The detail is
+  the server's own message; fix the arguments and retry, or pick a different
+  tool. This is a tool-level error, not a netclaw or "tool not loaded" problem.
+- `Error: MCP tool 'server/tool' failed: <detail>` — the call could not reach
+  the server (transport/connection failure). Check the server's health with
+  `netclaw mcp status`; a reconnect is attempted automatically once.
+
+Both name the server explicitly (`server/tool`), so when two servers expose a
+same-named tool you can tell which one failed.

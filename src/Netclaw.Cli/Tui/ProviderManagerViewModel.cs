@@ -30,6 +30,9 @@ public enum ProviderManagerState
     AddSelectType,
     AddName,
     AddSelectAuth,
+    AddGitHubCopilotAuthHost,
+    AddGitHubCopilotEnterpriseHost,
+    AddGitHubCopilotEnterpriseApiBase,
     AddCredentials,
     AddOAuthDeviceFlow,
     AddBrowserOAuthFlow,
@@ -127,6 +130,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
     public IReadOnlyDictionary<string, object?>? NewVendorOptions { get; set; }
+    public GitHubCopilotAuthHostMode NewGitHubCopilotHostMode { get; set; } = GitHubCopilotAuthHostMode.GitHubCom;
+    public string? NewGitHubCopilotHost { get; set; }
+    public string? NewGitHubCopilotApiBase { get; set; }
     private bool _newProviderPersisted;
 
     // ── OAuth flow (shared coordinator) ──
@@ -473,24 +479,14 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         if (method == AuthMethod.OAuthDevice)
         {
-            if (!TryBuildOAuthFlowEntry(out var oauthEntry, out var error))
+            if (!IsFixFlow && GitHubCopilotSetupFlow.IsGitHubCopilot(NewProviderType))
             {
-                StatusMessage.Value = error;
-                RequestRedraw();
+                CurrentState.Value = ProviderManagerState.AddGitHubCopilotAuthHost;
+                NotifyStateChanged();
                 return;
             }
 
-            CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
-            NotifyStateChanged();
-            ProbeElapsedSeconds.Value = 0;
-            var ct = OAuth.StartDeviceFlow(NewProviderType!, result =>
-            {
-                NewApiKey = result.AccessToken.Value;
-                CurrentState.Value = ProviderManagerState.AddValidating;
-                NotifyStateChanged();
-                StartProbe();
-            }, oauthEntry);
-            _ = RunProbeTimerAsync(ct);
+            StartOAuthDeviceFlow();
             return;
         }
 
@@ -515,11 +511,112 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
+    public void SelectGitHubCopilotAuthHost(GitHubCopilotAuthHostMode mode)
+    {
+        NewGitHubCopilotHostMode = mode;
+        ErrorMessage.Value = "";
+
+        if (mode == GitHubCopilotAuthHostMode.GitHubCom)
+        {
+            NewGitHubCopilotHost = null;
+            NewGitHubCopilotApiBase = null;
+            NewVendorOptions = null;
+            StartOAuthDeviceFlow();
+            return;
+        }
+
+        CurrentState.Value = ProviderManagerState.AddGitHubCopilotEnterpriseHost;
+        NotifyStateChanged();
+    }
+
+    public bool TrySetGitHubCopilotEnterpriseHost(string? gitHubHost, out string error)
+    {
+        var previousHost = NewGitHubCopilotHost;
+        var trimmedHost = gitHubHost?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmedHost))
+        {
+            error = "GitHub Enterprise host is required.";
+            return false;
+        }
+
+        if (!GitHubCopilotSetupFlow.TryResolveEnterpriseVendorOptions(
+                trimmedHost,
+                gitHubApiBase: null,
+                out _,
+                out error))
+        {
+            return false;
+        }
+
+        NewGitHubCopilotHost = trimmedHost;
+        if (!string.Equals(previousHost, trimmedHost, StringComparison.Ordinal))
+        {
+            NewGitHubCopilotApiBase = null;
+            NewVendorOptions = null;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    public bool SubmitGitHubCopilotEnterpriseHost(string? gitHubHost, out string error)
+    {
+        if (!TrySetGitHubCopilotEnterpriseHost(gitHubHost, out error))
+            return false;
+
+        CurrentState.Value = ProviderManagerState.AddGitHubCopilotEnterpriseApiBase;
+        NotifyStateChanged();
+        return true;
+    }
+
+    public bool TryStartGitHubCopilotEnterpriseOAuth(string? gitHubApiBase, out string error)
+    {
+        NewGitHubCopilotApiBase = string.IsNullOrWhiteSpace(gitHubApiBase)
+            ? null
+            : gitHubApiBase.Trim();
+
+        if (!GitHubCopilotSetupFlow.TryResolveEnterpriseVendorOptions(
+                NewGitHubCopilotHost,
+                NewGitHubCopilotApiBase,
+                out var vendorOptions,
+                out error))
+        {
+            return false;
+        }
+
+        NewVendorOptions = vendorOptions;
+        ErrorMessage.Value = "";
+        StartOAuthDeviceFlow();
+        return true;
+    }
+
+    private void StartOAuthDeviceFlow()
+    {
+        if (!TryBuildOAuthFlowEntry(out var oauthEntry, out var error))
+        {
+            ErrorMessage.Value = error;
+            RequestRedraw();
+            return;
+        }
+
+        CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
+        NotifyStateChanged();
+        ProbeElapsedSeconds.Value = 0;
+        var ct = OAuth.StartDeviceFlow(NewProviderType!, result =>
+        {
+            NewApiKey = result.AccessToken.Value;
+            CurrentState.Value = ProviderManagerState.AddValidating;
+            NotifyStateChanged();
+            StartProbe();
+        }, oauthEntry);
+        _ = RunProbeTimerAsync(ct);
+    }
+
     private bool TryBuildOAuthFlowEntry(out ProviderEntry? entry, out string error)
     {
         entry = null;
         error = string.Empty;
-        if (!string.Equals(NewProviderType, "github-copilot", StringComparison.OrdinalIgnoreCase))
+        if (!GitHubCopilotSetupFlow.IsGitHubCopilot(NewProviderType))
             return true;
 
         if (IsFixFlow && DetailProvider?.Entry is { } existing)
@@ -528,24 +625,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return true;
         }
 
-        if (!GitHubCopilotAuthResolver.TryResolveSetupOptions(
-                gitHubHost: null,
-                gitHubApiBase: null,
-                includeAmbientEnvironment: true,
-                out var setupOptions,
-                out var setupError))
-        {
-            error = setupError ?? "GitHub Copilot enterprise host settings are invalid.";
-            return false;
-        }
-
-        NewVendorOptions = GitHubCopilotAuthResolver.ToVendorOptions(setupOptions);
-        entry = new ProviderEntry
-        {
-            Type = "github-copilot",
-            AuthMethod = AuthMethod.OAuthDevice,
-        };
-        entry.SetVendorOptions(ToJsonObject(NewVendorOptions));
+        entry = GitHubCopilotSetupFlow.BuildOAuthEntry(NewVendorOptions);
         return true;
     }
 
@@ -893,10 +973,24 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             case ProviderManagerState.AddSelectAuth:
                 GoBackToList();
                 break;
+            case ProviderManagerState.AddGitHubCopilotAuthHost:
+                CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.AddGitHubCopilotEnterpriseHost:
+                CurrentState.Value = ProviderManagerState.AddGitHubCopilotAuthHost;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.AddGitHubCopilotEnterpriseApiBase:
+                CurrentState.Value = ProviderManagerState.AddGitHubCopilotEnterpriseHost;
+                NotifyStateChanged();
+                break;
             case ProviderManagerState.AddOAuthDeviceFlow:
             case ProviderManagerState.AddBrowserOAuthFlow:
                 OAuth.Cancel();
-                CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                CurrentState.Value = GitHubCopilotSetupFlow.IsGitHubCopilot(NewProviderType) && !IsFixFlow
+                    ? ProviderManagerState.AddGitHubCopilotAuthHost
+                    : ProviderManagerState.AddSelectAuth;
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddCredentials:
@@ -915,7 +1009,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 }
                 else
                 {
-                    CurrentState.Value = ProviderManagerState.AddCredentials;
+                    CurrentState.Value = NewAuthMethod == AuthMethod.OAuthDevice
+                                         && GitHubCopilotSetupFlow.IsGitHubCopilot(NewProviderType)
+                        ? ProviderManagerState.AddOAuthDeviceFlow
+                        : ProviderManagerState.AddCredentials;
                 }
                 NotifyStateChanged();
                 break;
@@ -1185,6 +1282,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewApiKey = null;
         NewEndpoint = null;
         NewVendorOptions = null;
+        NewGitHubCopilotHostMode = GitHubCopilotAuthHostMode.GitHubCom;
+        NewGitHubCopilotHost = null;
+        NewGitHubCopilotApiBase = null;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         IsFixFlow = false;
