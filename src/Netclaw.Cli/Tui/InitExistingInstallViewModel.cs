@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using R3;
@@ -38,6 +39,8 @@ public sealed class InitNavigationState
 /// </summary>
 public sealed class InitExistingInstallViewModel : ReactiveViewModel
 {
+    internal static readonly TimeSpan CompletionPause = TimeSpan.FromMilliseconds(600);
+
     public enum Phase
     {
         Menu,
@@ -57,16 +60,34 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
     private readonly InitNavigationState _navigationState;
-    private readonly DaemonManager? _daemonManager;
+    private readonly Func<string, CancellationToken, Task<DaemonResult>> _stopDaemonAsync;
+    private readonly Action<string> _deleteDirectory;
+    private readonly TimeProvider _timeProvider;
+    private readonly CancellationTokenSource _resetCts = new();
+    private volatile bool _disposed;
+    private volatile bool _quitBlockedForDeletion;
 
     public InitExistingInstallViewModel(
         NetclawPaths paths,
         InitNavigationState navigationState,
-        DaemonManager? daemonManager = null)
+        DaemonManager daemonManager,
+        TimeProvider timeProvider)
+        : this(paths, navigationState, daemonManager.StopAsync, DeleteDirectory, timeProvider)
+    {
+    }
+
+    internal InitExistingInstallViewModel(
+        NetclawPaths paths,
+        InitNavigationState navigationState,
+        Func<string, CancellationToken, Task<DaemonResult>> stopDaemonAsync,
+        Action<string> deleteDirectory,
+        TimeProvider timeProvider)
     {
         _paths = paths;
         _navigationState = navigationState;
-        _daemonManager = daemonManager;
+        _stopDaemonAsync = stopDaemonAsync;
+        _deleteDirectory = deleteDirectory;
+        _timeProvider = timeProvider;
     }
 
     public const string IdentityRoute = "/init/identity";
@@ -81,10 +102,11 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     public ResetScopeKind Scope => _scope;
 
     // Progress-screen state
-    private readonly List<bool> _completedSteps = [];
-    public IReadOnlyList<bool> CompletedSteps => _completedSteps;
     public ReactiveProperty<int> CurrentProgressStep { get; } = new(-1);
     public ReactiveProperty<string> ProgressMessage { get; } = new("");
+    public ReactiveProperty<bool> CanQuitProgress { get; } = new(true);
+    internal Task? ResetTask { get; private set; }
+    internal bool IsResetCancellationRequested => _resetCts.IsCancellationRequested;
 
     public static readonly IReadOnlyList<MenuItem> MenuItems =
     [
@@ -171,57 +193,156 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     private void StartResetProgress()
     {
         CurrentPhase.Value = Phase.Progress;
-        _completedSteps.Clear();
-        _completedSteps.Add(false);
-        _completedSteps.Add(false);
-        _completedSteps.Add(false);
         CurrentProgressStep.Value = 0;
+        CanQuitProgress.Value = true;
         ProgressMessage.Value = "Stopping daemon…";
         RequestRedraw();
-        _ = RunResetAsync();
+        // Track the destructive work so tests and future callers can observe completion;
+        // the reset itself runs off the input/render loop to keep Ctrl+Q responsive.
+        ResetTask = Task.Run(() => RunResetAsync(_resetCts.Token), _resetCts.Token);
     }
 
-    private async Task RunResetAsync()
+    private async Task RunResetAsync(CancellationToken ct)
     {
-        SafeStopDaemon(_daemonManager, "factory-reset");
-        _completedSteps[0] = true;
-        CurrentProgressStep.Value = 1;
-        ProgressMessage.Value = _scope == ResetScopeKind.Full ? "Deleting all data…" : "Deleting setup files…";
-        RequestRedraw();
-
         try
         {
+            await StopDaemonBestEffortAsync(ct);
+            if (ct.IsCancellationRequested)
+                return;
+
+            _quitBlockedForDeletion = true;
+            PublishOnLoop(() =>
+            {
+                CanQuitProgress.Value = false;
+                CurrentProgressStep.Value = 1;
+                ProgressMessage.Value = _scope == ResetScopeKind.Full ? "Deleting all data…" : "Deleting setup files…";
+                RequestRedraw();
+            }, ct);
+
+            if (ct.IsCancellationRequested)
+            {
+                _quitBlockedForDeletion = false;
+                return;
+            }
+
             if (_scope == ResetScopeKind.Full)
-                DeleteDirectory(_paths.BasePath);
+            {
+                _deleteDirectory(_paths.BasePath);
+            }
             else
             {
-                DeleteDirectory(_paths.ConfigDirectory);
-                DeleteDirectory(_paths.IdentityDirectory);
-                DeleteDirectory(_paths.SoulDirectory);
+                _deleteDirectory(_paths.ConfigDirectory);
+                _deleteDirectory(_paths.IdentityDirectory);
+                _deleteDirectory(_paths.SoulDirectory);
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            ProgressMessage.Value = $"Reset failed: {ex.Message}";
-            RequestRedraw();
+            _quitBlockedForDeletion = false;
+            return;
+        }
+        catch (Exception ex)
+        {
+            _quitBlockedForDeletion = false;
+            PublishResetFailure(ex, ct);
             return;
         }
 
-        _completedSteps[2] = true;
-        CurrentProgressStep.Value = 2;
-        ProgressMessage.Value = "Purge complete";
-        RequestRedraw();
-        await Task.Delay(600);
-        Navigate?.Invoke(WizardRoute);
+        if (ct.IsCancellationRequested)
+            return;
+
+        _quitBlockedForDeletion = false;
+        PublishOnLoop(() =>
+        {
+            CurrentProgressStep.Value = 3;
+            CanQuitProgress.Value = true;
+            ProgressMessage.Value = "Purge complete";
+            if (StatusMessage.Value.StartsWith("Reset is deleting data;", StringComparison.Ordinal))
+                StatusMessage.Value = "";
+            RequestRedraw();
+        }, ct);
+
+        try
+        {
+            await Task.Delay(CompletionPause, _timeProvider, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        PublishOnLoop(() => Navigate?.Invoke(WizardRoute), ct);
     }
 
-    /// <summary>Best-effort daemon stop — daemon may not be running or externally managed.</summary>
-    private static void SafeStopDaemon(DaemonManager? manager, string reason)
+    /// <summary>Best-effort daemon stop; deletion still surfaces any locked-file failure.</summary>
+    private async Task StopDaemonBestEffortAsync(CancellationToken ct)
     {
-        if (manager is null) return;
-        try { manager.StopAsync(reason).GetAwaiter().GetResult(); }
-        catch (OperationCanceledException) { }
-        catch (Exception) { /* best-effort — daemon may not be running or externally managed */ }
+        Task<DaemonResult>? stopTask = null;
+        try
+        {
+            stopTask = _stopDaemonAsync("factory-reset", ct);
+            var result = await stopTask.WaitAsync(ct);
+            if (!result.Success && !IsDaemonAlreadyStopped(result.Message))
+                PublishStatus($"Daemon stop did not complete; reset will continue: {result.Message}", ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            ObserveLateStopFailure(stopTask);
+        }
+        catch (OperationCanceledException ex)
+        {
+            PublishStatus($"Daemon stop canceled; reset will continue: {ex.Message}", ct);
+        }
+        catch (Exception ex)
+        {
+            PublishStatus($"Daemon stop failed; reset will continue: {ex.Message}", ct);
+        }
+    }
+
+    private static bool IsDaemonAlreadyStopped(string message)
+        => message.StartsWith("Daemon is not running.", StringComparison.Ordinal);
+
+    private static void ObserveLateStopFailure(Task<DaemonResult>? stopTask)
+    {
+        if (stopTask is null || stopTask.IsCompleted)
+            return;
+
+        _ = stopTask.ContinueWith(
+            task => Debug.WriteLine($"Init reset daemon stop completed after cancellation: {task.Exception?.GetBaseException().Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void PublishResetFailure(Exception ex, CancellationToken ct)
+        => PublishOnLoop(() =>
+        {
+            ProgressMessage.Value = $"Reset failed: {ex.Message}";
+            CanQuitProgress.Value = true;
+            if (StatusMessage.Value.StartsWith("Reset is deleting data;", StringComparison.Ordinal))
+                StatusMessage.Value = "";
+            RequestRedraw();
+        }, ct);
+
+    private void PublishStatus(string message, CancellationToken ct)
+        => PublishOnLoop(() =>
+        {
+            StatusMessage.Value = message;
+            RequestRedraw();
+        }, ct);
+
+    private void PublishOnLoop(Action action, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested || _disposed)
+            return;
+
+        _ = InvokeAsync(() =>
+        {
+            if (ct.IsCancellationRequested || _disposed)
+                return;
+
+            action();
+        }, ct);
     }
 
     private static void DeleteDirectory(string path)
@@ -249,15 +370,41 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    public void RequestQuit() => Shutdown();
+    public void RequestQuit()
+    {
+        if (CurrentPhase.Value == Phase.Progress && _quitBlockedForDeletion)
+        {
+            StatusMessage.Value = "Reset is deleting data; quit is disabled until deletion completes.";
+            RequestRedraw();
+            return;
+        }
+
+        if (CurrentPhase.Value == Phase.Progress)
+            _resetCts.Cancel();
+
+        Shutdown();
+    }
 
     public override void Dispose()
     {
+        _disposed = true;
+        _resetCts.Cancel();
+        try
+        {
+            ResetTask?.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Init reset task drain on dispose faulted: {ex.Message}");
+        }
+
+        _resetCts.Dispose();
         CurrentPhase.Dispose();
         SelectedIndex.Dispose();
         StatusMessage.Dispose();
         CurrentProgressStep.Dispose();
         ProgressMessage.Dispose();
+        CanQuitProgress.Dispose();
         base.Dispose();
     }
 }

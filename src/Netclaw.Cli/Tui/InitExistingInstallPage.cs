@@ -23,6 +23,7 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
 {
     private SelectionListNode<string>? _list;
     private DynamicLayoutNode? _bodyNode;
+    private DynamicLayoutNode? _keyBindingsNode;
     private readonly CompositeDisposable _phaseSubs = [];
 
     protected override void OnBound()
@@ -33,9 +34,25 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
 
-        // Rebuild the body when the phase changes so the list reflects the new options.
+        // Rebuild dynamic chrome when the phase changes so options and key hints stay in sync.
         ViewModel.CurrentPhase
+            .Subscribe(_ =>
+            {
+                _bodyNode?.Invalidate();
+                _keyBindingsNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
+        ViewModel.CurrentProgressStep
             .Subscribe(_ => _bodyNode?.Invalidate())
+            .DisposeWith(Subscriptions);
+
+        ViewModel.ProgressMessage
+            .Subscribe(_ => _bodyNode?.Invalidate())
+            .DisposeWith(Subscriptions);
+
+        ViewModel.CanQuitProgress
+            .Subscribe(_ => _keyBindingsNode?.Invalidate())
             .DisposeWith(Subscriptions);
     }
 
@@ -47,12 +64,13 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
     private ILayoutNode BuildInnerLayout()
     {
         _bodyNode = new DynamicLayoutNode(BuildBody);
+        _keyBindingsNode = new DynamicLayoutNode(BuildKeyBindings);
         return Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(_bodyNode)
             .WithChild(Layouts.Empty().Fill())
             .WithChild(BuildStatusBar())
-            .WithChild(BuildKeyBindings());
+            .WithChild(_keyBindingsNode);
     }
 
     private ILayoutNode BuildBody()
@@ -65,7 +83,10 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
 
         // ── Progress screen ──
         if (phase == InitExistingInstallViewModel.Phase.Progress)
+        {
+            _list = null;
             return BuildProgressScreen();
+        }
 
         // ── Menu / confirmation screens ──
         var header = Layouts.Vertical().WithSpacing(0);
@@ -129,11 +150,12 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
     {
         var progressStep = ViewModel.CurrentProgressStep.Value;
 
-        // Step labels — must match InitExistingInstallViewModel.ProgressStep enum order
         var stepLabels = new[]
         {
             "Stopping daemon…",
-            "Deleting data…",
+            ViewModel.Scope == InitExistingInstallViewModel.ResetScopeKind.Full
+                ? "Deleting data…"
+                : "Deleting setup files…",
             "Purge complete",
         };
 
@@ -185,11 +207,13 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
             .Height(1);
     }
 
-    private LayoutNode BuildKeyBindings()
+    private ILayoutNode BuildKeyBindings()
     {
         var phase = ViewModel.CurrentPhase.Value;
         if (phase == InitExistingInstallViewModel.Phase.Progress)
-            return NetclawTuiChrome.BuildKeyHintLine(" [Ctrl+Q] Quit");
+            return NetclawTuiChrome.BuildKeyHintLine(ViewModel.CanQuitProgress.Value
+                ? " [Ctrl+Q] Quit"
+                : " Reset in progress — deletion cannot be interrupted");
 
         return NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit");
     }
@@ -202,6 +226,9 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
             ViewModel.RequestQuit();
             return;
         }
+
+        if (ViewModel.CurrentPhase.Value == InitExistingInstallViewModel.Phase.Progress)
+            return;
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {

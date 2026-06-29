@@ -495,7 +495,7 @@ static async Task RunAsync(string[] args)
                 return;
 
             case "stop":
-                var stopResult = await manager.StopAsync("cli-stop");
+                var stopResult = await manager.StopAsync("cli-stop", CancellationToken.None);
                 WriteDaemonResult(stopResult);
                 return;
 
