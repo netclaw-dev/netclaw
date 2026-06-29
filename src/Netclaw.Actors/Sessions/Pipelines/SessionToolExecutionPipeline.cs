@@ -98,7 +98,6 @@ internal static class SessionToolExecutionPipeline
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
         TurnContext? turnContext = null,
-        Action<string>? emitSessionLogLine = null,
         CancellationToken ct = default)
     {
         try
@@ -139,8 +138,7 @@ internal static class SessionToolExecutionPipeline
                         ? overrideDecision
                         : null,
                     turnContext,
-                    modelInputBudget,
-                    emitSessionLogLine);
+                    modelInputBudget);
                 if (streamToolResults)
                     self.Tell(new ToolExecutionSingleCompleted(result));
                 return result;
@@ -211,8 +209,7 @@ internal static class SessionToolExecutionPipeline
         IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
         ApprovalDecision? decisionOverride = null,
         TurnContext? turnContext = null,
-        ModelInputBatchBudget? modelInputBudget = null,
-        Action<string>? emitSessionLogLine = null)
+        ModelInputBatchBudget? modelInputBudget = null)
     {
         // Single execution-preflight seam, shared with the sub-agent path via
         // IToolExecutor.InterpretToolCall: validate the ORIGINAL arguments (parse
@@ -288,7 +285,6 @@ internal static class SessionToolExecutionPipeline
         }
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
-        context.EmitSessionLogLine = emitSessionLogLine;
         context.OnSubAgentActivity = info =>
         {
             if (info.IsStarted)

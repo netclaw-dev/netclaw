@@ -28,9 +28,9 @@ public sealed class RollingFileLoggerProviderTests : IDisposable
             logger.LogInformation("hello daemon log {SessionId}", "channel/thread");
         }
 
-        // The {SessionId} field is NOT special to this sink — it renders into the message
-        // text and the line goes to daemon.log only. Per-session routing is the producers'
-        // job (explicit SessionLogDiagnostic), not the logging sink's.
+        // No dispatcher was attached, so per-session routing is off and even a session-tagged
+        // line falls back to daemon.log. (When routing IS attached the {SessionId} line is
+        // partitioned to session.log — see RollingFileLoggerPartitionTests.)
         var daemonLog = Directory.GetFiles(Path.Combine(_basePath, "logs"), "daemon-*.log").Single();
         var text = await File.ReadAllTextAsync(daemonLog, TestContext.Current.CancellationToken);
         Assert.Contains("hello daemon log", text, StringComparison.Ordinal);

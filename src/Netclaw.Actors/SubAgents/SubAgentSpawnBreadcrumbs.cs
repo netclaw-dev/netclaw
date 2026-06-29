@@ -4,109 +4,98 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// Single emit point for the sub-agent spawn lifecycle. Each method fans one event
-/// out to BOTH sinks from one source of truth, so callers state the event once and
-/// the two renderings cannot drift:
-/// <list type="bullet">
-/// <item><c>daemon.log</c> / Seq — the structured diagnostic line (queryable
-/// <c>{AgentName}</c>/<c>{RunId}</c>/<c>{SessionId}</c> fields, plus the exception
-/// object on failure paths).</item>
-/// <item><c>session.log</c> — the flat audit line for the parent's transcript, via
-/// <see cref="ToolExecutionContext.EmitSessionLogLine"/>. The <c>session=…</c> suffix
-/// is omitted because that file is already per-session.</item>
-/// </list>
-/// These are two different artifacts (operational diagnostics vs the per-session
-/// audit transcript), not two ways of writing the same file — unifying them at the
-/// sink was tried and reverted (routing by <c>SessionId</c> floods the transcript).
-/// The <paramref name="logger"/> is nullable so tool call sites with an optional
-/// logger can share these emitters.
+/// Centralizes the sub-agent spawn-lifecycle log lines. Each is an ordinary structured log call
+/// wrapped in a <c>SessionId</c> scope, so the file-logger partitions it into the spawning
+/// session's <c>session.log</c> (and the OTLP exporter sees the session id as an attribute).
+/// <see cref="SubAgentSpawner"/> and <see cref="SpawnAgentTool"/> are plain classes — no actor
+/// <c>WithContext</c> — so the scope is what carries the id. The <paramref name="logger"/> is
+/// nullable so tool call sites with an optional logger can share these emitters.
 /// </summary>
 internal static class SubAgentSpawnBreadcrumbs
 {
     public static void SpawnRequested(ILogger? logger, ToolExecutionContext context, string agentName, int taskChars)
     {
-        logger?.LogInformation(
-            "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars}, session={SessionId})",
-            agentName, taskChars, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] spawn requested (taskChars={taskChars})");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogInformation(
+                "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars})",
+                agentName, taskChars);
     }
 
     public static void NoSessionContext(ILogger? logger, ToolExecutionContext context, string agentName)
     {
-        logger?.LogWarning(
-            "SubAgent [{AgentName}] cannot spawn — no session context available (session={SessionId})",
-            agentName, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] cannot spawn — no session context available");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogWarning(
+                "SubAgent [{AgentName}] cannot spawn — no session context available",
+                agentName);
     }
 
     public static void NoToolsAvailable(ILogger? logger, ToolExecutionContext context, string agentName)
     {
-        logger?.LogWarning(
-            "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn (session={SessionId})",
-            agentName, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] has no tools available under the parent audience policy — cannot spawn");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogWarning(
+                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
+                agentName);
     }
 
     public static void ChildSpawnFailed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, Exception ex)
     {
-        logger?.LogError(
-            ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId}, session={SessionId})",
-            agentName, runId, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] failed to spawn child actor (runId={runId}): {ex.Message}");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogError(
+                ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId})",
+                agentName, runId);
     }
 
     public static void ChildSpawned(ILogger? logger, ToolExecutionContext context, string agentName, string runId)
     {
-        logger?.LogInformation(
-            "SubAgent [{AgentName}] child actor spawned (runId={RunId}, session={SessionId}); dispatching RunSubAgent",
-            agentName, runId, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] child actor spawned (runId={runId}); dispatching RunSubAgent");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogInformation(
+                "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
+                agentName, runId);
     }
 
     public static void Completed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, bool success, long durationMs)
     {
-        logger?.LogInformation(
-            "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms, session={SessionId})",
-            agentName, runId, success, durationMs, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] completed (runId={runId}, success={success}, duration={durationMs}ms)");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogInformation(
+                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
+                agentName, runId, success, durationMs);
     }
 
     public static void RunFailed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, Exception ex)
     {
-        logger?.LogError(
-            ex, "SubAgent [{AgentName}] run failed (runId={RunId}, session={SessionId})",
-            agentName, runId, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"SubAgent [{agentName}] run failed (runId={runId}): {ex.Message}");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogError(
+                ex, "SubAgent [{AgentName}] run failed (runId={RunId})",
+                agentName, runId);
     }
 
     public static void SpawnRefused(ILogger? logger, ToolExecutionContext context, string agentName, TrustAudience audience, bool subsystemEnabled)
     {
-        logger?.LogWarning(
-            "spawn_agent refused (agent={Agent}, audience={Audience}, subsystemEnabled={Enabled}, session={SessionId})",
-            agentName, audience, subsystemEnabled, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"spawn_agent refused (agent={agentName}, audience={audience}, subsystemEnabled={subsystemEnabled})");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogWarning(
+                "spawn_agent refused (agent={Agent}, audience={Audience}, subsystemEnabled={Enabled})",
+                agentName, audience, subsystemEnabled);
     }
 
     public static void UnknownAgentRefused(ILogger? logger, ToolExecutionContext context, string agentName, int availableCount)
     {
-        logger?.LogWarning(
-            "spawn_agent refused: agent '{Agent}' not found or not user-facing (availableCount={Count}, session={SessionId})",
-            agentName, availableCount, context.SessionId);
-        context.EmitSessionLogLine?.Invoke(
-            $"spawn_agent refused: agent '{agentName}' not found or not user-facing (availableCount={availableCount})");
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogWarning(
+                "spawn_agent refused: agent '{Agent}' not found or not user-facing (availableCount={Count})",
+                agentName, availableCount);
     }
+
+    // Opens the SessionId scope the file-logger routes on. No-op (null using) when there is no
+    // logger or no session — the line then falls through to daemon.log as a sessionless line.
+    private static IDisposable? BeginSessionScope(ILogger? logger, string? sessionId) =>
+        logger is not null && !string.IsNullOrWhiteSpace(sessionId)
+            ? logger.BeginScope(new[] { new KeyValuePair<string, object>(NetclawLogProperties.SessionId, sessionId) })
+            : null;
 }

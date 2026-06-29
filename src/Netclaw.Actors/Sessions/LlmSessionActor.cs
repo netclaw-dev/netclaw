@@ -1971,11 +1971,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             logActor?.Tell(output);
         };
 
-        // Sub-agent / tool lifecycle lines are published explicitly into this session's
-        // session.log via the dispatcher. Routing is intentional here, not inferred from
-        // log metadata at the sink. Same emitter as the routed-skill path (one definition).
-        Action<string> emitSessionLogLine = CreateSessionLogEmitter();
-
         // Marshal child-actor spawning back onto the session actor thread.
         Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
             await self.Ask<IActorRef>(
@@ -2010,7 +2005,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             oneTimeApprovalPreSeed: oneTimeApprovalPreSeed,
             decisionOverride: decisionOverride,
             turnContext: _currentTurnContext,
-            emitSessionLogLine: emitSessionLogLine,
             ct: toolExecutionCt);
     }
 
@@ -3045,13 +3039,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     new SpawnChildActorRequest((Props)props, name),
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
-
-            // Publish the routed sub-agent's spawn lifecycle into this session's
-            // session.log, exactly as the tool-execution dispatch path does (one shared
-            // emitter). Without it the routed-skill path drops the explicit breadcrumbs
-            // SubAgentSpawner emits — notably the spawn-failure reasons (#1467) that are
-            // otherwise invisible to an operator reading the transcript.
-            context.EmitSessionLogLine = CreateSessionLogEmitter();
 
             context.OnSubAgentActivity = info =>
             {
@@ -4254,23 +4241,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _subscribers.Emit(output, requiredFlag);
         _logActor?.Tell(output);
         _observerActor?.Tell(output);
-    }
-
-    /// <summary>
-    /// Builds the explicit session-log emitter wired into
-    /// <see cref="ToolExecutionContext.EmitSessionLogLine"/>. Both the tool-execution
-    /// dispatch path and the routed-skill path publish lifecycle/breadcrumb lines through
-    /// this single definition so their timestamp format and dispatcher routing never
-    /// diverge. <c>_logActor</c> is null only in unit-test scenarios that skip the hosting
-    /// wiring; in production it is resolved on recovery, so the line is delivered. Snapshots
-    /// the fields so the returned closure is safe to invoke off the actor thread.
-    /// </summary>
-    private Action<string> CreateSessionLogEmitter()
-    {
-        var logActor = _logActor;
-        var timeProvider = _timeProvider;
-        var sessionId = _sessionId;
-        return line => logActor?.Tell(new SessionLogDiagnostic(sessionId, $"[{timeProvider.GetUtcNow():o}] {line}"));
     }
 
     private async Task PersistApprovalCandidatesAsync(

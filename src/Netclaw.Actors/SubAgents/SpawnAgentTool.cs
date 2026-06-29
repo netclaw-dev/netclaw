@@ -124,10 +124,10 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     private (string? Error, SubAgentProfile? Profile) Resolve(Params args, ToolExecutionContext context)
     {
         // Rejections here return a (sometimes deliberately opaque) error string to
-        // the model. Mirror the real reason to the session transcript via
-        // EmitSessionLogLine (explicit publish) so an operator can tell *why* a spawn
-        // was refused; the "This tool is not available." string hides the
-        // audience-vs-disabled distinction on purpose.
+        // the model. The breadcrumb records the real reason under a SessionId scope (so it
+        // lands in the session.log) so an operator can tell *why* a spawn was refused; the
+        // "This tool is not available." string hides the audience-vs-disabled distinction on
+        // purpose.
 
         // Defense-in-depth: block subagent spawning for Public audience or when
         // the subagent subsystem is disabled.
