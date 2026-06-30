@@ -256,6 +256,12 @@ public static partial class SessionProtocol
         /// <summary>Whether the subagent completed successfully (on Completed).</summary>
         public bool Success { get; init; }
 
+        /// <summary>Terminal outcome of the subagent run (on Completed).</summary>
+        public SubAgentRunOutcome Outcome { get; init; } = SubAgentRunOutcome.Completed;
+
+        /// <summary>Machine-readable reason when <see cref="Outcome"/> is not completed.</summary>
+        public SubAgentOutcomeReason? OutcomeReason { get; init; }
+
         /// <summary>Wall-clock duration (on Completed).</summary>
         public TimeSpan Duration { get; init; }
 

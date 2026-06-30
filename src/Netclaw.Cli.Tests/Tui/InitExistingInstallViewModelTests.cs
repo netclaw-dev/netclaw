@@ -408,7 +408,9 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
     private static async Task WaitForProgressAsync(InitExistingInstallViewModel vm, int expectedStep)
     {
-        if (vm.CurrentProgressStep.Value >= expectedStep)
+        bool Matches() => vm.CurrentProgressStep.Value >= expectedStep;
+
+        if (Matches())
             return;
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -418,12 +420,17 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
                 tcs.TrySetResult();
         });
 
+        if (Matches())
+            return;
+
         await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForProgressMessageAsync(InitExistingInstallViewModel vm, string prefix)
     {
-        if (vm.ProgressMessage.Value.StartsWith(prefix, StringComparison.Ordinal))
+        bool Matches() => vm.ProgressMessage.Value.StartsWith(prefix, StringComparison.Ordinal);
+
+        if (Matches())
             return;
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -433,12 +440,17 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
                 tcs.TrySetResult();
         });
 
+        if (Matches())
+            return;
+
         await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForStatusMessageAsync(InitExistingInstallViewModel vm, string prefix)
     {
-        if (vm.StatusMessage.Value.StartsWith(prefix, StringComparison.Ordinal))
+        bool Matches() => vm.StatusMessage.Value.StartsWith(prefix, StringComparison.Ordinal);
+
+        if (Matches())
             return;
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -447,6 +459,9 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
             if (message.StartsWith(prefix, StringComparison.Ordinal))
                 tcs.TrySetResult();
         });
+
+        if (Matches())
+            return;
 
         await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
     }

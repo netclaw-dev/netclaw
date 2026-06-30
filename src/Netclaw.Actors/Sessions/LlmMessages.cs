@@ -100,9 +100,11 @@ internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificatio
 
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
-    public required string RunId { get; init; }
+    public required SubAgentRunId RunId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
     public required bool Success { get; init; }
+    public required SubAgentRunOutcome Outcome { get; init; }
+    public SubAgentOutcomeReason? OutcomeReason { get; init; }
     public required TimeSpan Duration { get; init; }
     public int FindingsCount { get; init; }
     public string? MemoryDecision { get; init; }
@@ -111,7 +113,7 @@ internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 
 internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNeeded
 {
-    public required string RunId { get; init; }
+    public required SubAgentRunId RunId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
     public required TimeSpan Duration { get; init; }
     public required SubAgentFindingShape Shape { get; init; }

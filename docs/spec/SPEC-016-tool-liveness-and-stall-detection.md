@@ -150,8 +150,9 @@ Expected stream shape:
    longer applied to this call.
 4. The child watchdog governs prefill, model deltas, keepalive-only wedges,
    tool-loop progress, approval waits, cancellation, and iteration exhaustion.
-5. The terminal `ToolCompletedUpdate` carries either a successful sub-agent result
-   or a failed sub-agent result produced by the child.
+5. The terminal `ToolCompletedUpdate` carries an explicit sub-agent run envelope
+   produced by the child: run id, outcome, optional reason, diagnostics pointer,
+   and the final summary or error text.
 
 ## Validation Strategy
 
@@ -204,7 +205,7 @@ without the parent killing it, while opaque tools remain bounded.
 ### Diagnostics And Manual Repro
 
 - Logs SHALL correlate parent session id, sub-agent run id, child watchdog
-  reason, and terminal `spawn_agent` result.
+  reason, terminal outcome, and terminal `spawn_agent` result.
 - Manual repro should run parallel `spawn_agent` calls where one child opens a
   quiet window longer than the parent tool timeout. The expected result is no
   parent `produced no activity` failure; either the child completes or the child

@@ -591,7 +591,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         CompactionOutput
             => "[session compacted]",
         SubAgentOutput sa when sa.Phase == SubAgentPhase.Completed
-            => $"[subagent] {sa.AgentName} completed (findings={sa.FindingsCount})",
+            => $"[subagent] {sa.AgentName} {sa.Outcome.ToString().ToLowerInvariant()} (findings={sa.FindingsCount})",
         ErrorOutput error
             => $"[error] {error.Message}",
         _ => null

@@ -123,6 +123,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private CancellationTokenRegistration _externalCancellationRegistration;
     private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
     private bool _malformedFinalOutputRepairAttempted;
+    private SubAgentOutcomeReason? _forcedFinalOutcomeReason;
 
     public SubAgentActor(
         SubAgentDefinition definition,
@@ -196,6 +197,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 Success = false,
                 Output = "Subagent stopped before completion.",
                 AgentName = _definition.Name,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.ActorStopped,
                 Findings = [],
                 FindingsCount = 0
             });
@@ -231,7 +234,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 Complete(
                     success: false,
                     "Sub-agent spawn failed: no trust audience was provided. A sub-agent "
-                    + "must inherit the spawning session's audience.");
+                    + "must inherit the spawning session's audience.",
+                    SubAgentRunOutcome.Failed,
+                    SubAgentOutcomeReason.MissingAudience);
                 return;
             }
 
@@ -316,7 +321,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     analysis.ToolCalls.Count,
                     _turnState.ToolCallCount,
                     _maxToolIterations);
-                Complete(false, "Subagent exceeded its tool iteration budget and continued requesting tools after tools were disabled.");
+                Complete(
+                    false,
+                    "Subagent exceeded its tool iteration budget and continued requesting tools after tools were disabled.",
+                    SubAgentRunOutcome.Failed,
+                    SubAgentOutcomeReason.ToolIterationBudgetExceededAfterDisable);
                 return;
             }
 
@@ -358,7 +367,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             "SubAgent [{AgentName}] produced repeated {Kind} responses — reporting failure",
                             _definition.Name,
                             analysis.Kind);
-                        Complete(false, fail.ErrorMessage);
+                        Complete(false, fail.ErrorMessage, SubAgentRunOutcome.Failed, SubAgentOutcomeReason.EmptyFinalResponse);
                         return;
                 }
             }
@@ -373,7 +382,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _log.Warning(
                     "SubAgent [{AgentName}] LLM returned empty text after non-empty analysis — reporting as failure",
                     _definition.Name);
-                Complete(false, "Subagent returned an empty final response.");
+                Complete(false, "Subagent returned an empty final response.", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.EmptyFinalResponse);
                 return;
             }
 
@@ -393,11 +402,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _log.Warning(
                     "SubAgent [{AgentName}] repeatedly emitted unexecuted tool-call markup as final text; reporting failure",
                     _definition.Name);
-                Complete(false, MalformedFinalOutputMessage);
+                Complete(false, MalformedFinalOutputMessage, SubAgentRunOutcome.Failed, SubAgentOutcomeReason.MalformedFinalOutput);
                 return;
             }
 
-            Complete(true, text);
+            Complete(
+                true,
+                text,
+                _forcedFinalOutcomeReason.HasValue ? SubAgentRunOutcome.Partial : SubAgentRunOutcome.Completed,
+                _forcedFinalOutcomeReason);
         });
 
         Receive<ToolExecutionCompleted>(msg =>
@@ -436,6 +449,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 case ToolBudgetStatus.Exhausted exhausted:
                     _log.Warning("SubAgent [{AgentName}] hit tool iteration limit ({Count}), forcing text response",
                         _definition.Name, _turnState.ToolIterationCount);
+                    _forcedFinalOutcomeReason = SubAgentOutcomeReason.ToolIterationBudgetExhausted;
                     AddSystemNudge(exhausted.NudgeText);
                     FireLlmCall(forceNoTools: true);
                     return;
@@ -459,13 +473,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             _log.Error(msg.Cause, "SubAgent [{AgentName}] tool execution failed", _definition.Name);
-            Complete(false, $"Tool execution failed: {msg.Cause.Message}");
+            Complete(false, $"Tool execution failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolExecutionFailed);
         });
 
         Receive<LlmCallFailed>(msg =>
         {
             _log.Error(msg.Cause, "SubAgent [{AgentName}] LLM call failed callId={CallId}", _definition.Name, msg.CallId);
-            Complete(false, $"LLM call failed: {msg.Cause.Message}");
+            Complete(false, $"LLM call failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.LlmCallFailed);
         });
 
         Receive<SubAgentCancelled>(_ =>
@@ -473,7 +487,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _executionCts?.Cancel();
             _externalCts?.Cancel();
             _log.Warning("SubAgent [{AgentName}] cancelled by parent", _definition.Name);
-            Complete(false, "Subagent cancelled by parent");
+            Complete(false, "Subagent cancelled by parent", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.CancelledByParent);
         });
 
         Receive<ProcessingWatchdogExpired>(msg =>
@@ -498,7 +512,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _log.Warning(
                     "SubAgent [{AgentName}] timed out: no substantive output for {Budget:F0}s after {Iterations} tool iterations",
                     _definition.Name, noProgress, _turnState.ToolIterationCount);
-                Complete(false, $"Subagent timed out: no substantive output for {noProgress:F0}s.");
+                Complete(false, $"Subagent timed out: no substantive output for {noProgress:F0}s.", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.NoSubstantiveOutputTimeout);
                 return;
             }
 
@@ -530,7 +544,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 "SubAgent [{AgentName}] timed out: no activity for {Budget}s ({Phase}) after {Iterations} tool iterations",
                 _definition.Name, activeBudget.TotalSeconds,
                 _anyContentStreamed ? "inter-delta" : "prefill", _turnState.ToolIterationCount);
-            Complete(false, $"Subagent timed out: no activity for {activeBudget.TotalSeconds:F0}s.");
+            Complete(false, $"Subagent timed out: no activity for {activeBudget.TotalSeconds:F0}s.", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.NoActivityTimeout);
         });
 
         Receive<SubAgentApprovalWaitStarted>(_ =>
@@ -694,7 +708,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private bool _completed;
 
-    private void Complete(bool success, string output)
+    private void Complete(
+        bool success,
+        string output,
+        SubAgentRunOutcome? outcome = null,
+        SubAgentOutcomeReason? outcomeReason = null)
     {
         // Idempotent guard: a stale ProcessingWatchdogExpired or other handler can
         // land after Complete has already run (Tell from a thread-pool finally
@@ -716,8 +734,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _externalCts = null;
         _pendingApprovalWaits = 0;
 
-        _log.Info("SubAgent [{AgentName}] completed (success={Success}, output={OutputLength} chars, iterations={Iterations})",
-            _definition.Name, success, output.Length, _turnState.ToolIterationCount);
+        var resolvedOutcome = outcome ?? (success ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed);
+
+        _log.Info("SubAgent [{AgentName}] completed (success={Success}, outcome={Outcome}, reason={Reason}, output={OutputLength} chars, iterations={Iterations})",
+            _definition.Name, success, resolvedOutcome, outcomeReason?.Value ?? "-", output.Length, _turnState.ToolIterationCount);
 
         // Log cumulative stats for observability — total LLM calls, tool usage, etc.
         // This gives operators a single summary line for sub-agent duration analysis.
@@ -729,7 +749,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _runStopwatch.Elapsed.TotalSeconds);
 
         var findings = success && _definition.EmitStructuredFindings
-            ? BuildFindings(output, _toolExecutionContext.SessionId)
+            ? BuildFindings(output, _toolExecutionContext.SessionId, resolvedOutcome, outcomeReason)
             : [];
 
         _replyTo.Tell(new SubAgentResult
@@ -737,6 +757,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Success = success,
             Output = output,
             AgentName = _definition.Name,
+            Outcome = resolvedOutcome,
+            OutcomeReason = outcomeReason,
             Findings = findings,
             FindingsCount = findings.Count
         });
@@ -788,7 +810,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         EmitActivity(phase);
     }
 
-    private List<SubAgentFinding> BuildFindings(string output, string? sessionId)
+    private List<SubAgentFinding> BuildFindings(
+        string output,
+        string? sessionId,
+        SubAgentRunOutcome outcome,
+        SubAgentOutcomeReason? outcomeReason)
     {
         var content = output?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(content))
@@ -797,11 +823,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         if (content.Length < 30)
             return [];
 
-        var normalized = content.Length <= 1800
-            ? content
-            : content[..1800];
-
-        var confidence = 0.65;
+        var confidence = outcome == SubAgentRunOutcome.Partial ? 0.6 : 0.65;
         var policy = _policyEvaluator.EvaluateWrite(
             sensitivity: SubAgentFindingSensitivity.Normal.ToWireValue(),
             recallMode: SubAgentFindingRecallMode.Auto.ToWireValue(),
@@ -811,13 +833,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         if (!policy.Allowed)
             return [];
 
+        var evidence = new List<string> { $"subagent_outcome:{outcome.ToString().ToLowerInvariant()}" };
+        if (outcomeReason is { } reason)
+            evidence.Add($"subagent_outcome_reason:{reason.Value}");
+
         return
         [
             new SubAgentFinding
             {
                 Shape = SubAgentFindingShape.Conclusion,
                 Title = $"subagent:{_definition.Name}",
-                Content = normalized,
+                Content = content,
                 Kind = "record",
                 Sensitivity = SubAgentFindingSensitivity.Normal,
                 RecallMode = SubAgentFindingRecallMode.Searchable,
@@ -825,7 +851,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 Confidence = confidence,
                 Durability = SubAgentFindingDurability.Durable,
                 Reusability = SubAgentFindingReusability.Reusable,
-                Evidence = []
+                Evidence = evidence
             }
         ];
     }

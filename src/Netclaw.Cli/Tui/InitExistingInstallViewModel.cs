@@ -96,15 +96,24 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
     public ReactiveProperty<Phase> CurrentPhase { get; } = new(Phase.Menu);
     public ReactiveProperty<int> SelectedIndex { get; } = new(0);
-    public ReactiveProperty<string> StatusMessage { get; } = new("");
+
+    // Synchronized: also published from the background reset Task — see CurrentProgressStep below.
+    public ReactiveProperty<string> StatusMessage { get; } = new SynchronizedReactiveProperty<string>("");
 
     private ResetScopeKind _scope = ResetScopeKind.SetupOnly;
     public ResetScopeKind Scope => _scope;
 
-    // Progress-screen state
-    public ReactiveProperty<int> CurrentProgressStep { get; } = new(-1);
-    public ReactiveProperty<string> ProgressMessage { get; } = new("");
-    public ReactiveProperty<bool> CanQuitProgress { get; } = new(true);
+    // Progress-screen state. These three (plus StatusMessage above) are published from the
+    // background reset Task (RunResetAsync -> PublishOnLoop), not just the input/loop thread.
+    // R3's ReactiveProperty is not thread-safe — its value-set walks the observer list lock-free
+    // while Subscribe/Dispose mutate that list under a lock, so a background write can corrupt the
+    // list when a subscriber attaches or detaches concurrently. Bound to the Termina loop those
+    // writes marshal onto one thread, but tests (and any unbound use) observe them off-thread.
+    // SynchronizedReactiveProperty serializes set/subscribe/dispose on one monitor; uncontended in
+    // production. The declared type stays ReactiveProperty<T> so the page and all readers are unchanged.
+    public ReactiveProperty<int> CurrentProgressStep { get; } = new SynchronizedReactiveProperty<int>(-1);
+    public ReactiveProperty<string> ProgressMessage { get; } = new SynchronizedReactiveProperty<string>("");
+    public ReactiveProperty<bool> CanQuitProgress { get; } = new SynchronizedReactiveProperty<bool>(true);
     internal Task? ResetTask { get; private set; }
     internal bool IsResetCancellationRequested => _resetCts.IsCancellationRequested;
 

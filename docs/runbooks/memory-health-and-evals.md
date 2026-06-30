@@ -44,11 +44,15 @@ sqlite3 "$HOME/.netclaw/memory/netclaw-memory.db" \
 Subagent-originated memory candidates are surfaced as session `SubAgentOutput`
 completion events with:
 
+- `outcome` (`completed`, `partial`, `failed`)
+- `outcomeReason` (when the run ended for a machine-readable non-completed reason)
 - `memoryDecision` (`accepted`, `deferred`, `rejected`)
 - `memoryDecisionReason` (when decision is not accepted)
 - `findingsCount`
 
 Only `accepted` findings are enqueued into the memory checkpoint pipeline.
+Partial runs can still produce accepted findings; failed runs are treated as
+operator-visible diagnostics rather than durable-memory evidence by default.
 
 ## Eval Execution
 

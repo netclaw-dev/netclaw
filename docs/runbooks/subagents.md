@@ -93,8 +93,11 @@ first user message is just the raw task, identical to the pre-context protocol.
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
 5. After at most 30 tool iterations, a final response, or an inactivity timeout,
-   the subagent returns its final text response.
-6. The main agent receives this response as the `spawn_agent` tool result.
+   the subagent returns a terminal run result.
+6. The main agent receives the `spawn_agent` tool result as an explicit text
+   envelope: agent name, run id, outcome (`completed`, `partial`, or `failed`),
+   optional reason, diagnostics pointer, and either a `Summary:` or `Error:`
+   section containing the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. If the parent tool call is cancelled or
@@ -117,10 +120,16 @@ are suppressed in Slack.
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
 and the memory-decision fields are empty because there was nothing to review.
+The completion event carries the same terminal outcome and reason used by the
+tool-result envelope, so operators can distinguish a useful partial summary from
+a failed run.
 
 Structured findings are conservative, parent-reviewed durable-memory candidates.
 They should be emitted as explicit conclusion envelopes with review metadata,
-not inferred from free-form work logs or tool transcripts.
+not inferred from free-form work logs or tool transcripts. They are not the
+parent-facing `spawn_agent` result; they exist so accepted subagent conclusions
+can enter the memory checkpoint pipeline without asking the parent model to parse
+free-form work logs.
 
 ## Defining subagents
 

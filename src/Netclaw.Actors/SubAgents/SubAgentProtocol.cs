@@ -185,6 +185,18 @@ public sealed record SubAgentResult : ISubAgentResponse
     /// <summary>Name of the subagent that produced this result.</summary>
     public required AgentName AgentName { get; init; }
 
+    /// <summary>Terminal outcome of the run, separate from the legacy success flag.</summary>
+    public SubAgentRunOutcome Outcome { get; init; } = SubAgentRunOutcome.Completed;
+
+    /// <summary>Machine-readable reason when <see cref="Outcome"/> is not completed.</summary>
+    public SubAgentOutcomeReason? OutcomeReason { get; init; }
+
+    /// <summary>Spawner-generated run id used to correlate logs and notifications.</summary>
+    public SubAgentRunId? RunId { get; init; }
+
+    /// <summary>Subagent scope id used in structured logs.</summary>
+    public SubAgentScopeId? ScopeId { get; init; }
+
     /// <summary>
     /// Structured findings returned to the owning session for policy and checkpoint review.
     /// </summary>

@@ -811,13 +811,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         foreach (var startedJob in msg.StartedBackgroundJobs)
             TrackStartedBackgroundJob(startedJob);
 
-        var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
+        var emittedRunIds = new HashSet<SubAgentRunId>();
         foreach (var finding in msg.AcceptedSubAgentFindings)
         {
             if (emittedRunIds.Add(finding.RunId))
             {
                 var runSummary = msg.CompletedSubAgentRuns
-                    .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
+                    .FirstOrDefault(x => x.RunId == finding.RunId);
 
                 EmitOutput(new SubAgentOutput
                 {
@@ -826,6 +826,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     AgentName = finding.AgentName,
                     Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                     Success = true,
+                    Outcome = runSummary?.Outcome ?? SubAgentRunOutcome.Completed,
+                    OutcomeReason = runSummary?.OutcomeReason,
                     Duration = finding.Duration,
                     MemoryDecision = finding.Decision.ToWireValue(),
                     MemoryDecisionReason = finding.DecisionReason,
@@ -860,6 +862,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 AgentName = run.AgentName,
                 Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                 Success = run.Success,
+                Outcome = run.Outcome,
+                OutcomeReason = run.OutcomeReason,
                 Duration = run.Duration,
                 MemoryDecision = run.MemoryDecision,
                 MemoryDecisionReason = run.MemoryDecisionReason,
@@ -4339,13 +4343,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         TrackStartedBackgroundJob(result.StartedBackgroundJob);
 
-        var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
+        var emittedRunIds = new HashSet<SubAgentRunId>();
         foreach (var finding in result.AcceptedSubAgentFindings)
         {
             if (emittedRunIds.Add(finding.RunId))
             {
                 var runSummary = result.CompletedSubAgentRuns
-                    .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
+                    .FirstOrDefault(x => x.RunId == finding.RunId);
 
                 EmitOutput(new SubAgentOutput
                 {
@@ -4354,6 +4358,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     AgentName = finding.AgentName,
                     Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                     Success = true,
+                    Outcome = runSummary?.Outcome ?? SubAgentRunOutcome.Completed,
+                    OutcomeReason = runSummary?.OutcomeReason,
                     Duration = finding.Duration,
                     MemoryDecision = finding.Decision.ToWireValue(),
                     MemoryDecisionReason = finding.DecisionReason,
@@ -4388,6 +4394,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 AgentName = run.AgentName,
                 Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                 Success = run.Success,
+                Outcome = run.Outcome,
+                OutcomeReason = run.OutcomeReason,
                 Duration = run.Duration,
                 MemoryDecision = run.MemoryDecision,
                 MemoryDecisionReason = run.MemoryDecisionReason,
