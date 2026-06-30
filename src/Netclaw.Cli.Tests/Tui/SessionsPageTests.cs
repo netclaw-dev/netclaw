@@ -156,6 +156,29 @@ public sealed class SessionsPageTests : IDisposable
     }
 
     [Fact]
+    public async Task DownArrow_VisiblyHighlightsSelectedRow()
+    {
+        var sessions = new[]
+        {
+            CreateSession("session-001", "tui", 1, _time.GetUtcNow().AddMinutes(-1)),
+            CreateSession("session-002", "tui", 2, _time.GetUtcNow().AddMinutes(-2)),
+            CreateSession("session-003", "tui", 3, _time.GetUtcNow().AddMinutes(-3)),
+        };
+
+        var (terminal, app, vm, _) = CreateHeadlessApp(out var input, sessions);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(1, vm.SelectedIndex.Value);
+        AssertLineHasBackground(terminal, "002", Color.Cyan);
+        AssertLineDoesNotHaveBackground(terminal, "001", Color.Cyan);
+    }
+
+    [Fact]
     public async Task EnterOnSelectedSession_ResumesThatSession_NotTheFirst()
     {
         // THE key regression: arrow keys must drive SelectedIndex so Enter resumes the
@@ -222,6 +245,25 @@ public sealed class SessionsPageTests : IDisposable
             $"Expected >15 sessions visible in scrollable list; only {visibleCount} visible. Screen:\n{terminal}");
     }
 
+    [Fact]
+    public async Task LongList_DownArrowScrollsSelectedRowIntoView_WithHighlight()
+    {
+        var sessions = Enumerable.Range(1, 100)
+            .Select(i => CreateSession($"session-{i:000}", "tui", i, _time.GetUtcNow().AddMinutes(-i)))
+            .ToArray();
+
+        var (terminal, app, vm, _) = CreateHeadlessApp(out var input, sessions);
+        for (var i = 0; i < 49; i++)
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(49, vm.SelectedIndex.Value);
+        AssertLineHasBackground(terminal, "050", Color.Cyan);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, SessionsViewModel Vm, ChatNavigationState Nav)
@@ -264,6 +306,34 @@ public sealed class SessionsPageTests : IDisposable
         var app = sp.GetRequiredService<TerminaApplication>();
 
         return (terminal, app, capturedVm!, nav);
+    }
+
+    private static void AssertLineHasBackground(VirtualTerminal terminal, string text, Color expected)
+    {
+        var row = FindLine(terminal, text);
+        var hasExpectedBackground = Enumerable.Range(0, terminal.Width)
+            .Any(column => terminal.GetBackground(column, row) == expected);
+
+        Assert.True(hasExpectedBackground,
+            $"Expected line containing '{text}' to include {expected} background. Screen:\n{terminal}");
+    }
+
+    private static void AssertLineDoesNotHaveBackground(VirtualTerminal terminal, string text, Color unexpected)
+    {
+        var row = FindLine(terminal, text);
+        var hasUnexpectedBackground = Enumerable.Range(0, terminal.Width)
+            .Any(column => terminal.GetBackground(column, row) == unexpected);
+
+        Assert.False(hasUnexpectedBackground,
+            $"Expected line containing '{text}' not to include {unexpected} background. Screen:\n{terminal}");
+    }
+
+    private static int FindLine(VirtualTerminal terminal, string text)
+    {
+        var lines = terminal.GetAllLines();
+        var row = Array.FindIndex(lines, line => line.Contains(text, StringComparison.Ordinal));
+        Assert.True(row >= 0, $"Expected line containing '{text}'. Screen:\n{terminal}");
+        return row;
     }
 
     private sealed class MockSessionsHttpHandler : HttpMessageHandler
