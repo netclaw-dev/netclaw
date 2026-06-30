@@ -29,6 +29,9 @@ public sealed class SlackProcessingOutputRenderer(ISlackReplyClient replyClient)
         if (string.IsNullOrWhiteSpace(request.Target.ThreadOrRootId))
             throw new InvalidOperationException("Slack processing indicators require a thread timestamp.");
 
+        // Slack assistant thread status is stateful: Slack clears it when the
+        // app sends a reply, after a timeout, or when an empty status is sent.
+        // https://docs.slack.dev/reference/methods/assistant.threads.setStatus/
         await replyClient.SetThreadStatusAsync(
             new SlackChannelId(request.Target.Destination.StableId),
             new SlackThreadTs(request.Target.ThreadOrRootId),

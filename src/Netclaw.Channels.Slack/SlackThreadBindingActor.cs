@@ -1208,6 +1208,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (!_processingIndicatorActive)
             return;
 
+        // Slack clears assistant thread status when the app sends a reply; keep
+        // long-running turns visible after Slack-side thread activity while the
+        // session still reports Processing. See SlackProcessingOutputRenderer.
         _ = RenderProcessingStateAsync(new ProcessingStateOutput(true)
         {
             SessionId = _sessionId
