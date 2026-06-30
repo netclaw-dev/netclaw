@@ -44,36 +44,36 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName);
     }
 
-    public static void ChildSpawnFailed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, Exception ex)
+    public static void ChildSpawnFailed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogError(
                 ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId})",
-                agentName, runId);
+                agentName, runId.Value);
     }
 
-    public static void ChildSpawned(ILogger? logger, ToolExecutionContext context, string agentName, string runId)
+    public static void ChildSpawned(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogInformation(
                 "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
-                agentName, runId);
+                agentName, runId.Value);
     }
 
-    public static void Completed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, bool success, long durationMs)
+    public static void Completed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, bool success, long durationMs)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogInformation(
                 "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
-                agentName, runId, success, durationMs);
+                agentName, runId.Value, success, durationMs);
     }
 
-    public static void RunFailed(ILogger? logger, ToolExecutionContext context, string agentName, string runId, Exception ex)
+    public static void RunFailed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogError(
                 ex, "SubAgent [{AgentName}] run failed (runId={RunId})",
-                agentName, runId);
+                agentName, runId.Value);
     }
 
     public static void SpawnRefused(ILogger? logger, ToolExecutionContext context, string agentName, TrustAudience audience, bool subsystemEnabled)
