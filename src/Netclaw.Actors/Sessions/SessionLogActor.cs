@@ -48,6 +48,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private StreamWriter? _writer;
     private int _unflushedWrites;
+    private bool _flushFailing;
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -125,10 +126,23 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         {
             _writer?.Flush();
             _unflushedWrites = 0;
+            if (_flushFailing)
+            {
+                _flushFailing = false;
+                _log.Info("session.log flushing recovered for {Session}", _sessionId.Value);
+            }
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Failed to flush session.log for {SessionId}", _sessionId.Value);
+            // Reset so a persistent failure (full disk, locked file) does not busy-flush-and-warn
+            // on every 1s tick; the unflushed bytes stay in the StreamWriter buffer and are retried
+            // on the next write batch (and on dispose). Warn once on onset, once on recovery.
+            _unflushedWrites = 0;
+            if (!_flushFailing)
+            {
+                _flushFailing = true;
+                _log.Warning(ex, "Failed to flush session.log for {Session}; further flush failures suppressed until recovery", _sessionId.Value);
+            }
         }
     }
 
@@ -145,7 +159,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Dropped user message audit line for {SessionId}", _sessionId.Value);
+            _log.Warning(ex, "Dropped user message audit line for {Session}", _sessionId.Value);
         }
     }
 
@@ -182,7 +196,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Dropped session log audit line for {SessionId}", _sessionId.Value);
+            _log.Warning(ex, "Dropped session log audit line for {Session}", _sessionId.Value);
         }
     }
 
@@ -194,7 +208,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Dropped diagnostic audit line for {SessionId}", _sessionId.Value);
+            _log.Warning(ex, "Dropped diagnostic audit line for {Session}", _sessionId.Value);
         }
     }
 

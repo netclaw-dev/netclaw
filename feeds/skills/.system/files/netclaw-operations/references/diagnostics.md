@@ -20,9 +20,13 @@ Log split — one stream, partitioned locally by session:
   a `{SessionId}` message field, or a `SessionId` logging scope) is written to that
   session's `session.log` and **not** to `daemon.log`. The partition is by session
   id — nothing is duplicated locally.
-- `daemon.log` holds only genuinely daemon-wide lines: startup/config, session
-  start/stop, and global errors (e.g. an inference provider becoming unreachable).
-  Rolled daily, capped at 10 MB per file.
+- `daemon.log` holds only sessionless, daemon-wide lines: startup/config, session
+  start/stop, and operational **alerts** (e.g. the `provider.unreachable` /
+  `provider.failover` alert raised when an inference provider goes down — surfaced
+  here, and to webhooks, by the notification sink). Note the *per-call* failover/retry
+  log lines emitted while serving a specific session carry that session's id, so they
+  partition into its `session.log`; the daemon-wide outage signal is the alert in
+  `daemon.log`. Rolled daily, capped at 10 MB per file.
 - The **full** stream (daemon and session lines alike) is also exported to OTEL/Seq
   with the session id as an attribute; do the global slicing/distilling on the OTEL
   receiver side.

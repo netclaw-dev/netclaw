@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
@@ -41,9 +42,14 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
     private readonly BlockingCollection<string> _queue = new(1024);
     private readonly Thread _writerThread;
     private IExternalScopeProvider? _scopeProvider;
-    private ConcurrentQueue<SessionLogDiagnostic>? _pendingDiagnostics;
+
+    // The startup-window buffer and its dispatcher/failed transition are all guarded by
+    // _routeGate. The lock is only ever taken on the slow path (before _sessionDispatcher is
+    // published); once resolved, Route's fast path reads _sessionDispatcher lock-free.
+    private readonly object _routeGate = new();
+    private Queue<SessionLogDiagnostic>? _pendingDiagnostics;
     private IActorRef? _sessionDispatcher;
-    private int _pendingCount;
+    private bool _routingFailed;
     private int _sessionRoutingEnabled;
     private StreamWriter? _writer;
     private string _currentDate = "";
@@ -79,7 +85,9 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         if (Interlocked.Exchange(ref _sessionRoutingEnabled, 1) == 1)
             return;
 
-        _pendingDiagnostics = new ConcurrentQueue<SessionLogDiagnostic>();
+        lock (_routeGate)
+            _pendingDiagnostics = new Queue<SessionLogDiagnostic>();
+
         _ = ResolveSessionDispatcherAsync(dispatcherTask);
     }
 
@@ -103,6 +111,8 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
 
         var diagnostic = new SessionLogDiagnostic(new SessionId(sessionId), line);
 
+        // Fast path: once resolved, _sessionDispatcher is non-null for the rest of the process,
+        // so the steady state never takes the lock.
         var dispatcher = Volatile.Read(ref _sessionDispatcher);
         if (dispatcher is not null)
         {
@@ -110,16 +120,27 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
             return;
         }
 
-        // Dispatcher not resolved yet. Buffer up to a bound; once full, fall back to daemon.log
-        // rather than drop the line.
-        if (Volatile.Read(ref _pendingCount) >= PreResolutionBufferLimit)
+        // Slow path — only during the brief window before resolution (or after a failure).
+        // Serialize with ResolveSessionDispatcherAsync so the buffer is never enqueued-into after
+        // it has been drained/abandoned (no lost lines, no null-deref on a torn-down buffer).
+        lock (_routeGate)
         {
-            _queue.TryAdd(line);
-            return;
-        }
+            if (_sessionDispatcher is { } resolved)
+            {
+                resolved.Tell(diagnostic);
+                return;
+            }
 
-        Interlocked.Increment(ref _pendingCount);
-        _pendingDiagnostics!.Enqueue(diagnostic);
+            // Routing failed, the buffer is gone, or it is full → fall back to daemon.log rather
+            // than drop the line.
+            if (_routingFailed || _pendingDiagnostics is null || _pendingDiagnostics.Count >= PreResolutionBufferLimit)
+            {
+                _queue.TryAdd(line);
+                return;
+            }
+
+            _pendingDiagnostics.Enqueue(diagnostic);
+        }
     }
 
     private string? FindSessionIdInScopes()
@@ -128,11 +149,13 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         if (scopeProvider is null)
             return null;
 
-        string? found = null;
+        // static lambda + StrongBox state: the delegate is cached and nothing is captured, so the
+        // chat-client diagnostic hot path doesn't allocate a closure per logged line.
+        var box = new StrongBox<string?>(null);
         scopeProvider.ForEachScope(
-            (scope, _) =>
+            static (scope, state) =>
             {
-                if (found is not null)
+                if (state.Value is not null)
                     return;
 
                 if (scope is IEnumerable<KeyValuePair<string, object>> kvps)
@@ -142,15 +165,15 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
                         if (kv.Key == NetclawLogProperties.SessionId
                             && kv.Value?.ToString() is { Length: > 0 } id)
                         {
-                            found = id;
+                            state.Value = id;
                             return;
                         }
                     }
                 }
             },
-            (object?)null);
+            box);
 
-        return found;
+        return box.Value;
     }
 
     private async Task ResolveSessionDispatcherAsync(Task<IActorRef> dispatcherTask)
@@ -162,23 +185,40 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         }
         catch (Exception ex)
         {
-            // Resolution failed permanently. Drop the buffer and switch routing off — daemon
-            // logging continues, but session-scoped lines fall back to daemon.log for the rest
-            // of the process. Surface one loud line so this is visible, not silently degraded.
-            _queue.TryAdd($"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {ex.Message}");
-            Volatile.Write(ref _sessionRoutingEnabled, 0);
-            _pendingDiagnostics = null;
+            // Resolution failed permanently. Mark routing failed and FLUSH the buffered lines to
+            // daemon.log (rather than drop them) so the diagnostics that preceded the failure
+            // aren't lost; session-scoped lines then fall back to daemon.log for the rest of the
+            // process.
+            lock (_routeGate)
+            {
+                _routingFailed = true;
+                if (_pendingDiagnostics is not null)
+                {
+                    while (_pendingDiagnostics.TryDequeue(out var pending))
+                        _queue.TryAdd(pending.Line);
+                    _pendingDiagnostics = null;
+                }
+            }
+
+            // One loud beacon, with a stderr fallback so the single failure signal is never lost
+            // even if the daemon-log queue is saturated.
+            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {ex.Message}";
+            if (!_queue.TryAdd(beacon))
+                Console.Error.WriteLine(beacon);
             return;
         }
 
-        // Publish the ref BEFORE draining so producers racing with the drainer Tell directly
-        // rather than enqueueing into a buffer we are about to abandon.
-        Volatile.Write(ref _sessionDispatcher, dispatcher);
-
-        while (_pendingDiagnostics!.TryDequeue(out var pending))
+        // Publish the ref and drain the buffer under the same lock that Route's slow path uses,
+        // so a line is never enqueued into the buffer after this drain has run.
+        lock (_routeGate)
         {
-            Interlocked.Decrement(ref _pendingCount);
-            dispatcher.Tell(pending);
+            Volatile.Write(ref _sessionDispatcher, dispatcher);
+            if (_pendingDiagnostics is not null)
+            {
+                while (_pendingDiagnostics.TryDequeue(out var pending))
+                    dispatcher.Tell(pending);
+                _pendingDiagnostics = null;
+            }
         }
     }
 

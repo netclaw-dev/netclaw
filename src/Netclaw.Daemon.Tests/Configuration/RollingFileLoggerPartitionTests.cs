@@ -138,6 +138,49 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
         Cleanup(dir);
     }
 
+    [Fact]
+    public async Task Dispatcher_resolution_failure_drains_buffer_and_beacons_to_daemon_log()
+    {
+        var (dir, daemonPath) = TempPaths();
+        var pending = new TaskCompletionSource<Akka.Actor.IActorRef>();
+        var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow));
+        try
+        {
+            provider.AttachSessionDispatcher(pending.Task); // routing on, dispatcher not resolved
+            provider.CreateLogger("Netclaw.Tools").LogInformation("buffered before failure {SessionId}", "C9/T9");
+
+            pending.SetException(new InvalidOperationException("dispatcher never registered"));
+
+            // On failure: the buffered session line is NOT dropped — it falls back to daemon.log,
+            // and a single beacon records that routing was disabled.
+            await AwaitAssertAsync(
+                async () =>
+                {
+                    var text = await ReadDaemonSharedAsync(dir, TestContext.Current.CancellationToken);
+                    Assert.Contains("buffered before failure", text, StringComparison.Ordinal);
+                    Assert.Contains("per-session routing disabled", text, StringComparison.Ordinal);
+                },
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            provider.Dispose();
+        }
+
+        Cleanup(dir);
+    }
+
+    private static async Task<string> ReadDaemonSharedAsync(string dir, CancellationToken ct)
+    {
+        var files = Directory.GetFiles(dir, "daemon-*.log");
+        if (files.Length == 0)
+            return string.Empty;
+        await using var stream = new FileStream(files[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync(ct);
+    }
+
     private static (string Dir, string DaemonPath) TempPaths()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"netclaw-partition-{Guid.NewGuid():N}");

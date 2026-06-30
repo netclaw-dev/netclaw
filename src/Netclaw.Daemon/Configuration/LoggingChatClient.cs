@@ -13,14 +13,14 @@ using Netclaw.Actors.Sessions;
 namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
-/// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token
-/// usage, and errors. These diagnostics go to <c>daemon.log</c> (the decorator is
-/// session-agnostic); they are not published to a session's <c>session.log</c>, but
-/// they are tagged with the owning <c>SessionId</c> — read from
-/// <see cref="SessionScopedChatOptions"/> on the call — so they correlate to a session
-/// in Seq/OTLP. Stateless and safe to share across sessions. Netclaw issues only
-/// streaming requests, so only the streaming path is instrumented; the inherited
-/// non-streaming pass-through is unused.
+/// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token usage, and
+/// errors. The decorator is session-agnostic but tags each line with the owning
+/// <c>SessionId</c> via a logging scope — read from <see cref="SessionScopedChatOptions"/> on
+/// the call (<see cref="ChatClientSessionScope"/>). The file-logger partitions scoped lines into
+/// that session's <c>session.log</c> (and they carry <c>SessionId</c> as a Seq/OTLP field); a
+/// call with no session scope falls through to <c>daemon.log</c>. Stateless and safe to share
+/// across sessions. Netclaw issues only streaming requests, so only the streaming path is
+/// instrumented; the inherited non-streaming pass-through is unused.
 /// </summary>
 public sealed class LoggingChatClient : DelegatingChatClient
 {
