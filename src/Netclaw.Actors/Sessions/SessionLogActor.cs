@@ -119,7 +119,10 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
     private void Flush()
     {
-        if (_unflushedWrites == 0)
+        // Nothing buffered AND not in a failing state → skip. While failing, fall through so the
+        // periodic 1s tick keeps retrying the flush (the bytes are still in the StreamWriter
+        // buffer) and becomes durable as soon as the disk recovers — even with no new writes.
+        if (_unflushedWrites == 0 && !_flushFailing)
             return;
 
         try
@@ -134,9 +137,9 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            // Reset so a persistent failure (full disk, locked file) does not busy-flush-and-warn
-            // on every 1s tick; the unflushed bytes stay in the StreamWriter buffer and are retried
-            // on the next write batch (and on dispose). Warn once on onset, once on recovery.
+            // Reset the write-batch counter so writes don't trigger a per-line flush storm during a
+            // persistent failure (full disk, locked file); _flushFailing stays set, so the 1s tick
+            // keeps retrying until recovery. Warn once on onset, once on recovery.
             _unflushedWrites = 0;
             if (!_flushFailing)
             {

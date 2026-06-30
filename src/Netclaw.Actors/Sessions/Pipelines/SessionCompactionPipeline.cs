@@ -181,8 +181,11 @@ internal static class SessionCompactionPipeline
                     ObservationPromptBuilder.BuildObservationUserPrompt(remainingDiscarded))
             };
 
+            // Carry the session id so the observer's chat-client diagnostics route to the
+            // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
+            var observerOptions = new SessionScopedChatOptions { SessionId = sessionId.Value };
             var result = await StreamingResponseReader.ReadAsync(
-                client, observerMessages, options: null, cts.Token);
+                client, observerMessages, observerOptions, cts.Token);
             var text = result.Response.Text;
 
             if (string.IsNullOrWhiteSpace(text))

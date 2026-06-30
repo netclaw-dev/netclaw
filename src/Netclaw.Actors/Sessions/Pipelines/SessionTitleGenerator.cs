@@ -48,7 +48,11 @@ internal static class SessionTitleGenerator
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildTitleGenerationPrompt(history))
             };
-            var result = await StreamingResponseReader.ReadAsync(client, messages, options: null, cts.Token);
+            // Carry the session id so this sidecar's chat-client diagnostics (timing, retries,
+            // provider failover) route to the session's session.log and correlate in Seq/OTLP —
+            // the explicit carrier that replaced the deleted SessionDiagnosticsContext AsyncLocal.
+            var options = new SessionScopedChatOptions { SessionId = sessionId.Value };
+            var result = await StreamingResponseReader.ReadAsync(client, messages, options, cts.Token);
             var title = result.Response.Text ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(title))

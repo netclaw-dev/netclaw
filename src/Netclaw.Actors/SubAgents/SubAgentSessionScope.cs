@@ -6,13 +6,14 @@
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// Derives the owning (parent) session id from a sub-agent's composite scope id.
-/// Sub-agents run as ephemeral children of a parent session and reuse its
-/// <c>session.log</c>; their composite ids (<c>{parentId}/subagent/{name}/{runId}</c>)
-/// must collapse back to the parent so their diagnostics route to the parent's log
-/// rather than scatter into per-agent files operators do not monitor. This is the
-/// only place that decision is made — keep it in sync with how sub-agent ids are
-/// constructed in the spawner.
+/// Derives the owning (parent) session id from a sub-agent's composite scope id
+/// (<c>{parentId}/subagent/{name}/{runId}</c>) by stripping the <c>/subagent/…</c> suffix.
+/// Sub-agent log lines are tagged with this parent id as their <c>SessionId</c> so OTEL/Seq
+/// groups a sub-agent's activity under the session that spawned it; the full composite id is
+/// carried separately as <c>SubSessionId</c> and is what partitions the local
+/// <c>session.log</c> into the sub-agent's OWN file. Keep this in sync with how sub-agent ids
+/// are constructed in the spawner. Note: <c>ToolApprovalActor</c> performs the same
+/// <c>/subagent/</c> split for approval inheritance — if the id format changes, update both.
 /// </summary>
 internal static class SubAgentSessionScope
 {

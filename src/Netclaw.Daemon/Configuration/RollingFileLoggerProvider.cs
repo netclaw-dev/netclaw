@@ -103,11 +103,13 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
 
         var sessionId = stateSessionId;
         var subSessionId = stateSubSessionId;
-        if (sessionId is null || subSessionId is null)
+        if (sessionId is null)
         {
-            // Chat-client lines carry the ids via BeginScope rather than message state.
+            // Only chat-client lines lack a state session id; they carry both ids via BeginScope.
+            // An actor line already names its ids in state, so we never consult scopes for it —
+            // otherwise an unrelated ambient SubSessionId scope could hijack its routing.
             FindScopeIds(out var scopeSessionId, out var scopeSubSessionId);
-            sessionId ??= scopeSessionId;
+            sessionId = scopeSessionId;
             subSessionId ??= scopeSubSessionId;
         }
 

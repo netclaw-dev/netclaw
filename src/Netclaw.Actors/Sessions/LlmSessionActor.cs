@@ -1745,8 +1745,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
             };
+            // Carry the session id so memory-extraction chat-client diagnostics route to the
+            // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
+            var options = new SessionScopedChatOptions { SessionId = sessionId.Value };
             var extractionResult = await StreamingResponseReader.ReadAsync(
-                client, extractionMessages, options: null, cts.Token);
+                client, extractionMessages, options, cts.Token);
             var extractedText = extractionResult.Response.Text ?? string.Empty;
             self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
         }

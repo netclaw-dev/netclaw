@@ -355,7 +355,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                     sessionId, turnCount, transcript, existingProposals))
             };
 
-            var response = (await StreamingResponseReader.ReadAsync(client, messages, options: null, cts.Token)).Response;
+            // Carry the session id so memory-distillation chat-client diagnostics route to the
+            // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
+            var options = new SessionScopedChatOptions { SessionId = sessionId.Value };
+            var response = (await StreamingResponseReader.ReadAsync(client, messages, options, cts.Token)).Response;
             var text = response.Text ?? string.Empty;
 
             inputTokens = response.Usage?.InputTokenCount;
