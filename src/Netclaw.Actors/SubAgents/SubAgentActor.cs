@@ -98,10 +98,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private IParentApprovalBridge? _approvalBridge;
     private ChannelWriter<ToolActivityUpdate>? _activitySink;
 
-    // Parent session id (scopeId with the "/subagent/..." suffix stripped). Carried on
-    // the sub-agent's ChatOptions so its LLM diagnostics correlate to the spawning
-    // session in Seq, matching the SessionId its enriched logger already uses.
+    // Parent session id (scopeId with the "/subagent/..." suffix stripped) and the full
+    // sub-session scope id. Carried on the sub-agent's ChatOptions so its LLM-pipeline lines
+    // group under the parent in OTEL (SessionId) while the file-logger partitions them into the
+    // sub-agent's own session.log (SubSessionId) — matching the enriched logger's own context.
     private string? _parentSessionId;
+    private string? _subSessionId;
 
     // Default wait-for-first-delta budget when the spawn message carries none
     // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
@@ -269,10 +271,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
             // "/subagent/..." suffix to recover the parent. SessionId matches the key the
             // session/channel actors already tag their loggers with, so sub-agent and
-            // parent logs share one filterable attribute (and route to the same
-            // session.log); SubSessionId isolates a single run within that session.
+            // parent logs share one filterable attribute (so OTEL groups them under the parent);
+            // SubSessionId isolates a single run and is what the file-logger partitions on, so the
+            // sub-agent's lines land in its OWN session.log rather than the parent's.
             var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
             _parentSessionId = parentSessionId;
+            _subSessionId = scopeId;
             var enrichedLog = Context.GetLogger();
             if (!string.IsNullOrWhiteSpace(parentSessionId))
                 enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SessionId, parentSessionId);
@@ -682,11 +686,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var messages = new List<AiChatMessage>(_history);
         var callId = ++_llmCallId;
 
-        // Carry the parent session id (when known) so the chat-client decorators
-        // correlate this sub-agent's LLM diagnostics to the spawning session in Seq,
-        // just like the main session path. Direct/test callers leave it unset.
+        // Carry the parent session id (when known) so the chat-client decorators group this
+        // sub-agent's LLM-pipeline lines under the spawning session in OTEL, plus the sub-session
+        // id so the file-logger partitions them into the sub-agent's OWN session.log. Direct/test
+        // callers leave both unset.
         ChatOptions? options = _parentSessionId is { Length: > 0 } sid
-            ? new SessionScopedChatOptions { SessionId = sid }
+            ? new SessionScopedChatOptions { SessionId = sid, SubSessionId = _subSessionId }
             : null;
         if (!forceNoTools && _aiTools.Count > 0)
         {

@@ -27,8 +27,14 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public sealed class SessionScopedChatOptions : ChatOptions
 {
-    /// <summary>The session whose turn this LLM call belongs to. For sub-agent calls
-    /// this is the parent session id, so a sub-agent's LLM diagnostics correlate to the
-    /// session that spawned it.</summary>
+    /// <summary>The session whose turn this LLM call belongs to. For sub-agent calls this is
+    /// the parent session id, so OTEL/Seq can still group the call under the spawning session.</summary>
     public required string SessionId { get; init; }
+
+    /// <summary>For a sub-agent's LLM call, the sub-session id (its run scope
+    /// <c>{parent}/subagent/{name}/{runId}</c>). When set, the file-logger partitions these
+    /// lines into the sub-agent's own <c>session.log</c> (the local file is keyed by the
+    /// sub-session, while <see cref="SessionId"/> keeps OTEL grouping under the parent). Null
+    /// for top-level session calls.</summary>
+    public string? SubSessionId { get; init; }
 }

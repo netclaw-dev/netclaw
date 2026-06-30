@@ -27,8 +27,22 @@ namespace Netclaw.Daemon.Configuration;
 /// </summary>
 internal static class ChatClientSessionScope
 {
-    public static IDisposable? Begin(ILogger logger, ChatOptions? options) =>
-        options is SessionScopedChatOptions { SessionId: { Length: > 0 } sessionId }
-            ? logger.BeginScope(new[] { new KeyValuePair<string, object>(NetclawLogProperties.SessionId, sessionId) })
-            : null;
+    public static IDisposable? Begin(ILogger logger, ChatOptions? options)
+    {
+        if (options is not SessionScopedChatOptions { SessionId: { Length: > 0 } sessionId } scoped)
+            return null;
+
+        // A sub-agent's call also carries its SubSessionId, so the file-logger routes the line
+        // into the sub-agent's own session.log while SessionId keeps OTEL grouping under the parent.
+        return string.IsNullOrWhiteSpace(scoped.SubSessionId)
+            ? logger.BeginScope(new[]
+            {
+                new KeyValuePair<string, object>(NetclawLogProperties.SessionId, sessionId),
+            })
+            : logger.BeginScope(new[]
+            {
+                new KeyValuePair<string, object>(NetclawLogProperties.SessionId, sessionId),
+                new KeyValuePair<string, object>(NetclawLogProperties.SubSessionId, scoped.SubSessionId),
+            });
+    }
 }

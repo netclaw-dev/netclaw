@@ -74,6 +74,59 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
     }
 
     [Fact]
+    public async Task Sub_agent_line_routes_to_its_own_file_keyed_by_sub_session_id()
+    {
+        var (dir, daemonPath) = TempPaths();
+        var dispatcher = CreateTestProbe("dispatcher");
+
+        using (var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow)))
+        {
+            provider.AttachSessionDispatcher(Task.FromResult(dispatcher.Ref));
+
+            // A bridged sub-agent line carries the parent SessionId (for OTEL grouping) AND the
+            // sub-session id; the LOCAL file is partitioned by the sub-session.
+            var state = new List<KeyValuePair<string, object>>
+            {
+                new(NetclawLogProperties.SessionId, "C1/T1"),
+                new(NetclawLogProperties.SubSessionId, "C1/T1/subagent/summarizer/ab12"),
+            };
+            provider.CreateLogger("Akka.Actor.ActorSystem")
+                .Log(LogLevel.Information, new EventId(0), state, null, (_, _) => "sub-agent did work");
+
+            var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal("C1/T1/subagent/summarizer/ab12", diag.SessionId.Value); // sub file, not the parent
+            Assert.Contains("sub-agent did work", diag.Line, StringComparison.Ordinal);
+        }
+
+        Cleanup(dir);
+    }
+
+    [Fact]
+    public async Task Sub_session_id_carried_in_a_scope_routes_to_the_sub_agent_file()
+    {
+        var (dir, daemonPath) = TempPaths();
+        var dispatcher = CreateTestProbe("dispatcher");
+        var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow));
+        var factory = LoggerFactory.Create(b => b.AddProvider(provider));
+        provider.AttachSessionDispatcher(Task.FromResult(dispatcher.Ref));
+
+        var logger = factory.CreateLogger("Netclaw.LlmPipeline");
+        using (logger.BeginScope(new[]
+        {
+            new KeyValuePair<string, object>(NetclawLogProperties.SessionId, "C2/T2"),
+            new KeyValuePair<string, object>(NetclawLogProperties.SubSessionId, "C2/T2/subagent/coder/cd34"),
+        }))
+            logger.LogInformation("sub-agent LLM streaming call completed");
+
+        var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C2/T2/subagent/coder/cd34", diag.SessionId.Value);
+        Assert.Contains("sub-agent LLM streaming call completed", diag.Line, StringComparison.Ordinal);
+
+        factory.Dispose();
+        Cleanup(dir);
+    }
+
+    [Fact]
     public async Task Sessionless_line_goes_to_daemon_log()
     {
         var (dir, daemonPath) = TempPaths();

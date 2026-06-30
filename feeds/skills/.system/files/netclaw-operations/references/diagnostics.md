@@ -31,8 +31,13 @@ Log split — one stream, partitioned locally by session:
   with the session id as an attribute; do the global slicing/distilling on the OTEL
   receiver side.
 - Session log directories use the sanitized session ID (`/`, `.`, spaces, etc.
-  replaced with `_`). Sub-agent activity rolls up into the parent session's
-  `session.log`; there is no separate file per sub-agent run. No rotation today
+  replaced with `_`). Each **sub-agent run** writes to its **own** `session.log`,
+  keyed by its sub-session id (`{parentId}/subagent/{name}/{runId}`, sanitized) —
+  so a sub-agent's detail stays out of the parent's log and you review it in that
+  run's own file. The parent's `session.log` keeps the spawn breadcrumbs (requested
+  → spawned → completed/failed) as the pointer to each run. In OTEL the sub-agent
+  lines still carry the parent `SessionId` (so they group under the parent) plus
+  `SubSessionId` (so they slice by run). No rotation today
   (see netclaw-dev/netclaw#919).
 
 What to expect inside `session.log`:

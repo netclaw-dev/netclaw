@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
@@ -92,15 +91,33 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
     /// is resolved; otherwise writes it to <c>daemon.log</c>. <paramref name="stateSessionId"/> is
     /// the id found on the log event's state; the active scopes are consulted only as a fallback.
     /// </summary>
-    internal void Route(string line, string? stateSessionId, bool fromSessionLogActor)
+    internal void Route(string line, string? stateSessionId, string? stateSubSessionId, bool fromSessionLogActor)
     {
         // Carve-out: the session-log writer's own lines go to daemon.log so a failed write that
         // logs an error cannot route back into the same (failing) session.log — an infinite loop.
-        var sessionId = fromSessionLogActor ? null : (stateSessionId ?? FindSessionIdInScopes());
-
-        if (!string.IsNullOrWhiteSpace(sessionId) && Volatile.Read(ref _sessionDispatcher) is { } dispatcher)
+        if (fromSessionLogActor)
         {
-            dispatcher.Tell(new SessionLogDiagnostic(new SessionId(sessionId), line));
+            _queue.TryAdd(line);
+            return;
+        }
+
+        var sessionId = stateSessionId;
+        var subSessionId = stateSubSessionId;
+        if (sessionId is null || subSessionId is null)
+        {
+            // Chat-client lines carry the ids via BeginScope rather than message state.
+            FindScopeIds(out var scopeSessionId, out var scopeSubSessionId);
+            sessionId ??= scopeSessionId;
+            subSessionId ??= scopeSubSessionId;
+        }
+
+        // Partition the LOCAL file: a sub-agent's lines (which carry a SubSessionId) get their own
+        // session.log keyed by the sub-session; everything else goes to its session's file. The
+        // line still carries the parent SessionId, so OTEL groups it under the parent regardless.
+        var routingId = subSessionId ?? sessionId;
+        if (!string.IsNullOrWhiteSpace(routingId) && Volatile.Read(ref _sessionDispatcher) is { } dispatcher)
+        {
+            dispatcher.Tell(new SessionLogDiagnostic(new SessionId(routingId), line));
             return;
         }
 
@@ -109,37 +126,49 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         _queue.TryAdd(line);
     }
 
-    private string? FindSessionIdInScopes()
+    private void FindScopeIds(out string? sessionId, out string? subSessionId)
     {
+        sessionId = null;
+        subSessionId = null;
+
         var scopeProvider = _scopeProvider;
         if (scopeProvider is null)
-            return null;
+            return;
 
-        // static lambda + StrongBox state: the delegate is cached and nothing is captured, so the
-        // chat-client diagnostic hot path doesn't allocate a closure per logged line.
-        var box = new StrongBox<string?>(null);
+        // static lambda + a single mutable holder: the delegate is cached and nothing is
+        // captured, so the chat-client diagnostic hot path doesn't allocate a closure per line.
+        var ids = new ScopeIds();
         scopeProvider.ForEachScope(
             static (scope, state) =>
             {
-                if (state.Value is not null)
+                if (state.SessionId is not null && state.SubSessionId is not null)
                     return;
 
                 if (scope is IEnumerable<KeyValuePair<string, object>> kvps)
                 {
                     foreach (var kv in kvps)
                     {
-                        if (kv.Key == NetclawLogProperties.SessionId
+                        if (state.SessionId is null
+                            && kv.Key == NetclawLogProperties.SessionId
                             && kv.Value?.ToString() is { Length: > 0 } id)
-                        {
-                            state.Value = id;
-                            return;
-                        }
+                            state.SessionId = id;
+                        else if (state.SubSessionId is null
+                            && kv.Key == NetclawLogProperties.SubSessionId
+                            && kv.Value?.ToString() is { Length: > 0 } subId)
+                            state.SubSessionId = subId;
                     }
                 }
             },
-            box);
+            ids);
 
-        return box.Value;
+        sessionId = ids.SessionId;
+        subSessionId = ids.SubSessionId;
+    }
+
+    private sealed class ScopeIds
+    {
+        public string? SessionId;
+        public string? SubSessionId;
     }
 
     private async Task ResolveSessionDispatcherAsync(Task<IActorRef> dispatcherTask)
@@ -239,11 +268,12 @@ internal sealed class RollingFileLogger : ILogger
         if (!IsEnabled(logLevel))
             return;
 
-        // Single pass over the event's structured state: pick up the session id (for routing),
-        // the Akka log source (for a useful per-line label — every actor shares the generic MEL
-        // category "Akka.Actor.ActorSystem"), and whether this line is the session-log writer's
-        // own (so we never route it back into the file it writes).
-        ScanState(state, out var sessionId, out var logSource, out var fromSessionLogActor);
+        // Single pass over the event's structured state: pick up the session id and (for a
+        // sub-agent's lines) the sub-session id (for routing), the Akka log source (for a useful
+        // per-line label — every actor shares the generic MEL category "Akka.Actor.ActorSystem"),
+        // and whether this line is the session-log writer's own (so we never route it back into
+        // the file it writes).
+        ScanState(state, out var sessionId, out var subSessionId, out var logSource, out var fromSessionLogActor);
 
         var timestamp = _provider.GetTimestamp();
         var level = logLevel switch
@@ -261,7 +291,7 @@ internal sealed class RollingFileLogger : ILogger
         if (exception is not null)
             line += Environment.NewLine + exception;
 
-        _provider.Route(line, sessionId, fromSessionLogActor);
+        _provider.Route(line, sessionId, subSessionId, fromSessionLogActor);
     }
 
     // Read the fields the producer already put on the log event. The Akka→MEL bridge passes an
@@ -269,20 +299,21 @@ internal sealed class RollingFileLogger : ILogger
     // structured logging passes FormattedLogValues carrying a {SessionId} field. Both surface
     // their fields as KeyValuePair<string, object> sequences (the nullable-annotated and
     // unannotated forms are the same runtime type), so one branch reads both — no Akka internals.
-    private static void ScanState<TState>(TState state, out string? sessionId, out string? logSource, out bool fromSessionLogActor)
+    private static void ScanState<TState>(TState state, out string? sessionId, out string? subSessionId, out string? logSource, out bool fromSessionLogActor)
     {
         sessionId = null;
+        subSessionId = null;
         logSource = null;
         fromSessionLogActor = false;
 
         if (state is IEnumerable<KeyValuePair<string, object>> fields)
         {
             foreach (var field in fields)
-                Apply(field.Key, field.Value, ref sessionId, ref logSource, ref fromSessionLogActor);
+                Apply(field.Key, field.Value, ref sessionId, ref subSessionId, ref logSource, ref fromSessionLogActor);
         }
     }
 
-    private static void Apply(string key, object? value, ref string? sessionId, ref string? logSource, ref bool fromSessionLogActor)
+    private static void Apply(string key, object? value, ref string? sessionId, ref string? subSessionId, ref string? logSource, ref bool fromSessionLogActor)
     {
         if (value is null)
             return;
@@ -291,6 +322,11 @@ internal sealed class RollingFileLogger : ILogger
         {
             if (value.ToString() is { Length: > 0 } id)
                 sessionId = id;
+        }
+        else if (key == NetclawLogProperties.SubSessionId)
+        {
+            if (value.ToString() is { Length: > 0 } subId)
+                subSessionId = subId;
         }
         else if (key == "LogSource")
         {
