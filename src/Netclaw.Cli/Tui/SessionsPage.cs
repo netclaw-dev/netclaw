@@ -46,12 +46,15 @@ public sealed class SessionsPage : ReactivePage<SessionsViewModel>
                     else
                     {
                         var items = ViewModel.Sessions.Select(FormatSessionLine).ToList();
+                        var list = Layouts.SelectionList(items)
+                            .WithMode(SelectionMode.Single)
+                            .WithHighlightColors(Color.Black, Color.Cyan)
+                            .WithHighlightedIndex(selectedIndex)
+                            .WithFillHeight();
+                        list.OnFocused();
+
                         content.WithChild(
-                            Layouts.SelectionList(items)
-                                .WithMode(SelectionMode.Single)
-                                .WithHighlightColors(Color.Black, Color.Cyan)
-                                .WithHighlightedIndex(selectedIndex)
-                                .WithFillHeight());
+                            list);
                     }
 
                     return (ILayoutNode)Layouts.Vertical()

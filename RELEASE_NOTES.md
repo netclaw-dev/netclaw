@@ -1,3 +1,35 @@
+#### 0.24.3-beta.2 2026-06-30 ####
+
+Netclaw v0.24.3-beta.2 — GitHub Enterprise Copilot auth, Slack native processing status, reminder failure visibility
+
+**Features**
+
+* **Slack native processing status** — Shows real-time processing indicators in Slack interactions instead of generic "working" messages. ([#1524](https://github.com/netclaw-dev/netclaw/pull/1524))
+
+* **GitHub Enterprise Copilot authentication** — Provider-layer GHE Copilot auth support plus TUI configuration for GitHub Enterprise Copilot authentication. ([#1509](https://github.com/netclaw-dev/netclaw/pull/1509), [#1512](https://github.com/netclaw-dev/netclaw/pull/1512))
+
+* **Reminder failure and skip visibility** — Operators can now see when reminders fail or are skipped, providing debugging insight into reminder execution. ([#1503](https://github.com/netclaw-dev/netclaw/pull/1503))
+
+**Bug Fixes**
+
+* **Fixed flaky host crash during install reset** — Race condition in reset-progress ReactiveProperties causing crashes during host reset; now properly synchronized. ([#1525](https://github.com/netclaw-dev/netclaw/pull/1525))
+
+* **Fixed subagent terminal result summaries** — Subagent result summaries in the terminal were returning incorrect data; now properly surfaces explicit terminal run summaries. ([#1519](https://github.com/netclaw-dev/netclaw/pull/1519))
+
+* **Fixed identity redo timezone infinite loop** — Resolved an infinite loop in the identity redo flow and corrected a session browser regression test. ([#1518](https://github.com/netclaw-dev/netclaw/pull/1518))
+
+* **Fixed daemon reset behavior** — Daemon now properly stops before reset and shows a progress screen. ([#1494](https://github.com/netclaw-dev/netclaw/pull/1494))
+
+* **Clean MCP error messages** — MCP tool errors now display as clean attributed messages instead of raw JSON blobs, allowing models to properly interpret and handle MCP errors. ([#1495](https://github.com/netclaw-dev/netclaw/pull/1510))
+
+**Dependency Updates**
+
+* **Bump Anthropic SDK** — 12.30.0 → 12.31.0 (semver-minor). ([#1488](https://github.com/netclaw-dev/netclaw/pull/1488))
+
+* **Bump YamlDotNet** — 18.0.0 → 18.1.0 (semver-minor). ([#1516](https://github.com/netclaw-dev/netclaw/pull/1516))
+
+* **Bump Termina** — 0.14.0 → 0.15.0-beta1. ([#1506](https://github.com/netclaw-dev/netclaw/pull/1506))
+
 #### 0.24.3-beta.1 2026-06-26 ####
 
 Netclaw v0.24.3-beta.1 — Reminder duplicate-execution guard fix, autonomous session workspace write support
