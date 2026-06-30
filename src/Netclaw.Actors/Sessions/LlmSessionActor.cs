@@ -372,8 +372,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void EmitProcessingStateForPhase(SessionPhase phase)
     {
         var isProcessing = phase is SessionPhase.Processing or SessionPhase.Compacting;
+        EmitProcessingState(isProcessing, force: false);
+    }
+
+    private void EmitProcessingState(bool isProcessing, bool force)
+    {
         if (_processingStateActive == isProcessing)
-            return;
+        {
+            if (!force)
+                return;
+        }
 
         _processingStateActive = isProcessing;
         EmitOutput(new ProcessingStateOutput(isProcessing)
@@ -2628,6 +2636,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
+        // Channel-native busy indicators can expire or clear while a tool loop
+        // stays in Processing, so refresh on every LLM segment, not only phase changes.
+        EmitProcessingState(isProcessing: true, force: true);
+
         _anyContentStreamed = false;
         CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();

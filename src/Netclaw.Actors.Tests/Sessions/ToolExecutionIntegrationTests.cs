@@ -120,6 +120,65 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Tool_loop_reemits_processing_state_for_followup_llm_call()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "test query" })
+        ];
+        _fakeToolExecutor.Results["web_search"] = "Found 3 results for test query";
+
+        var sessionId = new SessionId("test-channel/tool-processing-refresh");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-processing-refresh-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full | OutputFilter.ProcessingState
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search for test query"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var initialProcessing = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(initialProcessing.IsProcessing);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var followupProcessing = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(followupProcessing.IsProcessing);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var idle = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(idle.IsProcessing);
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+    }
+
+    [Fact]
     public async Task Multiple_tool_calls_in_single_response_all_executed()
     {
         _fakeChatClient.ToolCallsOnFirstCall =
