@@ -33,6 +33,7 @@ namespace Netclaw.Daemon.Configuration;
 internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExternalScope
 {
     private const long MaxFileSizeBytes = 10 * 1024 * 1024; // 10MB per file
+    private const int DaemonLogFlushBatch = 256; // flush cap under a burst; idle flushes every line
 
     private readonly string _basePath;
     private readonly TimeProvider _timeProvider;
@@ -193,13 +194,23 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
 
     private void ProcessQueue()
     {
+        var batched = 0;
         foreach (var message in _queue.GetConsumingEnumerable())
         {
             try
             {
                 EnsureWriter();
                 _writer!.WriteLine(message);
-                _writer.Flush();
+
+                // Flush when the queue has drained — so sparse daemon.log lines (startup, config,
+                // lifecycle, alerts) stay immediately durable — or after a burst batch, so a
+                // sustained burst doesn't pay an fsync per line. The final tail is flushed by
+                // Dispose() when the writer thread exits.
+                if (_queue.Count == 0 || ++batched >= DaemonLogFlushBatch)
+                {
+                    _writer.Flush();
+                    batched = 0;
+                }
             }
             catch (Exception ex)
             {

@@ -12,8 +12,9 @@ namespace Netclaw.Actors.SubAgents;
 /// groups a sub-agent's activity under the session that spawned it; the full composite id is
 /// carried separately as <c>SubSessionId</c> and is what partitions the local
 /// <c>session.log</c> into the sub-agent's OWN file. Keep this in sync with how sub-agent ids
-/// are constructed in the spawner. Note: <c>ToolApprovalActor</c> performs the same
-/// <c>/subagent/</c> split for approval inheritance — if the id format changes, update both.
+/// are constructed in the spawner. <c>ToolApprovalActor</c> also calls this to walk a
+/// sub-agent's approvals up to its parent, so this is the single owner of the <c>/subagent/</c>
+/// split.
 /// </summary>
 internal static class SubAgentSessionScope
 {

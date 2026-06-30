@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -104,11 +105,14 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 return true;
             }
 
-            var subagentMarker = scopeId.IndexOf("/subagent/", StringComparison.Ordinal);
-            if (subagentMarker <= 0)
+            // Walk to the parent session so a sub-agent inherits its parent's approvals.
+            // SubAgentSessionScope.NormalizeSessionId owns the "/subagent/" split (one
+            // implementation shared with log routing); break once there is nothing left to strip.
+            var parent = SubAgentSessionScope.NormalizeSessionId(scopeId);
+            if (string.IsNullOrEmpty(parent) || parent == scopeId)
                 break;
 
-            scopeId = scopeId[..subagentMarker];
+            scopeId = parent;
         }
 
         return false;
