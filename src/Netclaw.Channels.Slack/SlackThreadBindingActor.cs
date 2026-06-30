@@ -61,9 +61,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private readonly SessionPipelineHandle _handle;
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
-    private long _processingIndicatorVersion;
-    private readonly ProcessingIndicatorState _processingIndicatorState = new();
-    private Task _processingIndicatorRenderQueue = Task.CompletedTask;
+    private volatile bool _processingIndicatorActive;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -138,7 +136,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
-        QueueTerminalProcessingIndicatorClear();
+        QueueProcessingIndicatorClearIfActive();
         _handle.Dispose();
         base.PostStop();
     }
@@ -198,7 +196,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         CommandAsync<StartProactiveThread>(HandleProactiveThreadAsync);
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         CommandAsync<ThreadOutput>(HandleOutputAsync);
-        Command<LateProcessingRenderCompleted>(HandleLateProcessingRenderCompleted);
         Command<OutputStreamTerminated>(msg =>
         {
             if (msg.Generation != _handle.Generation)
@@ -1176,16 +1173,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private Task RenderProcessingStateAsync(ProcessingStateOutput output)
     {
-        var version = RecordProcessingIndicatorDesiredState(output.IsProcessing);
-        return QueueProcessingStateRender(output, output.IsRequired, version);
-    }
-
-    private Task QueueProcessingStateRender(
-        ProcessingStateOutput output,
-        bool isRequired,
-        long version)
-    {
-        var requirement = isRequired
+        _processingIndicatorActive = output.IsProcessing;
+        var requirement = output.IsRequired
             ? ChannelOutputRequirement.Required
             : ChannelOutputRequirement.Optional;
         var request = new ChannelOutputRenderRequest(
@@ -1194,60 +1183,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelOutputEffectKind.ProcessingIndicator,
             requirement);
 
-        var work = new ProcessingRenderWork(
-            _dependencies.ChannelRegistry,
-            _log,
-            request,
-            isRequired,
-            output.IsProcessing,
-            version,
-            _processingIndicatorState,
-            Self);
-        if (isRequired)
-            return RenderProcessingStateRequestAsync(work);
+        if (output.IsRequired)
+            return RenderProcessingStateRequestAsync(request, isRequired: true);
 
-        _processingIndicatorRenderQueue = _processingIndicatorRenderQueue.ContinueWith(
-            static async (previous, state) =>
-            {
-                _ = previous.Exception;
-                await RenderProcessingStateRequestAsync((ProcessingRenderWork)state!);
-            },
-            work,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default).Unwrap();
-
+        _ = RenderProcessingStateRequestAsync(request, isRequired: false);
         return Task.CompletedTask;
-    }
-
-    private void HandleLateProcessingRenderCompleted(LateProcessingRenderCompleted completed)
-    {
-        var latest = Volatile.Read(ref _processingIndicatorState.Current);
-        if (latest.Version <= completed.Version || latest.IsProcessing == completed.IsProcessing)
-            return;
-
-        _ = QueueProcessingStateRender(
-            new ProcessingStateOutput(latest.IsProcessing)
-            {
-                SessionId = _sessionId
-            },
-            isRequired: false,
-            latest.Version);
-    }
-
-    private long RecordProcessingIndicatorDesiredState(bool isProcessing)
-    {
-        var version = Interlocked.Increment(ref _processingIndicatorVersion);
-        Volatile.Write(
-            ref _processingIndicatorState.Current,
-            new ProcessingIndicatorSnapshot(version, isProcessing));
-        return version;
     }
 
     private void QueueProcessingIndicatorClearIfActive()
     {
-        var current = Volatile.Read(ref _processingIndicatorState.Current);
-        if (!current.IsProcessing)
+        if (!_processingIndicatorActive)
             return;
 
         _ = RenderProcessingStateAsync(new ProcessingStateOutput(false)
@@ -1256,50 +1201,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         });
     }
 
-    private void QueueTerminalProcessingIndicatorClear()
+    private async Task RenderProcessingStateRequestAsync(
+        ChannelOutputRenderRequest request,
+        bool isRequired)
     {
-        var current = Volatile.Read(ref _processingIndicatorState.Current);
-        if (current.Version == 0)
-            return;
-
-        Volatile.Write(ref _processingIndicatorState.TerminalCleanupRequested, 1);
-        var version = RecordProcessingIndicatorDesiredState(isProcessing: false);
-        _ = QueueProcessingStateRender(
-            new ProcessingStateOutput(false)
-            {
-                SessionId = _sessionId
-            },
-            isRequired: false,
-            version);
-    }
-
-    private static async Task RenderProcessingStateRequestAsync(ProcessingRenderWork work)
-    {
-        if (ShouldSkipStaleOptionalProcessingRender(work))
-            return;
-
         try
         {
-            await RenderOutputWithTimeoutAsync(work);
+            await RenderOutputWithTimeoutAsync(_dependencies.ChannelRegistry, request);
         }
-        catch (Exception ex) when (!work.IsRequired)
+        catch (Exception ex) when (!isRequired)
         {
-            work.Log.Warning(ex, "Failed rendering optional Slack processing indicator");
+            _log.Warning(ex, "Failed rendering optional Slack processing indicator");
         }
     }
 
-    private static bool ShouldSkipStaleOptionalProcessingRender(ProcessingRenderWork work)
+    private static async Task RenderOutputWithTimeoutAsync(
+        IChannelRegistry registry,
+        ChannelOutputRenderRequest request)
     {
-        if (work.IsRequired)
-            return false;
-
-        var latest = Volatile.Read(ref work.State.Current);
-        return latest.Version > work.Version && latest.IsProcessing != work.IsProcessing;
-    }
-
-    private static async Task RenderOutputWithTimeoutAsync(ProcessingRenderWork work)
-    {
-        var renderTask = work.Registry.RenderOutputAsync(work.Request, CancellationToken.None).AsTask();
+        using var renderCts = new CancellationTokenSource(ProcessingIndicatorTimeout);
+        var renderTask = registry.RenderOutputAsync(request, renderCts.Token).AsTask();
         try
         {
             await renderTask.WaitAsync(ProcessingIndicatorTimeout);
@@ -1307,83 +1228,21 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         finally
         {
             if (!renderTask.IsCompleted)
-                ObserveLateProcessingRender(renderTask, work);
+                ObserveLateProcessingRender(renderTask);
         }
     }
 
-    private static void ObserveLateProcessingRender(
-        Task renderTask,
-        ProcessingRenderWork work)
+    private static void ObserveLateProcessingRender(Task renderTask)
     {
         _ = renderTask.ContinueWith(
-            static (task, state) =>
+            static task =>
             {
-                var renderWork = (ProcessingRenderWork)state!;
                 _ = task.Exception;
-
-                if (Volatile.Read(ref renderWork.State.TerminalCleanupRequested) == 1)
-                {
-                    if (renderWork.IsProcessing)
-                        _ = ClearTerminalProcessingStateAfterLateStartAsync(renderWork);
-                    return;
-                }
-
-                renderWork.Owner.Tell(new LateProcessingRenderCompleted(renderWork.Version, renderWork.IsProcessing));
             },
-            work,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
-
-    private static async Task ClearTerminalProcessingStateAfterLateStartAsync(ProcessingRenderWork work)
-    {
-        var latest = Volatile.Read(ref work.State.Current);
-        if (latest.IsProcessing)
-            return;
-
-        var clearWork = work with
-        {
-            Request = work.Request with
-            {
-                Output = new ProcessingStateOutput(false)
-                {
-                    SessionId = work.Request.Output.SessionId
-                },
-                Requirement = ChannelOutputRequirement.Optional
-            },
-            IsRequired = false,
-            IsProcessing = false,
-            Version = latest.Version
-        };
-
-        try
-        {
-            await RenderOutputWithTimeoutAsync(clearWork);
-        }
-        catch (Exception ex)
-        {
-            work.Log.Warning(ex, "Failed clearing terminal Slack processing indicator after late status render");
-        }
-    }
-
-    private sealed class ProcessingIndicatorState
-    {
-        public ProcessingIndicatorSnapshot Current = new(0, IsProcessing: false);
-        public int TerminalCleanupRequested;
-    }
-
-    private sealed record ProcessingIndicatorSnapshot(long Version, bool IsProcessing);
-
-    private sealed record ProcessingRenderWork(
-        IChannelRegistry Registry,
-        ILoggingAdapter Log,
-        ChannelOutputRenderRequest Request,
-        bool IsRequired,
-        bool IsProcessing,
-        long Version,
-        ProcessingIndicatorState State,
-        IActorRef Owner);
 
     private ChannelDeliveryTarget BuildOutputRenderTarget()
     {
@@ -1901,7 +1760,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private sealed record ThreadOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
-    private sealed record LateProcessingRenderCompleted(long Version, bool IsProcessing) : INoSerializationVerificationNeeded;
     private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
     private sealed class PendingApprovalRequest
     {

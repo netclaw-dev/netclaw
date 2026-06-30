@@ -251,36 +251,6 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task Late_processing_start_is_cleared_when_idle_is_latest_state()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-slack-processing-late-start");
-        var renderer = new ReleasableStartProcessingRenderer();
-        var registry = TestChannelRegistries.SlackWithProcessingRenderer(renderer);
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new ProcessingStateOutput(true) { SessionId = sid },
-            new ProcessingStateOutput(false) { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
-        ]);
-
-        CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(new[] { false }, renderer.Statuses);
-        }, cancellationToken: ct);
-
-        renderer.ReleaseStart();
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(new[] { false, true, false }, renderer.Statuses);
-        }, cancellationToken: ct);
-    }
-
-    [Fact]
     public async Task Active_processing_status_is_cleared_when_actor_stops()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -309,40 +279,6 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 _replyClient.Statuses,
                 status => Assert.Equal("is thinking...", status.Status),
                 status => Assert.Equal(string.Empty, status.Status));
-        }, cancellationToken: ct);
-    }
-
-    [Fact]
-    public async Task Timed_out_processing_start_is_cleared_after_actor_stops()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-slack-processing-stop-late-start");
-        var renderer = new ReleasableStartProcessingRenderer();
-        var registry = TestChannelRegistries.SlackWithProcessingRenderer(renderer);
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new ProcessingStateOutput(true) { SessionId = sid }
-        ]);
-        var actor = CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
-
-        await renderer.StartBlocked.WaitAsync(ct);
-
-        var stopProbe = CreateTestProbe("slack-processing-stop-late-start");
-        stopProbe.Watch(actor);
-        Sys.Stop(actor);
-        await stopProbe.ExpectTerminatedAsync(actor, cancellationToken: ct);
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(new[] { false }, renderer.Statuses);
-        }, cancellationToken: ct);
-
-        renderer.ReleaseStart();
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(new[] { false, true, false }, renderer.Statuses);
         }, cancellationToken: ct);
     }
 
@@ -590,37 +526,4 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         }
     }
 
-    private sealed class ReleasableStartProcessingRenderer : IChannelOutputRenderer
-    {
-        private readonly object _lock = new();
-        private readonly List<bool> _statuses = [];
-        private readonly TaskCompletionSource _startBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _releaseStart = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _startCount;
-
-        public ChannelDescriptorKey Key => ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
-
-        public IReadOnlyList<bool> Statuses
-        {
-            get { lock (_lock) return _statuses.ToList(); }
-        }
-
-        public Task StartBlocked => _startBlocked.Task;
-
-        public void ReleaseStart() => _releaseStart.TrySetResult();
-
-        public async ValueTask RenderAsync(
-            ChannelOutputRenderRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            var processing = Assert.IsType<ProcessingStateOutput>(request.Output);
-            if (processing.IsProcessing && Interlocked.Increment(ref _startCount) == 1)
-            {
-                _startBlocked.TrySetResult();
-                await _releaseStart.Task;
-            }
-
-            lock (_lock) _statuses.Add(processing.IsProcessing);
-        }
-    }
 }
