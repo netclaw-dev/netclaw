@@ -54,9 +54,11 @@ What to expect inside `session.log`:
   or globally, use Seq/OTLP (every line is there with `SessionId` as a field).
 - The session-log writer's own failure lines are the one exception: they go to
   `daemon.log`, never routed back into the file that just failed.
-- Best-effort, **batched** writes (flushed on a ~1s cadence): a recent line may lag
-  by up to a second, and individual lines may be dropped on transient IO errors (a
-  warning lands in `daemon.log`). Not a transactional audit trail.
+- Writes are split by kind. The **conversation audit** (User/Assistant/Tool/Usage
+  lines) is flushed **immediately**, so a hard process death cannot drop the audit
+  tail. The higher-volume **diagnostics** are **batched** (flushed on a ~1s cadence),
+  so a recent diagnostic line may lag by up to a second. Individual lines may be
+  dropped on transient IO errors (a warning lands in `daemon.log`).
 
 What stays in `daemon.log`: only sessionless lines — daemon startup/config, session
 lifecycle, and global errors. Debugging one session → read its `session.log`;

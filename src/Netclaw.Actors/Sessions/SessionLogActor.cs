@@ -104,10 +104,18 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
     protected override void PostStop()
     {
-        // Dispose flushes, but flush explicitly first so a write failure here is logged
-        // rather than swallowed by Dispose.
+        // Flush explicitly first so a write failure is reported via Flush's rate-limited warning.
+        // Dispose flushes again; guard it so a still-failing disk (the _flushFailing state) cannot
+        // throw IOException out of PostStop and bury the real cause under Akka's PostStop noise.
         Flush();
-        _writer?.Dispose();
+        try
+        {
+            _writer?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to close session.log for {Session}", _sessionId.Value);
+        }
         base.PostStop();
     }
 

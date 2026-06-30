@@ -286,12 +286,7 @@ public sealed class SubAgentSpawner
             }
             else
             {
-                // Log at INFO so tool denials are visible in production logs.
-                // Sub-agents without certain tools may be unable to complete
-                // their tasks, and this information is important for debugging.
-                _logger.LogInformation(
-                    "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy (session={SessionId})",
-                    profile.Name, tool.Name, context.SessionId);
+                SubAgentSpawnBreadcrumbs.ToolDenied(_logger, context, profile.Name, tool.Name);
             }
         }
 
