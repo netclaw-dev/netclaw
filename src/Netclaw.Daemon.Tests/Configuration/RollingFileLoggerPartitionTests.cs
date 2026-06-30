@@ -119,45 +119,46 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
     }
 
     [Fact]
-    public async Task Session_lines_emitted_before_dispatcher_resolves_buffer_then_drain()
+    public async Task Session_line_before_dispatcher_resolves_falls_back_to_daemon_log()
     {
         var (dir, daemonPath) = TempPaths();
         var dispatcher = CreateTestProbe("dispatcher");
         var pending = new TaskCompletionSource<Akka.Actor.IActorRef>();
 
-        using var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow));
-        provider.AttachSessionDispatcher(pending.Task); // routing on, dispatcher not yet resolved
-        provider.CreateLogger("Netclaw.Tools").LogInformation("buffered op {SessionId}", "C4/T4");
+        using (var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow)))
+        {
+            provider.AttachSessionDispatcher(pending.Task); // never resolves during this test
+            provider.CreateLogger("Netclaw.Tools").LogInformation("before resolve {SessionId}", "C4/T4");
 
-        await dispatcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken);
+            // No buffering: a line logged before the dispatcher resolves is not held for it; it
+            // goes straight to daemon.log (the dispatcher never sees it).
+            await dispatcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+        }
 
-        pending.SetResult(dispatcher.Ref); // resolution drains the buffer in order
-        var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("C4/T4", diag.SessionId.Value);
-        Assert.Contains("buffered op", diag.Line, StringComparison.Ordinal);
+        Assert.Contains("before resolve", ReadDaemonLog(dir), StringComparison.Ordinal);
         Cleanup(dir);
     }
 
     [Fact]
-    public async Task Dispatcher_resolution_failure_drains_buffer_and_beacons_to_daemon_log()
+    public async Task Dispatcher_resolution_failure_falls_back_and_beacons_to_daemon_log()
     {
         var (dir, daemonPath) = TempPaths();
         var pending = new TaskCompletionSource<Akka.Actor.IActorRef>();
         var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow));
         try
         {
-            provider.AttachSessionDispatcher(pending.Task); // routing on, dispatcher not resolved
-            provider.CreateLogger("Netclaw.Tools").LogInformation("buffered before failure {SessionId}", "C9/T9");
+            provider.AttachSessionDispatcher(pending.Task); // dispatcher not resolved
+            provider.CreateLogger("Netclaw.Tools").LogInformation("before failure {SessionId}", "C9/T9");
 
             pending.SetException(new InvalidOperationException("dispatcher never registered"));
 
-            // On failure: the buffered session line is NOT dropped — it falls back to daemon.log,
-            // and a single beacon records that routing was disabled.
+            // The session line fell back to daemon.log at log time (dispatcher still null); on
+            // failure a single beacon records that per-session routing is disabled.
             await AwaitAssertAsync(
                 async () =>
                 {
                     var text = await ReadDaemonSharedAsync(dir, TestContext.Current.CancellationToken);
-                    Assert.Contains("buffered before failure", text, StringComparison.Ordinal);
+                    Assert.Contains("before failure", text, StringComparison.Ordinal);
                     Assert.Contains("per-session routing disabled", text, StringComparison.Ordinal);
                 },
                 TimeSpan.FromSeconds(5),
