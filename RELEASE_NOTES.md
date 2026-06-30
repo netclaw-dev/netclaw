@@ -1,3 +1,13 @@
+#### 0.24.3-beta.1 2026-06-26 ####
+
+Netclaw v0.24.3-beta.1 — Reminder duplicate-execution guard fix, autonomous session workspace write support
+
+**Bug Fixes**
+
+* **Reminders: release duplicate-execution guard when a Mode A reminder session wedges** — When a Mode A reminder session wedged, the duplicate-execution guard was never released, blocking subsequent executions. The guard is now properly released when a session wedges. ([#1492](https://github.com/netclaw-dev/netclaw/pull/1500))
+
+* **Tools: allow autonomous sessions to write the workspace directory** — Autonomous sessions were blocked from writing to the workspace directory. This fix grants them write access. ([#1493](https://github.com/netclaw-dev/netclaw/pull/1498))
+
 #### 0.24.2 2026-06-25 ####
 
 Netclaw v0.24.2 — DwarfStar provider support, sub-agent operating rule inheritance, systemd update reliability, and reliability improvements

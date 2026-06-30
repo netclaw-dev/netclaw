@@ -487,7 +487,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             "Transport and address may be missing or invalid.");
     }
 
-    private static ChannelDeliveryTargetInfo? ResolveChannelDeliveryTarget(ReminderDefinition definition)
+    internal static ChannelDeliveryTargetInfo? ResolveChannelDeliveryTarget(ReminderDefinition definition)
     {
         if (definition.Delivery.Target is not null)
             return definition.Delivery.Target;

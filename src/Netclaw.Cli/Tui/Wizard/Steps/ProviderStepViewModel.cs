@@ -4,14 +4,18 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
 using R3;
 
@@ -59,6 +63,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     public AuthMethod SelectedAuthMethod { get; set; } = AuthMethod.None;
     public string? ApiKeyInput { get; set; }
     public string? EndpointInput { get; set; }
+    public IReadOnlyDictionary<string, object?>? VendorOptions { get; set; }
     public string? SelectedModelId { get; set; }
     public bool HasStoredCredential { get; private set; }
     public List<DiscoveredModel> DiscoveredModels { get; } = [];
@@ -271,6 +276,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             entry.ApiKey = new SensitiveString(ApiKeyInput);
         }
 
+        entry.SetVendorOptions(ToJsonObject(VendorOptions));
+
         return entry;
     }
 
@@ -279,13 +286,47 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     public void StartOAuthFlow()
     {
         if (SelectedProviderType is null) return;
+        if (!TryBuildOAuthFlowEntry(out var oauthEntry, out var error))
+        {
+            ProbeResult.Value = new ProviderProbeResult(false, error, []);
+            return;
+        }
+
         ProbeElapsedSeconds.Value = 0;
         var ct = OAuth.StartDeviceFlow(SelectedProviderType, result =>
         {
             ApiKeyInput = result.AccessToken.Value;
             StartProbe();
-        });
+        }, oauthEntry);
         _ = RunProbeTimerAsync(ct);
+    }
+
+    private bool TryBuildOAuthFlowEntry(out ProviderEntry? entry, out string error)
+    {
+        entry = null;
+        error = string.Empty;
+        if (!string.Equals(SelectedProviderType, "github-copilot", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!GitHubCopilotAuthResolver.TryResolveSetupOptions(
+                gitHubHost: null,
+                gitHubApiBase: null,
+                includeAmbientEnvironment: true,
+                out var setupOptions,
+                out var setupError))
+        {
+            error = setupError ?? "GitHub Copilot enterprise host settings are invalid.";
+            return false;
+        }
+
+        VendorOptions = GitHubCopilotAuthResolver.ToVendorOptions(setupOptions);
+        entry = new ProviderEntry
+        {
+            Type = "github-copilot",
+            AuthMethod = AuthMethod.OAuthDevice,
+        };
+        entry.SetVendorOptions(ToJsonObject(VendorOptions));
+        return true;
     }
 
     public void StartBrowserOAuthFlow()
@@ -310,6 +351,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         SelectedAuthMethod = AuthMethod.None;
         ApiKeyInput = null;
         EndpointInput = null;
+        VendorOptions = null;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         SelectedModelId = null;
@@ -332,7 +374,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
                 ? EndpointInput
                 : _registry.TryGet(providerName, out var desc) && desc.Auth is EndpointOnlyAuth
                     ? desc.DefaultEndpoint
-                    : null
+                    : null,
+            VendorOptions = VendorOptions,
         };
 
         var selectedModel = DiscoveredModels.FirstOrDefault(model =>
@@ -374,9 +417,10 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             EndpointInput,
             OAuth.Result,
             ApiKeyInput,
-            _registry,
+            registry: _registry,
             // Protector for this config's keys directory, not the process-wide static service locator.
-            SecretsProtection.CreateProtector(paths));
+            protector: SecretsProtection.CreateProtector(paths),
+            vendorOptions: VendorOptions);
     }
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
@@ -466,6 +510,9 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             EndpointInput ??= endpointText;
         }
 
+        if (TryReadExistingVendorOptions(context, providerType, out var vendorOptions))
+            VendorOptions ??= vendorOptions;
+
         if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, $"Providers.{providerType}.AuthMethod", out var authMethod)
             && authMethod is string authMethodText
             && Enum.TryParse<AuthMethod>(authMethodText, ignoreCase: true, out var parsed))
@@ -535,7 +582,38 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         if (!string.IsNullOrWhiteSpace(endpoint))
             entry["Endpoint"] = endpoint;
 
+        if (vm.VendorOptions is not null && vm.VendorOptions.Count > 0)
+            entry["VendorOptions"] = vm.VendorOptions;
+
         return entry;
+    }
+
+    private static bool TryReadExistingVendorOptions(
+        WizardContext context,
+        string providerType,
+        out IReadOnlyDictionary<string, object?>? vendorOptions)
+    {
+        vendorOptions = null;
+        if (context.ExistingConfig is null
+            || !ConfigFileHelper.TryGetPathValue(context.ExistingConfig, $"Providers.{providerType}.VendorOptions", out var raw)
+            || raw is null)
+        {
+            return false;
+        }
+
+        var json = raw is JsonElement element
+            ? element.GetRawText()
+            : JsonSerializer.Serialize(raw, JsonDefaults.ConfigFile);
+        vendorOptions = JsonSerializer.Deserialize<Dictionary<string, object?>>(json, JsonDefaults.ConfigRead);
+        return vendorOptions is not null;
+    }
+
+    private static JsonObject? ToJsonObject(IReadOnlyDictionary<string, object?>? vendorOptions)
+    {
+        if (vendorOptions is null || vendorOptions.Count == 0)
+            return null;
+
+        return JsonNode.Parse(JsonSerializer.Serialize(vendorOptions, JsonDefaults.ConfigFile))?.AsObject();
     }
 
     public void Dispose()

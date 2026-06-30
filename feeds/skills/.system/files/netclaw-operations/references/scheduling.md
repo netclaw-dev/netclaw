@@ -58,6 +58,28 @@ Reminders that hit 5 consecutive execution failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
 operator can diagnose and re-enable after fixing the root cause.
 
+**Failure visibility.** When a reminder execution fails for any reason — including
+the 20-minute stall backstop that recovers a wedged run — the failure is posted
+as a plain-language notice to the reminder's **destination channel** (for
+`channel`-delivery reminders), so the operator sees it where they expect that
+reminder's output. This is bounded by the auto-disable threshold (at most a few
+notices plus the disabled notice), not the unbounded skip stream.
+
+A *skipped* fire (one that arrives while the prior execution is still running) is
+**not** posted to the channel — it would be too noisy — but it is counted and
+surfaced by the status command:
+
+```
+netclaw reminder status <id>
+```
+
+`status` shows, per reminder: whether it's enabled, whether an execution is in
+flight right now, when it next fires, the consecutive-failure count, the
+skipped-fire count (since daemon start), and recent run history. Reach for it
+when a reminder seems to have silently stopped doing its job — a high skip count
+means a prior run is wedged (it should self-recover within ~20 minutes), and a
+rising failure count points at a misconfigured or broken reminder.
+
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
 minted with broader audience than the creator currently holds; lowering the

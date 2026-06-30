@@ -404,6 +404,30 @@ public sealed record ReminderHealthResponse(
     int ActiveExecutions,
     int FailedCount) : IReminderResponse, INoSerializationVerificationNeeded;
 
+/// <summary>
+/// Query sent to <see cref="ReminderManagerActor"/> for the per-reminder
+/// operational status surfaced by <c>netclaw reminder status &lt;id&gt;</c>.
+/// </summary>
+public sealed record GetReminderStatusQuery(ReminderId Id) : IReminderQuery, INoSerializationVerificationNeeded;
+
+/// <summary>
+/// Response to <see cref="GetReminderStatusQuery"/>: per-reminder health for an
+/// operator — whether the reminder exists/is enabled, whether an execution is in
+/// flight right now, when it next fires, the consecutive-failure and
+/// skipped-duplicate counts (in-memory since daemon start), and recent run
+/// history. Lets <c>netclaw reminder status</c> answer "is this reminder healthy
+/// or is it silently failing/skipping?" — the gap that hid #1492.
+/// </summary>
+public sealed record ReminderStatusResponse(
+    ReminderId Id,
+    bool Found,
+    bool Enabled,
+    bool Executing,
+    DateTimeOffset? NextFire,
+    int ConsecutiveFailures,
+    int SkippedDuplicates,
+    IReadOnlyList<HistoryRecord> RecentHistory) : IReminderResponse, INoSerializationVerificationNeeded;
+
 }
 
 public sealed record ReminderInfo(

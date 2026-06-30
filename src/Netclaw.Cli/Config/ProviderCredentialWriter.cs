@@ -38,6 +38,7 @@ internal static class ProviderCredentialWriter
     /// <param name="apiKey">API key if auth method is ApiKey, null otherwise.</param>
     /// <param name="registry">Provider registry for looking up default endpoints.</param>
     /// <param name="protector">Secrets protector override. When null, creates one from paths.</param>
+    /// <param name="vendorOptions">Provider-owned non-secret options for netclaw.json.</param>
     internal static void WriteProvider(
         NetclawPaths paths,
         string providerName,
@@ -47,7 +48,8 @@ internal static class ProviderCredentialWriter
         OAuthDeviceFlowResult? oauthResult,
         string? apiKey,
         ProviderDescriptorRegistry? registry = null,
-        ISecretsProtector? protector = null)
+        ISecretsProtector? protector = null,
+        IReadOnlyDictionary<string, object?>? vendorOptions = null)
     {
         paths.EnsureDirectoriesExist();
 
@@ -70,6 +72,9 @@ internal static class ProviderCredentialWriter
 
         if (!string.IsNullOrWhiteSpace(endpoint))
             providerEntry["Endpoint"] = endpoint;
+
+        if (vendorOptions is not null && vendorOptions.Count > 0)
+            providerEntry["VendorOptions"] = vendorOptions;
 
         // OAuthTokenExpiry goes in netclaw.json (NOT secrets) — see class remarks.
         if (oauthResult?.ExpiresAt is { } expiresAt)
