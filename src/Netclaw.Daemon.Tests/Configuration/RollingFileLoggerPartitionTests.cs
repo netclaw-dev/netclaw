@@ -14,10 +14,13 @@ using Xunit;
 namespace Netclaw.Daemon.Tests.Configuration;
 
 /// <summary>
-/// The provider owns the LOCAL partition of the log stream: a line carrying a session id goes
-/// to that session's session.log (Tell'd as a <see cref="SessionLogDiagnostic"/> to the
-/// dispatcher) and NOT to daemon.log; everything else goes to daemon.log. The session-log
-/// writer's own lines are excluded so a write-failure log cannot recurse.
+/// The provider owns the LOCAL partition of the log stream: a line tagged with a session id by
+/// session-SERVING code (an actor's WithContext, which the Akka bridge surfaces alongside a
+/// LogSource; or a BeginScope) goes to that session's session.log (Tell'd as a
+/// <see cref="SessionLogDiagnostic"/> to the dispatcher) and NOT to daemon.log. A daemon-service
+/// line that merely NAMES a session in its message template (a bare {SessionId} field with no
+/// LogSource) stays in daemon.log, as does everything sessionless. The session-log writer's own
+/// lines are excluded so a write-failure log cannot recurse.
 /// </summary>
 public sealed class RollingFileLoggerPartitionTests : TestKit
 {
@@ -36,7 +39,8 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
         using (var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow)))
         {
             provider.AttachSessionDispatcher(Task.FromResult(dispatcher.Ref));
-            provider.CreateLogger("Netclaw.Tools").LogInformation("spawn requested {SessionId}", "C1/T1");
+            provider.CreateLogger("Akka.Actor.ActorSystem")
+                .Log(LogLevel.Information, new EventId(0), ActorState("C1/T1"), null, (_, _) => "spawn requested");
 
             var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal("C1/T1", diag.SessionId.Value);
@@ -85,11 +89,7 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
 
             // A bridged sub-agent line carries the parent SessionId (for OTEL grouping) AND the
             // sub-session id; the LOCAL file is partitioned by the sub-session.
-            var state = new List<KeyValuePair<string, object>>
-            {
-                new(NetclawLogProperties.SessionId, "C1/T1"),
-                new(NetclawLogProperties.SubSessionId, "C1/T1/subagent/summarizer/ab12"),
-            };
+            var state = ActorState("C1/T1", "C1/T1/subagent/summarizer/ab12");
             provider.CreateLogger("Akka.Actor.ActorSystem")
                 .Log(LogLevel.Information, new EventId(0), state, null, (_, _) => "sub-agent did work");
 
@@ -145,6 +145,29 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
     }
 
     [Fact]
+    public async Task Daemon_service_line_naming_a_session_in_its_message_stays_in_daemon_log()
+    {
+        var (dir, daemonPath) = TempPaths();
+        var dispatcher = CreateTestProbe("dispatcher");
+
+        using (var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow)))
+        {
+            provider.AttachSessionDispatcher(Task.FromResult(dispatcher.Ref));
+
+            // A plain daemon-service ILogger<T> line that merely names a session in its message
+            // template — no actor LogSource, no scope. It is daemon infrastructure, not the
+            // session's own work, so it must NOT be diverted into session.log.
+            provider.CreateLogger("Netclaw.Daemon.Gateway.SessionCatalogService")
+                .LogWarning("Failed to mark session {SessionId} active", "C7/T7");
+
+            await dispatcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+        }
+
+        Assert.Contains("Failed to mark session", ReadDaemonLog(dir), StringComparison.Ordinal);
+        Cleanup(dir);
+    }
+
+    [Fact]
     public async Task Session_log_writers_own_line_is_not_routed_back()
     {
         var (dir, daemonPath) = TempPaths();
@@ -181,10 +204,11 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
         using (var provider = new RollingFileLoggerProvider(daemonPath, new FakeTimeProvider(FixedNow)))
         {
             provider.AttachSessionDispatcher(pending.Task); // never resolves during this test
-            provider.CreateLogger("Netclaw.Tools").LogInformation("before resolve {SessionId}", "C4/T4");
+            provider.CreateLogger("Akka.Actor.ActorSystem")
+                .Log(LogLevel.Information, new EventId(0), ActorState("C4/T4"), null, (_, _) => "before resolve");
 
-            // No buffering: a line logged before the dispatcher resolves is not held for it; it
-            // goes straight to daemon.log (the dispatcher never sees it).
+            // No buffering: a routable line logged before the dispatcher resolves is not held for
+            // it; it goes straight to daemon.log (the dispatcher never sees it).
             await dispatcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
         }
 
@@ -201,7 +225,8 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
         try
         {
             provider.AttachSessionDispatcher(pending.Task); // dispatcher not resolved
-            provider.CreateLogger("Netclaw.Tools").LogInformation("before failure {SessionId}", "C9/T9");
+            provider.CreateLogger("Akka.Actor.ActorSystem")
+                .Log(LogLevel.Warning, new EventId(0), ActorState("C9/T9"), null, (_, _) => "before failure");
 
             pending.SetException(new InvalidOperationException("dispatcher never registered"));
 
@@ -233,6 +258,21 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
         await using var stream = new FileStream(files[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
         return await reader.ReadToEndAsync(ct);
+    }
+
+    // Shape of a bridged Akka actor log: WithContext("SessionId") surfaces alongside the actor's
+    // LogSource. The LogSource is what marks the line as session-SERVING (vs a daemon service that
+    // merely names a session in its message), so the router treats the session id as routable.
+    private static List<KeyValuePair<string, object>> ActorState(string sessionId, string? subSessionId = null)
+    {
+        var state = new List<KeyValuePair<string, object>>
+        {
+            new(NetclawLogProperties.SessionId, sessionId),
+            new("LogSource", "[akka://netclaw/user/session-manager#1]"),
+        };
+        if (subSessionId is not null)
+            state.Add(new(NetclawLogProperties.SubSessionId, subSessionId));
+        return state;
     }
 
     private static (string Dir, string DaemonPath) TempPaths()

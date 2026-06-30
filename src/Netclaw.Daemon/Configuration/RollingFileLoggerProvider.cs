@@ -16,12 +16,16 @@ namespace Netclaw.Daemon.Configuration;
 /// File-based logger that owns the LOCAL partition of the one log stream. Every line is
 /// written to exactly one place on disk:
 /// <list type="bullet">
-/// <item>A line that carries a session id (an actor's <c>WithContext("SessionId", …)</c>,
-/// which the Akka→MEL bridge surfaces as structured state; a MEL <c>{SessionId}</c> message
-/// field; or a <c>BeginScope</c> carrying it) is routed to that session's <c>session.log</c>
-/// via the <c>SessionLogDispatcher</c> and is NOT written to <c>daemon.log</c>.</item>
-/// <item>Everything else — genuinely daemon-wide lines (startup, config, session lifecycle,
-/// global errors) — goes to <c>daemon.log</c>.</item>
+/// <item>A line tagged with a session id by session-<b>serving</b> code is routed to that
+/// session's <c>session.log</c> via the <c>SessionLogDispatcher</c> and is NOT written to
+/// <c>daemon.log</c>. "Serving" is the key: the id must ride in on an actor context — an
+/// actor's <c>WithContext("SessionId", …)</c>, which the Akka→MEL bridge surfaces alongside a
+/// <c>LogSource</c> — or a <c>BeginScope</c> (the chat-client decorators and spawn breadcrumbs).</item>
+/// <item>Everything else goes to <c>daemon.log</c>: genuinely daemon-wide lines (startup,
+/// config, session lifecycle, global errors) AND a daemon-infrastructure line that merely
+/// <i>names</i> a session in its message template (a bare <c>{SessionId}</c> field with no actor
+/// context — e.g. the gateway/catalog/drain "failed to … session X" warnings). Those are daemon
+/// functionality, not the session's own work, so they stay where an operator triages the daemon.</item>
 /// </list>
 /// The full stream still reaches OTEL via the separate OTLP exporter (with the session id as
 /// an attribute); the OTEL receiver does the global slicing/distilling. The dispatcher is
@@ -34,6 +38,7 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
 {
     private const long MaxFileSizeBytes = 10 * 1024 * 1024; // 10MB per file
     private const int DaemonLogFlushBatch = 256; // flush cap under a burst; idle flushes every line
+    private const long RollFlushMarginBytes = 128 * 1024; // flush near the size cap so rolls aren't late
 
     private readonly string _basePath;
     private readonly TimeProvider _timeProvider;
@@ -225,6 +230,13 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         var today = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (_writer is not null && _currentDate == today)
         {
+            // With AutoFlush off (batched writes), BaseStream.Length lags the buffered bytes. Flush
+            // once we're within a batch of the cap so the roll decision sees the true size — paying
+            // the fsync only near the threshold, not per line — then the file can't overshoot 10MB
+            // by a batch's worth of buffered data.
+            if (_writer.BaseStream.Length >= MaxFileSizeBytes - RollFlushMarginBytes)
+                _writer.Flush();
+
             // Roll if file exceeds size limit
             if (_writer.BaseStream.Length >= MaxFileSizeBytes)
             {
@@ -304,7 +316,17 @@ internal sealed class RollingFileLogger : ILogger
         if (exception is not null)
             line += Environment.NewLine + exception;
 
-        _provider.Route(line, sessionId, subSessionId, fromSessionLogActor);
+        // A session id found in the message STATE is a routing trigger only when it rode in on an
+        // Akka actor context: the Akka→MEL bridge's AkkaLogState carries a LogSource alongside the
+        // WithContext("SessionId", …). A bare {SessionId} message field on a plain daemon-service
+        // ILogger<T> (gateway/catalog/drain) has no LogSource — that is daemon infrastructure
+        // merely naming a session, so it stays in daemon.log. Session-serving non-actor producers
+        // (chat-client decorators, spawn breadcrumbs) tag via BeginScope instead, which Route still
+        // consults as a fallback.
+        var stateSessionId = logSource is not null ? sessionId : null;
+        var stateSubSessionId = logSource is not null ? subSessionId : null;
+
+        _provider.Route(line, stateSessionId, stateSubSessionId, fromSessionLogActor);
     }
 
     // Read the fields the producer already put on the log event. The Akka→MEL bridge passes an
