@@ -6,6 +6,7 @@
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
+using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -160,6 +161,8 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("memory-curator", dto.AgentName);
         Assert.Equal("started", dto.Phase);
         Assert.Equal(5, dto.ToolCountSub);
+        Assert.Null(dto.SubAgentOutcome);
+        Assert.Null(dto.SubAgentOutcomeReason);
         Assert.Null(dto.MemoryDecision);
 
         var roundTripped = DaemonClient.FromDto(dto);
@@ -179,6 +182,8 @@ public sealed class DaemonClientMappingTests
             AgentName = new AgentName("memory-retriever"),
             Phase = SubAgentPhase.Completed,
             Success = true,
+            Outcome = SubAgentRunOutcome.Partial,
+            OutcomeReason = SubAgentOutcomeReason.ToolIterationBudgetExhausted,
             Duration = TimeSpan.FromSeconds(12.3)
         };
 
@@ -186,6 +191,8 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("subagent", dto.Type);
         Assert.Equal("completed", dto.Phase);
         Assert.True(dto.SubAgentSuccess);
+        Assert.Equal("partial", dto.SubAgentOutcome);
+        Assert.Equal("tool_iteration_budget_exhausted", dto.SubAgentOutcomeReason);
 
         var enrichedDto = dto with
         {
@@ -199,6 +206,8 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("memory-retriever", result.AgentName.Value);
         Assert.Equal(SubAgentPhase.Completed, result.Phase);
         Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
+        Assert.Equal(SubAgentOutcomeReason.ToolIterationBudgetExhausted, result.OutcomeReason);
         Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
         Assert.Equal("accepted", result.MemoryDecision);
         Assert.Equal(2, result.FindingsCount);

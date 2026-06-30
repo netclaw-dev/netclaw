@@ -25,11 +25,13 @@ public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeTy
 /// </summary>
 public sealed record SubAgentNotificationInfo
 {
-    public required string RunId { get; init; }
+    public required SubAgentRunId RunId { get; init; }
     public required string AgentName { get; init; }
     public required bool IsStarted { get; init; }
     public int ToolCount { get; init; }
     public bool Success { get; init; }
+    public SubAgentRunOutcome? Outcome { get; init; }
+    public SubAgentOutcomeReason? OutcomeReason { get; init; }
     public TimeSpan Duration { get; init; }
     public IReadOnlyList<SubAgentFinding> Findings { get; init; } = [];
 }

@@ -138,7 +138,9 @@ public sealed class TurnStateTrackerTests
 
         // The cap-th iteration hits the limit.
         var capped = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
-        Assert.IsType<ToolBudgetStatus.Exhausted>(capped);
+        var exhausted = Assert.IsType<ToolBudgetStatus.Exhausted>(capped);
+        Assert.Contains("executive summary", exhausted.NudgeText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Partial or Unknown", exhausted.NudgeText, StringComparison.Ordinal);
         Assert.Equal(cap, tracker.ToolIterationCount);
     }
 

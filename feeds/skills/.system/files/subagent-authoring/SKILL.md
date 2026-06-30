@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.3.1"
+  version: "1.3.2"
 ---
 
 # Subagent Authoring
@@ -135,6 +135,12 @@ Subagents share the same tool-loop budget strategy as parent sessions: budget
 nudges, duplicate-call nudges, and force-no-tools wrap-up. The current
 subagent budget is 30 tool iterations per run, where one LLM response with any
 number of parallel tool calls counts as one iteration.
+
+The parent-facing `spawn_agent` result is an explicit terminal text envelope:
+agent name, run id, outcome (`completed`, `partial`, or `failed`), optional
+reason, diagnostics pointer, and a `Summary:` or `Error:` section. Structured
+findings, when enabled, are a separate parent-reviewed memory-candidate path;
+do not rely on them as the visible result returned to the parent model.
 
 ## Fail-loud loader behavior
 

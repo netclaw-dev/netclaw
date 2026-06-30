@@ -66,6 +66,12 @@ public sealed class IdentityRedoPage : ReactivePage<IdentityRedoViewModel>
                     "Identity updated.",
                     "Press Enter to exit. Run `netclaw chat` to talk to your agent.");
 
+            // Clear old subscriptions before creating new ones — the view is a
+            // singleton and each rebuild creates new TextInputNodes whose
+            // subscriptions would otherwise accumulate in _stepSubs and cause
+            // stale callbacks to fire after the step completes.
+            _stepSubs.Clear();
+
             ViewModel.StepView.ClearFocusState();
             return ViewModel.StepView.BuildContent(ViewModel.Step, CreateCallbacks());
         });

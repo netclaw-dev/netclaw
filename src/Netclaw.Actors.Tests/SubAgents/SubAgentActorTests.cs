@@ -68,6 +68,8 @@ public class SubAgentActorTests : TestKit
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Completed, result.Outcome);
+        Assert.Null(result.OutcomeReason);
         Assert.Contains("Response #1", result.Output);
         Assert.Equal("test-agent", result.AgentName.Value);
         Assert.Empty(result.Findings);
@@ -1021,6 +1023,8 @@ public class SubAgentActorTests : TestKit
 
         // After the configured tool budget, force a no-tools call which returns text.
         Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
+        Assert.Equal(SubAgentOutcomeReason.ToolIterationBudgetExhausted, result.OutcomeReason);
         Assert.Equal(4, fakeClient.CallCount);
         Assert.NotNull(fakeClient.LastReceivedMessages);
         Assert.Contains(fakeClient.LastReceivedMessages,
@@ -1270,11 +1274,14 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Long_text_response_emits_findings_when_enabled()
+    public async Task Long_text_response_emits_untruncated_findings_when_enabled()
     {
+        var longSummary = string.Concat(
+            new string('a', 1900),
+            "\nTAIL_CONCLUSION: preserve this final conclusion and citation.");
         var fakeClient = new FakeChatClient
         {
-            ResponseText = "This is a durable subagent summary with enough detail to be considered a memory candidate for parent-session checkpoint review."
+            ResponseText = longSummary
         };
         var definition = CreateDefinition() with { EmitStructuredFindings = true };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
@@ -1285,11 +1292,14 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.Single(result.Findings);
+        Assert.Equal(longSummary, result.Findings[0].Content);
+        Assert.Contains("TAIL_CONCLUSION", result.Findings[0].Content, StringComparison.Ordinal);
         Assert.Equal(SubAgentFindingShape.Conclusion, result.Findings[0].Shape);
         Assert.Equal("subagent:test-agent", result.Findings[0].Title);
         Assert.Equal(SubAgentFindingDurability.Durable, result.Findings[0].Durability);
         Assert.Equal(SubAgentFindingReusability.Reusable, result.Findings[0].Reusability);
         Assert.Equal(SubAgentFindingRecallMode.Searchable, result.Findings[0].RecallMode);
+        Assert.Contains("subagent_outcome:completed", result.Findings[0].Evidence);
     }
 
     [Fact]
