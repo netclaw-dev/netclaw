@@ -240,10 +240,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 return;
             }
 
+            // Fall back to the project directory (which is guaranteed to be in the
+            // session's autonomous zone) when the parent had no resolvable cwd.
+            // Using the parent's cwd directly is wrong for subagents: if the parent
+            // was in the session directory or had no cwd, the subagent's relative
+            // paths (skill scripts, workspace files) resolve outside the zone and
+            // get shell-blocked. The project directory is always zone-safe.
+            var cwd = string.IsNullOrWhiteSpace(msg.ParentCwd)
+                ? msg.ParentProjectDirectory
+                : msg.ParentCwd;
+
             _toolExecutionContext = new ToolExecutionContext(scopeId, msg.ParentSessionDirectory)
             {
                 Audience = subAgentAudience,
-                InheritedCwd = msg.ParentCwd,
+                InheritedCwd = cwd,
             };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
