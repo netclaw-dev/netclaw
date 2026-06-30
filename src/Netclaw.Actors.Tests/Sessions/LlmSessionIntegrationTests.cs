@@ -770,6 +770,72 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Buffered_user_message_reemits_processing_state_while_turn_is_active()
+    {
+        var firstResponseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = firstResponseGate;
+
+        var sessionId = new SessionId("channel-C/thread-processing-refresh");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("buffered-processing-refresh");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly | OutputFilter.ProcessingState
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First message"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var initialProcessing = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(initialProcessing.IsProcessing);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Second message"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var bufferedRefresh = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(bufferedRefresh.IsProcessing);
+
+        firstResponseGate.TrySetResult();
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+
+        var followupProcessing = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(followupProcessing.IsProcessing);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+
+        var idle = await subscriber.ExpectMsgAsync<ProcessingStateOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(idle.IsProcessing);
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+    }
+
+    [Fact]
     public async Task Discovered_tools_are_retained_then_expire_after_lease_window()
     {
         _fakeChatClient.ToolCallsOnFirstCall =

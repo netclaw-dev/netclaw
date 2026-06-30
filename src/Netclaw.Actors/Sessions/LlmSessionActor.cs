@@ -494,6 +494,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _deliveryRetry.Clear();
+            EmitProcessingState(isProcessing: true, force: true);
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -1124,6 +1125,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            EmitProcessingState(isProcessing: true, force: true);
             _log.Info("Buffering user message (compaction in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
