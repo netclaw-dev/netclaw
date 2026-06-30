@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MemoryTypedId.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -23,13 +23,17 @@ public readonly record struct MemoryTypedId(MemoryKind Kind, string Id)
 
     /// <summary>
     /// Parses a prefixed string like "doc:abc123" or "rec:def456" into a typed ID.
+    /// Also accepts the dash-separated wire representation (e.g. "doc-abc123") for
+    /// compatibility with auto-recall output and raw database storage.
     /// Returns <see cref="MemoryKind.Unknown"/> with the raw value when the prefix is unrecognized.
     /// </summary>
     public static MemoryTypedId Parse(string raw)
     {
-        if (raw.StartsWith("doc:", StringComparison.OrdinalIgnoreCase))
+        if (raw.StartsWith("doc:", StringComparison.OrdinalIgnoreCase)
+            || raw.StartsWith("doc-", StringComparison.OrdinalIgnoreCase))
             return new MemoryTypedId(MemoryKind.Document, raw[4..]);
-        if (raw.StartsWith("rec:", StringComparison.OrdinalIgnoreCase))
+        if (raw.StartsWith("rec:", StringComparison.OrdinalIgnoreCase)
+            || raw.StartsWith("rec-", StringComparison.OrdinalIgnoreCase))
             return new MemoryTypedId(MemoryKind.Record, raw[4..]);
         return new MemoryTypedId(MemoryKind.Unknown, raw);
     }
