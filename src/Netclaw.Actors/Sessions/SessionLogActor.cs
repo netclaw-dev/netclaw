@@ -27,10 +27,12 @@ namespace Netclaw.Actors.Sessions;
 ///
 /// File handle lifecycle:
 /// - Open once in <see cref="PreStart"/> with append mode + read-share.
-/// - Buffered writes flushed in batches (after a write burst or on a periodic tick),
-///   not per line: now that the whole per-session log stream lands here, an fsync per
-///   line would dominate. <see cref="FlushTick"/> is <c>INotInfluenceReceiveTimeout</c>
-///   so the flush cadence does not keep an idle session alive.
+/// - The high-volume diagnostic lines are flushed in batches (after a write burst or on a
+///   periodic tick), not per line: now that the whole per-session log stream lands here, an
+///   fsync per line would dominate. The audit transcript (user/assistant/tool/usage) is
+///   flushed immediately instead, so a hard process death cannot drop the audit record's tail.
+///   <see cref="FlushTick"/> is <c>INotInfluenceReceiveTimeout</c> so the flush cadence does
+///   not keep an idle session alive.
 /// - Close/dispose in <see cref="PostStop"/> (which flushes) — no retry loop needed since
 ///   the handle is kept open and single-writer is enforced by the actor mailbox.
 /// </summary>
@@ -110,11 +112,22 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     }
 
     // Buffered write: lines accumulate in the StreamWriter buffer and are flushed in batches.
+    // Used for the high-volume diagnostic lines, where an fsync per line would dominate.
     private void Write(string line)
     {
         _writer?.WriteLine(line);
         if (++_unflushedWrites >= FlushAfterWrites)
             Flush();
+    }
+
+    // Durable write for the audit transcript (user/assistant/tool/usage lines): flush immediately
+    // so a hard process death (SIGKILL/OOM) cannot drop the security/audit record's tail. The
+    // flush also drains any diagnostics buffered before this line, so audit lines are natural
+    // flush points. Diagnostics themselves stay on the batched Write() path above.
+    private void WriteDurable(string line)
+    {
+        Write(line);
+        Flush();
     }
 
     private void Flush()
@@ -158,7 +171,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
                 : string.Empty;
             var line = $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}";
 
-            Write(line);
+            WriteDurable(line);
         }
         catch (Exception ex)
         {
@@ -194,7 +207,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
             if (line is not null)
             {
-                Write($"[{_timeProvider.GetUtcNow():o}] {line}");
+                WriteDurable($"[{_timeProvider.GetUtcNow():o}] {line}");
             }
         }
         catch (Exception ex)
