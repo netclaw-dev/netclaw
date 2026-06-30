@@ -47,6 +47,7 @@ public sealed class SlackGatewayContractTests(ITestOutputHelper output)
             Options: slackOptions,
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: defaultChannelId,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: new RecordingSlackReplyClient(),
             ContentScanner: new NullContentScanner(),
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,

@@ -102,6 +102,7 @@ public sealed record SlackGatewayDependencies(
     SlackChannelOptions Options,
     SlackUserId? BotUserId,
     SlackChannelId? DefaultChannelId,
+    IChannelRegistry ChannelRegistry,
     ISlackReplyClient ReplyClient,
     IContentScanner ContentScanner,
     IThreadHistoryFetcher ThreadHistoryFetcher,

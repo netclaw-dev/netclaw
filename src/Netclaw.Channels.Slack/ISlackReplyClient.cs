@@ -20,6 +20,12 @@ public interface ISlackReplyClient
         IReadOnlyList<Block>? blocks = null,
         CancellationToken cancellationToken = default);
 
+    Task SetThreadStatusAsync(
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
+        string status,
+        CancellationToken cancellationToken = default);
+
     Task UploadFileToThreadAsync(
         SlackChannelId channelId,
         SlackThreadTs threadTs,

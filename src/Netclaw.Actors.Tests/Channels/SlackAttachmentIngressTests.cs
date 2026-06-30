@@ -139,6 +139,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: scanner ?? new MagicByteContentScanner(new ContentPolicy()),
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
@@ -746,6 +747,12 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             SlackEventTs messageTs,
             string text,
             IReadOnlyList<Block>? blocks = null,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task SetThreadStatusAsync(
+            SlackChannelId channelId,
+            SlackThreadTs threadTs,
+            string status,
             CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task UploadFileToThreadAsync(

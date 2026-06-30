@@ -125,6 +125,25 @@ public sealed class SlackReplyClientTests
     }
 
     [Fact]
+    public async Task SetThreadStatusAsync_calls_assistant_thread_status_api()
+    {
+        var fakeAssistantThreads = new FakeAssistantThreadsApi();
+        var fakeClient = new FakeSlackApiClient(assistantThreads: fakeAssistantThreads);
+        var client = new SlackReplyClient(fakeClient);
+
+        await client.SetThreadStatusAsync(
+            new SlackChannelId("C123"),
+            new SlackThreadTs("1234.5678"),
+            "is thinking...",
+            TestContext.Current.CancellationToken);
+
+        var status = Assert.Single(fakeAssistantThreads.Statuses);
+        Assert.Equal("C123", status.ChannelId);
+        Assert.Equal("1234.5678", status.ThreadTs);
+        Assert.Equal("is thinking...", status.Status);
+    }
+
+    [Fact]
     public void Approval_block_builder_uses_unique_action_ids_per_button()
     {
         var request = new ToolInteractionRequest
@@ -202,5 +221,38 @@ public sealed class SlackReplyClientTests
         public Task<MessageTsResponse> AppendStream(string channel, string ts, string markdownText, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<PostMessageResponse> StopStream(string channel, string ts, string? markdownText = null, IEnumerable<Block>? blocks = null, object? metadataObject = null, MessageMetadata? metadataJson = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<PostMessageResponse> UpdateStream(string channel, string ts, IEnumerable<Block>? newBlocks = null, string? markdownText = null, object? metadataObject = null, MessageMetadata? metadataJson = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+    }
+
+    private sealed class FakeAssistantThreadsApi : IAssistantThreadsApi
+    {
+        public List<StatusRecord> Statuses { get; } = [];
+
+        public Task SetStatus(
+            string channelId,
+            string threadTs,
+            string status,
+            IEnumerable<string>? loadingMessages = null,
+            CancellationToken cancellationToken = default)
+        {
+            Statuses.Add(new StatusRecord(channelId, threadTs, status));
+            return Task.CompletedTask;
+        }
+
+        public Task SetSuggestedPrompts(
+            string channelId,
+            string threadTs,
+            IEnumerable<AssistantPrompt> prompts,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task SetTitle(
+            string channelId,
+            string threadTs,
+            string title,
+            CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public sealed record StatusRecord(string ChannelId, string ThreadTs, string Status);
     }
 }

@@ -81,7 +81,7 @@ public sealed class ChannelRegistryRegistrationTests
         Assert.Contains(ChannelOutputEffectKind.FileAttachment, descriptors["mattermost"].SupportedOutputEffects);
 
         Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["discord"].SupportedOutputEffects);
-        Assert.DoesNotContain(ChannelOutputEffectKind.ProcessingIndicator, descriptors["slack"].SupportedOutputEffects);
+        Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["slack"].SupportedOutputEffects);
         Assert.DoesNotContain(ChannelOutputEffectKind.ProcessingIndicator, descriptors["mattermost"].SupportedOutputEffects);
     }
 
@@ -153,6 +153,7 @@ public sealed class ChannelRegistryRegistrationTests
         Assert.True(IsRegistered<MattermostProactiveOutboundClient>(services));
         Assert.True(IsRegistered<LookupMattermostUserTool>(services));
         Assert.False(typeof(IChannelTool).IsAssignableFrom(typeof(LookupMattermostUserTool)));
+        Assert.True(IsRegistered<SlackProcessingOutputRenderer>(services));
         Assert.True(IsRegistered<DiscordProcessingOutputRenderer>(services));
     }
 
@@ -471,6 +472,57 @@ public sealed class ChannelRegistryRegistrationTests
         Assert.Equal("channel-1", channelId.Value);
     }
 
+    [Fact]
+    public async Task Slack_processing_renderer_sets_and_clears_thread_status()
+    {
+        var replyClient = new RecordingSlackReplyClient();
+        var renderer = new SlackProcessingOutputRenderer(replyClient);
+        var key = ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+
+        await renderer.RenderAsync(
+            BuildProcessingRenderRequest(key),
+            TestContext.Current.CancellationToken);
+        await renderer.RenderAsync(
+            BuildProcessingRenderRequest(key, isProcessing: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Collection(
+            replyClient.Statuses,
+            status =>
+            {
+                Assert.Equal("channel-1", status.ChannelId.Value);
+                Assert.Equal("thread-1", status.ThreadTs.Value);
+                Assert.Equal("is thinking...", status.Status);
+            },
+            status =>
+            {
+                Assert.Equal("channel-1", status.ChannelId.Value);
+                Assert.Equal("thread-1", status.ThreadTs.Value);
+                Assert.Equal(string.Empty, status.Status);
+            });
+    }
+
+    [Fact]
+    public async Task Slack_processing_renderer_rejects_non_processing_outputs()
+    {
+        var replyClient = new RecordingSlackReplyClient();
+        var renderer = new SlackProcessingOutputRenderer(replyClient);
+        var key = ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+        var request = new ChannelOutputRenderRequest(
+            new ChannelDeliveryTarget(
+                key,
+                new ResolvedChannelAddress(key, ChannelAddressKind.Destination, "channel-1", "channel-1"),
+                "thread-1"),
+            new TextOutput("hello")
+            {
+                SessionId = new SessionId("session-1")
+            },
+            ChannelOutputEffectKind.TextMessage);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await renderer.RenderAsync(request, TestContext.Current.CancellationToken));
+    }
+
     private static IReadOnlyDictionary<string, ChannelDescriptor> BuildDescriptors(
         IReadOnlyDictionary<string, string?> settings)
     {
@@ -509,15 +561,18 @@ public sealed class ChannelRegistryRegistrationTests
         return services.Any(descriptor => descriptor.ServiceType == typeof(T));
     }
 
-    private static ChannelOutputRenderRequest BuildProcessingRenderRequest(ChannelDescriptorKey key)
+    private static ChannelOutputRenderRequest BuildProcessingRenderRequest(
+        ChannelDescriptorKey key,
+        bool isProcessing = true)
     {
         var target = new ChannelDeliveryTarget(
             key,
-            new ResolvedChannelAddress(key, ChannelAddressKind.Destination, "channel-1", "channel-1"));
+            new ResolvedChannelAddress(key, ChannelAddressKind.Destination, "channel-1", "channel-1"),
+            "thread-1");
 
         return new ChannelOutputRenderRequest(
             target,
-            new ProcessingStateOutput(true)
+            new ProcessingStateOutput(isProcessing)
             {
                 SessionId = new SessionId("session-1")
             },
@@ -645,5 +700,42 @@ public sealed class ChannelRegistryRegistrationTests
 
         public Task<DiscordMessageId?> UploadFileAsync(DiscordFileUpload upload, CancellationToken cancellationToken = default)
             => Task.FromResult<DiscordMessageId?>(new DiscordMessageId("file-1"));
+    }
+
+    private sealed class RecordingSlackReplyClient : ISlackReplyClient
+    {
+        public List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string Status)> Statuses { get; } = [];
+
+        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<string> PostThreadReplyWithTsAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task UpdateThreadMessageAsync(
+            SlackChannelId channelId,
+            SlackEventTs messageTs,
+            string text,
+            IReadOnlyList<SlackNet.Blocks.Block>? blocks = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task SetThreadStatusAsync(
+            SlackChannelId channelId,
+            SlackThreadTs threadTs,
+            string status,
+            CancellationToken cancellationToken = default)
+        {
+            Statuses.Add((channelId, threadTs, status));
+            return Task.CompletedTask;
+        }
+
+        public Task UploadFileToThreadAsync(
+            SlackChannelId channelId,
+            SlackThreadTs threadTs,
+            string filePath,
+            string? filename = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 }

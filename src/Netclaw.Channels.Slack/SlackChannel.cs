@@ -30,6 +30,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ISlackApiClient _slack;
     private readonly ISlackSocketModeClient _socketModeClient;
     private readonly ISlackReplyClient _replyClient;
+    private readonly IChannelRegistry _channelRegistry;
     private readonly SessionIngressGate _ingressGate;
     private readonly IContentScanner _contentScanner;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
@@ -59,6 +60,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ISlackApiClient slack,
         ISlackSocketModeClient socketModeClient,
         ISlackReplyClient replyClient,
+        IChannelRegistry channelRegistry,
         SessionIngressGate ingressGate,
         IContentScanner contentScanner,
         IPromptInjectionDetector? promptInjectionDetector,
@@ -77,6 +79,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _slack = slack;
         _socketModeClient = socketModeClient;
         _replyClient = replyClient;
+        _channelRegistry = channelRegistry;
         _ingressGate = ingressGate;
         _contentScanner = contentScanner;
         // Fail loud rather than substituting a no-op detector — a no-op reports
@@ -237,6 +240,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 Options: _options,
                 BotUserId: _botUserId,
                 DefaultChannelId: _defaultChannelId,
+                ChannelRegistry: _channelRegistry,
                 ReplyClient: _replyClient,
                 ContentScanner: _contentScanner,
                 ThreadHistoryFetcher: _threadHistoryFetcher,

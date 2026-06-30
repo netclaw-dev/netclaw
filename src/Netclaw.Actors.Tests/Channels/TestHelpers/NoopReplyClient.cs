@@ -23,6 +23,13 @@ internal sealed class NoopReplyClient : ISlackReplyClient
         CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
+    public Task SetThreadStatusAsync(
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
+        string status,
+        CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public Task UploadFileToThreadAsync(SlackChannelId channelId, SlackThreadTs threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 }

@@ -78,6 +78,30 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
         }
     }
 
+    public async Task SetThreadStatusAsync(
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await slackApiClient.AssistantThreads.SetStatus(
+                channelId.Value,
+                threadTs.Value,
+                status,
+                cancellationToken: cancellationToken);
+        }
+        catch (SlackException ex)
+        {
+            throw new SlackMessageDeliveryException(
+                ex.ErrorCode,
+                MapFailureKind(ex.ErrorCode),
+                ex.Message,
+                ex);
+        }
+    }
+
     internal static DeliveryFailureKind MapFailureKind(string? errorCode)
         => errorCode switch
         {

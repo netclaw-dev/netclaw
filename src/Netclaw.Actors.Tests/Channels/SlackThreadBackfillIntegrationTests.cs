@@ -131,6 +131,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -222,6 +223,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -358,6 +360,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             ThreadHistoryFetcher: fetcher,
@@ -482,6 +485,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -592,6 +596,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -710,6 +715,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -797,6 +803,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -928,6 +935,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
@@ -1097,6 +1105,13 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             SlackEventTs messageTs,
             string text,
             IReadOnlyList<SlackNet.Blocks.Block>? blocks = null,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task SetThreadStatusAsync(
+            SlackChannelId channelId,
+            SlackThreadTs threadTs,
+            string status,
             CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 

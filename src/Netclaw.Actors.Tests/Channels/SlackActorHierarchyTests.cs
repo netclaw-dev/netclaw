@@ -279,6 +279,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
             ReplyClient: new NoopReplyClient(),
             ContentScanner: new NullContentScanner(),
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
