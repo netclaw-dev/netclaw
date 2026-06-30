@@ -61,6 +61,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private readonly SessionPipelineHandle _handle;
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
+    private volatile bool _processingIndicatorActive;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -73,6 +74,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ProcessingIndicatorTimeout = TimeSpan.FromSeconds(1);
     private const string BackfillDetectorWarning = ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
     private const string LiveDetectorUnavailableWarning = ":warning: I couldn't safely analyze your message — please try again in a moment.";
     private const string LiveInjectionBlockedWarning = ":warning: Message blocked by prompt-injection policy.";
@@ -134,6 +136,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
+        QueueProcessingIndicatorClearIfActive();
         _handle.Dispose();
         base.PostStop();
     }
@@ -574,7 +577,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = Actors.Channels.ChannelType.Slack,
-        Filter = OutputFilter.Text | OutputFilter.Files
+        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.ProcessingState
     };
 
     private async Task EnsureInitializedAsync()
@@ -1016,6 +1019,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task ReinitializePipelineAsync(string reason)
     {
+        QueueProcessingIndicatorClearIfActive();
         _pendingCursorTs = null;
         // Reset per-turn delivery flags: a reinit aborts the in-flight turn,
         // and a stale _postedThisTurn=true would otherwise leak into the next
@@ -1058,6 +1062,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 var uploadResult = await SafeUploadFileAsync(file);
                 if (!uploadResult.Success)
                     _lastFailedPost = uploadResult;
+                break;
+
+            case ProcessingStateOutput processing:
+                await RenderProcessingStateAsync(processing);
                 break;
 
             // BufferFlush and TextDeltaOutput are not received — Slack subscribes
@@ -1161,6 +1169,92 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
                 break;
         }
+    }
+
+    private Task RenderProcessingStateAsync(ProcessingStateOutput output)
+    {
+        _processingIndicatorActive = output.IsProcessing;
+        var requirement = output.IsRequired
+            ? ChannelOutputRequirement.Required
+            : ChannelOutputRequirement.Optional;
+        var request = new ChannelOutputRenderRequest(
+            BuildOutputRenderTarget(),
+            output,
+            ChannelOutputEffectKind.ProcessingIndicator,
+            requirement);
+
+        if (output.IsRequired)
+            return RenderProcessingStateRequestAsync(request, isRequired: true);
+
+        _ = RenderProcessingStateRequestAsync(request, isRequired: false);
+        return Task.CompletedTask;
+    }
+
+    private void QueueProcessingIndicatorClearIfActive()
+    {
+        if (!_processingIndicatorActive)
+            return;
+
+        _ = RenderProcessingStateAsync(new ProcessingStateOutput(false)
+        {
+            SessionId = _sessionId
+        });
+    }
+
+    private async Task RenderProcessingStateRequestAsync(
+        ChannelOutputRenderRequest request,
+        bool isRequired)
+    {
+        try
+        {
+            await RenderOutputWithTimeoutAsync(_dependencies.ChannelRegistry, request);
+        }
+        catch (Exception ex) when (!isRequired)
+        {
+            _log.Warning(ex, "Failed rendering optional Slack processing indicator");
+        }
+    }
+
+    private static async Task RenderOutputWithTimeoutAsync(
+        IChannelRegistry registry,
+        ChannelOutputRenderRequest request)
+    {
+        using var renderCts = new CancellationTokenSource(ProcessingIndicatorTimeout);
+        var renderTask = registry.RenderOutputAsync(request, renderCts.Token).AsTask();
+        try
+        {
+            await renderTask.WaitAsync(ProcessingIndicatorTimeout);
+        }
+        finally
+        {
+            if (!renderTask.IsCompleted)
+                ObserveLateProcessingRender(renderTask);
+        }
+    }
+
+    private static void ObserveLateProcessingRender(Task renderTask)
+    {
+        _ = renderTask.ContinueWith(
+            static task =>
+            {
+                _ = task.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private ChannelDeliveryTarget BuildOutputRenderTarget()
+    {
+        var channelKey = ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+        return new ChannelDeliveryTarget(
+            channelKey,
+            new ResolvedChannelAddress(
+                channelKey,
+                ChannelAddressKind.Destination,
+                _channelId.Value,
+                _channelId.Value),
+            _threadTs.Value);
     }
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)

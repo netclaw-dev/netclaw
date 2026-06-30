@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Channels;
 
 namespace Netclaw.Actors.Tests.Channels;
 
@@ -36,6 +38,9 @@ internal static class TestSlackGatewayDeps
             InputModalities = ModelModality.Text,
             OutputModalities = ModelModality.Text
         };
+
+    public static IChannelRegistry DefaultChannelRegistry
+        => TestChannelRegistries.SlackWithProcessingRenderer(new NoopReplyClient());
 
     public static NetclawPaths NewTestPaths()
     {

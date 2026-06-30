@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
 using R3;
-using Termina.Input;
 using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui;
@@ -43,11 +42,6 @@ public sealed class SessionsViewModel : ReactiveViewModel
     public override void OnActivated()
     {
         base.OnActivated();
-
-        Input.OfType<IInputEvent, KeyPressed>()
-            .Subscribe(HandleKeyPress)
-            .DisposeWith(Subscriptions);
-
         _ = LoadSessionsAsync(offset: 0);
     }
 
@@ -87,22 +81,27 @@ public sealed class SessionsViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    private void HandleKeyPress(KeyPressed key)
+    /// <summary>
+    /// Handles a key for the session browser, returning <c>true</c> when the key was consumed.
+    /// Driven from <see cref="SessionsPage.HandlePageInput"/> so navigation and selection keys are
+    /// claimed at the page level — Termina dispatches that before its focus manager routes input
+    /// into the scrollable <c>SelectionListNode</c>, which is focusable and would otherwise swallow
+    /// the arrows and Enter, leaving <see cref="SelectedIndex"/> (and the resume target) stuck at 0.
+    /// </summary>
+    public bool HandleKey(ConsoleKeyInfo keyInfo)
     {
-        var keyInfo = key.KeyInfo;
-
         // Ctrl+Q always quits
         if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             Shutdown();
-            return;
+            return true;
         }
 
         // Escape quits
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             Shutdown();
-            return;
+            return true;
         }
 
         // N starts a new chat (no resume)
@@ -110,7 +109,7 @@ public sealed class SessionsViewModel : ReactiveViewModel
         {
             _navigationState.ResumeSessionId = null;
             Navigate?.Invoke("/chat");
-            return;
+            return true;
         }
 
         if (IsLoading.Value || Sessions.Count == 0)
@@ -120,8 +119,9 @@ public sealed class SessionsViewModel : ReactiveViewModel
             {
                 _navigationState.ResumeSessionId = null;
                 Navigate?.Invoke("/chat");
+                return true;
             }
-            return;
+            return false;
         }
 
         switch (keyInfo.Key)
@@ -129,12 +129,12 @@ public sealed class SessionsViewModel : ReactiveViewModel
             case ConsoleKey.PageUp:
                 if (_pageOffset > 0)
                     _ = LoadSessionsAsync(Math.Max(0, _pageOffset - PageSize));
-                break;
+                return true;
 
             case ConsoleKey.PageDown:
                 if (_hasNextPage)
                     _ = LoadSessionsAsync(_pageOffset + PageSize);
-                break;
+                return true;
 
             case ConsoleKey.UpArrow or ConsoleKey.K:
                 if (SelectedIndex.Value > 0)
@@ -142,7 +142,7 @@ public sealed class SessionsViewModel : ReactiveViewModel
                     SelectedIndex.Value--;
                     RequestRedraw();
                 }
-                break;
+                return true;
 
             case ConsoleKey.DownArrow or ConsoleKey.J:
                 if (SelectedIndex.Value < Sessions.Count - 1)
@@ -150,13 +150,16 @@ public sealed class SessionsViewModel : ReactiveViewModel
                     SelectedIndex.Value++;
                     RequestRedraw();
                 }
-                break;
+                return true;
 
             case ConsoleKey.Enter:
                 var selected = Sessions[SelectedIndex.Value];
                 _navigationState.ResumeSessionId = selected.SessionId;
                 Navigate?.Invoke("/chat");
-                break;
+                return true;
+
+            default:
+                return false;
         }
     }
 

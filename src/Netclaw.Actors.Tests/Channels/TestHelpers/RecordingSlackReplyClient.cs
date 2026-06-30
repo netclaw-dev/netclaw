@@ -13,6 +13,7 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
     private readonly object _lock = new();
     private readonly List<SlackPostMessage> _posts = [];
     private readonly List<UpdateRecord> _updates = [];
+    private readonly List<StatusRecord> _statuses = [];
 
     public IReadOnlyList<SlackPostMessage> Posts
     {
@@ -22,6 +23,11 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
     public IReadOnlyList<UpdateRecord> Updates
     {
         get { lock (_lock) return _updates.ToList(); }
+    }
+
+    public IReadOnlyList<StatusRecord> Statuses
+    {
+        get { lock (_lock) return _statuses.ToList(); }
     }
 
     public Exception? ThrowOnPost { get; set; }
@@ -36,6 +42,7 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
         {
             _posts.Clear();
             _updates.Clear();
+            _statuses.Clear();
         }
     }
 
@@ -77,6 +84,16 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
         return Task.CompletedTask;
     }
 
+    public Task SetThreadStatusAsync(
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock) _statuses.Add(new StatusRecord(channelId, threadTs, status));
+        return Task.CompletedTask;
+    }
+
     public Task UploadFileToThreadAsync(
         SlackChannelId channelId,
         SlackThreadTs threadTs,
@@ -89,4 +106,9 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
         SlackEventTs MessageTs,
         string Text,
         IReadOnlyList<Block>? Blocks);
+
+    public sealed record StatusRecord(
+        SlackChannelId ChannelId,
+        SlackThreadTs ThreadTs,
+        string Status);
 }

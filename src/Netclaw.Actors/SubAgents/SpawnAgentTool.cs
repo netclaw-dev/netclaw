@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -114,7 +115,23 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     }
 
     private static string FormatResult(string agent, SubAgentResult result)
-        => result.Success ? result.Output : $"Subagent '{agent}' failed: {result.Output}";
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Subagent run finished.");
+        builder.AppendLine($"Agent: {agent}");
+        if (result.RunId is { } runId)
+            builder.AppendLine($"RunId: {runId.Value}");
+        builder.AppendLine($"Outcome: {result.Outcome.ToString().ToLowerInvariant()}");
+        if (result.OutcomeReason is { } reason)
+            builder.AppendLine($"Reason: {reason.Value}");
+        if (result.ScopeId is { } scopeId)
+            builder.AppendLine($"Diagnostics: session log entries include SubSessionId {scopeId.Value}.");
+
+        builder.AppendLine();
+        builder.AppendLine(result.Success ? "Summary:" : "Error:");
+        builder.Append(result.Output);
+        return builder.ToString();
+    }
 
     /// <summary>
     /// Validate the invocation and resolve the requested agent. Returns an error

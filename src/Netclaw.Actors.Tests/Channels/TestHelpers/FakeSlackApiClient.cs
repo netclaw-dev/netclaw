@@ -13,7 +13,10 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 /// test supplies (Chat and/or Auth); every other member throws so unexpected
 /// API usage fails loud instead of silently succeeding.
 /// </summary>
-internal sealed class FakeSlackApiClient(IChatApi? chat = null, IAuthApi? auth = null) : ISlackApiClient
+internal sealed class FakeSlackApiClient(
+    IChatApi? chat = null,
+    IAuthApi? auth = null,
+    IAssistantThreadsApi? assistantThreads = null) : ISlackApiClient
 {
     public IChatApi Chat => chat ?? throw new NotImplementedException();
     public IAuthApi Auth => auth ?? throw new NotImplementedException();
@@ -22,7 +25,7 @@ internal sealed class FakeSlackApiClient(IChatApi? chat = null, IAuthApi? auth =
     public IAppsConnectionsApi AppsConnectionsApi => throw new NotImplementedException();
     public IAppsEventAuthorizationsApi AppsEventAuthorizations => throw new NotImplementedException();
     public IAssistantSearchApi AssistantSearch => throw new NotImplementedException();
-    public IAssistantThreadsApi AssistantThreads => throw new NotImplementedException();
+    public IAssistantThreadsApi AssistantThreads => assistantThreads ?? throw new NotImplementedException();
     public IBookmarksApi Bookmarks => throw new NotImplementedException();
     public IBotsApi Bots => throw new NotImplementedException();
     public ICallParticipantsApi CallParticipants => throw new NotImplementedException();

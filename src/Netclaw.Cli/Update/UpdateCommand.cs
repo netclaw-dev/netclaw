@@ -355,7 +355,7 @@ internal static class UpdateCommand
                 var remainingStatus = manager.GetStatus();
                 if (remainingStatus.IsRunning)
                 {
-                    var detachedStop = await manager.StopAsync("update");
+                    var detachedStop = await manager.StopAsync("update", CancellationToken.None);
                     if (!detachedStop.Success)
                     {
                         return UpdateDaemonStopResult.Failed(
@@ -373,7 +373,7 @@ internal static class UpdateCommand
             case SystemdUserServiceOwnershipKind.Unmanaged:
             default:
             {
-                var detachedStop = await manager.StopAsync("update");
+                var detachedStop = await manager.StopAsync("update", CancellationToken.None);
                 return detachedStop.Success
                     ? UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.DetachedProcess, detachedStop.Message)
                     : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, detachedStop.Message);
@@ -411,7 +411,8 @@ internal static class UpdateCommand
     {
         public DaemonStatus GetStatus() => manager.GetStatus();
 
-        public Task<DaemonResult> StopAsync(string reason) => manager.StopAsync(reason);
+        public Task<DaemonResult> StopAsync(string reason, CancellationToken cancellationToken)
+            => manager.StopAsync(reason, cancellationToken);
 
         public DaemonResult Start() => manager.Start();
     }
@@ -607,7 +608,7 @@ internal interface IDaemonProcessLifecycle
 {
     DaemonStatus GetStatus();
 
-    Task<DaemonResult> StopAsync(string reason);
+    Task<DaemonResult> StopAsync(string reason, CancellationToken cancellationToken);
 
     DaemonResult Start();
 }

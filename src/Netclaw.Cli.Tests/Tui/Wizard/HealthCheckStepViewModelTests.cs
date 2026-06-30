@@ -107,12 +107,14 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         var runner = new HealthCheckRunner(step.Results, () => { });
         using var cts = new CancellationTokenSource();
+        var firstResultAdded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writer = Task.Factory.StartNew(() =>
         {
             var writeCount = 0;
             while (!cts.IsCancellationRequested)
             {
                 runner.Add(new HealthCheckItem("probe", true));
+                firstResultAdded.TrySetResult();
 
                 if (++writeCount % 128 != 0)
                     continue;
@@ -132,13 +134,11 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
         try
         {
-            // Wait (bounded) for the writer to start producing before the read loop, so the reads
-            // genuinely race concurrent Adds AND the final non-empty assertion is deterministic. On a
-            // contended CI scheduler the Task.Run writer may not run before cts.Cancel(), which left
-            // Results empty and failed the assertion intermittently.
-            Assert.True(
-                SpinWait.SpinUntil(() => step.ResultsSnapshot().Count > 0, TimeSpan.FromSeconds(10)),
-                "Writer task did not start adding results within 10s.");
+            // Wait for the writer to start producing before the read loop, so the reads genuinely
+            // race concurrent Adds AND the final non-empty assertion is deterministic. On a contended
+            // CI scheduler the writer may not run before cts.Cancel(), which left Results empty and
+            // failed the assertion intermittently.
+            await firstResultAdded.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
             // Read snapshots while the writer mutates Results off-thread. Without the synchronized
             // snapshot, ToArray throws "Collection was modified" during a concurrent Add.

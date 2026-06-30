@@ -9,6 +9,7 @@ The Slack channel runs inside `netclawd` using Slack Socket Mode.
 - Inbound events: `app_mention`, `message`
 - Session identity: `{channelId}/{threadTs}`
 - Reply behavior: assistant replies are posted back to the same thread
+- Processing indicator: native Slack thread status via `assistant.threads.setStatus`
 - Thread behavior: mention starts thread, thread replies continue without mention
 
 No public webhook endpoint is required.
@@ -23,7 +24,7 @@ Create a Slack app with:
 - Bot scopes at minimum:
   - `app_mentions:read`
   - `channels:history`
-  - `chat:write`
+  - `chat:write` for thread replies and native loading status
   - `groups:history` (if private channels are used)
   - `channels:read` and `groups:read` (if resolving by channel name)
 
@@ -72,6 +73,8 @@ Supported Slack settings:
 
 - When Slack is disabled, daemon starts normally and Slack channel stays inactive.
 - If Slack is enabled but required tokens are missing, daemon startup fails fast.
+- While a session is processing, Netclaw sets the Slack thread status to
+  `is thinking...` and clears it when the session returns idle.
 - Socket Mode disconnects are handled by SlackNet reconnecting client behavior.
 - Slack lifecycle is hosted-service owned rather than actor-owned. Ingress only
   forwards after the Slack gateway actor exists, while clean reconnect decisions

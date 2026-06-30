@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Reminders;
 using Netclaw.Media;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Protocol;
@@ -133,6 +134,12 @@ public static class SessionOutputDtoMapper
             Phase = msg.Phase.ToString().ToLowerInvariant(),
             ToolCountSub = msg.ToolCount,
             SubAgentSuccess = msg.Success,
+            SubAgentOutcome = msg.Phase == SubAgents.SubAgentPhase.Completed
+                ? msg.Outcome.ToString().ToLowerInvariant()
+                : null,
+            SubAgentOutcomeReason = msg.Phase == SubAgents.SubAgentPhase.Completed
+                ? msg.OutcomeReason?.Value
+                : null,
             DurationMs = msg.Duration.TotalMilliseconds,
             MemoryDecision = msg.MemoryDecision,
             MemoryDecisionReason = msg.MemoryDecisionReason,
@@ -294,21 +301,7 @@ public static class SessionOutputDtoMapper
                 FileName = dto.FileName ?? "file",
                 MimeType = new MimeType(dto.MimeType)
             },
-            SessionOutputTypes.SubAgent => new SubAgentOutput
-            {
-                SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                AgentName = new SubAgents.AgentName(dto.AgentName ?? "unknown"),
-                Phase = dto.Phase?.Equals("completed", StringComparison.OrdinalIgnoreCase) == true
-                    ? SubAgents.SubAgentPhase.Completed
-                    : SubAgents.SubAgentPhase.Started,
-                ToolCount = dto.ToolCountSub ?? 0,
-                Success = dto.SubAgentSuccess ?? false,
-                Duration = TimeSpan.FromMilliseconds(dto.DurationMs ?? 0),
-                MemoryDecision = dto.MemoryDecision,
-                MemoryDecisionReason = dto.MemoryDecisionReason,
-                FindingsCount = dto.FindingsCount ?? 0
-            },
+            SessionOutputTypes.SubAgent => MapSubAgentOutput(dto, sessionId),
             SessionOutputTypes.BufferFlush => new BufferFlush
             {
                 SessionId = sessionId,
@@ -362,6 +355,42 @@ public static class SessionOutputDtoMapper
                 TimestampMs = dto.TimestampMs,
                 Message = $"Unknown output type from daemon: {dto.Type}"
             }
+            };
+    }
+
+    private static SubAgentRunOutcome ParseSubAgentOutcome(string? value, bool? success)
+    {
+        if (!string.IsNullOrWhiteSpace(value)
+            && Enum.TryParse<SubAgentRunOutcome>(value, ignoreCase: true, out var parsed))
+            return parsed;
+
+        return success == false ? SubAgentRunOutcome.Failed : SubAgentRunOutcome.Completed;
+    }
+
+    private static SubAgentOutput MapSubAgentOutput(SessionOutputDto dto, SessionId sessionId)
+    {
+        var phase = dto.Phase?.Equals("completed", StringComparison.OrdinalIgnoreCase) == true
+            ? SubAgents.SubAgentPhase.Completed
+            : SubAgents.SubAgentPhase.Started;
+
+        return new SubAgentOutput
+        {
+            SessionId = sessionId,
+            TimestampMs = dto.TimestampMs,
+            AgentName = new SubAgents.AgentName(dto.AgentName ?? "unknown"),
+            Phase = phase,
+            ToolCount = dto.ToolCountSub ?? 0,
+            Success = dto.SubAgentSuccess ?? false,
+            Outcome = phase == SubAgents.SubAgentPhase.Completed
+                ? ParseSubAgentOutcome(dto.SubAgentOutcome, dto.SubAgentSuccess)
+                : SubAgentRunOutcome.Completed,
+            OutcomeReason = phase == SubAgents.SubAgentPhase.Completed && !string.IsNullOrWhiteSpace(dto.SubAgentOutcomeReason)
+                ? new SubAgentOutcomeReason(dto.SubAgentOutcomeReason)
+                : null,
+            Duration = TimeSpan.FromMilliseconds(dto.DurationMs ?? 0),
+            MemoryDecision = dto.MemoryDecision,
+            MemoryDecisionReason = dto.MemoryDecisionReason,
+            FindingsCount = dto.FindingsCount ?? 0
         };
     }
 }

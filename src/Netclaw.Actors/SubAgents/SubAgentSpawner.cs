@@ -80,7 +80,9 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Cannot spawn subagent '{profile.Name}': no session context available.",
-                AgentName = new AgentName(profile.Name)
+                AgentName = new AgentName(profile.Name),
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.SpawnUnavailable
             };
         }
 
@@ -93,7 +95,9 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Cannot spawn subagent '{profile.Name}': no tools are available under the parent audience policy.",
-                AgentName = new AgentName(profile.Name)
+                AgentName = new AgentName(profile.Name),
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.NoToolsAvailable
             };
         }
 
@@ -108,7 +112,7 @@ public sealed class SubAgentSpawner
             OperatingRules = ResolveOperatingRules(context)
         };
 
-        var runId = Guid.NewGuid().ToString("N");
+        var runId = SubAgentRunId.New();
 
         // Notify session that subagent is starting
         context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
@@ -127,6 +131,7 @@ public sealed class SubAgentSpawner
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
+        var scopeId = new SubAgentScopeId(subAgentScopeId);
 
         // Spawn as child of the session actor via the context factory
         var props = SubAgentActor.CreateProps(
@@ -155,7 +160,9 @@ public sealed class SubAgentSpawner
                 RunId = runId,
                 AgentName = definition.Name.Value,
                 IsStarted = false,
-                Success = false
+                Success = false,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.SpawnError
             });
             activitySink?.TryComplete();
             throw;
@@ -214,13 +221,19 @@ public sealed class SubAgentSpawner
                 AgentName = definition.Name.Value,
                 IsStarted = false,
                 Success = result.Success,
+                Outcome = result.Outcome,
+                OutcomeReason = result.OutcomeReason,
                 Duration = sw.Elapsed,
                 Findings = result.Findings
             });
 
             SubAgentSpawnBreadcrumbs.Completed(_logger, context, profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
 
-            return result;
+            return result with
+            {
+                RunId = runId,
+                ScopeId = scopeId
+            };
         }
         catch (Exception ex)
         {
@@ -234,6 +247,8 @@ public sealed class SubAgentSpawner
                 AgentName = definition.Name.Value,
                 IsStarted = false,
                 Success = false,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.SpawnError,
                 Duration = sw.Elapsed
             });
 
@@ -242,7 +257,11 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Subagent error: {ex.Message}",
-                AgentName = new AgentName(profile.Name)
+                AgentName = new AgentName(profile.Name),
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.SpawnError,
+                RunId = runId,
+                ScopeId = scopeId
             };
         }
         finally

@@ -37,6 +37,7 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
             new FakeSlackApiClient(auth: new StubAuthApi()),
             new FakeSlackSocketModeClient(),
             new RecordingSlackReplyClient(),
+            TestSlackGatewayDeps.DefaultChannelRegistry,
             new SessionIngressGate(),
             new NullContentScanner(),
             SafePromptInjectionDetector.Instance,

@@ -1354,13 +1354,16 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             Assert.Null(vm.PendingLabelRefresh);
         });
 
-        var completed = await Task.WhenAny(
-            scenario,
-            Task.Delay(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
-        Assert.True(
-            ReferenceEquals(completed, scenario),
-            "Reset deadlocked under a single-worker SynchronizationContext — a sync-over-async bridge was reintroduced.");
-        await scenario; // re-throw any assertion failure raised on the worker thread
+        try
+        {
+            await scenario.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException(
+                "Reset deadlocked under a single-worker SynchronizationContext — a sync-over-async bridge was reintroduced.",
+                ex);
+        }
     }
 
     [Fact]
@@ -1389,10 +1392,15 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         // mutate disposed reactive state. Run Dispose off the xunit synchronization context so the
         // in-flight write's continuations can drain on the test context while Dispose waits.
         var dispose = Task.Run(vm.Dispose, TestContext.Current.CancellationToken);
-        var finished = await Task.WhenAny(
-            dispose, Task.Delay(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
-        Assert.True(ReferenceEquals(finished, dispose), "Dispose did not drain the cancelled in-flight write promptly.");
-        await dispose;  // surface any teardown exception
+        try
+        {
+            await dispose.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException("Dispose did not drain the cancelled in-flight write promptly.", ex);
+        }
+
         await write;    // the cancelled add unwound without surfacing out
     }
 

@@ -121,6 +121,9 @@ public class SpawnAgentStreamingTests : TestKit
         // not a "Subagent '...' failed: ..." message from FormatResult.
         Assert.NotNull(result);
         Assert.NotEmpty(result);
+        Assert.Contains("Subagent run finished.", result, StringComparison.Ordinal);
+        Assert.Contains("Outcome: completed", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Summary:", result, StringComparison.Ordinal);
         Assert.DoesNotContain("failed", result, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -207,6 +210,8 @@ public class SpawnAgentStreamingTests : TestKit
 
         var result = await drain.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.NotNull(result);
+        Assert.Contains("Subagent run finished.", result, StringComparison.Ordinal);
+        Assert.Contains("Outcome: completed", result, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("summary complete", result);
     }
 

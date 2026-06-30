@@ -20,7 +20,8 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Provider wizard step.
-/// 7 sub-steps: provider selection → auth → credentials → validation → model → OAuth device → OAuth browser.
+/// Sub-steps: provider selection → auth → credentials → validation → model → OAuth device → OAuth browser,
+/// plus GitHub Copilot host-mode and Enterprise host inputs.
 /// </summary>
 public sealed class ProviderStepView : IWizardStepView
 {
@@ -28,8 +29,11 @@ public sealed class ProviderStepView : IWizardStepView
 
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _authMethodList;
+    private SelectionListNode<string>? _githubCopilotAuthHostList;
     private TextInputNode? _apiKeyInput;
     private TextInputNode? _endpointInput;
+    private TextInputNode? _githubCopilotHostInput;
+    private TextInputNode? _githubCopilotApiBaseInput;
     private SelectionListNode<string>? _modelList;
     private TextInputNode? _manualModelInput;
     private TextInputNode? _redirectUrlInput;
@@ -60,6 +64,9 @@ public sealed class ProviderStepView : IWizardStepView
             4 => BuildModelSelection(vm, callbacks),
             5 => BuildOAuthDeviceFlow(vm),
             6 => BuildBrowserOAuthFlow(vm, callbacks),
+            7 => BuildGitHubCopilotAuthHost(vm, callbacks),
+            8 => BuildGitHubCopilotEnterpriseHost(vm, callbacks),
+            9 => BuildGitHubCopilotEnterpriseApiBase(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -133,8 +140,15 @@ public sealed class ProviderStepView : IWizardStepView
                     }
                     else if (method == AuthMethod.OAuthDevice)
                     {
-                        vm.SetSubStep(5);
-                        vm.StartOAuthFlow();
+                        if (GitHubCopilotSetupFlow.IsGitHubCopilot(vm.SelectedProviderType))
+                        {
+                            vm.SetSubStep(7);
+                        }
+                        else
+                        {
+                            vm.SetSubStep(5);
+                            vm.StartOAuthFlow();
+                        }
                     }
                     else
                     {
@@ -148,6 +162,108 @@ public sealed class ProviderStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode($"  Authentication for {descriptor.DisplayName}:").WithForeground(Color.White))
             .WithChild(_authMethodList);
+    }
+
+    private ILayoutNode BuildGitHubCopilotAuthHost(ProviderStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _githubCopilotAuthHostList = Layouts.SelectionList(GitHubCopilotSetupFlow.AuthHostLabels.ToList())
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _githubCopilotAuthHostList.OnFocused();
+        _lastFocusedList = _githubCopilotAuthHostList;
+        _lastFocusedInput = null;
+
+        _githubCopilotAuthHostList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                callbacks.ClearStatusMessage();
+                vm.SelectGitHubCopilotAuthHost(GitHubCopilotSetupFlow.ParseAuthHostLabel(selected[0]));
+                callbacks.InvalidateAndRedraw();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  GitHub Copilot authentication host:").WithForeground(Color.White))
+            .WithChild(new TextNode("  Choose GitHub Enterprise only if your Copilot subscription is tied to GHE.")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(_githubCopilotAuthHostList);
+    }
+
+    private ILayoutNode BuildGitHubCopilotEnterpriseHost(ProviderStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _lastFocusedList = null;
+
+        _githubCopilotHostInput = new TextInputNode()
+            .WithPlaceholder("https://ghe.example.com");
+        if (!string.IsNullOrWhiteSpace(vm.GitHubCopilotHostInput))
+            _githubCopilotHostInput.Text = vm.GitHubCopilotHostInput;
+        _githubCopilotHostInput.OnFocused();
+        _lastFocusedInput = _githubCopilotHostInput;
+
+        _githubCopilotHostInput.Submitted
+            .Subscribe(text =>
+            {
+                if (vm.TrySetGitHubCopilotEnterpriseHost(text, out var error))
+                {
+                    callbacks.ClearStatusMessage();
+                    vm.SetSubStep(9);
+                    callbacks.InvalidateAndRedraw();
+                    return;
+                }
+
+                callbacks.ShowValidationError(error);
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  GitHub Enterprise host").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(new TextNode("  Enter the GitHub Enterprise web host used for OAuth.").WithForeground(Color.Gray))
+            .WithChild(new TextNode("  Example: https://ghe.example.com").WithForeground(Color.Gray))
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_githubCopilotHostInput, "GitHub host"));
+    }
+
+    private ILayoutNode BuildGitHubCopilotEnterpriseApiBase(ProviderStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _lastFocusedList = null;
+        var placeholder = GitHubCopilotSetupFlow.GetApiBasePlaceholder(vm.GitHubCopilotHostInput);
+
+        _githubCopilotApiBaseInput = new TextInputNode()
+            .WithPlaceholder(placeholder);
+        if (!string.IsNullOrWhiteSpace(vm.GitHubCopilotApiBaseInput))
+            _githubCopilotApiBaseInput.Text = vm.GitHubCopilotApiBaseInput;
+        _githubCopilotApiBaseInput.OnFocused();
+        _lastFocusedInput = _githubCopilotApiBaseInput;
+
+        _githubCopilotApiBaseInput.Submitted
+            .Subscribe(text =>
+            {
+                if (vm.TryStartGitHubCopilotEnterpriseOAuth(text, out var error))
+                {
+                    callbacks.ClearStatusMessage();
+                    callbacks.InvalidateAndRedraw();
+                    return;
+                }
+
+                callbacks.ShowValidationError(error);
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  GitHub Enterprise API base").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(new TextNode("  Press Enter to use the derived API base, or type an explicit API URL.")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode($"  Derived default: {placeholder}")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_githubCopilotApiBaseInput, "GitHub API base"));
     }
 
     private ILayoutNode BuildCredentialInput(ProviderStepViewModel vm, StepViewCallbacks callbacks)
@@ -442,8 +558,11 @@ public sealed class ProviderStepView : IWizardStepView
         _lastFocusedInput = null;
         _providerList = null;
         _authMethodList = null;
+        _githubCopilotAuthHostList = null;
         _apiKeyInput = null;
         _endpointInput = null;
+        _githubCopilotHostInput = null;
+        _githubCopilotApiBaseInput = null;
         _modelList = null;
         _manualModelInput = null;
         _redirectUrlInput = null;

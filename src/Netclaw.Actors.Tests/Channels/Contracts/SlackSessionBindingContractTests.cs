@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -143,7 +144,8 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         ISessionPipeline pipeline,
         ConfigurablePromptInjectionDetector detector,
         string nameSuffix = "",
-        IThreadHistoryFetcher? historyFetcher = null)
+        IThreadHistoryFetcher? historyFetcher = null,
+        IChannelRegistry? channelRegistry = null)
     {
         var paths = TestSlackGatewayDeps.NewTestPaths();
         var deps = new SlackGatewayDependencies(
@@ -159,6 +161,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             },
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
+            ChannelRegistry: channelRegistry ?? TestChannelRegistries.SlackWithProcessingRenderer(_replyClient),
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             ThreadHistoryFetcher: historyFetcher ?? EmptyThreadHistoryFetcher.Instance,
@@ -174,6 +177,109 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             new SlackChannelId("C-test"),
             new SlackThreadTs("1000.1"),
             deps), name);
+    }
+
+    [Fact]
+    public async Task Subscribes_to_processing_state_outputs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-filter");
+        var pipeline = new RecordingSessionPipeline(_ => []);
+
+        CreateActorCore(sid, pipeline, detector);
+
+        var options = await pipeline.Created.WaitAsync(ct);
+        Assert.Equal(OutputFilter.ProcessingState, options.Filter & OutputFilter.ProcessingState);
+    }
+
+    [Fact]
+    public async Task Processing_state_output_sets_and_clears_thread_status()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-status");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new ProcessingStateOutput(false) { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        ]);
+
+        CreateActorCore(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Collection(
+                _replyClient.Statuses,
+                status =>
+                {
+                    Assert.Equal("C-test", status.ChannelId.Value);
+                    Assert.Equal("1000.1", status.ThreadTs.Value);
+                    Assert.Equal("is thinking...", status.Status);
+                },
+                status =>
+                {
+                    Assert.Equal("C-test", status.ChannelId.Value);
+                    Assert.Equal("1000.1", status.ThreadTs.Value);
+                    Assert.Equal(string.Empty, status.Status);
+                });
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Processing_state_output_does_not_block_text_when_renderer_stalls()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-timeout");
+        var renderer = new BlockingProcessingRenderer();
+        var registry = TestChannelRegistries.SlackWithProcessingRenderer(renderer);
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new TextOutput("visible after status failure") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        ]);
+
+        CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.Posts, p => p.Text == "visible after status failure");
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Active_processing_status_is_cleared_when_actor_stops()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-stop-clear");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid }
+        ]);
+        var actor = CreateActorCore(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var status = Assert.Single(_replyClient.Statuses);
+            Assert.Equal("is thinking...", status.Status);
+        }, cancellationToken: ct);
+
+        var stopProbe = CreateTestProbe("slack-processing-stop-clear");
+        stopProbe.Watch(actor);
+        Sys.Stop(actor);
+        await stopProbe.ExpectTerminatedAsync(actor, cancellationToken: ct);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Collection(
+                _replyClient.Statuses,
+                status => Assert.Equal("is thinking...", status.Status),
+                status => Assert.Equal(string.Empty, status.Status));
+        }, cancellationToken: ct);
     }
 
     // Regression for #939: when the binding has no in-memory pending approval
@@ -405,4 +511,19 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
         Assert.Empty(_replyClient.Updates);
     }
+
+    private sealed class BlockingProcessingRenderer : IChannelOutputRenderer
+    {
+        private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ChannelDescriptorKey Key => ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+
+        public ValueTask RenderAsync(
+            ChannelOutputRenderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return new ValueTask(_blocked.Task);
+        }
+    }
+
 }

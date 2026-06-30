@@ -318,6 +318,8 @@ internal static class SessionToolExecutionPipeline
                     RunId = info.RunId,
                     AgentName = new SubAgents.AgentName(info.AgentName),
                     Success = info.Success,
+                    Outcome = info.Outcome ?? (info.Success ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed),
+                    OutcomeReason = info.OutcomeReason,
                     Duration = info.Duration,
                     FindingsCount = info.Findings.Count,
                     MemoryDecision = decision,

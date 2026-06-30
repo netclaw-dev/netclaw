@@ -112,8 +112,10 @@ public sealed partial class DaemonManager
     /// Why the daemon is being stopped (e.g., "cli-stop", "update").
     /// Included in the shutdown webhook notification.
     /// </param>
-    public async Task<DaemonResult> StopAsync(string reason)
+    public async Task<DaemonResult> StopAsync(string reason, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (!TryGetRunningPid(out var pid))
             return new DaemonResult(false, "Daemon is not running.");
 
@@ -150,12 +152,15 @@ public sealed partial class DaemonManager
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             await http.PostAsync(
                 $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",
-                null);
+                null,
+                cancellationToken);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is (HttpRequestException or TaskCanceledException))
         {
             Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Graceful shutdown: SIGTERM on Unix, Kill on Windows (no SIGTERM equivalent)
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
@@ -173,7 +178,7 @@ public sealed partial class DaemonManager
         }
 
         // Wait up to 10 seconds for graceful exit.
-        if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(10)))
+        if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(10), cancellationToken))
         {
             // Timed out — hard cutoff.
             string? killError = null;
@@ -186,7 +191,7 @@ public sealed partial class DaemonManager
             if (!TryKillProcess(process, out var processKillError) && string.IsNullOrWhiteSpace(killError))
                 killError = processKillError;
 
-            if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(5)))
+            if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(5), cancellationToken))
             {
                 var details = string.IsNullOrWhiteSpace(killError)
                     ? string.Empty
@@ -623,15 +628,17 @@ public sealed partial class DaemonManager
         return kill(pid, (int)signal) == 0;
     }
 
-    private async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout)
+    private async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = _timeProvider.GetUtcNow() + timeout;
         while (_timeProvider.GetUtcNow() < deadline)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (process.HasExited)
                 return true;
 
-            await Task.Delay(200);
+            await Task.Delay(200, cancellationToken);
         }
 
         return process.HasExited;

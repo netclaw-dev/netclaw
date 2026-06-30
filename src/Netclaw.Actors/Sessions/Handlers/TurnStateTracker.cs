@@ -124,9 +124,9 @@ internal sealed class TurnStateTracker
             return new ToolBudgetStatus.Exhausted(
                 $"You have reached the tool iteration limit for this turn. "
                 + "Do NOT request any more tools. "
-                + "Summarize the work you completed and produce your final response "
-                + "based on the information you have gathered so far. "
-                + "If you could not complete the task, explain what you found and what remains.");
+                + "Produce a concise final executive summary based only on the information gathered so far. "
+                + "Use this format: Summary, Completed, Partial or Unknown, Caveats, Useful Evidence. "
+                + "Clearly state that the result is partial when work remains or evidence is incomplete.");
         }
 
         var budgetThreshold = (int)(maxToolIterationsPerTurn * BudgetNudgeRatio);

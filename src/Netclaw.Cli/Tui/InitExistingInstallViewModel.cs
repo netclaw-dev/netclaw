@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -37,12 +39,15 @@ public sealed class InitNavigationState
 /// </summary>
 public sealed class InitExistingInstallViewModel : ReactiveViewModel
 {
+    internal static readonly TimeSpan CompletionPause = TimeSpan.FromMilliseconds(600);
+
     public enum Phase
     {
         Menu,
         ResetScope,
         ResetConfirm1,
         ResetConfirm2,
+        Progress,
     }
 
     public enum ResetScopeKind
@@ -55,28 +60,62 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
     private readonly InitNavigationState _navigationState;
+    private readonly Func<string, CancellationToken, Task<DaemonResult>> _stopDaemonAsync;
+    private readonly Action<string> _deleteDirectory;
+    private readonly TimeProvider _timeProvider;
+    private readonly CancellationTokenSource _resetCts = new();
+    private volatile bool _disposed;
+    private volatile bool _quitBlockedForDeletion;
 
-    public InitExistingInstallViewModel(NetclawPaths paths, InitNavigationState navigationState)
+    public InitExistingInstallViewModel(
+        NetclawPaths paths,
+        InitNavigationState navigationState,
+        DaemonManager daemonManager,
+        TimeProvider timeProvider)
+        : this(paths, navigationState, daemonManager.StopAsync, DeleteDirectory, timeProvider)
+    {
+    }
+
+    internal InitExistingInstallViewModel(
+        NetclawPaths paths,
+        InitNavigationState navigationState,
+        Func<string, CancellationToken, Task<DaemonResult>> stopDaemonAsync,
+        Action<string> deleteDirectory,
+        TimeProvider timeProvider)
     {
         _paths = paths;
         _navigationState = navigationState;
+        _stopDaemonAsync = stopDaemonAsync;
+        _deleteDirectory = deleteDirectory;
+        _timeProvider = timeProvider;
     }
 
-    /// <summary>Route the wizard launches for "Redo identity setup".</summary>
     public const string IdentityRoute = "/init/identity";
-
-    /// <summary>Route launched for a fresh setup after a confirmed reset.</summary>
     public const string WizardRoute = "/init";
-
-    /// <summary>This menu's own route (identity redo returns here on Esc).</summary>
     public const string MenuRoute = "/init/menu";
 
     public ReactiveProperty<Phase> CurrentPhase { get; } = new(Phase.Menu);
     public ReactiveProperty<int> SelectedIndex { get; } = new(0);
-    public ReactiveProperty<string> StatusMessage { get; } = new("");
+
+    // Synchronized: also published from the background reset Task — see CurrentProgressStep below.
+    public ReactiveProperty<string> StatusMessage { get; } = new SynchronizedReactiveProperty<string>("");
 
     private ResetScopeKind _scope = ResetScopeKind.SetupOnly;
     public ResetScopeKind Scope => _scope;
+
+    // Progress-screen state. These three (plus StatusMessage above) are published from the
+    // background reset Task (RunResetAsync -> PublishOnLoop), not just the input/loop thread.
+    // R3's ReactiveProperty is not thread-safe — its value-set walks the observer list lock-free
+    // while Subscribe/Dispose mutate that list under a lock, so a background write can corrupt the
+    // list when a subscriber attaches or detaches concurrently. Bound to the Termina loop those
+    // writes marshal onto one thread, but tests (and any unbound use) observe them off-thread.
+    // SynchronizedReactiveProperty serializes set/subscribe/dispose on one monitor; uncontended in
+    // production. The declared type stays ReactiveProperty<T> so the page and all readers are unchanged.
+    public ReactiveProperty<int> CurrentProgressStep { get; } = new SynchronizedReactiveProperty<int>(-1);
+    public ReactiveProperty<string> ProgressMessage { get; } = new SynchronizedReactiveProperty<string>("");
+    public ReactiveProperty<bool> CanQuitProgress { get; } = new SynchronizedReactiveProperty<bool>(true);
+    internal Task? ResetTask { get; private set; }
+    internal bool IsResetCancellationRequested => _resetCts.IsCancellationRequested;
 
     public static readonly IReadOnlyList<MenuItem> MenuItems =
     [
@@ -93,7 +132,6 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
         new("Cancel", "Go back without changing anything."),
     ];
 
-    /// <summary>Items for the current phase (drives the rendered list).</summary>
     public IReadOnlyList<MenuItem> CurrentItems => CurrentPhase.Value switch
     {
         Phase.Menu => MenuItems,
@@ -117,31 +155,19 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     public void MoveSelection(int delta)
     {
         var count = CurrentItems.Count;
-        if (count == 0)
-            return;
-
+        if (count == 0) return;
         var next = Math.Clamp(SelectedIndex.Value + delta, 0, count - 1);
-        if (next != SelectedIndex.Value)
-            SelectedIndex.Value = next;
+        if (next != SelectedIndex.Value) SelectedIndex.Value = next;
     }
 
-    /// <summary>Enter on the highlighted row.</summary>
     public void ActivateSelected()
     {
         switch (CurrentPhase.Value)
         {
-            case Phase.Menu:
-                ActivateMenu(SelectedIndex.Value);
-                break;
-            case Phase.ResetScope:
-                ActivateScope(SelectedIndex.Value);
-                break;
-            case Phase.ResetConfirm1:
-                ActivateConfirm(first: true);
-                break;
-            case Phase.ResetConfirm2:
-                ActivateConfirm(first: false);
-                break;
+            case Phase.Menu: ActivateMenu(SelectedIndex.Value); break;
+            case Phase.ResetScope: ActivateScope(SelectedIndex.Value); break;
+            case Phase.ResetConfirm1: ActivateConfirm(first: true); break;
+            case Phase.ResetConfirm2: ActivateConfirm(first: false); break;
         }
     }
 
@@ -149,19 +175,10 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     {
         switch (index)
         {
-            case 0: // Redo identity setup
-                Navigate?.Invoke(IdentityRoute);
-                break;
-            case 1: // Open configuration editor
-                _navigationState.PendingAction = InitFollowUpAction.OpenConfigEditor;
-                Shutdown();
-                break;
-            case 2: // Start over from scratch
-                EnterPhase(Phase.ResetScope);
-                break;
-            default: // Cancel
-                Shutdown();
-                break;
+            case 0: Navigate?.Invoke(IdentityRoute); break;
+            case 1: _navigationState.PendingAction = InitFollowUpAction.OpenConfigEditor; Shutdown(); break;
+            case 2: EnterPhase(Phase.ResetScope); break;
+            default: Shutdown(); break;
         }
     }
 
@@ -169,110 +186,234 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     {
         switch (index)
         {
-            case 0:
-                _scope = ResetScopeKind.SetupOnly;
-                EnterPhase(Phase.ResetConfirm1);
-                break;
-            case 1:
-                _scope = ResetScopeKind.Full;
-                EnterPhase(Phase.ResetConfirm1);
-                break;
-            default: // Cancel
-                EnterPhase(Phase.Menu);
-                break;
+            case 0: _scope = ResetScopeKind.SetupOnly; EnterPhase(Phase.ResetConfirm1); break;
+            case 1: _scope = ResetScopeKind.Full; EnterPhase(Phase.ResetConfirm1); break;
+            default: EnterPhase(Phase.Menu); break;
         }
     }
 
-    // Confirm rows are [Cancel, Yes]. Default selection is Cancel (index 0), so a stray
-    // Enter never deletes — the operator must move to "Yes" and confirm twice.
     private void ActivateConfirm(bool first)
     {
-        if (SelectedIndex.Value == 0) // Cancel
-        {
-            EnterPhase(Phase.ResetScope);
-            return;
-        }
-
-        if (first)
-        {
-            EnterPhase(Phase.ResetConfirm2);
-            return;
-        }
-
-        PerformReset();
+        if (SelectedIndex.Value == 0) { EnterPhase(Phase.ResetScope); return; }
+        if (first) { EnterPhase(Phase.ResetConfirm2); return; }
+        StartResetProgress();
     }
 
-    private void PerformReset()
+    private void StartResetProgress()
+    {
+        CurrentPhase.Value = Phase.Progress;
+        CurrentProgressStep.Value = 0;
+        CanQuitProgress.Value = true;
+        ProgressMessage.Value = "Stopping daemon…";
+        RequestRedraw();
+        // Track the destructive work so tests and future callers can observe completion;
+        // the reset itself runs off the input/render loop to keep Ctrl+Q responsive.
+        ResetTask = Task.Run(() => RunResetAsync(_resetCts.Token), _resetCts.Token);
+    }
+
+    private async Task RunResetAsync(CancellationToken ct)
     {
         try
         {
+            await StopDaemonBestEffortAsync(ct);
+            if (ct.IsCancellationRequested)
+                return;
+
+            _quitBlockedForDeletion = true;
+            PublishOnLoop(() =>
+            {
+                CanQuitProgress.Value = false;
+                CurrentProgressStep.Value = 1;
+                ProgressMessage.Value = _scope == ResetScopeKind.Full ? "Deleting all data…" : "Deleting setup files…";
+                RequestRedraw();
+            }, ct);
+
+            if (ct.IsCancellationRequested)
+            {
+                _quitBlockedForDeletion = false;
+                return;
+            }
+
             if (_scope == ResetScopeKind.Full)
             {
-                DeleteDirectory(_paths.BasePath);
+                _deleteDirectory(_paths.BasePath);
             }
             else
             {
-                // Setup-only: remove what the bootstrap wizard writes (config + secrets +
-                // identity), preserving memory, sessions, and skills. SecretsPath lives
-                // under ConfigDirectory, so deleting it covers secrets too.
-                DeleteDirectory(_paths.ConfigDirectory);
-                DeleteDirectory(_paths.IdentityDirectory);
-                DeleteDirectory(_paths.SoulDirectory);
+                _deleteDirectory(_paths.ConfigDirectory);
+                _deleteDirectory(_paths.IdentityDirectory);
+                _deleteDirectory(_paths.SoulDirectory);
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            StatusMessage.Value = $"Reset failed: {ex.Message}";
-            RequestRedraw();
+            _quitBlockedForDeletion = false;
+            return;
+        }
+        catch (Exception ex)
+        {
+            _quitBlockedForDeletion = false;
+            PublishResetFailure(ex, ct);
             return;
         }
 
-        // Fresh setup from the top.
-        Navigate?.Invoke(WizardRoute);
+        if (ct.IsCancellationRequested)
+            return;
+
+        _quitBlockedForDeletion = false;
+        PublishOnLoop(() =>
+        {
+            CurrentProgressStep.Value = 3;
+            CanQuitProgress.Value = true;
+            ProgressMessage.Value = "Purge complete";
+            if (StatusMessage.Value.StartsWith("Reset is deleting data;", StringComparison.Ordinal))
+                StatusMessage.Value = "";
+            RequestRedraw();
+        }, ct);
+
+        try
+        {
+            await Task.Delay(CompletionPause, _timeProvider, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        PublishOnLoop(() => Navigate?.Invoke(WizardRoute), ct);
+    }
+
+    /// <summary>Best-effort daemon stop; deletion still surfaces any locked-file failure.</summary>
+    private async Task StopDaemonBestEffortAsync(CancellationToken ct)
+    {
+        Task<DaemonResult>? stopTask = null;
+        try
+        {
+            stopTask = _stopDaemonAsync("factory-reset", ct);
+            var result = await stopTask.WaitAsync(ct);
+            if (!result.Success && !IsDaemonAlreadyStopped(result.Message))
+                PublishStatus($"Daemon stop did not complete; reset will continue: {result.Message}", ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            ObserveLateStopFailure(stopTask);
+        }
+        catch (OperationCanceledException ex)
+        {
+            PublishStatus($"Daemon stop canceled; reset will continue: {ex.Message}", ct);
+        }
+        catch (Exception ex)
+        {
+            PublishStatus($"Daemon stop failed; reset will continue: {ex.Message}", ct);
+        }
+    }
+
+    private static bool IsDaemonAlreadyStopped(string message)
+        => message.StartsWith("Daemon is not running.", StringComparison.Ordinal);
+
+    private static void ObserveLateStopFailure(Task<DaemonResult>? stopTask)
+    {
+        if (stopTask is null || stopTask.IsCompleted)
+            return;
+
+        _ = stopTask.ContinueWith(
+            task => Debug.WriteLine($"Init reset daemon stop completed after cancellation: {task.Exception?.GetBaseException().Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void PublishResetFailure(Exception ex, CancellationToken ct)
+        => PublishOnLoop(() =>
+        {
+            ProgressMessage.Value = $"Reset failed: {ex.Message}";
+            CanQuitProgress.Value = true;
+            if (StatusMessage.Value.StartsWith("Reset is deleting data;", StringComparison.Ordinal))
+                StatusMessage.Value = "";
+            RequestRedraw();
+        }, ct);
+
+    private void PublishStatus(string message, CancellationToken ct)
+        => PublishOnLoop(() =>
+        {
+            StatusMessage.Value = message;
+            RequestRedraw();
+        }, ct);
+
+    private void PublishOnLoop(Action action, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested || _disposed)
+            return;
+
+        _ = InvokeAsync(() =>
+        {
+            if (ct.IsCancellationRequested || _disposed)
+                return;
+
+            action();
+        }, ct);
     }
 
     private static void DeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
-            Directory.Delete(path, recursive: true);
+        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
     }
 
-    /// <summary>Esc: step back one phase, or quit from the menu.</summary>
     public void GoBack()
     {
         switch (CurrentPhase.Value)
         {
-            case Phase.Menu:
-                Shutdown();
-                break;
-            case Phase.ResetScope:
-                EnterPhase(Phase.Menu);
-                break;
-            case Phase.ResetConfirm1:
-                EnterPhase(Phase.ResetScope);
-                break;
-            case Phase.ResetConfirm2:
-                EnterPhase(Phase.ResetConfirm1);
-                break;
+            case Phase.Menu: Shutdown(); break;
+            case Phase.ResetScope: EnterPhase(Phase.Menu); break;
+            case Phase.ResetConfirm1: EnterPhase(Phase.ResetScope); break;
+            case Phase.ResetConfirm2: EnterPhase(Phase.ResetConfirm1); break;
+            case Phase.Progress: break; // Don't allow backing out — it's running
         }
     }
 
     private void EnterPhase(Phase phase)
     {
         CurrentPhase.Value = phase;
-        // Confirm phases default to Cancel (index 0); menus/scope start at the top.
         SelectedIndex.Value = 0;
         StatusMessage.Value = "";
         RequestRedraw();
     }
 
-    public void RequestQuit() => Shutdown();
+    public void RequestQuit()
+    {
+        if (CurrentPhase.Value == Phase.Progress && _quitBlockedForDeletion)
+        {
+            StatusMessage.Value = "Reset is deleting data; quit is disabled until deletion completes.";
+            RequestRedraw();
+            return;
+        }
+
+        if (CurrentPhase.Value == Phase.Progress)
+            _resetCts.Cancel();
+
+        Shutdown();
+    }
 
     public override void Dispose()
     {
+        _disposed = true;
+        _resetCts.Cancel();
+        try
+        {
+            ResetTask?.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Init reset task drain on dispose faulted: {ex.Message}");
+        }
+
+        _resetCts.Dispose();
         CurrentPhase.Dispose();
         SelectedIndex.Dispose();
         StatusMessage.Dispose();
+        CurrentProgressStep.Dispose();
+        ProgressMessage.Dispose();
+        CanQuitProgress.Dispose();
         base.Dispose();
     }
 }

@@ -176,7 +176,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         try
         {
-            return await InvokeFunctionAsync(function, arguments, ct);
+            return await InvokeFunctionAsync(function, $"{serverName.Value}/{toolName.Value}", arguments, ct);
         }
         catch (Exception ex)
         {
@@ -190,7 +190,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 || retryFunction is null)
                 throw;
 
-            return await InvokeFunctionAsync(retryFunction, arguments, ct);
+            return await InvokeFunctionAsync(retryFunction, $"{serverName.Value}/{toolName.Value}", arguments, ct);
         }
     }
 
@@ -217,7 +217,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     $"MCP tool '{toolName.Value}' is not available on server '{serverName.Value}'.");
             }
 
-            return await InvokeFunctionAsync(function, arguments, ct);
+            return await InvokeFunctionAsync(function, $"{serverName.Value}/{toolName.Value}", arguments, ct);
         }
         finally
         {
@@ -226,8 +226,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
+    // qualifiedToolName is the server-qualified "server/tool" name (not the bare
+    // function.Name, which omits the server) so MCP error attribution matches the
+    // bound-tool path (McpToolAdapter.Name) — otherwise the same error renders
+    // differently depending on which invocation path produced it.
     private static async Task<string> InvokeFunctionAsync(
         AIFunction function,
+        string qualifiedToolName,
         IDictionary<string, object?>? arguments,
         CancellationToken ct)
     {
@@ -236,7 +241,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             : null;
 
         var result = await function.InvokeAsync(aiArgs, ct);
-        return result?.ToString() ?? "";
+        // The SDK returns the whole CallToolResult as raw JSON on isError; surface
+        // a clean, attributed error instead of a blob the model can't classify (#1495).
+        return McpToolResultFormatter.Format(result, qualifiedToolName);
     }
 
     private bool TryGetSharedFunction(McpServerName serverName, string toolName, out AIFunction? function)

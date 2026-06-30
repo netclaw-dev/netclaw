@@ -441,7 +441,7 @@ public sealed class UpdateCommandTests : IDisposable
             return _lastStatus;
         }
 
-        public Task<DaemonResult> StopAsync(string reason)
+        public Task<DaemonResult> StopAsync(string reason, CancellationToken cancellationToken)
         {
             StopCalls++;
             StopReasons.Add(reason);

@@ -40,7 +40,10 @@ public static class ChannelIntegrationRegistrationExtensions
 
     internal static void AddSlackChannel(IServiceCollection services, IConfiguration configuration)
     {
-        services.AddRemoteChatChannel<SlackChannel, SlackChannelOptions>(ChannelType.Slack, configuration)
+        services.AddRemoteChatChannel<SlackChannel, SlackChannelOptions>(
+                ChannelType.Slack,
+                configuration,
+                new HashSet<ChannelOutputEffectKind> { ChannelOutputEffectKind.ProcessingIndicator })
             // Token validity is NOT checked here: an exception thrown from this
             // registration path aborts host construction and crashes the daemon.
             // A missing/invalid token is handled as a contained channel failure in
@@ -68,6 +71,7 @@ public static class ChannelIntegrationRegistrationExtensions
             })
             .WithOutboundClient<ISlackOutboundClient, SlackOutboundClient>()
             .WithLookupClient<ISlackTargetLookupClient, SlackApiTargetLookupClient>()
+            .WithRenderer<SlackProcessingOutputRenderer>()
             .WithReminderResolver<SlackReminderTargetResolver>()
             // The default-channel accessor reads the RUNTIME-resolved ID from
             // SlackChannel (StartAsync resolves DefaultChannelName → ID), not

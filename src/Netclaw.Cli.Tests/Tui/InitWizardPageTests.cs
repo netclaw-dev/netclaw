@@ -103,6 +103,33 @@ public sealed class InitWizardPageTests : IDisposable
         Assert.Equal(_registry.KnownTypeKeys[1], vm.ProviderStep.SelectedProviderType);
     }
 
+    [Fact]
+    public async Task GitHubCopilotEnterpriseInputs_AcceptTypedHostAndApiBase()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Copilot
+        input.EnqueueKey(ConsoleKey.Enter);     // provider selection
+        input.EnqueueKey(ConsoleKey.Enter);     // OAuth Device Flow
+        input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Enterprise
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("https://ghe.example.com");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("https://api.ghe.example.com/");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("github-copilot", vm.ProviderStep.SelectedProviderType);
+        Assert.Equal("https://ghe.example.com", vm.ProviderStep.GitHubCopilotHostInput);
+        Assert.Equal("https://api.ghe.example.com/", vm.ProviderStep.GitHubCopilotApiBaseInput);
+        Assert.NotNull(vm.ProviderStep.VendorOptions);
+        Assert.Equal("https://ghe.example.com", vm.ProviderStep.VendorOptions!["GitHubHost"]);
+        Assert.Equal("https://api.ghe.example.com", vm.ProviderStep.VendorOptions["GitHubApiBase"]);
+    }
+
 
     // ── Config integrity: wizard choices must match written config ──────────
 
