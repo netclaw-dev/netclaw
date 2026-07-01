@@ -33,6 +33,12 @@
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
+    <!-- Transitive security pin: Microsoft.AspNetCore.OpenApi 10.0.9 pulls
+         Microsoft.OpenApi 2.0.0, which trips NU1903 (GHSA-v5pm-xwqc-g5wc,
+         circular schema references can terminate OpenAPI parsing). Keep this on
+         the patched 2.x line until ASP.NET Core ships a non-vulnerable
+         transitive dependency. -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
