@@ -611,19 +611,6 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(
-        IReadOnlyList<string> ids,
-        string boundary,
-        TrustAudience audience,
-        CancellationToken ct = default)
-    {
-        if (ids.Count == 0)
-            return [];
-
-        var resolvedIds = await ResolveMemoryHandlesAsync(ids, boundary, audience, ct);
-        return await GetMemoriesByResolvedHandlesAsync(resolvedIds, boundary, audience, ct);
-    }
-
     /// <summary>
     /// Hydrates memories from handles that have already been resolved. Callers that run
     /// <see cref="ResolveMemoryHandlesAsync"/> up front (e.g. to surface per-ID errors) pass

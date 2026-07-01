@@ -23,7 +23,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
     private readonly ILogger _logger;
 
     public record Params(
-        [property: Description("Comma-separated memory IDs to load (e.g. \"doc:abc, rec:def\")")]
+        [property: Description("Comma-separated memory IDs to load. Copy the ids shown by find_memories, get_memories, or recall verbatim (e.g. \"doc-1a2b3c, rec-9d8e7f\").")]
         string Ids);
 
     public SqliteGetMemoriesTool(SQLiteMemoryStore store, TimeProvider? timeProvider = null, ILogger<SqliteGetMemoriesTool>? logger = null)
