@@ -672,8 +672,7 @@ public sealed class SQLiteMemoryStore
                     ExpiresAtMs: reader.IsDBNull(12) ? null : reader.GetInt64(12),
                     UpdatedAtMs: reader.GetInt64(13)));
 
-                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
-                    || !allowedAudiences.Contains(output[^1].Audience))
+                if (!IsAccessible(output[^1].Boundary, output[^1].Audience, boundary, allowedAudiences))
                 {
                     output.RemoveAt(output.Count - 1);
                 }
@@ -709,8 +708,7 @@ public sealed class SQLiteMemoryStore
                     ExpiresAtMs: reader.IsDBNull(12) ? null : reader.GetInt64(12),
                     UpdatedAtMs: reader.GetInt64(13)));
 
-                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
-                    || !allowedAudiences.Contains(output[^1].Audience))
+                if (!IsAccessible(output[^1].Boundary, output[^1].Audience, boundary, allowedAudiences))
                 {
                     output.RemoveAt(output.Count - 1);
                 }
@@ -727,10 +725,21 @@ public sealed class SQLiteMemoryStore
         TrustAudience audience,
         CancellationToken ct = default)
     {
+        if (rawIds.Count == 0)
+            return [];
+
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Resolve the whole batch over one connection so N ids cost a single connection open
+        // (and one allowedAudiences set), not N of each.
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         var output = new List<ResolvedMemoryHandle>(rawIds.Count);
         foreach (var rawId in rawIds)
-            output.Add(await ResolveMemoryHandleAsync(rawId, boundary, audience, ct));
-        return output;
+            output.Add(await ResolveHandleOnConnectionAsync(conn, rawId, boundary, allowedAudiences, ct));
+        return (IReadOnlyList<ResolvedMemoryHandle>)output;
+        }, ct);
     }
 
     public async Task<ResolvedMemoryHandle> ResolveMemoryHandleAsync(
@@ -739,17 +748,29 @@ public sealed class SQLiteMemoryStore
         TrustAudience audience,
         CancellationToken ct = default)
     {
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return await WithConnectionAsync(
+            (conn, ct) => ResolveHandleOnConnectionAsync(conn, rawId, boundary, allowedAudiences, ct),
+            ct);
+    }
+
+    // Core handle resolution against an already-open connection, so a batch (get_memories) can
+    // share a single connection and allowedAudiences set instead of opening a connection per id.
+    private static async Task<ResolvedMemoryHandle> ResolveHandleOnConnectionAsync(
+        SqliteConnection conn,
+        string rawId,
+        string boundary,
+        ISet<string> allowedAudiences,
+        CancellationToken ct)
+    {
         var parsed = MemoryTypedId.Parse(rawId);
         if (parsed.Kind is not (MemoryKind.Document or MemoryKind.Record))
             return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID must be prefixed with doc- or rec-.");
         if (parsed.Id.IsEmpty)
             return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID payload is required.");
 
-        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return await WithConnectionAsync(async (conn, ct) =>
-        {
         // Records are append-only: an edit inserts a new row that supersedes the old one and
         // leaves the old row physically present. Follow the supersede chain to the head (latest)
         // row so a stable handle the model was given earlier still resolves to the current
@@ -764,7 +785,6 @@ public sealed class SQLiteMemoryStore
         return visible
             ? ResolvedMemoryHandle.Found(rawId, parsed.Kind, storageId)
             : ResolvedMemoryHandle.Failed(rawId, parsed.Kind, $"Memory \"{rawId}\" was not found or is not accessible from this session.");
-        }, ct);
     }
 
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanAsync(
@@ -1702,9 +1722,14 @@ public sealed class SQLiteMemoryStore
 
         var itemBoundary = reader.IsDBNull(0) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(0);
         var itemAudience = reader.IsDBNull(1) ? TrustAudience.Personal.ToWireValue() : reader.GetString(1);
-        return string.Equals(itemBoundary, boundary, StringComparison.OrdinalIgnoreCase)
-               && allowedAudiences.Contains(itemAudience);
+        return IsAccessible(itemBoundary, itemAudience, boundary, allowedAudiences);
     }
+
+    // Single source of truth for the boundary/audience visibility rule, shared by handle
+    // resolution (MemoryIdVisibleAsync) and hydration so the two paths cannot drift.
+    private static bool IsAccessible(string itemBoundary, string itemAudience, string boundary, ISet<string> allowedAudiences)
+        => string.Equals(itemBoundary, boundary, StringComparison.OrdinalIgnoreCase)
+           && allowedAudiences.Contains(itemAudience);
 
     private static async Task EnsureAnchorAsync(
         SqliteConnection conn,

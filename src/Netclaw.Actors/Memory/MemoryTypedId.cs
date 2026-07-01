@@ -32,6 +32,13 @@ public readonly record struct MemoryTypedId(MemoryKind Kind, MemoryStorageId Id)
     /// it is never rewritten — so there is exactly one key per input and no ambiguity.
     /// Returns <see cref="MemoryKind.Unknown"/> with the raw value when the prefix is unrecognized.
     /// </summary>
+    /// <remarks>
+    /// The kind prefix is matched case-insensitively (a tolerant envelope), but the storage key
+    /// that follows is preserved verbatim and later matched case-sensitively against the canonical
+    /// lowercase primary key. This is deliberate: generated ids are always lowercase, so a
+    /// mis-cased key is treated as not-found (fail-loud) rather than silently coerced to a
+    /// different row.
+    /// </remarks>
     public static MemoryTypedId Parse(string raw)
     {
         raw = raw.Trim();
