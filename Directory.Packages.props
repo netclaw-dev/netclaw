@@ -12,7 +12,7 @@
     <MattermostNetVersion>5.0.0</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.9</MicrosoftAspNetCoreVersion>
-    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
+    <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
@@ -33,6 +33,8 @@
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
+    <!-- Pin to patched version to avoid CVE-2026-49451 (stack overflow on circular schema refs) -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
