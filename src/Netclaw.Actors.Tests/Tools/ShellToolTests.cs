@@ -46,6 +46,44 @@ public class ShellToolTests
     }
 
     [Fact]
+    public async Task Execute_denies_commands_referencing_server_feed_skill_directly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"netclaw-shell-policy-{Guid.NewGuid():N}");
+        var paths = new NetclawPaths(tempRoot);
+        var serverFeedScript = Path.Combine(
+            paths.ServerFeedsDirectory,
+            "corp",
+            "runner",
+            "examples",
+            "hello.sh");
+        Directory.CreateDirectory(Path.GetDirectoryName(serverFeedScript)!);
+        await File.WriteAllTextAsync(serverFeedScript, "printf 'blocked\\n'\n", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var tool = new ShellTool(
+                new ToolConfig(),
+                new ToolPathPolicy(
+                    writeDeniedPaths: [paths.SystemSkillsDirectory, paths.ServerFeedsDirectory],
+                    readDeniedPaths: [],
+                    shellIndicatorPaths: [paths.SystemSkillsDirectory, paths.ServerFeedsDirectory]),
+                new ShellCommandPolicy());
+
+            var result = await tool.ExecuteAsync(
+                ToolInput.Create("Command", $"bash '{serverFeedScript}'"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("protected file path", result, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("blocked", result, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Timeout_kills_long_running_process()
     {
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());

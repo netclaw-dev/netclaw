@@ -31,13 +31,14 @@ internal static class SkillToolRegistration
         var paths = services.GetRequiredService<NetclawPaths>();
         var toolConfig = services.GetRequiredService<ToolConfig>();
         var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
+        var shellCommandPolicy = services.GetRequiredService<ShellCommandPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
         var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
         var subAgentSpawner = services.GetService<SubAgentSpawner>();
         var subAgentLoader = services.GetService<FileSubAgentDefinitionLoader>();
-        var skillSyncConfig = services.GetService<SkillSyncConfig>();
+        var skillSyncConfig = services.GetRequiredService<SkillSyncConfig>();
         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
         registry.Replace(new FileReadTool(toolConfig, paths, pathPolicy, skillRegistry, metrics,
@@ -47,12 +48,15 @@ internal static class SkillToolRegistration
             skillRegistry,
             skillIndexLayer,
             paths,
+            toolConfig,
+            pathPolicy,
+            shellCommandPolicy,
             scanner,
             externalSources,
+            skillSyncConfig,
             metrics,
             subAgentRegistry,
             subAgentSpawner,
-            skillSyncConfig,
             subAgentLoader,
             loggerFactory.CreateLogger<SkillLoadTool>());
     }

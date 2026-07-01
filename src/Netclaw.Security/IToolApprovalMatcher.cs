@@ -736,6 +736,65 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 }
 
 /// <summary>
+/// Approval matcher for skill resource execution. The approval unit is the
+/// concrete skill resource plus the argument string the agent asked to pass to
+/// it; filesystem directory scoping does not apply because the runtime stages
+/// the resource out of the managed skill directory before execution.
+/// </summary>
+public sealed class SkillResourceApprovalMatcher : IToolApprovalMatcher
+{
+    public static readonly SkillResourceApprovalMatcher Instance = new();
+
+    public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
+        => toolName.Value;
+
+    public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
+        => true;
+
+    public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
+        => [BuildCandidate(toolName, arguments)];
+
+    public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
+        => [BuildCandidate(toolName, arguments)];
+
+    public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
+        => [new ApprovalCandidate(BuildCandidate(toolName, arguments), Directory: null)];
+
+    public bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd)
+        => ApprovalPatternMatching.MatchesAny(BuildCandidate(toolName, arguments), approvedEntries);
+
+    public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => false;
+
+    public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
+        => BuildCandidate(toolName, arguments);
+
+    private static string BuildCandidate(ToolName toolName, IDictionary<string, object?>? arguments)
+    {
+        var skillName = NormalizeSegment(ToolArgumentHelper.GetString(arguments, "SkillName"));
+        var resourcePath = NormalizeSegment(ToolArgumentHelper.GetString(arguments, "ResourcePath"))
+            .Replace('\\', '/');
+        var interpreter = ToolArgumentHelper.GetString(arguments, "Interpreter")?.Trim();
+        var rawArguments = ToolArgumentHelper.GetString(arguments, "Arguments")?.Trim();
+
+        var candidate = $"{toolName.Value} {skillName}/{resourcePath}";
+        if (!string.IsNullOrWhiteSpace(interpreter))
+            candidate = string.Concat(candidate, " via ", interpreter);
+        if (!string.IsNullOrWhiteSpace(rawArguments))
+            candidate = string.Concat(candidate, " -- ", rawArguments);
+
+        return candidate;
+    }
+
+    private static string NormalizeSegment(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "<missing>" : value.Trim();
+}
+
+/// <summary>
 /// Default approval matcher for non-shell tools. Approval is at the tool-name
 /// level — either the tool is approved or it isn't. Directory scoping does
 /// not apply.

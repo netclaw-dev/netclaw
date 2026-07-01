@@ -5,9 +5,11 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Skills;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -43,6 +45,18 @@ public sealed class ToolApprovalGateTests
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
+    }
+
+    private static INetclawTool SkillExecuteResourceToolInstance()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        return new SkillExecuteResourceTool(
+            new SkillRegistry(),
+            new NoOpSkillContentScanner(),
+            config,
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            new SkillSyncConfig());
     }
 
     [Fact]
@@ -104,6 +118,61 @@ public sealed class ToolApprovalGateTests
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
         Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
+    }
+
+    [Fact]
+    public void Missing_personal_approval_policy_fails_closed_for_skill_resource_execution()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = null;
+
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var args = ToolInput.Create(
+            "SkillName", "runner",
+            "ResourcePath", "examples/hello.sh",
+            "Arguments", "--dry-run");
+
+        var decision = policy.AuthorizeInvocation(SkillExecuteResourceToolInstance(), PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+        Assert.NotNull(decision.ApprovalContext);
+        Assert.Equal("skill_execute_resource", decision.ApprovalContext!.ToolName);
+        Assert.Equal(["skill_execute_resource runner/examples/hello.sh -- --dry-run"], decision.ApprovalContext.Patterns);
+        var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
+        Assert.Equal("skill_execute_resource runner/examples/hello.sh -- --dry-run", candidate.Verb);
+        Assert.Null(candidate.Directory);
+        Assert.DoesNotContain(decision.ApprovalContext.Options, option => option.Key == ApprovalOptionKeys.ApproveAlwaysKey);
+    }
+
+    [Fact]
+    public void Skill_resource_execution_is_hidden_outside_personal_shell_context()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+        var tool = SkillExecuteResourceToolInstance();
+
+        var teamTools = policy.FilterDiscoverableTools(
+            [tool],
+            new ToolExecutionContext("mattermost/thread-1", null) { Audience = TrustAudience.Team });
+        var personalTools = policy.FilterDiscoverableTools(
+            [tool],
+            PersonalContext());
+
+        Assert.Empty(teamTools);
+        Assert.Same(tool, Assert.Single(personalTools));
     }
 
     [Fact]

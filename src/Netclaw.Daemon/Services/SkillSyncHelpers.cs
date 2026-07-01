@@ -13,7 +13,9 @@ namespace Netclaw.Daemon.Services;
 
 internal static class SkillSyncHelpers
 {
-    internal static readonly string[] AllowedResourcePrefixes = ["references", "scripts", "assets"];
+    internal static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
 
     // A directory is a skill iff it owns a SKILL.md — the same rule SkillScanner uses.
     private const string SkillFileName = "SKILL.md";
@@ -22,7 +24,12 @@ internal static class SkillSyncHelpers
 
     internal static string ComputeSha256(string content)
     {
-        var bytes = Encoding.UTF8.GetBytes(content);
+        var bytes = StrictUtf8.GetBytes(content);
+        return ComputeSha256(bytes);
+    }
+
+    internal static string ComputeSha256(byte[] bytes)
+    {
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexStringLower(hash);
     }
@@ -32,15 +39,25 @@ internal static class SkillSyncHelpers
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        if (Path.IsPathRooted(path) || path.Contains("..", StringComparison.Ordinal))
+        var normalized = path.Trim().Replace('\\', '/');
+        if (Path.IsPathRooted(normalized)
+            || normalized.StartsWith("/", StringComparison.Ordinal)
+            || normalized.Contains(':', StringComparison.Ordinal))
             return null;
 
-        var normalized = path.Replace('\\', '/');
-        var firstSegment = normalized.Split('/')[0];
-        if (!AllowedResourcePrefixes.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
+        var segments = normalized.Split('/');
+        if (segments.Any(static segment => segment.Length == 0
+                                           || string.Equals(segment, ".", StringComparison.Ordinal)
+                                           || string.Equals(segment, "..", StringComparison.Ordinal)))
             return null;
 
-        return normalized;
+        // AgentSkills.io recommends scripts/, references/, and assets/, but the
+        // format permits additional directories. Resource files still must live
+        // below a subdirectory so SKILL.md remains the only root-level artifact.
+        if (segments.Length < 2)
+            return null;
+
+        return string.Join('/', segments);
     }
 
     internal static SkillSyncState ReadSyncState(string path, ILogger logger)
@@ -175,7 +192,7 @@ internal static class SkillSyncHelpers
             {
                 var targetPath = Path.Combine(stagingDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                await File.WriteAllTextAsync(targetPath, file.Content, cancellationToken);
+                await File.WriteAllBytesAsync(targetPath, file.Content, cancellationToken);
             }
 
             if (Directory.Exists(skillDir))
@@ -204,4 +221,8 @@ internal static class SkillSyncHelpers
     }
 }
 
-internal sealed record DownloadedSkillFile(string RelativePath, string Content);
+internal sealed record DownloadedSkillFile(string RelativePath, byte[] Content)
+{
+    public static DownloadedSkillFile FromText(string relativePath, string content)
+        => new(relativePath, SkillSyncHelpers.StrictUtf8.GetBytes(content));
+}

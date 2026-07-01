@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.22.0"
+  version: "2.22.1"
 ---
 
 # Netclaw Operations
@@ -228,6 +228,20 @@ netclaw approvals revoke --tool shell_execute --all --audience personal
 `revoke` of a non-existent pattern exits non-zero with a clear message — the
 CLI never silently succeeds. `trust-verb` is idempotent — re-running it on an
 existing entry exits zero with "no changes."
+
+### Executable Skill Resources
+
+Use `skill_execute_resource` for executable helpers bundled with a registered
+skill. It is shell-equivalent: Personal-only, approval-gated, hard-deny checked,
+and unavailable to Public. The approval unit is the concrete skill resource plus
+the argument string, not a normal `(verb, directory)` shell pair.
+
+`skill_execute_resource` validates the resource path under the skill directory,
+rejects traversal and symlinks, scans the text content, stages the file into the
+session scratch directory, and then runs the staged copy with the selected or
+inferred interpreter. Do not run helpers directly from `.system/` or
+`.server-feeds/` with `shell_execute`; those sync-managed directories remain
+protected from direct shell access.
 
 ### Pre-approving for unattended tasks (load-bearing)
 

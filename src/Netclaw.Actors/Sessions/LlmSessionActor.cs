@@ -3030,16 +3030,35 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         try
         {
+            var turnContext = _currentTurnContext;
+            var source = _currentTurnSource;
+            var canRequestApproval = turnContext?.SupportsInteractiveApproval
+                                     ?? source?.ChannelType.SupportsInteractiveApproval()
+                                     ?? false;
             var context = new ToolExecutionContext(_sessionId.Value, GetSessionDirectory())
             {
                 // No active turn context/source carries no trust context — fall closed.
-                Audience = _currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public,
-                Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
-                ChannelType = _currentTurnContext?.ChannelType?.ToWireValue()
-                              ?? (_currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue()),
+                Audience = turnContext?.Audience ?? source?.Audience ?? TrustAudience.Public,
+                Boundary = turnContext?.Boundary ?? source?.Boundary,
+                ChannelType = turnContext?.ChannelType?.ToWireValue()
+                              ?? (source is null ? null : source.ChannelType.ToWireValue()),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,
-                SupportsInteractiveApproval = false,
+                SupportsInteractiveApproval = canRequestApproval,
             };
+
+            if (canRequestApproval)
+            {
+                context.ApprovalBridge = new ParentSessionApprovalBridge(
+                    _approvalChannel,
+                    request => self.Tell(request),
+                    _sessionId,
+                    $"routed-{Guid.NewGuid():N}",
+                    turnContext?.RequesterSenderId ?? source?.SenderId,
+                    turnContext?.RequesterPrincipal ?? source?.Principal,
+                    turnContext?.HasAdoptedContext ?? source?.HasAdoptedContext ?? false,
+                    turnContext?.HasThirdPartyAdoptedContext ?? source?.HasThirdPartyAdoptedContext ?? false,
+                    turnContext?.AdoptedSpeakerIds ?? source?.AdoptedSpeakerIds ?? []);
+            }
 
             context.SpawnChildActor = async (props, name, ct) =>
                 await self.Ask<IActorRef>(

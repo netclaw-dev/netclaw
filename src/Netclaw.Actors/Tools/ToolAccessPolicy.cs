@@ -164,7 +164,7 @@ public sealed class ToolAccessPolicy
             }
         }
 
-        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(toolName, context, arguments, SelectShellCoupledMatcher(toolName));
     }
 
     /// <summary>
@@ -343,6 +343,7 @@ public sealed class ToolAccessPolicy
 
         var options = BuildApprovalOptions(
             isMessy,
+            supportsDirectoryScopedApproval: isShell,
             isCwdShallow: IsCwdTooShallow(context?.Cwd),
             allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
                 candidates, context?.Cwd, context?.SessionDirectory));
@@ -393,7 +394,7 @@ public sealed class ToolAccessPolicy
     /// <summary>
     /// Builds the prompt's button row. The five-button default
     /// (Once / This chat / Always here / Always anywhere / Deny) is pruned
-    /// in three cases:
+    /// in four cases:
     /// <list type="bullet">
     /// <item><b>Messy commands</b> (bash control-flow / unbalanced
     /// quotes/brackets) — only <c>Once</c> and <c>Deny</c> are offered.
@@ -409,10 +410,14 @@ public sealed class ToolAccessPolicy
     /// to a directory that won't recur. <c>This chat</c> already provides
     /// the equivalent in-session semantics without polluting the persistent
     /// store.</item>
+    /// <item><b>Tools without directory-scoped approval matching</b> —
+    /// <c>Always here</c> is omitted because their persisted approvals match
+    /// by verb only, so a saved directory would not constrain redemption.</item>
     /// </list>
     /// </summary>
     private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(
         bool isMessy,
+        bool supportsDirectoryScopedApproval,
         bool isCwdShallow,
         bool allEffectiveDirsAreSessionScratch)
     {
@@ -431,7 +436,7 @@ public sealed class ToolAccessPolicy
             new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel)
         };
 
-        if (!isCwdShallow && !allEffectiveDirsAreSessionScratch)
+        if (supportsDirectoryScopedApproval && !isCwdShallow && !allEffectiveDirsAreSessionScratch)
         {
             options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel));
         }
@@ -531,6 +536,11 @@ public sealed class ToolAccessPolicy
         return DefaultApprovalMatcher.Instance;
     }
 
+    private static IToolApprovalMatcher SelectShellCoupledMatcher(ToolName toolName)
+        => string.Equals(toolName.Value, SkillExecuteResourceTool.ToolName, StringComparison.Ordinal)
+            ? SkillResourceApprovalMatcher.Instance
+            : ShellApprovalMatcher.Instance;
+
     private ShellExecutionMode ResolveShellMode()
         => _toolConfig.ShellMode ?? _defaults.ShellExecutionMode;
 
@@ -547,7 +557,7 @@ public sealed class ToolAccessPolicy
         => registration.GrantCategory == "shell" || IsShellTool(registration.Tool);
 
     private static bool IsShellTool(INetclawTool tool)
-        => string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
+        => tool.GrantCategory == "shell" || string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
 
     private static bool IsShellCoupledTool(INetclawTool tool)
         => IsShellTool(tool)
@@ -565,7 +575,7 @@ public sealed class ToolAccessPolicy
                 => !_featureGates.MemoryEnabled,
             "web_search" or "web_fetch"
                 => !_featureGates.SearchEnabled,
-            "skill_load" or "skill_read_resource"
+            "skill_load" or "skill_read_resource" or SkillExecuteResourceTool.ToolName
                 => !_featureGates.SkillSyncEnabled,
             "spawn_agent"
                 => !_featureGates.SubAgentsEnabled,

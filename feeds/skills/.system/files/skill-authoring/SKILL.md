@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.7.1"
+  version: "1.7.2"
 ---
 
 # Skill Authoring
@@ -17,8 +17,9 @@ the user create one.
 Skills are subject to two independent gates:
 
 - **Audience gate:** Public sessions cannot load skills (`skill_load`),
-  read skill resources (`skill_read_resource`), or see the skill index
-  context layer. Skills are fully invisible to Public.
+  read skill resources (`skill_read_resource`), execute skill resources
+  (`skill_execute_resource`), or see the skill index context layer. Skills are
+  fully invisible to Public.
 - **Deployment gate:** `SkillSync.Enabled` in `netclaw.json` (default `true`).
   When `false`, skill tools are hidden from discovery for ALL audiences and
   the skill index context layer returns empty.
@@ -49,6 +50,7 @@ skill-name/
   references/       # Optional: detail documents loaded on demand
   scripts/          # Optional: executable helpers
   assets/           # Optional: templates, static resources
+  other-dirs/       # Optional: AgentSkills.io permits additional directories
 ```
 
 ### Flat-file layout
@@ -177,9 +179,22 @@ Put detail in subdirectories, not in the main SKILL.md:
 | `scripts/` | Executable helpers (shell scripts, Python) |
 | `assets/` | Templates, static files, config samples |
 
+AgentSkills.io permits additional subdirectories. Prefer `references/`,
+`scripts/`, and `assets/` for new skills unless an existing upstream skill uses
+another layout. Executable helpers outside `scripts/` are accepted when they
+resolve inside the registered skill directory, but `scripts/` remains the
+clearest convention for humans and linters.
+
 The skill body references these files explicitly: "See
 `references/deployment-checklist.md` for the full checklist." The agent loads
 them on demand via `skill_read_resource`.
+
+When a helper resource must run, use `skill_execute_resource(skillName,
+resourcePath, interpreter?, arguments?)`. Netclaw validates the path under the
+registered skill root, scans the content, stages it into session scratch, and
+then runs it with shell-equivalent approval. Do not call `shell_execute`
+directly against files under `.system/` or `.server-feeds/`; those
+sync-managed directories are protected from direct shell access.
 
 ## Creating Skills with skill_manage
 
@@ -211,7 +226,11 @@ Content scanning rules:
 - All skills are scanned uniformly regardless of origin — system, user, and all other skills use the same policy (High risk → Reject, Medium → Warn, Low → Allow).
 - Rejected scans fail closed: Netclaw returns the rejection reason and leaves the previous on-disk content unchanged.
 - Warnings may still allow a mutation or read, but the warning text is surfaced in the tool result.
-- Resource files must stay under `references/`, `scripts/`, or `assets/`; other paths are rejected.
+- `skill_manage` writes and removes operator-authored resource files only under
+  `references/`, `scripts/`, or `assets/`. Server-feed and external
+  AgentSkills.io skills may contain other subdirectories; Netclaw accepts them
+  during sync/load, and `skill_execute_resource` can run executable text files
+  from any subdirectory inside the registered skill root.
 
 Hard rules:
 - The frontmatter `name` must match the target skill name for `create` and `edit`.

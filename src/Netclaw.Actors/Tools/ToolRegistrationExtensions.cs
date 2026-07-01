@@ -60,23 +60,28 @@ public static class ToolRegistrationExtensions
     }
 
     /// <summary>
-    /// Registers skill management tools (skill_load, skill_read_resource, skill_manage).
-    /// All use "builtin" grant — available to all audiences.
+    /// Registers skill management tools (skill_load, skill_read_resource, skill_manage)
+    /// and shell-equivalent skill resource execution.
     /// </summary>
     public static ToolRegistry WithSkillTools(
         this ToolRegistry registry,
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
+        ToolConfig toolConfig,
+        ToolPathPolicy pathPolicy,
+        ShellCommandPolicy shellCommandPolicy,
         ISkillContentScanner scanner,
         IReadOnlyList<ResolvedExternalSource> externalSources,
+        SkillSyncConfig skillSyncConfig,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
         SubAgentSpawner? subAgentSpawner = null,
-        SkillSyncConfig? skillSyncConfig = null,
         FileSubAgentDefinitionLoader? subAgentLoader = null,
         ILogger<SkillLoadTool>? skillLoadLogger = null)
     {
+        ArgumentNullException.ThrowIfNull(skillSyncConfig);
+
         registry.Register(new SkillLoadTool(
             skillRegistry,
             scanner,
@@ -87,6 +92,13 @@ public static class ToolRegistrationExtensions
             skillLoadLogger,
             subAgentLoader));
         registry.Register(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
+        registry.Register(new SkillExecuteResourceTool(
+            skillRegistry,
+            scanner,
+            toolConfig,
+            pathPolicy,
+            shellCommandPolicy,
+            skillSyncConfig));
         registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
         return registry;
     }

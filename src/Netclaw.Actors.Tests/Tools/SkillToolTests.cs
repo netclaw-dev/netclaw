@@ -410,6 +410,177 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
+    public async Task SkillExecuteResource_ExecutesResourceOutsideScripts_WhenInsideSkillRoot()
+    {
+        WriteSkill("runner", """
+            ---
+            name: runner
+            description: Run bundled helper resources.
+            ---
+            # Runner
+            """);
+        WriteFile("runner", "examples/hello.sh", "printf 'skill:%s\\n' \"$1\"\n");
+        ScanSkills();
+
+        var sessionDir = Path.Combine(_skillsDir, "session");
+        var context = new ToolExecutionContext("signalr/thread-1", sessionDir)
+        {
+            Audience = TrustAudience.Personal,
+            RequestedTimeoutSeconds = 5
+        };
+        var tool = CreateExecuteResourceTool();
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "runner",
+                "ResourcePath", "examples/hello.sh",
+                "Arguments", "world"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("Exit code: 0", result);
+        Assert.Contains("skill:world", result);
+        Assert.Contains(
+            Directory.EnumerateFiles(Path.Combine(sessionDir, "skill-resources"), "hello.sh", SearchOption.AllDirectories),
+            stagedPath => Path.GetFileName(stagedPath) == "hello.sh");
+    }
+
+    [Fact]
+    public async Task SkillExecuteResource_ReturnsGenericDenialForTeamAudience()
+    {
+        var tool = CreateExecuteResourceTool();
+        var context = new ToolExecutionContext("mattermost/thread-1", Path.Combine(_skillsDir, "session"))
+        {
+            Audience = TrustAudience.Team
+        };
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "secret-runner",
+                "ResourcePath", "examples/hello.sh"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("Error: This tool is not available.", result);
+        Assert.DoesNotContain("secret-runner", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SkillExecuteResource_RejectsPathTraversal()
+    {
+        WriteSkill("runner", """
+            ---
+            name: runner
+            description: Run bundled helper resources.
+            ---
+            # Runner
+            """);
+        ScanSkills();
+
+        var tool = CreateExecuteResourceTool();
+        var context = new ToolExecutionContext("signalr/thread-1", Path.Combine(_skillsDir, "session"))
+        {
+            Audience = TrustAudience.Personal
+        };
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "runner",
+                "ResourcePath", "../runner/examples/hello.sh"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("path traversal", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SkillExecuteResource_RejectsSymlinkResource()
+    {
+        WriteSkill("runner", """
+            ---
+            name: runner
+            description: Run bundled helper resources.
+            ---
+            # Runner
+            """);
+        WriteFile("runner", "scripts/real.sh", "printf 'nope\\n'\n");
+        ScanSkills();
+
+        var linkPath = Path.Combine(_paths.SkillsDirectory, "runner", "examples", "link.sh");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+        try
+        {
+            File.CreateSymbolicLink(
+                linkPath,
+                Path.Combine(_paths.SkillsDirectory, "runner", "scripts", "real.sh"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = CreateExecuteResourceTool();
+        var context = new ToolExecutionContext("signalr/thread-1", Path.Combine(_skillsDir, "session"))
+        {
+            Audience = TrustAudience.Personal
+        };
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "runner",
+                "ResourcePath", "examples/link.sh"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("Symlink traversal", result);
+    }
+
+    [Fact]
+    public async Task SkillExecuteResource_RejectsSymlinkedStagingRoot()
+    {
+        WriteSkill("runner", """
+            ---
+            name: runner
+            description: Run bundled helper resources.
+            ---
+            # Runner
+            """);
+        WriteFile("runner", "examples/hello.sh", "printf 'nope\n'\n");
+        ScanSkills();
+
+        var sessionDir = Path.Combine(_skillsDir, "session");
+        Directory.CreateDirectory(sessionDir);
+        var outsideDir = Path.Combine(_skillsDir, "outside-staging-target");
+        Directory.CreateDirectory(outsideDir);
+        try
+        {
+            Directory.CreateSymbolicLink(
+                Path.Combine(sessionDir, "skill-resources"),
+                outsideDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = CreateExecuteResourceTool();
+        var context = new ToolExecutionContext("signalr/thread-1", sessionDir)
+        {
+            Audience = TrustAudience.Personal
+        };
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "runner",
+                "ResourcePath", "examples/hello.sh"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("staging", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFiles(outsideDir, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task SkillManage_Create_ValidatesName()
     {
         ScanSkills();
@@ -815,6 +986,15 @@ public class SkillToolTests : IDisposable
 
     private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
         => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
+
+    private SkillExecuteResourceTool CreateExecuteResourceTool(ISkillContentScanner? scanner = null)
+        => new(
+            _registry,
+            scanner ?? new NoOpSkillContentScanner(),
+            new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            new SkillSyncConfig());
 
     private static SubAgentSpawner CreateSubAgentSpawner()
     {

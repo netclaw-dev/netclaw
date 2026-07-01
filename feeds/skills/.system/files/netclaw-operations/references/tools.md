@@ -23,8 +23,8 @@ Personal). **Public** sessions get read-only file tools only — `file_read`,
 `file_list`, `attach_file` — and no outbound web access. **Team** adds
 `file_write`, `file_edit`, `web_search`, `web_fetch`, the scheduling tools,
 `skill_manage`, and `set_working_directory`. **Personal** gets everything.
-`shell_execute` is Personal-only — in a Team or Public session, use `file_list`
-to enumerate a directory instead of `ls`.
+`shell_execute` and `skill_execute_resource` are Personal-only — in a Team or
+Public session, use `file_list` to enumerate a directory instead of `ls`.
 
 Tools belonging to disabled subsystems (see [Feature Kill Switches](#feature-kill-switches))
 are hidden from `search_tools` results for all audiences. Public sessions

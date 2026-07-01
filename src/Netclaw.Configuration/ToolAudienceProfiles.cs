@@ -138,6 +138,7 @@ public static class ToolAudienceProfileToolCatalog
     public const string WebSearch = "web_search";
     public const string WebFetch = "web_fetch";
     public const string SkillManage = "skill_manage";
+    public const string SkillExecuteResource = "skill_execute_resource";
     public const string SetWebhook = "set_webhook";
     public const string ListWebhooks = "list_webhooks";
     public const string DeleteWebhook = "delete_webhook";
@@ -169,6 +170,7 @@ public static class ToolAudienceProfileToolCatalog
     [
         .. TeamDefaultAllowedTools,
         .. WebhookTools,
+        SkillExecuteResource,
         ShellExecute
     ];
 

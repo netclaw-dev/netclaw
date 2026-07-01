@@ -211,7 +211,7 @@ internal sealed class SystemSkillSyncService : IHostedService
 
                 var downloadedFiles = new List<DownloadedSkillFile>
                 {
-                    new("SKILL.md", mainContent)
+                    DownloadedSkillFile.FromText("SKILL.md", mainContent)
                 };
 
                 if (entry.Files is { Count: > 0 })
@@ -254,7 +254,7 @@ internal sealed class SystemSkillSyncService : IHostedService
                             break;
                         }
 
-                        downloadedFiles.Add(new DownloadedSkillFile(normalizedPath, fileContent));
+                        downloadedFiles.Add(DownloadedSkillFile.FromText(normalizedPath, fileContent));
                     }
 
                     if (!allFilesOk)
