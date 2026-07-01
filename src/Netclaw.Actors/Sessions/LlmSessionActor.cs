@@ -246,7 +246,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
-        _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
+        _log = Context.GetLogger().WithContext(NetclawLogProperties.SessionId, _sessionId.Value);
 
         // Load all non-MCP tools for initial LLM calls.
         // MCP tools are loaded dynamically via search_tools and can be retained for a
@@ -1738,7 +1738,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         try
         {
             using var cts = new CancellationTokenSource(timeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var extractionMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
@@ -1746,8 +1745,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
             };
+            // Carry the session id so memory-extraction chat-client diagnostics route to the
+            // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
+            var options = new SessionScopedChatOptions { SessionId = sessionId.Value };
             var extractionResult = await StreamingResponseReader.ReadAsync(
-                client, extractionMessages, options: null, cts.Token);
+                client, extractionMessages, options, cts.Token);
             var extractedText = extractionResult.Response.Text ?? string.Empty;
             self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
         }
@@ -2745,20 +2747,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var client = _chatClient;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
-        ChatOptions? options = null;
+        // Always carry the session id so the session-agnostic chat-client decorators
+        // (logging/retry/routing) can correlate LLM diagnostics — including provider
+        // failover/outage — back to this session in Seq. Tools are attached only when
+        // the turn exposes them; an empty Tools list is wire-equivalent to no options.
+        var options = new SessionScopedChatOptions { SessionId = _sessionId.Value };
         if (!forceNoTools && exposedTools.Count > 0)
-        {
-            options = new ChatOptions
-            {
-                Tools = [.. exposedTools]
-            };
-        }
+            options.Tools = [.. exposedTools];
 
         _watchdog.Start(ProcessingWatchdog.LlmCall, _config.PrefillTimeout, Timers, _config.NoProgressTimeout);
 
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
             messages.Count,
-            options?.Tools?.Count > 0,
+            options.Tools?.Count > 0,
             forceNoTools,
             _activeCallId);
 

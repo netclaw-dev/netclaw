@@ -25,14 +25,14 @@ public static class LoggingRegistrationExtensions
         if (consoleEnabled)
             builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
 
-        // Always write to a rolling log file in ~/.netclaw/logs/
+        // This provider owns the local partition of the log stream: session-tagged lines go
+        // to per-session session.log files, everything else to daemon.log (see
+        // RollingFileLoggerProvider). It must be constructed eagerly so MEL sees it via
+        // AddProvider — a Services.AddSingleton<ILoggerProvider>(factory) registration here is
+        // not picked up by the LoggerFactory in this hosting setup. The session-log dispatcher
+        // is wired in post-build by SessionLogDispatcherWiringService once Akka.Hosting has
+        // registered the actor system.
         Directory.CreateDirectory(resolvedPaths.LogsDirectory);
-
-        // Provider must be constructed eagerly so MEL can see it via AddProvider —
-        // a Services.AddSingleton<ILoggerProvider>(factory) registration here is
-        // not picked up by the LoggerFactory in this hosting setup. The session
-        // log dispatcher is wired in post-build by SessionLogDispatcherWiringService
-        // once Akka.Hosting has registered the actor system.
         var provider = new RollingFileLoggerProvider(resolvedPaths.DaemonLogPath);
         builder.Logging.AddProvider(provider);
         builder.Services.AddSingleton(provider);
@@ -53,8 +53,9 @@ public static class LoggingRegistrationExtensions
 }
 
 /// <summary>
-/// Hooks the session log dispatcher into <see cref="RollingFileLoggerProvider"/>
-/// once Akka.Hosting has registered <c>SessionLogDispatcherActorKey</c>.
+/// Hooks the session-log dispatcher into <see cref="RollingFileLoggerProvider"/> once
+/// Akka.Hosting has registered <c>SessionLogDispatcherActorKey</c>. The provider is built during
+/// host construction (before Akka), so the dispatcher can only be attached post-start.
 /// </summary>
 internal sealed class SessionLogDispatcherWiringService : IHostedService
 {

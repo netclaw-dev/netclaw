@@ -64,12 +64,12 @@ public sealed class RoutingChatClient : IChatClient
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !isLast)
             {
                 EmitFailover(ex);
-                LogWithSession(LogLevel.Warning, ex, "LLM provider failed, failing over to next candidate");
+                LogWithSession(LogLevel.Warning, ex, "LLM provider failed, failing over to next candidate", options);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 EmitUnreachable(ex, candidates.Count);
-                LogWithSession(LogLevel.Error, ex, UnreachableMessage(candidates.Count));
+                LogWithSession(LogLevel.Error, ex, UnreachableMessage(candidates.Count), options);
                 throw;
             }
         }
@@ -137,12 +137,12 @@ public sealed class RoutingChatClient : IChatClient
             if (isLast)
             {
                 EmitUnreachable(failure, candidates.Count);
-                LogWithSession(LogLevel.Error, failure, UnreachableMessage(candidates.Count));
+                LogWithSession(LogLevel.Error, failure, UnreachableMessage(candidates.Count), options);
                 ExceptionDispatchInfo.Capture(failure).Throw();
             }
 
             EmitFailover(failure);
-            LogWithSession(LogLevel.Warning, failure, "LLM provider failed, failing over to next candidate");
+            LogWithSession(LogLevel.Warning, failure, "LLM provider failed, failing over to next candidate", options);
             // outer loop advances to the next candidate
         }
     }
@@ -180,11 +180,12 @@ public sealed class RoutingChatClient : IChatClient
             AlertSeverity.Critical,
             context: new Dictionary<string, string> { ["error"] = ex.Message }));
 
-    // Failover/outage events are logged here, outside any per-pipeline LoggingChatClient
-    // scope, so attach the session id so they correlate by session in Seq.
-    private void LogWithSession(LogLevel level, Exception ex, string message)
+    // Failover/outage events are logged outside any per-pipeline LoggingChatClient
+    // scope, so attach the session id (carried on the call's options) here so they
+    // correlate by session in Seq.
+    private void LogWithSession(LogLevel level, Exception ex, string message, ChatOptions? options)
     {
-        using (SessionLoggingScope.Begin(_logger))
+        using (ChatClientSessionScope.Begin(_logger, options))
             _logger.Log(level, ex, message);
     }
 }

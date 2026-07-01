@@ -110,7 +110,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         _log = Context.GetLogger()
             .WithContext("Adapter", "mattermost")
-            .WithContext("SessionId", _sessionId.Value)
+            .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
             .WithContext("MattermostChannelId", _channelId.Value)
             .WithContext("MattermostRootPostId", _rootPostId.Value);
 

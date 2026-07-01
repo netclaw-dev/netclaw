@@ -101,7 +101,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         _handle = new SessionPipelineHandle(dependencies.Pipeline, Context.GetLogger(), "slack-thread");
         _log = Context.GetLogger()
             .WithContext("Adapter", "slack")
-            .WithContext("SessionId", _sessionId.Value)
+            .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
 

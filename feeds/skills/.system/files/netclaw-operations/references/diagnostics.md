@@ -14,36 +14,55 @@ When something seems wrong with Netclaw itself:
 3. Check daemon logs at `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log`
 4. Check session logs at `~/.netclaw/logs/sessions/{sanitized-session-id}/session.log`
 
-Log split:
+Log split — one stream, partitioned locally by session:
 
-- Daemon-global diagnostics stay in the daemon log (rolled daily, capped
-  at 10 MB per file).
-- Session-owned diagnostics and session output audit trails append to
-  `~/.netclaw/logs/sessions/{sanitized-session-id}/session.log` —
-  one file per session, no rotation today (see netclaw-dev/netclaw#919).
-- Session log directories use the sanitized session ID (`/`, `.`, spaces,
-  etc. replaced with `_`). Sub-agent diagnostics roll up into the parent
-  session's `session.log`; you will not find a separate file for a
-  sub-agent run.
+- A log line that carries a session id (an actor's `WithContext("SessionId", …)`,
+  a `{SessionId}` message field, or a `SessionId` logging scope) is written to that
+  session's `session.log` and **not** to `daemon.log`. The partition is by session
+  id — nothing is duplicated locally.
+- `daemon.log` holds only sessionless, daemon-wide lines: startup/config, session
+  start/stop, and operational **alerts** (e.g. the `provider.unreachable` /
+  `provider.failover` alert raised when an inference provider goes down — surfaced
+  here, and to webhooks, by the notification sink). Note the *per-call* failover/retry
+  log lines emitted while serving a specific session carry that session's id, so they
+  partition into its `session.log`; the daemon-wide outage signal is the alert in
+  `daemon.log`. Rolled daily, capped at 10 MB per file.
+- The **full** stream (daemon and session lines alike) is also exported to OTEL/Seq
+  with the session id as an attribute; do the global slicing/distilling on the OTEL
+  receiver side.
+- Session log directories use the sanitized session ID (`/`, `.`, spaces, etc.
+  replaced with `_`). Each **sub-agent run** writes to its **own** `session.log`,
+  keyed by its sub-session id (`{parentId}/subagent/{name}/{runId}`, sanitized) —
+  so a sub-agent's detail stays out of the parent's log and you review it in that
+  run's own file. The parent's `session.log` keeps the spawn breadcrumbs (requested
+  → spawned → completed/failed) as the pointer to each run. In OTEL the sub-agent
+  lines still carry the parent `SessionId` (so they group under the parent) plus
+  `SubSessionId` (so they slice by run). No rotation today
+  (see netclaw-dev/netclaw#919).
 
 What to expect inside `session.log`:
 
-- A single chronological timeline. One actor (`SessionLogActor`) is the
-  only writer per file, so audit lines and diagnostic lines interleave in
-  wall-clock order — useful for reading "what happened, in order" without
-  cross-referencing two files.
-- Two line shapes: session output audit lines (`User:`, `Assistant:`,
-  `Thinking:`, `Tool call:`, `Tool result:`, `Usage:`, `Turn N completed`,
-  etc.) and `Diagnostic:` lines from MEL providers (LLM client, HTTP,
-  retry middleware) emitted under a session diagnostics scope.
-- Best-effort observability. Individual lines may be dropped on transient
-  IO errors and logged at Debug level in the daemon log; this is not a
-  transactional audit trail. Cross-check the daemon log for warnings
-  if a critical line appears missing.
-- Sidecar paths (compaction, title generation, sub-agents, memory
-  distillation) currently bypass the session diagnostics scope, so their
-  internal diagnostics may not appear in `session.log` even though their
-  output audit lines do. Tracked in netclaw-dev/netclaw#920.
+- The session's **full local slice** of the log stream, in wall-clock order: the
+  conversation audit (`User:`, `Assistant:`, `Thinking:`, `Tool call:`,
+  `Tool result:`, `Usage:`, `Turn N completed`) interleaved with every operational
+  line scoped to that session — the LLM pipeline, retries, provider failover, tool
+  and sub-agent activity (spawn requested → child spawned → completed/failed, plus
+  guard rejections), memory, etc. One actor (`SessionLogActor`) is the only writer
+  per file.
+- Because the partition is by session id, you usually do **not** need to grep — open
+  the one file for the session and read top to bottom. To correlate across sessions
+  or globally, use Seq/OTLP (every line is there with `SessionId` as a field).
+- The session-log writer's own failure lines are the one exception: they go to
+  `daemon.log`, never routed back into the file that just failed.
+- Writes are split by kind. The **conversation audit** (User/Assistant/Tool/Usage
+  lines) is flushed **immediately**, so a hard process death cannot drop the audit
+  tail. The higher-volume **diagnostics** are **batched** (flushed on a ~1s cadence),
+  so a recent diagnostic line may lag by up to a second. Individual lines may be
+  dropped on transient IO errors (a warning lands in `daemon.log`).
+
+What stays in `daemon.log`: only sessionless lines — daemon startup/config, session
+lifecycle, and global errors. Debugging one session → read its `session.log`;
+debugging a daemon-wide problem → read `daemon.log`.
 
 | Symptom | Check |
 |---------|-------|

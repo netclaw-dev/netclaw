@@ -117,7 +117,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 : message.EventId.Value;
             var log = _log
                 .WithContext("SlackThreadTs", threadTs.Value)
-                .WithContext("SessionId", sessionId.Value)
+                .WithContext(NetclawLogProperties.SessionId, sessionId.Value)
                 .WithContext("TurnId", turnId)
                 .WithContext("SlackEventId", message.EventId.Value);
 

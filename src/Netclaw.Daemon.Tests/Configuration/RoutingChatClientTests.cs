@@ -6,6 +6,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
@@ -78,6 +79,56 @@ public sealed class RoutingChatClientTests
 
         Assert.Contains(sink.Alerts, a => a.Category == AlertType.ProviderUnreachable);
         Assert.DoesNotContain(sink.Alerts, a => a.Category == AlertType.ProviderFailover);
+    }
+
+    [Fact]
+    public async Task Failover_log_carries_SessionId_scope_from_options()
+    {
+        // Provider failover/outage is logged outside any per-pipeline LoggingChatClient
+        // scope, so RoutingChatClient must attach the session id (from the call options)
+        // itself — otherwise outages are uncorrelatable to the affected session in Seq.
+        var sink = new CapturingSink();
+        var logger = new ScopeCapturingLogger();
+        var primary = new FakeChatClient((_, _, _) => throw new HttpRequestException("primary down"));
+        var fallback = new FakeChatClient((_, _, _) =>
+            Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
+        var client = new RoutingChatClient(
+            new StubRouter([primary, fallback]),
+            new ChatRoutingContext { Role = ModelRole.Main },
+            sink, logger, TimeProvider.System);
+
+        await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
+    }
+
+    [Fact]
+    public async Task Streaming_failover_log_carries_SessionId_scope_from_options()
+    {
+        // Production takes the streaming failover path (StreamingResponseReader), so the
+        // streaming branch — not the non-streaming one above — is the one that must tag
+        // provider-failover/outage warnings with the session id.
+        var sink = new CapturingSink();
+        var logger = new ScopeCapturingLogger();
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) => SingleTextUpdateAsync("fallback", ct));
+        var client = new RoutingChatClient(
+            new StubRouter([primary, fallback]),
+            new ChatRoutingContext { Role = ModelRole.Main },
+            sink, logger, TimeProvider.System);
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")],
+            new SessionScopedChatOptions { SessionId = "ch/thread" },
+            TestContext.Current.CancellationToken))
+        {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
+        }
+
+        Assert.True(logger.HasSessionScope("ch/thread"));
     }
 
     [Fact]
@@ -204,7 +255,7 @@ public sealed class RoutingChatClientTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             await foreach (var _ in Client(sink, primary, fallback).GetStreamingResponseAsync(
-                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: cts.Token)) { }
+                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: cts.Token)) { /* drain the stream so the pipeline runs */ }
         });
 
         Assert.Equal(0, fallbackCalls);

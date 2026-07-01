@@ -116,7 +116,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         _log = Context.GetLogger()
             .WithContext("Adapter", "discord")
-            .WithContext("SessionId", _sessionId.Value)
+            .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
             .WithContext("DiscordChannelId", _channelId.Value)
             .WithContext("DiscordThreadOrMessageId", _threadOrMessageId.Value);
 

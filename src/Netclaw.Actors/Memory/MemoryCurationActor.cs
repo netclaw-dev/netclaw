@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using SessionId = Netclaw.Actors.Protocol.SessionId;
@@ -298,7 +299,6 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         try
         {
             using var cts = new CancellationTokenSource(LlmTimeout);
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
 
             var messages = new List<ChatMessage>
             {
@@ -306,8 +306,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates))
             };
 
-            var options = new ChatOptions
+            // SessionScopedChatOptions carries the session id so this sidecar's chat-client
+            // diagnostics route to the session's session.log and correlate in Seq/OTLP (replaces
+            // the deleted SessionDiagnosticsContext AsyncLocal).
+            var options = new SessionScopedChatOptions
             {
+                SessionId = sessionId.Value,
                 // Headroom for reasoning models: with a tight cap a thinking model
                 // spends the whole budget on hidden reasoning and returns empty
                 // content, silently disabling this LLM tier. Non-reasoning models

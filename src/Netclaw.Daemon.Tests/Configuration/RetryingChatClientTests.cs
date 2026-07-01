@@ -117,6 +117,12 @@ public sealed class RetryingChatClientTests
         Assert.Equal(4, attempts);
     }
 
+    // NOTE: RetryingChatClient deliberately does NOT open its own SessionId scope — it
+    // inherits the enclosing LoggingChatClient scope in the composed pipeline. The retry
+    // warning's session correlation is therefore covered by
+    // PipelineChatClientFactoryTests.Compose_streaming_retry_warning_inherits_SessionId_scope,
+    // which exercises the real composition, not this decorator in isolation.
+
     [Fact]
     public async Task DoesNotRetryNonTransientErrors()
     {

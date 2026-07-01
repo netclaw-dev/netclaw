@@ -67,19 +67,14 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
-        // Session-scoped breadcrumbs: the sub-agent's own actor logs go through
-        // Akka's async logger bridge, where the diagnostics AsyncLocal is gone, so
-        // they never reach session.log. These parent-side lines run synchronously
-        // under the parent session scope, so the spawn lifecycle (request → outcome,
-        // including every early rejection) is always visible in the session transcript.
-        using var diagnosticsScope = SessionDiagnosticsContext.Push(context.SessionId);
-        _logger.LogInformation(
-            "SubAgent [{AgentName}] spawn requested (taskChars={TaskChars})",
-            profile.Name, task.Length);
+        // Parent-side spawn breadcrumbs — each event is fanned out to daemon.log/Seq and
+        // the parent's session.log from one place (see SubAgentSpawnBreadcrumbs), covering
+        // request → outcome plus early rejections that happen before the child even exists.
+        SubAgentSpawnBreadcrumbs.SpawnRequested(_logger, context, profile.Name, task.Length);
 
         if (context.SpawnChildActor is null)
         {
-            _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available", profile.Name);
+            SubAgentSpawnBreadcrumbs.NoSessionContext(_logger, context, profile.Name);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -94,9 +89,7 @@ public sealed class SubAgentSpawner
         var tools = ResolveTools(profile, context);
         if (tools.Count == 0)
         {
-            _logger.LogWarning(
-                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
-                profile.Name);
+            SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
@@ -158,9 +151,7 @@ public sealed class SubAgentSpawner
             // The child actor was never created (session actor ActorOf failed or the
             // spawn ask timed out). Record it to the session transcript before the
             // exception propagates to the tool pipeline.
-            _logger.LogError(
-                ex, "SubAgent [{AgentName}] failed to spawn child actor (runId={RunId})",
-                profile.Name, runId);
+            SubAgentSpawnBreadcrumbs.ChildSpawnFailed(_logger, context, profile.Name, runId, ex);
             // Balance the IsStarted=true notification above: the non-streaming path
             // (activitySink is null) relies solely on OnSubAgentActivity, so without
             // a terminal event the session UI shows a sub-agent stuck in "Started".
@@ -177,9 +168,7 @@ public sealed class SubAgentSpawner
             throw;
         }
 
-        _logger.LogInformation(
-            "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
-            profile.Name, runId);
+        SubAgentSpawnBreadcrumbs.ChildSpawned(_logger, context, profile.Name, runId);
 
         var sw = Stopwatch.StartNew();
         try
@@ -238,9 +227,7 @@ public sealed class SubAgentSpawner
                 Findings = result.Findings
             });
 
-            _logger.LogInformation(
-                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
-                profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
+            SubAgentSpawnBreadcrumbs.Completed(_logger, context, profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
 
             return result with
             {
@@ -265,7 +252,7 @@ public sealed class SubAgentSpawner
                 Duration = sw.Elapsed
             });
 
-            _logger.LogError(ex, "SubAgent [{AgentName}] run failed (runId={RunId})", profile.Name, runId);
+            SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
             return new SubAgentResult
             {
                 Success = false,
@@ -299,12 +286,7 @@ public sealed class SubAgentSpawner
             }
             else
             {
-                // Log at INFO so tool denials are visible in production logs.
-                // Sub-agents without certain tools may be unable to complete
-                // their tasks, and this information is important for debugging.
-                _logger.LogInformation(
-                    "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy",
-                    profile.Name, tool.Name);
+                SubAgentSpawnBreadcrumbs.ToolDenied(_logger, context, profile.Name, tool.Name);
             }
         }
 

@@ -98,6 +98,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private IParentApprovalBridge? _approvalBridge;
     private ChannelWriter<ToolActivityUpdate>? _activitySink;
 
+    // Parent session id (scopeId with the "/subagent/..." suffix stripped) and the full
+    // sub-session scope id. Carried on the sub-agent's ChatOptions so its LLM-pipeline lines
+    // group under the parent in OTEL (SessionId) while the file-logger partitions them into the
+    // sub-agent's own session.log (SubSessionId) — matching the enriched logger's own context.
+    private string? _parentSessionId;
+    private string? _subSessionId;
+
     // Default wait-for-first-delta budget when the spawn message carries none
     // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
     // prefill never collapses to the tighter inter-delta budget — that collapse
@@ -263,15 +270,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
             // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
             // "/subagent/..." suffix to recover the parent. SessionId matches the key the
-            // session/channel actors already use (see SessionLoggingScope), so sub-agent
-            // and parent logs share one filterable attribute; SubSessionId isolates a
-            // single run within that session.
-            var parentSessionId = SessionDiagnosticsContext.NormalizeSessionId(scopeId);
+            // session/channel actors already tag their loggers with, so sub-agent and
+            // parent logs share one filterable attribute (so OTEL groups them under the parent);
+            // SubSessionId isolates a single run and is what the file-logger partitions on, so the
+            // sub-agent's lines land in its OWN session.log rather than the parent's.
+            var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
+            _parentSessionId = parentSessionId;
+            _subSessionId = scopeId;
             var enrichedLog = Context.GetLogger();
             if (!string.IsNullOrWhiteSpace(parentSessionId))
-                enrichedLog = enrichedLog.WithContext("SessionId", parentSessionId);
+                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SessionId, parentSessionId);
             if (!string.IsNullOrWhiteSpace(scopeId))
-                enrichedLog = enrichedLog.WithContext("SubSessionId", scopeId);
+                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SubSessionId, scopeId);
             _log = enrichedLog;
 
             // The run is bounded by a two-phase inactivity watchdog re-armed on
@@ -676,16 +686,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var messages = new List<AiChatMessage>(_history);
         var callId = ++_llmCallId;
 
-        ChatOptions? options = null;
+        // Carry the parent session id (when known) so the chat-client decorators group this
+        // sub-agent's LLM-pipeline lines under the spawning session in OTEL, plus the sub-session
+        // id so the file-logger partitions them into the sub-agent's OWN session.log. Direct/test
+        // callers leave both unset.
+        ChatOptions? options = _parentSessionId is { Length: > 0 } sid
+            ? new SessionScopedChatOptions { SessionId = sid, SubSessionId = _subSessionId }
+            : null;
         if (!forceNoTools && _aiTools.Count > 0)
         {
-            options = new ChatOptions
-            {
-                Tools = [.. _aiTools]
-            };
+            options ??= new ChatOptions();
+            options.Tools = [.. _aiTools];
         }
 
-        var sessionId = _toolExecutionContext.SessionId is null ? (SessionId?)null : new SessionId(_toolExecutionContext.SessionId);
         _log.Info(
             "SubAgent [{AgentName}] LLM call start callId={CallId} iteration={Iteration} messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
             _definition.Name,
@@ -694,7 +707,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
-        _ = InvokeLlmAsync(client, messages, options, sessionId, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
     }
 
     private IReadOnlyList<AITool> ResolveExposedAiTools()
@@ -913,27 +926,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
-        SessionId? sessionId,
         IActorRef self,
         CancellationToken ct)
-        => InvokeLlmAsync(client, messages, options, sessionId, self, callId: 0, ct);
+        => InvokeLlmAsync(client, messages, options, self, callId: 0, ct);
 
     internal static async Task InvokeLlmAsync(
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
-        SessionId? sessionId,
         IActorRef self,
         long callId,
         CancellationToken ct)
     {
         try
         {
-            // Sub-agents share the parent's diagnostics scope: SessionDiagnosticsContext
-            // strips the "/subagent/..." suffix back to the parent id. Null is intentional
-            // for sub-agents that run outside any session.
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId?.Value);
-
             // Use streaming to match the main session path. The non-streaming
             // GetResponseAsync path drops reasoning content for some providers
             // (e.g., Qwen emits <think> blocks that surface as TextReasoningContent

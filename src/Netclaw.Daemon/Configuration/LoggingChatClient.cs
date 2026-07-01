@@ -8,15 +8,19 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
-/// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token
-/// usage, and errors, and tags log lines with the ambient session id. Stateless
-/// and safe to share across sessions. Netclaw issues only streaming requests, so
-/// only the streaming path is instrumented; the inherited non-streaming
-/// pass-through is unused.
+/// Decorates an <see cref="IChatClient"/> with logging for elapsed time, token usage, and
+/// errors. The decorator is session-agnostic but tags each line with the owning
+/// <c>SessionId</c> via a logging scope — read from <see cref="SessionScopedChatOptions"/> on
+/// the call (<see cref="ChatClientSessionScope"/>). The file-logger partitions scoped lines into
+/// that session's <c>session.log</c> (and they carry <c>SessionId</c> as a Seq/OTLP field); a
+/// call with no session scope falls through to <c>daemon.log</c>. Stateless and safe to share
+/// across sessions. Netclaw issues only streaming requests, so only the streaming path is
+/// instrumented; the inherited non-streaming pass-through is unused.
 /// </summary>
 public sealed class LoggingChatClient : DelegatingChatClient
 {
@@ -39,7 +43,9 @@ public sealed class LoggingChatClient : DelegatingChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
     {
-        using var sessionScope = SessionLoggingScope.Begin(_logger);
+        // Tag every line this call emits (prompt summary, timing, token usage, errors)
+        // with the owning session so they correlate in Seq. No-op for sidecar calls.
+        using var sessionScope = ChatClientSessionScope.Begin(_logger, options);
         var messageList = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         LogPromptDiagnostics(messageList, options);
 

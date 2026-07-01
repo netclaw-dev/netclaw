@@ -55,7 +55,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         _hubContext = hubContext;
         _log = Context.GetLogger()
             .WithContext("Adapter", "signalr")
-            .WithContext("SessionId", _sessionId.Value);
+            .WithContext(NetclawLogProperties.SessionId, _sessionId.Value);
         _handle = new SessionPipelineHandle(pipeline, _log, "signalr");
 
         Initializing();

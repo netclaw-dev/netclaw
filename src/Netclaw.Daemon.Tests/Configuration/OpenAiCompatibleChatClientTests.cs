@@ -99,6 +99,35 @@ data: [DONE]
     }
 
     [Fact]
+    public async Task DoesNotLeakSessionId_FromSessionScopedChatOptions_ToWire()
+    {
+        // SessionScopedChatOptions carries the session id as a CLR property, NOT in
+        // AdditionalProperties — which this client forwards verbatim as top-level JSON.
+        // The session id must never appear in the outbound request body.
+        string? body = null;
+        using var handler = new RecordingHandler(req =>
+        {
+            body = req.Content is null ? null : req.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"id\":\"1\",\"model\":\"test\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}", Encoding.UTF8, "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hello")],
+            new Netclaw.Actors.Sessions.SessionScopedChatOptions { SessionId = "C123/167.42" },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.DoesNotContain("SessionId", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("C123/167.42", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CollapsesMultipleSystemMessages_IntoSingleLeadingSystemMessage()
     {
         string? body = null;

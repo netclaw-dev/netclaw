@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -14,14 +15,11 @@ using Xunit;
 namespace Netclaw.Actors.Tests.SubAgents;
 
 /// <summary>
-/// Regression coverage for sub-agent spawn observability. A sub-agent's own actor
-/// logs go through Akka's async logger bridge, where the diagnostics AsyncLocal is
-/// gone, so they never reach the per-session <c>session.log</c>. The spawn lifecycle
-/// is instead recorded by parent-side breadcrumbs that must run while the parent
-/// session scope is active — otherwise a refused or failed spawn is invisible in the
-/// session transcript. These tests assert the scope is active at log time, which is
-/// exactly the condition <c>RollingFileLoggerProvider</c> uses to route a line to
-/// <c>session.log</c>.
+/// Regression coverage for sub-agent spawn observability. Each lifecycle/rejection breadcrumb is
+/// an ordinary structured log call wrapped in a <c>SessionId</c> scope; the file-logger
+/// partitions scoped lines into the spawning session's <c>session.log</c> (routing itself is
+/// covered by <c>RollingFileLoggerPartitionTests</c>). These tests assert the producer side: a
+/// refused or failed spawn still logs its real reason under the session's id, so it is not lost.
 /// </summary>
 public sealed class SubAgentSpawnObservabilityTests : IDisposable
 {
@@ -39,9 +37,9 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public async Task Spawner_missing_session_context_records_breadcrumbs_under_session_scope()
+    public async Task Spawner_missing_session_context_logs_lifecycle_under_session_scope()
     {
-        var logger = new CapturingLogger<SubAgentSpawner>();
+        var logger = new RecordingLogger<SubAgentSpawner>();
         // Only the parent-side breadcrumb path runs before the early return, so the
         // unused collaborators are never dereferenced.
         var spawner = new SubAgentSpawner(
@@ -60,16 +58,19 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             Profile("summarizer"), "do the work", null, context, TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
-        // The spawn attempt and its failure are both visible in the session transcript.
-        Assert.Contains(logger.Entries, e => e.SessionScope == SessionId && e.Message.Contains("spawn requested"));
-        Assert.Contains(logger.Entries, e => e.SessionScope == SessionId && e.Message.Contains("no session context available"));
+        // The spawn attempt and its failure are both logged under the session's id, so the
+        // file-logger routes them to that session's session.log.
+        var requested = Assert.Single(logger.Entries, e => e.Message.Contains("spawn requested", StringComparison.Ordinal));
+        Assert.Equal(SessionId, requested.SessionId);
+        var noContext = Assert.Single(logger.Entries, e => e.Message.Contains("no session context available", StringComparison.Ordinal));
+        Assert.Equal(SessionId, noContext.SessionId);
     }
 
     [Fact]
-    public async Task Tool_refusal_records_real_reason_under_session_scope()
+    public async Task Tool_refusal_logs_real_reason_under_session_scope()
     {
-        var logger = new CapturingLogger<SpawnAgentTool>();
         var registry = new SubAgentDefinitionRegistry();
+        var logger = new RecordingLogger<SpawnAgentTool>();
         var tool = new SpawnAgentTool(registry, spawner: null!, _paths, logger: logger);
 
         // Public audience is refused with a deliberately opaque model-facing string;
@@ -82,12 +83,10 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             TestContext.Current.CancellationToken);
 
         Assert.Equal("Error: This tool is not available.", result);
-        Assert.Contains(
+        var refused = Assert.Single(
             logger.Entries,
-            e => e.Level == LogLevel.Warning
-                 && e.SessionScope == SessionId
-                 && e.Message.Contains("refused")
-                 && e.Message.Contains("Public"));
+            e => e.Message.Contains("refused", StringComparison.Ordinal) && e.Message.Contains("Public", StringComparison.Ordinal));
+        Assert.Equal(SessionId, refused.SessionId);
     }
 
     private static SubAgentProfile Profile(string name) => new()
@@ -99,20 +98,41 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
         Visibility = SubAgentVisibility.UserFacing
     };
 
-    private sealed class CapturingLogger<T> : ILogger<T>
+    // Records each log line with the SessionId on the scope active at emit time, so a test can
+    // assert a specific breadcrumb was logged under the right session.
+    private sealed class RecordingLogger<T> : ILogger<T>
     {
-        public readonly List<(LogLevel Level, string Message, string? SessionScope)> Entries = new();
+        private readonly List<object?> _scopes = [];
+        public List<(string Message, string? SessionId)> Entries { get; } = [];
 
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull
+        {
+            _scopes.Add(state);
+            return new Pop(_scopes);
+        }
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception), SessionDiagnosticsContext.SessionId));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Add((formatter(state, exception), ActiveSessionId()));
+
+        private string? ActiveSessionId()
+        {
+            for (var i = _scopes.Count - 1; i >= 0; i--)
+                if (_scopes[i] is IEnumerable<KeyValuePair<string, object>> kvps)
+                    foreach (var kv in kvps)
+                        if (kv.Key == NetclawLogProperties.SessionId && kv.Value is string s)
+                            return s;
+            return null;
+        }
+
+        private sealed class Pop(List<object?> scopes) : IDisposable
+        {
+            public void Dispose()
+            {
+                if (scopes.Count > 0)
+                    scopes.RemoveAt(scopes.Count - 1);
+            }
+        }
     }
 }

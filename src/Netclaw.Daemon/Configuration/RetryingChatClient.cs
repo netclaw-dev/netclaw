@@ -122,14 +122,23 @@ public sealed class RetryingChatClient : DelegatingChatClient
     private async Task BackoffAsync(Exception ex, int attempt, CancellationToken cancellationToken)
     {
         var delay = _policy.GetDelay(attempt);
-        // Retry is the hottest failure path; tag the warning with the session id (like
-        // the other chat-client decorators) so retry storms correlate by session in Seq.
-        using (SessionLoggingScope.Begin(_logger))
-        {
-            _logger.LogWarning(ex,
-                "LLM call failed (attempt {Attempt}/{Max}), retrying in {Delay:F1}s",
-                attempt + 1, _policy.MaxRetries, delay.TotalSeconds);
-        }
+        // No SessionId scope is opened here: PipelineChatClientFactory.Compose always
+        // wraps this decorator inside LoggingChatClient (guarded by
+        // Compose_puts_Logging_outermost), whose streaming scope stays open for the whole
+        // enumeration that drives this retry loop — so the warning already inherits the
+        // session id. Re-opening an identical scope would be pure duplication.
+        //
+        // CAVEAT — this inheritance holds ONLY on the streaming path. LoggingChatClient
+        // instruments streaming only; its inherited non-streaming GetResponseAsync opens no
+        // scope. Netclaw issues only streaming requests today, so the non-streaming retry
+        // path above is unreachable — but if that ever changes, these retry warnings would
+        // carry no SessionId and the file-logger would route them to daemon.log instead of
+        // the owning session.log (and they'd be uncorrelated in Seq). The fix at that point
+        // is to open a SessionId scope here from `options` (ChatClientSessionScope.Begin),
+        // or to instrument LoggingChatClient.GetResponseAsync. See RetryingChatClientTests.
+        _logger.LogWarning(ex,
+            "LLM call failed (attempt {Attempt}/{Max}), retrying in {Delay:F1}s",
+            attempt + 1, _policy.MaxRetries, delay.TotalSeconds);
 
         await Task.Delay(delay, _timeProvider, cancellationToken);
     }
