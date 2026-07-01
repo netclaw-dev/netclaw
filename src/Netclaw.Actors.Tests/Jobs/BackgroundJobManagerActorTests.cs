@@ -209,6 +209,10 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task StartupReconciliation_DeliversLostNotificationToOwningSession()
     {
+        await GetManager().Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
         var sessionId = new SessionId("lost/notify-session");
         var gatewayProbe = CreateTestProbe("lost-gateway");
         ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref, overwrite: true);
@@ -216,6 +220,11 @@ public class BackgroundJobManagerActorTests : TestKit
         // Pre-populate a "running" job with streamed output on disk, simulating
         // a job that was alive when the daemon went down.
         var orphanId = new BackgroundJobId("lost-notify-1");
+        var logPath = _store.GetOutputLogPath(orphanId);
+        await File.WriteAllTextAsync(
+            logPath, "Server running on http://127.0.0.1:4000/\n",
+            TestContext.Current.CancellationToken);
+
         _store.Save(new BackgroundJobDefinition
         {
             Id = orphanId,
@@ -228,10 +237,6 @@ public class BackgroundJobManagerActorTests : TestKit
             Boundary = TrustBoundary.Personal,
             OriginChannelType = ChannelType.Tui
         });
-        var logPath = _store.GetOutputLogPath(orphanId);
-        await File.WriteAllTextAsync(
-            logPath, "Server running on http://127.0.0.1:4000/\n",
-            TestContext.Current.CancellationToken);
 
         // A fresh manager's PreStart reconciliation marks the orphan Lost and
         // must notify the owning session through the gateway.
@@ -262,6 +267,10 @@ public class BackgroundJobManagerActorTests : TestKit
         // The manager was already created in ConfigureAkka and reconciled on PreStart.
         // Pre-populate a "running" job after startup, then create a second manager
         // to verify reconciliation.
+        await GetManager().Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
         var orphanDef = new BackgroundJobDefinition
         {
             Id = new BackgroundJobId("orphan-123"),
