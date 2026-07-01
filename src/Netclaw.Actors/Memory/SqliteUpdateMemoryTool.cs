@@ -72,6 +72,8 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             {
                 if (!string.IsNullOrEmpty(args.OldText) || args.NewText is not null)
                     return "Error: provide either new_content OR old_text/new_text, not both.";
+                if (string.IsNullOrWhiteSpace(args.NewContent))
+                    return "Error: new_content cannot be empty. To remove a memory, set delete to true.";
 
                 var replaced = await _store.ReplaceDocumentTextAsync(storageId.Value, args.NewContent, ct);
                 if (!replaced)
@@ -92,8 +94,11 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             return $"Memory \"{resolved.WireValue}\" updated.";
         }
 
+        if (args.OldText is not null)
+            return "Error: records do not support old_text/new_text find-and-replace; provide new_text or new_content as the full replacement payload.";
+
         var recordPayload = args.NewContent ?? args.NewText;
-        if (args.OldText is not null || recordPayload is null)
+        if (string.IsNullOrWhiteSpace(recordPayload))
             return "Error: record update requires new_text or new_content as replacement payload.";
 
         var superseded = await _store.SupersedeRecordAsync(storageId.Value, recordPayload, ct);

@@ -621,6 +621,20 @@ public sealed class SQLiteMemoryStore
             return [];
 
         var resolvedIds = await ResolveMemoryHandlesAsync(ids, boundary, audience, ct);
+        return await GetMemoriesByResolvedHandlesAsync(resolvedIds, boundary, audience, ct);
+    }
+
+    /// <summary>
+    /// Hydrates memories from handles that have already been resolved. Callers that run
+    /// <see cref="ResolveMemoryHandlesAsync"/> up front (e.g. to surface per-ID errors) pass
+    /// the result here so the same IDs are not resolved a second time.
+    /// </summary>
+    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByResolvedHandlesAsync(
+        IReadOnlyList<ResolvedMemoryHandle> resolvedIds,
+        string boundary,
+        TrustAudience audience,
+        CancellationToken ct = default)
+    {
         var documents = resolvedIds
             .Where(x => x.Resolved && x.Kind == MemoryKind.Document)
             .Select(x => x.StorageId!.Value.Value)
@@ -632,6 +646,9 @@ public sealed class SQLiteMemoryStore
             .Select(x => x.StorageId!.Value.Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        if (documents.Length == 0 && records.Length == 0)
+            return [];
 
         var output = new List<SQLiteMemoryHydratedItem>();
         var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)

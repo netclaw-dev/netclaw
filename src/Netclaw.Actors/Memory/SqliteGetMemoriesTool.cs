@@ -50,11 +50,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         if (unresolved.Length == resolved.Count)
             return string.Join(Environment.NewLine, unresolved.Select(x => $"Error: {x.Error}"));
 
-        var entries = await _store.GetMemoriesByIdsAsync(
-            resolved.Where(x => x.Resolved).Select(x => x.WireValue).ToArray(),
-            boundary,
-            audience,
-            ct);
+        var entries = await _store.GetMemoriesByResolvedHandlesAsync(resolved, boundary, audience, ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
 

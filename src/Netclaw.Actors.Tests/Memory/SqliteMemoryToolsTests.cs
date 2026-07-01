@@ -389,6 +389,54 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         Assert.Equal("No memories found.", search);
     }
 
+    [Fact]
+    public async Task UpdateMemory_rejects_empty_new_content_without_wiping_document()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreDocumentAsync("doc-guard", "Working preference", "Use short replies.", now);
+
+        var update = new SqliteUpdateMemoryTool(_store);
+        var result = await update.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["id"] = "doc:doc-guard",
+                ["new_content"] = "   "
+            },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var get = new SqliteGetMemoriesTool(_store, _timeProvider);
+        var hydrated = await get.ExecuteAsync(
+            new Dictionary<string, object?> { ["ids"] = "doc:doc-guard" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("new_content cannot be empty", result);
+        Assert.Contains("Use short replies.", hydrated);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_rejects_old_text_for_record_with_specific_error()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreRecordAsync("rec-guard", "Hotel note", "Hilton Easton was recommended.", now);
+
+        var update = new SqliteUpdateMemoryTool(_store);
+        var result = await update.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["id"] = "rec:rec-guard",
+                ["old_text"] = "Hilton",
+                ["new_text"] = "Marriott"
+            },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("records do not support old_text/new_text", result);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
@@ -416,6 +464,35 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
                     Audience: TrustAudience.Team,
                     Sensitivity: MemorySensitivity.Normal.ToWireValue(),
                     RecallMode: MemoryRecallMode.Auto.ToWireValue(),
+                    Confidence: 0.9,
+                    FreshnessAtMs: now,
+                    ExpiresAtMs: null)
+            ],
+            CancellationToken.None);
+    }
+
+    private async Task StoreRecordAsync(string id, string title, string content, long now)
+    {
+        await _store.ApplyCurationBatchAsync(
+            $"cp-{id}",
+            [
+                new SQLiteMemoryCurationOperation(
+                    Kind: MemoryKind.Record.ToWireValue(),
+                    MemoryClass: MemoryClass.Evidence.ToWireValue(),
+                    MemoryId: id,
+                    AnchorCanonicalName: title,
+                    AnchorType: "concept",
+                    Title: title,
+                    Content: content,
+                    AliasesJson: null,
+                    FacetsJson: null,
+                    SlotsJson: null,
+                    Relations: null,
+                    UpdateSemantics: MemoryUpdateSemantics.SupersedeRecord.ToWireValue(),
+                    Boundary: TrustBoundary.TrustedInstanceValue,
+                    Audience: TrustAudience.Team,
+                    Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+                    RecallMode: MemoryRecallMode.Searchable.ToWireValue(),
                     Confidence: 0.9,
                     FreshnessAtMs: now,
                     ExpiresAtMs: null)
