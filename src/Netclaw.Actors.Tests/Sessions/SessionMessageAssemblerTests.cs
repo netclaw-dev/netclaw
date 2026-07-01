@@ -154,6 +154,27 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
+    public void BuildVolatileContextBlock_formats_recall_ids_as_typed_memory_handles()
+    {
+        var input = MakeInput(
+            SeedHistory("hi"),
+            new AutomaticRecallResult(Items:
+            [
+                new AutomaticRecallItem(
+                    Id: new Netclaw.Actors.Memory.MemoryStorageId("doc-auto"),
+                    Title: "auto memory",
+                    Content: "remembered content",
+                    Sensitivity: "normal",
+                    Score: 0.9)
+            ]));
+
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
+
+        Assert.Contains("[doc:doc-auto]", block);
+        Assert.DoesNotContain("[doc-auto]", block);
+    }
+
+    [Fact]
     public void Static_block_contains_session_id_and_attachment_hint()
     {
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, fileReadGranted: true);
@@ -484,7 +505,7 @@ public sealed class SessionMessageAssemblerTests
         return new AutomaticRecallResult(Items: new[]
         {
             new AutomaticRecallItem(
-                Id: "mem/1",
+                Id: new Netclaw.Actors.Memory.MemoryStorageId("mem/1"),
                 Title: "test memory",
                 Content: content,
                 Sensitivity: "public",

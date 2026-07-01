@@ -189,8 +189,8 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             result.Degraded,
             $"[{scenarioId}] recall degraded: {result.DegradeStage}/{result.DegradeReason}");
 
-        var returnedIds = result.Items.Select(i => i.Id).ToArray();
-        var returnedWithScores = string.Join(", ", result.Items.Select(i => $"{i.Id}={i.Score:F3}"));
+        var returnedIds = result.Items.Select(i => i.Id.Value).ToArray();
+        var returnedWithScores = string.Join(", ", result.Items.Select(i => $"{i.Id.Value}={i.Score:F3}"));
 
         foreach (var expected in expectedIds)
         {

@@ -113,7 +113,7 @@ public sealed class DeterministicRetrievalPlanningTests
             ThreadTitle: "Product planning"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.Contains(result.Items, x => x.Id == "doc-textforge-pricing");
+        Assert.Contains(result.Items, x => x.Id.Value == "doc-textforge-pricing");
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public sealed class DeterministicRetrievalPlanningTests
             MaxItems: 3,
             ThreadTitle: "Product planning"), TestContext.Current.CancellationToken);
 
-        var item = Assert.Single(result.Items, x => x.Id == "doc-textforge-pricing-score");
+        var item = Assert.Single(result.Items, x => x.Id.Value == "doc-textforge-pricing-score");
         Assert.True(item.Score > 4.0, $"Expected composite score to exceed raw lexical score, got {item.Score:F2}");
     }
 
@@ -235,7 +235,7 @@ public sealed class DeterministicRetrievalPlanningTests
             MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.Contains(result.Items, x => x.Id == "doc-reelfarm-research");
+        Assert.Contains(result.Items, x => x.Id.Value == "doc-reelfarm-research");
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public sealed class DeterministicRetrievalPlanningTests
             MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.Contains(result.Items, x => x.Id == "doc-company-info");
+        Assert.Contains(result.Items, x => x.Id.Value == "doc-company-info");
     }
 
     [Fact]
@@ -324,6 +324,6 @@ public sealed class DeterministicRetrievalPlanningTests
             ThreadTitle: "General DM"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.Contains(result.Items, x => x.Id == "doc-textforge-business-context");
+        Assert.Contains(result.Items, x => x.Id.Value == "doc-textforge-business-context");
     }
 }

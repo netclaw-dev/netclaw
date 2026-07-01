@@ -102,7 +102,7 @@ internal sealed class SessionRecallManager
         if (_injectedMemoryIds.Count > 0 && resolved.Items.Count > 0)
         {
             var filtered = resolved.Items
-                .Where(i => !_injectedMemoryIds.Contains(i.Id))
+                .Where(i => !_injectedMemoryIds.Contains(i.Id.Value))
                 .ToArray();
 
             if (filtered.Length == 0 && resolved.Items.Count > 0)
@@ -120,7 +120,7 @@ internal sealed class SessionRecallManager
 
         // Track injected IDs for progressive recall across turns
         foreach (var item in resolved.Items)
-            _injectedMemoryIds.Add(item.Id);
+            _injectedMemoryIds.Add(item.Id.Value);
 
         return resolved;
     }

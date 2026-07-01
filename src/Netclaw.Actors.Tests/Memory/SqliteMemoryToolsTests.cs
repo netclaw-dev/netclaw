@@ -276,9 +276,154 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         Assert.DoesNotContain("Security issue", result);
     }
 
+    [Fact]
+    public async Task GetMemories_accepts_legacy_raw_and_typed_storage_ids()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+        await StoreDocumentAsync(
+            "doc-auto",
+            "Auto recalled note",
+            "This came from automatic recall.",
+            now);
+
+        var tool = new SqliteGetMemoriesTool(_store, _timeProvider);
+        var rawResult = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Ids"] = "doc-auto" },
+            PersonalContext(),
+            CancellationToken.None);
+        var typedResult = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Ids"] = "doc:doc-auto" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("Auto recalled note", rawResult);
+        Assert.Contains("doc:doc-auto", rawResult);
+        Assert.Contains("Auto recalled note", typedResult);
+        Assert.Contains("doc:doc-auto", typedResult);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_edits_document_from_typed_recall_id_without_checkpoint_clobber()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreDocumentAsync("doc-edit", "Favorite color", "The user's favorite color is blue.", now);
+
+        var update = new SqliteUpdateMemoryTool(_store);
+        var result = await update.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["id"] = "doc:doc-edit",
+                ["old_text"] = "blue",
+                ["new_text"] = "green"
+            },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var get = new SqliteGetMemoriesTool(_store, _timeProvider);
+        var hydrated = await get.ExecuteAsync(
+            new Dictionary<string, object?> { ["ids"] = "doc:doc-edit" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("updated", result);
+        Assert.Contains("green", hydrated);
+        Assert.DoesNotContain("blue", hydrated);
+        Assert.Equal(0, await _store.GetPendingCheckpointCountAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateMemory_replaces_document_content_from_legacy_raw_id()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreDocumentAsync("doc-replace", "Working preference", "Use short replies.", now);
+
+        var update = new SqliteUpdateMemoryTool(_store);
+        var result = await update.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["id"] = "doc-replace",
+                ["new_content"] = "Use direct replies with command examples when useful."
+            },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var get = new SqliteGetMemoriesTool(_store, _timeProvider);
+        var hydrated = await get.ExecuteAsync(
+            new Dictionary<string, object?> { ["ids"] = "doc:doc-replace" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("updated", result);
+        Assert.Contains("direct replies", hydrated);
+        Assert.DoesNotContain("short replies", hydrated);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_tombstones_document_from_typed_recall_id()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreDocumentAsync("doc-delete", "Delete me", "This memory should be removed from search.", now);
+
+        var update = new SqliteUpdateMemoryTool(_store);
+        var result = await update.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["id"] = "doc:doc-delete",
+                ["delete"] = true
+            },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var find = new SqliteFindMemoriesTool(_store, _timeProvider);
+        var search = await find.ExecuteAsync(
+            new Dictionary<string, object?> { ["query"] = "removed search", ["limit"] = 5 },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("tombstoned", result);
+        Assert.Equal("No memories found.", search);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
     }
+
+    private async Task StoreDocumentAsync(string id, string title, string content, long now)
+    {
+        await _store.ApplyCurationBatchAsync(
+            $"cp-{id}",
+            [
+                new SQLiteMemoryCurationOperation(
+                    Kind: MemoryKind.Document.ToWireValue(),
+                    MemoryClass: MemoryClass.DurableFact.ToWireValue(),
+                    MemoryId: id,
+                    AnchorCanonicalName: title,
+                    AnchorType: "concept",
+                    Title: title,
+                    Content: content,
+                    AliasesJson: null,
+                    FacetsJson: null,
+                    SlotsJson: null,
+                    Relations: null,
+                    UpdateSemantics: MemoryUpdateSemantics.MergeDocument.ToWireValue(),
+                    Boundary: TrustBoundary.TrustedInstanceValue,
+                    Audience: TrustAudience.Team,
+                    Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+                    RecallMode: MemoryRecallMode.Auto.ToWireValue(),
+                    Confidence: 0.9,
+                    FreshnessAtMs: now,
+                    ExpiresAtMs: null)
+            ],
+            CancellationToken.None);
+    }
+
+    private static ToolExecutionContext PersonalContext()
+        => new("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal };
 
 }

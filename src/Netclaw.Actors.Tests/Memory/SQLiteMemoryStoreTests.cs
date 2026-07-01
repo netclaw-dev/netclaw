@@ -242,6 +242,28 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
         Assert.Contains(personalResults, x => x.Id == "doc-personal");
     }
 
+    [Fact]
+    public async Task ResolveMemoryHandleAsync_fails_loudly_when_canonical_handle_is_ambiguous()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var anchor = _store.CreateDefaultAnchor("ambiguous-memory");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await _store.UpsertDocumentAsync(CreateDocument("abc", anchor, "Bare ID", now), TestContext.Current.CancellationToken);
+        await _store.UpsertDocumentAsync(CreateDocument("doc-abc", anchor, "Legacy ID", now), TestContext.Current.CancellationToken);
+
+        var resolved = await _store.ResolveMemoryHandleAsync(
+            "doc:abc",
+            TrustBoundary.TrustedInstanceValue,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(resolved.Resolved);
+        Assert.Contains("ambiguous", resolved.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("doc:abc", resolved.Error);
+        Assert.Contains("doc:doc-abc", resolved.Error);
+    }
+
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
     public async ValueTask DisposeAsync()
@@ -276,4 +298,25 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
         // Best effort cleanup: file handles can remain briefly open on Windows CI.
         // Leaving temp dirs behind is preferable to failing the test run.
     }
+
+    private static SQLiteMemoryDocument CreateDocument(string id, SQLiteMemoryAnchor anchor, string title, long now)
+        => new(
+            DocumentId: id,
+            Anchor: anchor,
+            MemoryClass: MemoryClass.DurableFact.ToWireValue(),
+            Title: title,
+            MarkdownBody: $"Content for {title}.",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: MemoryUpdateSemantics.MergeDocument.ToWireValue(),
+            Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+            RecallMode: MemoryRecallMode.Auto.ToWireValue(),
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now,
+            Boundary: TrustBoundary.TrustedInstanceValue,
+            Audience: TrustAudience.Team.ToWireValue());
 }

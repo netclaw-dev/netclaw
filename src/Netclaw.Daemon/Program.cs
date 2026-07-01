@@ -717,9 +717,7 @@ static void ConfigureDaemonServices(
         toolRegistry.Register(new SqliteFindMemoriesTool(memoryStore));
         toolRegistry.Register(new SqliteGetMemoriesTool(memoryStore));
         toolRegistry.Register(new SqliteStoreMemoryTool(new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
-        toolRegistry.Register(new SqliteUpdateMemoryTool(
-            memoryStore,
-            new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+        toolRegistry.Register(new SqliteUpdateMemoryTool(memoryStore));
     }
 
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);

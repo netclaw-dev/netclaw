@@ -45,7 +45,16 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
         var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
         var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value);
-        var entries = await _store.GetMemoriesByIdsAsync(ids, boundary, audience, ct);
+        var resolved = await _store.ResolveMemoryHandlesAsync(ids, boundary, audience, ct);
+        var unresolved = resolved.Where(x => !x.Resolved).ToArray();
+        if (unresolved.Length == resolved.Count)
+            return string.Join(Environment.NewLine, unresolved.Select(x => $"Error: {x.Error}"));
+
+        var entries = await _store.GetMemoriesByIdsAsync(
+            resolved.Where(x => x.Resolved).Select(x => x.WireValue).ToArray(),
+            boundary,
+            audience,
+            ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
 
@@ -63,6 +72,9 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
             sb.AppendLine(entry.Content);
             sb.AppendLine();
         }
+
+        foreach (var unresolvedId in unresolved)
+            sb.AppendLine($"Error: {unresolvedId.Error}");
 
         _logger.LogInformation("SQLite memory get completed: requested={Requested}, found={Found}", ids.Length, entries.Count);
         return sb.ToString().TrimEnd();

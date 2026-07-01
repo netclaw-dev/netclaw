@@ -58,7 +58,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.Contains(result.Items, i => i.Id == "doc-ops");
+        Assert.Contains(result.Items, i => i.Id.Value == "doc-ops");
         Assert.True(result.Items.Count <= 3);
     }
 
@@ -95,7 +95,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
-        Assert.DoesNotContain(result.Items, i => i.Id == "doc-secret");
+        Assert.DoesNotContain(result.Items, i => i.Id.Value == "doc-secret");
     }
 
     [Fact]

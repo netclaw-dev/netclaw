@@ -108,12 +108,12 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     deterministicItems.Length,
                     rankedCandidates.Length - aboveFloor.Length,
                     minimumCompositeScore,
-                    string.Join("|", deterministicItems.Select(i => $"{i.Id}=score{i.Score:F1}")));
+                    string.Join("|", deterministicItems.Select(i => $"{i.Id.Value}=score{i.Score:F1}")));
 
                 logger.LogDebug(
                     "memory_retrieval_final_detail session={SessionId} items={Items}",
                     request.SessionId,
-                    string.Join("|", deterministicItems.Select(i => $"{i.Id}={i.Title}")));
+                    string.Join("|", deterministicItems.Select(i => $"{i.Id.Value}={i.Title}")));
 
                 return new AutomaticRecallResult(deterministicItems);
             }

@@ -14,15 +14,15 @@ public class MemoryTypedIdTests
     [InlineData("rec:xyz789", MemoryKind.Record, "xyz789")]
     [InlineData("DOC:upper", MemoryKind.Document, "upper")]
     [InlineData("REC:UPPER", MemoryKind.Record, "UPPER")]
-    [InlineData("doc-abc123", MemoryKind.Document, "abc123")]
-    [InlineData("rec-xyz789", MemoryKind.Record, "xyz789")]
-    [InlineData("DOC-upper", MemoryKind.Document, "upper")]
-    [InlineData("REC-UPPER", MemoryKind.Record, "UPPER")]
-    public void Parse_accepts_both_colon_and_dash_prefixes(string raw, MemoryKind expectedKind, string expectedId)
+    [InlineData("doc-abc123", MemoryKind.Document, "doc-abc123")]
+    [InlineData("rec-xyz789", MemoryKind.Record, "rec-xyz789")]
+    [InlineData("DOC-upper", MemoryKind.Document, "DOC-upper")]
+    [InlineData("REC-UPPER", MemoryKind.Record, "REC-UPPER")]
+    public void Parse_accepts_canonical_and_legacy_raw_ids(string raw, MemoryKind expectedKind, string expectedId)
     {
         var parsed = MemoryTypedId.Parse(raw);
         Assert.Equal(expectedKind, parsed.Kind);
-        Assert.Equal(expectedId, parsed.Id);
+        Assert.Equal(expectedId, parsed.Id.Value);
     }
 
     [Fact]
@@ -30,16 +30,13 @@ public class MemoryTypedIdTests
     {
         var parsed = MemoryTypedId.Parse("unknown-abc123");
         Assert.Equal(MemoryKind.Unknown, parsed.Kind);
-        Assert.Equal("unknown-abc123", parsed.Id);
+        Assert.Equal("unknown-abc123", parsed.Id.Value);
     }
 
     [Theory]
-    [InlineData("doc:abc123")]
-    [InlineData("rec:xyz789")]
-    [InlineData("doc-bd5777c5860146aab6a5304310eb20c5")]
-    [InlineData("rec-bd5777c5860146aab6a5304310eb20c5")]
     [InlineData("")]
     [InlineData("no-prefix")]
+    [InlineData("anchor:netclaw")]
     public void Parse_unknown_for_invalid_prefixes(string raw)
     {
         var parsed = MemoryTypedId.Parse(raw);
@@ -69,29 +66,27 @@ public class MemoryTypedIdTests
     public void NewDocumentId_returns_dash_format()
     {
         var id = MemoryTypedId.NewDocumentId();
-        Assert.StartsWith("doc-", id);
-        Assert.Equal(36 + 4, id.Length); // "doc-" + 32-char GUID (with dashes)
+        Assert.StartsWith("doc-", id.Value);
+        Assert.Equal(36, id.Value.Length);
     }
 
     [Fact]
     public void NewRecordId_returns_dash_format()
     {
         var id = MemoryTypedId.NewRecordId();
-        Assert.StartsWith("rec-", id);
-        Assert.Equal(36 + 4, id.Length);
+        Assert.StartsWith("rec-", id.Value);
+        Assert.Equal(36, id.Value.Length);
     }
 
     [Fact]
     public void Round_trip_dash_to_parse_to_wire()
     {
-        // Simulates auto-recall output: agent receives "doc-{guid}"
-        var generated = MemoryTypedId.NewDocumentId(); // e.g. "doc-bd5777c5860146aab6a5304310eb20c5"
-        var parsed = MemoryTypedId.Parse(generated);
-        var wire = parsed.ToWireValue(); // e.g. "doc:bd5777c5860146aab6a5304310eb20c5"
+        var generated = MemoryTypedId.NewDocumentId();
+        var parsed = MemoryTypedId.Parse(generated.Value);
+        var wire = parsed.ToWireValue();
 
         Assert.Equal(MemoryKind.Document, parsed.Kind);
-        Assert.Contains("bd5777c", wire); // ID portion preserved
-        Assert.StartsWith("doc:", wire); // wire uses colon
+        Assert.Equal($"doc:{generated.Value}", wire);
     }
 
     [Fact]
@@ -104,5 +99,23 @@ public class MemoryTypedIdTests
 
         Assert.Equal(MemoryKind.Document, parsed.Kind);
         Assert.Equal("doc:abc123", output);
+    }
+
+    [Fact]
+    public void CandidateStorageIds_include_legacy_prefixed_candidate_for_bare_handle_payload()
+    {
+        var parsed = MemoryTypedId.Parse("doc:abc123");
+        var candidates = parsed.CandidateStorageIds().Select(x => x.Value).ToArray();
+
+        Assert.Equal(["abc123", "doc-abc123"], candidates);
+    }
+
+    [Fact]
+    public void CandidateStorageIds_preserve_legacy_raw_storage_id()
+    {
+        var parsed = MemoryTypedId.Parse("doc-abc123");
+        var candidates = parsed.CandidateStorageIds().Select(x => x.Value).ToArray();
+
+        Assert.Equal(["doc-abc123"], candidates);
     }
 }
