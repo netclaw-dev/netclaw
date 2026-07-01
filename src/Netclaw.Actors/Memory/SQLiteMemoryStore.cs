@@ -750,11 +750,19 @@ public sealed class SQLiteMemoryStore
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
-        // The parsed id is the exact storage key (primary key, unique per table), so a single
+        // Records are append-only: an edit inserts a new row that supersedes the old one and
+        // leaves the old row physically present. Follow the supersede chain to the head (latest)
+        // row so a stable handle the model was given earlier still resolves to the current
+        // content instead of the pre-edit row. Documents edit in place and have no such chain.
+        var storageId = parsed.Kind == MemoryKind.Record
+            ? await ResolveRecordHeadAsync(conn, parsed.Id, ct)
+            : parsed.Id;
+
+        // The resolved id is the exact storage key (primary key, unique per table), so a single
         // visibility-scoped lookup either finds it or it does not — no candidate guessing.
-        var visible = await MemoryIdVisibleAsync(conn, parsed.Kind, parsed.Id, boundary, allowedAudiences, ct);
+        var visible = await MemoryIdVisibleAsync(conn, parsed.Kind, storageId, boundary, allowedAudiences, ct);
         return visible
-            ? ResolvedMemoryHandle.Found(rawId, parsed.Kind, parsed.Id)
+            ? ResolvedMemoryHandle.Found(rawId, parsed.Kind, storageId)
             : ResolvedMemoryHandle.Failed(rawId, parsed.Kind, $"Memory \"{rawId}\" was not found or is not accessible from this session.");
         }, ct);
     }
@@ -1634,6 +1642,33 @@ public sealed class SQLiteMemoryStore
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         await work(conn, ct);
+    }
+
+    /// <summary>
+    /// Walks <c>memory_records.supersedes_record_id</c> forward to the head (latest) row in the
+    /// supersede chain. Returns the input id unchanged when it has not been superseded or does
+    /// not exist. Chains are acyclic (each supersede points at an older row), so the deepest
+    /// reachable row is the head.
+    /// </summary>
+    private static async Task<MemoryStorageId> ResolveRecordHeadAsync(
+        SqliteConnection conn,
+        MemoryStorageId recordId,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            WITH RECURSIVE chain(id, depth) AS (
+                SELECT $id, 0
+                UNION ALL
+                SELECT n.record_id, c.depth + 1
+                FROM memory_records n
+                JOIN chain c ON n.supersedes_record_id = c.id
+            )
+            SELECT id FROM chain ORDER BY depth DESC LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$id", recordId.Value);
+        var head = (string?)await cmd.ExecuteScalarAsync(ct);
+        return string.IsNullOrEmpty(head) ? recordId : new MemoryStorageId(head);
     }
 
     private static async Task<bool> MemoryIdVisibleAsync(

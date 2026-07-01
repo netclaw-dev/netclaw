@@ -441,6 +441,38 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         Assert.Contains("records do not support old_text/new_text", result);
     }
 
+    [Fact]
+    public async Task UpdateMemory_record_edits_stay_readable_via_the_original_handle()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        await StoreRecordAsync("rec-pref", "Coffee order", "The order is a flat white.", now);
+
+        // Records are superseded (append-only), not edited in place. The stable handle the model
+        // holds (rec-pref) must keep resolving to the CURRENT content across successive edits —
+        // walking the supersede chain to the head — not the pre-edit or first-edit row.
+        var update = new SqliteUpdateMemoryTool(_store);
+        await update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "rec-pref", ["new_text"] = "The order is a cortado." },
+            PersonalContext(),
+            CancellationToken.None);
+        var second = await update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "rec-pref", ["new_text"] = "The order is an espresso." },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var get = new SqliteGetMemoriesTool(_store, _timeProvider);
+        var hydrated = await get.ExecuteAsync(
+            new Dictionary<string, object?> { ["ids"] = "rec-pref" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Contains("superseded", second);
+        Assert.Contains("espresso", hydrated);
+        Assert.DoesNotContain("flat white", hydrated);
+        Assert.DoesNotContain("cortado", hydrated);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
