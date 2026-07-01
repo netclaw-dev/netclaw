@@ -25,12 +25,22 @@ internal static class ContextWindowResolution
             return Configured(configuredMain);
         }
 
+        if (status?.Model is { Degraded: true } degradedModel)
+        {
+            return new ModelRuntimeResolution(
+                "(no model - run `netclaw model`)",
+                degradedModel.Provider,
+                0,
+                Degraded: true);
+        }
+
         if (status?.Model is { ContextWindow: > 0 } daemonModel)
         {
             return new ModelRuntimeResolution(
                 daemonModel.ModelId,
                 daemonModel.Provider,
-                daemonModel.ContextWindow);
+                daemonModel.ContextWindow,
+                Degraded: false);
         }
 
         // The daemon was reachable but gave us no usable context window — either an
@@ -49,7 +59,7 @@ internal static class ContextWindowResolution
     }
 
     private static ModelRuntimeResolution Configured(ModelReference configuredMain)
-        => new(configuredMain.ModelId, configuredMain.Provider, configuredMain.ContextWindow!.Value);
+        => new(configuredMain.ModelId, configuredMain.Provider, configuredMain.ContextWindow!.Value, Degraded: false);
 
     private static async Task<DaemonRuntimeStatus.Response?> GetStatusAsync(DaemonApi daemon)
     {
@@ -71,7 +81,8 @@ internal static class ContextWindowResolution
 internal sealed record ModelRuntimeResolution(
     string ModelId,
     string Provider,
-    int ContextWindowTokens);
+    int ContextWindowTokens,
+    bool Degraded);
 
 internal sealed class DaemonUnavailableException : InvalidOperationException
 {

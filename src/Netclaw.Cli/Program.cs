@@ -1985,13 +1985,16 @@ static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, Da
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
-    var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+    var validation = ProviderRuntimeValidation.Evaluate(
+        providers,
+        models,
+        ProviderRuntimeConfiguration.FromConfiguration(configuration));
 
     if (validation.Status != ProviderRuntimeStatus.Valid)
     {
         return new ModelCapabilities
         {
-            ModelId = "(no model — run `netclaw model`)",
+            ModelId = "(no model - run `netclaw model`)",
             ContextWindowTokens = 0,
             CompactionModelId = null,
         };
@@ -2004,6 +2007,6 @@ static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, Da
     {
         ModelId = runtime.ModelId,
         ContextWindowTokens = runtime.ContextWindowTokens,
-        CompactionModelId = models.Compaction?.ModelId,
+        CompactionModelId = runtime.Degraded ? null : models.Compaction?.ModelId,
     };
 }

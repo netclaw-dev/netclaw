@@ -129,6 +129,29 @@ public sealed class ContextWindowResolutionTests
     }
 
     [Fact]
+    public async Task ResolveRuntime_DaemonReportsDegraded_ReturnsSentinelModel()
+    {
+        var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(
+            32_768,
+            modelId: "qwen3:30b",
+            provider: "local-ollama",
+            degraded: true)));
+
+        var result = await ContextWindowResolution.ResolveRuntimeAsync(
+            new ModelReference
+            {
+                Provider = "local-ollama",
+                ModelId = "qwen3:30b",
+                ContextWindow = 32_768,
+            },
+            daemon);
+
+        Assert.True(result.Degraded);
+        Assert.Equal("(no model - run `netclaw model`)", result.ModelId);
+        Assert.Equal(0, result.ContextWindowTokens);
+    }
+
+    [Fact]
     public async Task ResolveRuntime_NoConfig_EmptyStatus_Throws()
     {
         var daemon = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -167,7 +190,8 @@ public sealed class ContextWindowResolutionTests
     private static object BuildStatusResponse(
         int contextWindow,
         string modelId = "qwen3:30b",
-        string provider = "openai-compatible") => new
+        string provider = "openai-compatible",
+        bool degraded = false) => new
     {
         Overall = "healthy",
         Build = new { Version = "1.0.0", CommitHash = "abc123", BuildTimestamp = "2026-01-01T00:00:00Z" },
@@ -181,7 +205,8 @@ public sealed class ContextWindowResolutionTests
             Provider = provider,
             ContextWindow = contextWindow,
             InputModalities = "Text",
-            OutputModalities = "Text"
+            OutputModalities = "Text",
+            Degraded = degraded
         }
     };
 

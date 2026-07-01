@@ -52,6 +52,94 @@ public sealed class ChatClientDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsWarning_WhenProviderExistsButMainModelMissing()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              }
+            }
+            """);
+
+        var check = new ChatClientDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Models:Main missing", result.Message);
+        Assert.DoesNotContain("Real chat client configured", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsWarning_WhenMainModelSectionHasNoProviderOrModel()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Main": { }
+              }
+            }
+            """);
+
+        var check = new ChatClientDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("no model selected", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenReferencedProviderMissingType()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "openrouter": { }
+              },
+              "Models": {
+                "Main": { "Provider": "openrouter", "ModelId": "anthropic/claude-haiku-4" }
+              }
+            }
+            """);
+
+        var check = new ChatClientDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("missing required Type", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenFallbackReferencesUnknownProvider()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "openrouter": { "Type": "openrouter" }
+              },
+              "Models": {
+                "Main": { "Provider": "openrouter", "ModelId": "anthropic/claude-haiku-4" },
+                "Fallback": { "Provider": "missing", "ModelId": "qwen3:30b" }
+              }
+            }
+            """);
+
+        var check = new ChatClientDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Fallback", result.Message);
+        Assert.Contains("missing", result.Message);
+    }
+
+    [Fact]
     public async Task ReturnsWarning_WhenModelReferencesUnknownProvider()
     {
         // Regression: a typo in Models:Main.Provider (e.g. operator typed

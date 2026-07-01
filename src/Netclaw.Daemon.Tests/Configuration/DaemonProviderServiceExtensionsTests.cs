@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
@@ -22,7 +23,10 @@ public sealed class DaemonProviderServiceExtensionsTests
 
         var providers = new Dictionary<string, ProviderEntry>();
         var models = new ModelSelection();
-        var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+        var validation = ProviderRuntimeValidation.Evaluate(
+            providers,
+            models,
+            ProviderRuntimeConfiguration.FromExplicitRoles(providers, main: false, fallback: false, compaction: false));
 
         Assert.Equal(ProviderRuntimeStatus.NoProviderConfigured, validation.Status);
 
@@ -43,7 +47,9 @@ public sealed class DaemonProviderServiceExtensionsTests
 
         var validation = ProviderRuntimeValidation.Evaluate(
             new Dictionary<string, ProviderEntry>(),
-            new ModelSelection());
+            new ModelSelection(),
+            ProviderRuntimeConfiguration.FromExplicitRoles(
+                new Dictionary<string, ProviderEntry>(), main: false, fallback: false, compaction: false));
 
         services.AddDaemonLlmProviders(
             new Dictionary<string, ProviderEntry>(),
@@ -54,6 +60,32 @@ public sealed class DaemonProviderServiceExtensionsTests
 
         // ProviderPluginFactory is only registered on the valid path.
         Assert.Null(sp.GetService<ProviderPluginFactory>());
+    }
+
+    [Fact]
+    public void NoProviderConfigured_KeepsProviderDescriptorsAvailableForRecovery()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddSingleton(new NetclawPaths(Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-provider-tests-{Guid.NewGuid():N}")));
+
+        var validation = ProviderRuntimeValidation.Evaluate(
+            new Dictionary<string, ProviderEntry>(),
+            new ModelSelection(),
+            ProviderRuntimeConfiguration.FromExplicitRoles(
+                new Dictionary<string, ProviderEntry>(), main: false, fallback: false, compaction: false));
+
+        services.AddDaemonLlmProviders(
+            new Dictionary<string, ProviderEntry>(),
+            new ModelSelection(),
+            validation);
+
+        using var sp = services.BuildServiceProvider();
+
+        var registry = sp.GetRequiredService<ProviderDescriptorRegistry>();
+        Assert.Contains("openrouter", registry.KnownTypeKeys);
     }
 
     [Fact]
@@ -75,7 +107,10 @@ public sealed class DaemonProviderServiceExtensionsTests
         {
             Main = new ModelReference { Provider = "ollama-local1", ModelId = "qwen3:30b" },
         };
-        var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+        var validation = ProviderRuntimeValidation.Evaluate(
+            providers,
+            models,
+            ProviderRuntimeConfiguration.FromExplicitRoles(providers, main: true, fallback: false, compaction: false));
 
         services.AddDaemonLlmProviders(providers, models, validation);
 
@@ -95,7 +130,9 @@ public sealed class DaemonProviderServiceExtensionsTests
 
         var validation = ProviderRuntimeValidation.Evaluate(
             new Dictionary<string, ProviderEntry>(),
-            new ModelSelection());
+            new ModelSelection(),
+            ProviderRuntimeConfiguration.FromExplicitRoles(
+                new Dictionary<string, ProviderEntry>(), main: false, fallback: false, compaction: false));
 
         services.AddDaemonLlmProviders(
             new Dictionary<string, ProviderEntry>(),

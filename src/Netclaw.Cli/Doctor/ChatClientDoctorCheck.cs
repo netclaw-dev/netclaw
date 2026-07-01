@@ -33,7 +33,10 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
         // No config file at all → treated the same as "no provider configured".
         var providers = ReadProviders(root);
         var models = ReadModels(root);
-        var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+        var validation = ProviderRuntimeValidation.Evaluate(
+            providers,
+            models,
+            ProviderRuntimeConfiguration.FromJson(root));
 
         return Task.FromResult(validation.Status switch
         {
@@ -82,14 +85,25 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
     private static ModelSelection ReadModels(JsonObject? root)
     {
         var models = new ModelSelection();
-        if (root?["Models"]?["Main"] is not JsonObject main)
+        if (root?["Models"] is not JsonObject modelsObj)
             return models;
 
-        models.Main = new ModelReference
-        {
-            Provider = main["Provider"]?.GetValue<string>() ?? "",
-            ModelId = main["ModelId"]?.GetValue<string>() ?? "",
-        };
+        if (modelsObj["Main"] is JsonObject main)
+            models.Main = ReadModelReference(main);
+
+        if (modelsObj["Fallback"] is JsonObject fallback)
+            models.Fallback = ReadModelReference(fallback);
+
+        if (modelsObj["Compaction"] is JsonObject compaction)
+            models.Compaction = ReadModelReference(compaction);
+
         return models;
     }
+
+    private static ModelReference ReadModelReference(JsonObject model)
+        => new()
+        {
+            Provider = model["Provider"]?.GetValue<string>() ?? "",
+            ModelId = model["ModelId"]?.GetValue<string>() ?? "",
+        };
 }

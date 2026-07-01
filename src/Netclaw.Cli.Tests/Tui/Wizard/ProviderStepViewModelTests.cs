@@ -421,6 +421,18 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void HealthCheckRunner_WarningItemDoesNotCountAsCleanPass()
+    {
+        var items = new List<HealthCheckItem>
+        {
+            new("No provider configured", Passed: true, IsWarning: true),
+        };
+        var runner = new HealthCheckRunner(items, () => { });
+
+        Assert.False(runner.AllPassed);
+    }
+
+    [Fact]
     public async Task ContributeHealthChecks_ProviderSelected_EmitsPassItem()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe)

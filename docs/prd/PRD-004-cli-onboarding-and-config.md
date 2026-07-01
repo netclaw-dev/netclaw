@@ -230,12 +230,14 @@ When trust-context policy is configured, diagnostics SHALL surface:
 `netclaw doctor` SHALL include a **Chat Client** check that reports:
 
 - **pass** — a real provider chat client is configured.
-- **warn** — the No-Op chat client will be active (no valid provider
-  configured); the daemon starts in degraded mode and chat turns return a
-  fixed recovery banner. Remediation references `netclaw model` and editing
-  `netclaw.json`.
+- **warn** — the No-Op chat client will be active because no explicit
+  `Models:Main` provider/model is configured, no providers exist, or Main points
+  to an unconfigured provider. Bound defaults do not count as configuration.
+  The daemon starts in degraded mode and chat turns return a fixed recovery
+  banner. Remediation references `netclaw model` and editing `netclaw.json`.
 - **fail** — provider configuration is malformed (declared provider missing
-  required credentials, schema violation, model points to an unconfigured
+  required credentials or `Type`, schema violation, explicit Fallback/Compaction
+  role is incomplete, or explicit Fallback/Compaction points to an unconfigured
   provider); daemon startup will fail until resolved.
 
 ### CLI-005 Session Operations

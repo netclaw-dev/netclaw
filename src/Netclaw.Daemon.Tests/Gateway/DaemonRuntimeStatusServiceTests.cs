@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using Microsoft.Extensions.AI;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -51,7 +52,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         DaemonConfig? daemonConfig = null,
         NetclawPaths? paths = null,
         McpClientManager? mcpClientManager = null,
-        SQLiteMemoryStore? sqliteMemoryStore = null)
+        SQLiteMemoryStore? sqliteMemoryStore = null,
+        IChatClientProvider? chatClientProvider = null,
+        ProviderRuntimeValidation? providerValidation = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -63,6 +66,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             modelSelection ?? DefaultModelSelection,
             daemonConfig ?? new DaemonConfig(),
             paths ?? CreatePaths(),
+            chatClientProvider ?? new TestChatClientProvider(),
+            providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             mcpClientManager,
             sqliteMemoryStore);
     }
@@ -145,18 +150,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             "model 'Main' references provider 'ollama-local1' which is not configured (available: ollama-local)",
             new[] { "ollama-local" });
 
-        var service = new DaemonRuntimeStatusService(
-            new DaemonStartClock(TimeProvider.System),
-            TimeProvider.System,
-            channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
-            discordOptions: new DiscordChannelOptions { Enabled = false },
-            persistenceOptions: new DaemonPersistenceOptions(),
-            telemetryOptions: Options.Create(new TelemetryOptions()),
-            modelCapabilities: DefaultModelCapabilities,
-            modelSelection: DefaultModelSelection,
-            daemonConfig: new DaemonConfig(),
-            paths: CreatePaths(),
+        var service = CreateService(
             chatClientProvider: noOpProvider,
             providerValidation: validation);
 
@@ -415,5 +409,10 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class TestChatClientProvider : IChatClientProvider
+    {
+        public IChatClient GetClient(ModelRole role) => throw new NotSupportedException();
     }
 }

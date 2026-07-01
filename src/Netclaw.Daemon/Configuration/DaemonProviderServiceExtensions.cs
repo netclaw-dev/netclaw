@@ -31,6 +31,10 @@ public static class DaemonProviderServiceExtensions
         ProviderRuntimeValidation validation,
         RetryPolicy? retryPolicy = null)
     {
+        // Register descriptors/OAuth endpoints even in degraded mode so operators
+        // can recover through provider/model setup flows without restarting first.
+        services.AddLlmProviders();
+
         if (validation.Status == ProviderRuntimeStatus.NoProviderConfigured)
         {
             services.AddSingleton<IChatClientProvider>(sp =>
@@ -58,9 +62,6 @@ public static class DaemonProviderServiceExtensions
                     "Fix the issue in `netclaw.json` and restart the daemon. Run `netclaw doctor` for details."));
             return services;
         }
-
-        // Register plugins and OAuth from Netclaw.Providers
-        services.AddLlmProviders();
 
         // Raw provider client factory (raw client + vendor options per model)
         services.AddSingleton(sp =>

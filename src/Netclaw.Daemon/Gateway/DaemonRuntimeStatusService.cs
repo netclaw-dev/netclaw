@@ -32,11 +32,11 @@ internal sealed class DaemonRuntimeStatusService(
     ModelSelection modelSelection,
     DaemonConfig daemonConfig,
     NetclawPaths paths,
+    IChatClientProvider chatClientProvider,
+    ProviderRuntimeValidation providerValidation,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
-    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null,
-    IChatClientProvider? chatClientProvider = null,
-    ProviderRuntimeValidation? providerValidation = null)
+    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -48,7 +48,7 @@ internal sealed class DaemonRuntimeStatusService(
 
         connectors.AddRange(BuildMcpStatuses());
 
-        var degraded = chatClientProvider?.IsDegraded ?? false;
+        var degraded = chatClientProvider.IsDegraded;
         var overall = ResolveOverallStatus(connectors, degraded);
 
         return new DaemonRuntimeStatus.Response

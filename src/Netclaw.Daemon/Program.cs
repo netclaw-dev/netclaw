@@ -362,7 +362,10 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
-    var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+    var validation = ProviderRuntimeValidation.Evaluate(
+        providers,
+        models,
+        ProviderRuntimeConfiguration.FromConfiguration(configuration));
 
     // The transport RetryingChatClient is the single owner of LLM transient-failure
     // retry, so it uses the configured streaming-retry budget.

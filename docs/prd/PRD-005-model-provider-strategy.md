@@ -128,18 +128,23 @@ based on policy grants.
 ### Degraded startup (No-Op chat client)
 
 If provider/model configuration validation reports **no provider configured**
-(e.g., empty `Providers` section, `Models:Main` references an unconfigured
-provider), daemon startup SHALL succeed in a degraded mode. The host
-registers a No-Op `IChatClient` that returns a fixed banner beginning with
-`"No valid model configuration detected."` and lists the recovery commands
+(e.g., empty `Providers` section, missing or incomplete `Models:Main`, or
+`Models:Main` references an unconfigured provider), daemon startup SHALL
+succeed in a degraded mode. Bound object defaults such as
+`local-ollama/qwen3:30b` SHALL NOT count as explicit operator configuration
+unless `Models:Main:Provider` and `Models:Main:ModelId` are present in config.
+The host registers a No-Op `IChatClient` that returns a fixed banner beginning
+with `"No valid model configuration detected."` and lists the recovery commands
 (`netclaw doctor`, `netclaw model`, edit `netclaw.json`). The No-Op client
 SHALL NOT contact any external service and SHALL NOT emit tool calls.
 
 Malformed provider configuration (declared provider missing required
-credentials, schema violations) remains a **fatal** startup error — only the
-"no provider configured" outcome selects the No-Op fallback. Recovery from
-degraded mode requires a daemon restart; live config swap is out of scope.
-`netclaw doctor` reports the state as a **warn**-level "Chat Client" item.
+credentials or `Type`, schema violations, or explicit `Fallback` / `Compaction`
+roles that are incomplete or reference unconfigured providers) remains a
+**fatal** startup error — only the "no provider configured" outcome selects the
+No-Op fallback. Recovery from degraded mode requires a daemon restart; live
+config swap is out of scope. `netclaw doctor` reports the state as a
+**warn**-level "Chat Client" item.
 
 ## Non-Goals (MVP)
 

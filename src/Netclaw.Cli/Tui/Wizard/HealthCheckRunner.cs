@@ -102,7 +102,7 @@ public sealed class HealthCheckRunner
         get
         {
             lock (Results)
-                return Results.All(h => h.Passed == true);
+                return Results.All(h => h.Passed == true && !h.IsWarning);
         }
     }
 }

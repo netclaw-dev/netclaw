@@ -35,12 +35,15 @@ options instead of adding provider-specific properties to `ProviderEntry`.
 
 ### Degraded mode: No-Op chat client
 
-When Netclaw starts without a valid inference provider/model configuration
-(no `Providers` section, no main model, or `Models:Main` points to a provider
-that is not configured), the daemon launches in **degraded mode** with a No-Op
-chat client. Every chat turn returns a fixed configuration banner beginning with
-`"No valid model configuration detected."` and listing recovery steps:
-`netclaw doctor`, `netclaw model`, or edit `netclaw.json`.
+When Netclaw starts without an explicitly configured main model/provider
+(no `Models:Main`, incomplete `Models:Main`, no `Providers`, or `Models:Main`
+points to a provider that is not configured), the daemon launches in
+**degraded mode** with a No-Op chat client. Bound defaults such as
+`local-ollama/qwen3:30b` do not count as operator configuration unless those
+fields are actually present in config. Every chat turn returns a fixed
+configuration banner beginning with `"No valid model configuration detected."`
+and listing recovery steps: `netclaw doctor`, `netclaw model`, or edit
+`netclaw.json`.
 
 If the operator reports seeing that banner, do not troubleshoot model behavior;
 the daemon has no working provider. Direct them through the recovery steps and
@@ -48,8 +51,9 @@ restart the daemon after the provider/model config is fixed. `netclaw doctor`
 reports the state as a warn-level "Chat Client" item.
 
 Malformed provider configuration, such as a declared provider missing required
-credentials or schema-invalid config, is not degraded mode; it fails startup
-loudly.
+credentials, missing provider `Type`, schema-invalid config, or invalid explicit
+`Fallback` / `Compaction` model references, is not degraded mode; it fails
+startup loudly.
 
 For OpenAI ChatGPT subscription auth, Netclaw persists the OAuth access token,
 refresh token, and ChatGPT account ID returned by the OpenAI ID token. The
