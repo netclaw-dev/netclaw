@@ -423,6 +423,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
                         _pendingCursorTs = ts;
                 }
+
+                QueueProcessingIndicatorRefreshIfActive();
             }
             catch (OperationCanceledException ex)
             {
@@ -1201,6 +1203,20 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         });
     }
 
+    private void QueueProcessingIndicatorRefreshIfActive()
+    {
+        if (!_processingIndicatorActive)
+            return;
+
+        // Slack clears assistant thread status when the app sends a reply; keep
+        // long-running turns visible after Slack-side thread activity while the
+        // session still reports Processing. See SlackProcessingOutputRenderer.
+        _ = RenderProcessingStateAsync(new ProcessingStateOutput(true)
+        {
+            SessionId = _sessionId
+        });
+    }
+
     private async Task RenderProcessingStateRequestAsync(
         ChannelOutputRenderRequest request,
         bool isRequired)
@@ -1530,6 +1546,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
             _log.Info("Posted Slack reply message");
             ChannelTelemetry.For(ChannelType.Slack).RecordReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            QueueProcessingIndicatorRefreshIfActive();
             return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
