@@ -986,7 +986,11 @@ assert_skill_no_activation_general_code() {
 
 # Category 3: Memory Pipeline
 assert_memory_recall_active() {
-    daemon_log_contains 'turn_memory_recall.*degraded=False'
+    # The structured turn_memory_recall event (TurnLog/Akka) no longer lands in the file logs
+    # after the log-stream partition (#1472). Assert on the MEL recall-pipeline signals that do:
+    # a completed retrieval (memory_retrieval_final) with no degrade warning.
+    daemon_log_contains 'memory_retrieval_final' \
+        && ! daemon_log_contains 'memory_recall_degraded'
 }
 
 # Per the netclaw-agent-memory spec, durable user preferences are memory documents,
@@ -1006,7 +1010,11 @@ assert_memory_explicit_store() {
 }
 
 assert_memory_checkpoint_enqueue() {
-    daemon_log_contains 'turn_memory_checkpoint_enqueued' \
+    # turn_memory_checkpoint_enqueued (TurnLog/Akka) no longer lands in the file logs after the
+    # log-stream partition (#1472). A turn-complete checkpoint that was enqueued is proven by the
+    # curation worker processing it (MEL, in daemon.log) — whether the fact is later kept or
+    # dropped. Combined with no explicit memory tool call, this verifies automatic enqueue.
+    daemon_log_contains 'Memory checkpoint curation completed.*trigger=turn-complete' \
         && ! stdout_tool_called 'store_memory' \
         && ! stdout_tool_called 'update_memory'
 }

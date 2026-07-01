@@ -29,7 +29,7 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.31.0" />
+    <PackageVersion Include="Anthropic" Version="12.34.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
@@ -65,7 +65,7 @@
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.3.1" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.1.5" />
-    <PackageVersion Include="Termina" Version="0.15.0-beta1" />
+    <PackageVersion Include="Termina" Version="0.15.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
