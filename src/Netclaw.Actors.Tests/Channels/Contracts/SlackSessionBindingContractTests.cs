@@ -228,6 +228,60 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Inbound_message_refreshes_active_processing_status()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-inbound-refresh");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid }
+        ]);
+        var actor = CreateActorCore(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var status = Assert.Single(_replyClient.Statuses);
+            Assert.Equal("is thinking...", status.Status);
+        }, cancellationToken: ct);
+
+        actor.Tell(CreateInboundMessage("new context while you are working", "user-1"));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.NotEmpty(pipeline.CapturedInputs);
+            Assert.Collection(
+                _replyClient.Statuses,
+                status => Assert.Equal("is thinking...", status.Status),
+                status => Assert.Equal("is thinking...", status.Status));
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Slack_reply_refreshes_active_processing_status()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-post-refresh");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new TextOutput("I found the first result and am still working.") { SessionId = sid }
+        ]);
+
+        CreateActorCore(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.Posts, p => p.Text == "I found the first result and am still working.");
+            Assert.Collection(
+                _replyClient.Statuses,
+                status => Assert.Equal("is thinking...", status.Status),
+                status => Assert.Equal("is thinking...", status.Status));
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
     public async Task Processing_state_output_does_not_block_text_when_renderer_stalls()
     {
         var ct = TestContext.Current.CancellationToken;
