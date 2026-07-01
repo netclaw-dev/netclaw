@@ -211,11 +211,16 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         File.WriteAllText(_paths.NetclawConfigPath, "{}");
 
         var stopStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopCancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseStop = new TaskCompletionSource<DaemonResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationTokenRegistration stopCancellationRegistration = default;
         var deleteCalled = false;
         var vm = Create(
-            (_, _) =>
+            (_, ct) =>
             {
+                stopCancellationRegistration = ct.Register(
+                    static state => ((TaskCompletionSource)state!).TrySetResult(),
+                    stopCancellationObserved);
                 stopStarted.TrySetResult();
                 return releaseStop.Task;
             },
@@ -223,25 +228,25 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         string? route = null;
         SetNavigate(vm, requestedRoute => route = requestedRoute);
 
-        StartFullReset(vm);
-        await stopStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
-
-        using var disposeStarted = new ManualResetEventSlim();
-        var dispose = Task.Run(() =>
+        try
         {
-            disposeStarted.Set();
-            vm.Dispose();
-        }, TestContext.Current.CancellationToken);
-        Assert.True(
-            disposeStarted.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken),
-            "Dispose did not start.");
+            StartFullReset(vm);
+            await stopStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
-        releaseStop.TrySetResult(new DaemonResult(true, "Daemon stopped."));
-        await dispose.WaitAsync(TestContext.Current.CancellationToken);
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+            var dispose = Task.Run(() => vm.Dispose(), TestContext.Current.CancellationToken);
+            await stopCancellationObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Null(route);
-        Assert.False(deleteCalled, "Cancelling during daemon stop must not proceed into deletion.");
+            releaseStop.TrySetResult(new DaemonResult(true, "Daemon stopped."));
+            await dispose.WaitAsync(TestContext.Current.CancellationToken);
+            await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+
+            Assert.Null(route);
+            Assert.False(deleteCalled, "Cancelling during daemon stop must not proceed into deletion.");
+        }
+        finally
+        {
+            stopCancellationRegistration.Dispose();
+        }
     }
 
     [Fact]
