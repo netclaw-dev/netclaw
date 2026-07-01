@@ -9,8 +9,20 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.24.3</VersionPrefix>
-    <VersionSuffix>beta.2</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.24.3-beta.2 — GitHub Enterprise Copilot auth, Slack native processing status, reminder failure visibility
+    <VersionSuffix>beta.3</VersionSuffix>
+    <PackageReleaseNotes>Netclaw v0.24.3-beta.3 — Logging partition by session, Slack thread status refresh, TUI session browser highlight
+
+**Bug Fixes**
+
+* **Fixed Slack active thread status refresh** — Slack interactions now properly refresh processing status during tool loops and buffered message processing. ([#1534](https://github.com/netclaw-dev/netclaw/pull/1534))
+
+* **Fixed TUI session browser selection highlight** — Session browser in the TUI now properly shows selection highlights. ([#1531](https://github.com/netclaw-dev/netclaw/pull/1531))
+
+**Internal**
+
+* **Partitioned logging by session** — Session logs are now partitioned per-session (session.log), daemon.log is sparse, and OTEL captures the union. Removed async local threading for session diagnostics. ([#1472](https://github.com/netclaw-dev/netclaw/pull/1499))
+
+Netclaw v0.24.3-beta.2 — GitHub Enterprise Copilot auth, Slack native processing status, reminder failure visibility
 
 **Features**
 
