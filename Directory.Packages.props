@@ -12,7 +12,7 @@
     <MattermostNetVersion>5.0.0</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.9</MicrosoftAspNetCoreVersion>
-    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
+    <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
