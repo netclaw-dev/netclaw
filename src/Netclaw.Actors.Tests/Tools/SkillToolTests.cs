@@ -466,6 +466,26 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
+    public async Task SkillExecuteResource_ReturnsGenericDenialWhenSkillSyncDisabled()
+    {
+        var tool = CreateExecuteResourceTool(skillSyncConfig: new SkillSyncConfig { Enabled = false });
+        var context = new ToolExecutionContext("signalr/thread-1", Path.Combine(_skillsDir, "session"))
+        {
+            Audience = TrustAudience.Personal
+        };
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "secret-runner",
+                "ResourcePath", "examples/hello.sh"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("Error: This tool is not available.", result);
+        Assert.DoesNotContain("secret-runner", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SkillExecuteResource_RejectsPathTraversal()
     {
         WriteSkill("runner", """
@@ -987,14 +1007,16 @@ public class SkillToolTests : IDisposable
     private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
         => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
 
-    private SkillExecuteResourceTool CreateExecuteResourceTool(ISkillContentScanner? scanner = null)
+    private SkillExecuteResourceTool CreateExecuteResourceTool(
+        ISkillContentScanner? scanner = null,
+        SkillSyncConfig? skillSyncConfig = null)
         => new(
             _registry,
             scanner ?? new NoOpSkillContentScanner(),
             new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
             new ToolPathPolicy([]),
             new ShellCommandPolicy(),
-            new SkillSyncConfig());
+            skillSyncConfig ?? new SkillSyncConfig());
 
     private static SubAgentSpawner CreateSubAgentSpawner()
     {
