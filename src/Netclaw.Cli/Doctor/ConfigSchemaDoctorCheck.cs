@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
+using Netclaw.Cli;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -18,8 +19,8 @@ public sealed class ConfigSchemaDoctorCheck(NetclawPaths paths) : IDoctorCheck
         {
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Config Schema",
-                $"Config file not found at {paths.NetclawConfigPath}.",
-                "Run `netclaw init` to scaffold a baseline config."));
+                CliConfigPreflight.MissingConfigMessage,
+                $"Run `netclaw init` to create {paths.NetclawConfigPath}."));
         }
 
         JsonNode? root;

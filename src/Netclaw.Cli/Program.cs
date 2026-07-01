@@ -327,6 +327,13 @@ static async Task RunAsync(string[] args)
             return;
         }
 
+        var statusPaths = new NetclawPaths();
+        if (CliConfigPreflight.TryWriteMissingConfig(statusPaths, statusAsJson, Console.Out, out var statusExitCode))
+        {
+            Environment.ExitCode = statusExitCode;
+            return;
+        }
+
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
 
@@ -1009,6 +1016,13 @@ static async Task RunAsync(string[] args)
             headlessPrompt = chatPrompt;
             mode = "headless";
         }
+    }
+
+    if (mode is "chat" or "headless"
+        && CliConfigPreflight.TryWriteMissingConfig(new NetclawPaths(), jsonOutput: false, Console.Out, out var chatExitCode))
+    {
+        Environment.ExitCode = chatExitCode;
+        return;
     }
 
     // ── Interactive / headless modes (daemon-backed via SignalR) ──

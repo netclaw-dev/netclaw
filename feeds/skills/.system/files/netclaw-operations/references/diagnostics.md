@@ -14,6 +14,12 @@ When something seems wrong with Netclaw itself:
 3. Check daemon logs at `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log`
 4. Check session logs at `~/.netclaw/logs/sessions/{sanitized-session-id}/session.log`
 
+If `netclaw status` or `netclaw chat` prints `daemon not configured - please run
+netclaw init`, do not troubleshoot daemon reachability or model defaults. The
+install has no `netclaw.json`; run `netclaw init` first. If doctor prints the
+same message in the config-file check, treat it as the same uninitialized-install
+state.
+
 Log split — one stream, partitioned locally by session:
 
 - A log line that carries a session id (an actor's `WithContext("SessionId", …)`,

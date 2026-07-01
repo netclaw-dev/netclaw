@@ -132,9 +132,9 @@ public sealed class ContextWindowResolutionTests
     public async Task ResolveRuntime_DaemonReportsDegraded_ReturnsSentinelModel()
     {
         var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(
-            32_768,
-            modelId: "qwen3:30b",
-            provider: "local-ollama",
+            0,
+            modelId: "",
+            provider: "",
             degraded: true)));
 
         var result = await ContextWindowResolution.ResolveRuntimeAsync(
@@ -148,6 +148,7 @@ public sealed class ContextWindowResolutionTests
 
         Assert.True(result.Degraded);
         Assert.Equal("(no model - run `netclaw model`)", result.ModelId);
+        Assert.Equal("", result.Provider);
         Assert.Equal(0, result.ContextWindowTokens);
     }
 

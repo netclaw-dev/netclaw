@@ -25,11 +25,11 @@ internal static class ContextWindowResolution
             return Configured(configuredMain);
         }
 
-        if (status?.Model is { Degraded: true } degradedModel)
+        if (status?.Model is { Degraded: true })
         {
             return new ModelRuntimeResolution(
                 "(no model - run `netclaw model`)",
-                degradedModel.Provider,
+                string.Empty,
                 0,
                 Degraded: true);
         }

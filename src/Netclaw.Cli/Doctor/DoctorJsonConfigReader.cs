@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
+using Netclaw.Cli;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -37,8 +38,8 @@ internal static class DoctorJsonConfigReader
         {
             return (null, DoctorCheckResult.Warning(
                 "Config File",
-                $"Config file not found at {paths.NetclawConfigPath}.",
-                "Run `netclaw init` to scaffold a baseline config."));
+                CliConfigPreflight.MissingConfigMessage,
+                $"Run `netclaw init` to create {paths.NetclawConfigPath}."));
         }
 
         try

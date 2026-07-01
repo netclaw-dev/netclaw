@@ -127,7 +127,9 @@ Command ownership stays explicit:
 
 - `netclaw chat` — interactive agent prompt. Pure thin client connecting to the
   daemon over SignalR. Renders `SessionOutput` stream, sends `ChannelInput`.
-  Session entity key: `tui/{uuid}`. See TUI-001 wireframes.
+  Session entity key: `tui/{uuid}`. If `netclaw.json` is absent, the command
+  SHALL fail before contacting the daemon with
+  `daemon not configured - please run netclaw init`. See TUI-001 wireframes.
 
 ### TUI-Interactive Commands (Termina, offline)
 
@@ -147,9 +149,14 @@ Command ownership stays explicit:
 
 ### Diagnostics (Plain CLI, offline)
 
+- `netclaw status` — query daemon runtime health when initialized. If
+  `netclaw.json` is absent, the command SHALL fail before contacting the daemon
+  with `daemon not configured - please run netclaw init`.
 - `netclaw doctor` — validate config files, check daemon reachability, test
   provider connectivity, report system health, and flag unsafe trust-policy
-  combinations such as unrestricted `public` or `team` audience profiles
+  combinations such as unrestricted `public` or `team` audience profiles. If
+  `netclaw.json` is absent, the config-file diagnostic SHALL warn with
+  `daemon not configured - please run netclaw init`.
 
 ### Security and Policy (daemon required)
 

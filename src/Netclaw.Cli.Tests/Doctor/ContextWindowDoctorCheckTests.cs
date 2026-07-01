@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
@@ -33,7 +34,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("Config file not found", result.Message);
+        Assert.Equal(CliConfigPreflight.MissingConfigMessage, result.Message);
     }
 
     [Fact]

@@ -74,12 +74,12 @@ internal sealed class DaemonRuntimeStatusService(
             Telemetry = BuildTelemetry(),
             Model = new DaemonRuntimeStatus.Model
             {
-                ModelId = modelCapabilities.ModelId,
-                DisplayName = ModelIdNormalizer.GetDisplayName(modelCapabilities.ModelId),
-                Provider = modelSelection.Main.Provider,
-                InputModalities = modelCapabilities.InputModalities.ToString(),
-                OutputModalities = modelCapabilities.OutputModalities.ToString(),
-                ContextWindow = modelCapabilities.ContextWindowTokens,
+                ModelId = degraded ? string.Empty : modelCapabilities.ModelId,
+                DisplayName = degraded ? null : ModelIdNormalizer.GetDisplayName(modelCapabilities.ModelId),
+                Provider = degraded ? string.Empty : modelSelection.Main.Provider,
+                InputModalities = degraded ? string.Empty : modelCapabilities.InputModalities.ToString(),
+                OutputModalities = degraded ? string.Empty : modelCapabilities.OutputModalities.ToString(),
+                ContextWindow = degraded ? 0 : modelCapabilities.ContextWindowTokens,
                 Degraded = degraded,
                 DegradedReason = degraded ? providerValidation?.Reason : null,
             },

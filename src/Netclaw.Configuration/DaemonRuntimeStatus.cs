@@ -100,9 +100,9 @@ public static class DaemonRuntimeStatus
         /// <summary>
         /// True when the daemon is serving the No-Op chat client because no
         /// valid inference provider/model configuration is present. When
-        /// <c>true</c>, <see cref="ModelId"/> / <see cref="Provider"/> reflect
-        /// the (broken) operator config rather than a live model; clients
-        /// SHOULD render the degraded state instead of those fields.
+        /// <c>true</c>, <see cref="ModelId"/> / <see cref="Provider"/> are not
+        /// live model identifiers and clients SHOULD render the degraded state
+        /// instead of those fields.
         /// </summary>
         public bool Degraded { get; init; }
 

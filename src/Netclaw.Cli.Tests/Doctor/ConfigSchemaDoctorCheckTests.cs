@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
@@ -22,7 +23,7 @@ public sealed class ConfigSchemaDoctorCheckTests
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("not found", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(CliConfigPreflight.MissingConfigMessage, result.Message);
     }
 
     [Fact]

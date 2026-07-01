@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
@@ -182,6 +183,7 @@ public sealed class ChatClientDoctorCheckTests
         // Missing config short-circuits via DoctorJsonConfigReader and yields its own
         // warning — the chat-client check is not reached.
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Equal(CliConfigPreflight.MissingConfigMessage, result.Message);
     }
 
     private static NetclawPaths CreatePathsWithConfig(string configJson)

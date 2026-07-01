@@ -151,6 +151,17 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             new[] { "ollama-local" });
 
         var service = CreateService(
+            modelCapabilities: new ModelCapabilities
+            {
+                ModelId = "qwen3:30b",
+                InputModalities = ModelModality.Text,
+                OutputModalities = ModelModality.Text,
+                ContextWindowTokens = 32_768
+            },
+            modelSelection: new ModelSelection
+            {
+                Main = new ModelReference { Provider = "local-ollama", ModelId = "qwen3:30b" }
+            },
             chatClientProvider: noOpProvider,
             providerValidation: validation);
 
@@ -158,6 +169,10 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
         Assert.NotNull(status.Model);
         Assert.True(status.Model.Degraded);
+        Assert.Equal("", status.Model.ModelId);
+        Assert.Equal("", status.Model.Provider);
+        Assert.Equal(0, status.Model.ContextWindow);
+        Assert.Null(status.Model.DisplayName);
         Assert.Contains("ollama-local1", status.Model.DegradedReason);
         Assert.Equal("degraded", status.Overall);
     }
