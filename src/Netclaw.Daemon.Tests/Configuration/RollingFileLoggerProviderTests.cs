@@ -12,13 +12,13 @@ namespace Netclaw.Daemon.Tests.Configuration;
 
 public sealed class RollingFileLoggerProviderTests : IDisposable
 {
-    private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-rolling-logger-tests-{Guid.NewGuid():N}");
+    private readonly string _basePath = Path.Join(Path.GetTempPath(), $"netclaw-rolling-logger-tests-{Guid.NewGuid():N}");
 
     [Fact]
     public async Task Writes_log_lines_to_the_daily_rolling_daemon_log()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-07T12:34:56Z"));
-        var daemonLogPath = Path.Combine(_basePath, "logs", "daemon.log");
+        var daemonLogPath = Path.Join(_basePath, "logs", "daemon.log");
         Directory.CreateDirectory(Path.GetDirectoryName(daemonLogPath)!);
 
         // Dispose drains the writer thread, so the line is flushed by the time we read.
@@ -31,7 +31,7 @@ public sealed class RollingFileLoggerProviderTests : IDisposable
         // No dispatcher was attached, so per-session routing is off and even a session-tagged
         // line falls back to daemon.log. (When routing IS attached the {SessionId} line is
         // partitioned to session.log — see RollingFileLoggerPartitionTests.)
-        var daemonLog = Directory.GetFiles(Path.Combine(_basePath, "logs"), "daemon-*.log").Single();
+        var daemonLog = Directory.GetFiles(Path.Join(_basePath, "logs"), "daemon-*.log").Single();
         var text = await File.ReadAllTextAsync(daemonLog, TestContext.Current.CancellationToken);
         Assert.Contains("hello daemon log", text, StringComparison.Ordinal);
         Assert.Contains("Netclaw.Tests", text, StringComparison.Ordinal);

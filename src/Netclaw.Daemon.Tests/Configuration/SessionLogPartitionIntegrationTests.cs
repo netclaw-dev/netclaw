@@ -27,12 +27,12 @@ namespace Netclaw.Daemon.Tests.Configuration;
 /// </summary>
 public sealed class SessionLogPartitionIntegrationTests : TestKit
 {
-    private readonly string _logDir = Path.Combine(Path.GetTempPath(), $"netclaw-logpart-int-{Guid.NewGuid():N}");
+    private readonly string _logDir = Path.Join(Path.GetTempPath(), $"netclaw-logpart-int-{Guid.NewGuid():N}");
     private readonly FakeTimeProvider _time = new(DateTimeOffset.Parse("2026-05-07T12:00:00Z"));
     private RollingFileLoggerProvider _provider = null!;
 
-    private string DaemonPath => Path.Combine(_logDir, "daemon.log");
-    private string SessionsDir => Path.Combine(_logDir, "sessions");
+    private string DaemonPath => Path.Join(_logDir, "daemon.log");
+    private string SessionsDir => Path.Join(_logDir, "sessions");
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {

@@ -125,6 +125,7 @@ public sealed class RoutingChatClientTests
             new SessionScopedChatOptions { SessionId = "ch/thread" },
             TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         Assert.True(logger.HasSessionScope("ch/thread"));
@@ -254,7 +255,7 @@ public sealed class RoutingChatClientTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             await foreach (var _ in Client(sink, primary, fallback).GetStreamingResponseAsync(
-                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: cts.Token)) { }
+                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: cts.Token)) { /* drain the stream so the pipeline runs */ }
         });
 
         Assert.Equal(0, fallbackCalls);

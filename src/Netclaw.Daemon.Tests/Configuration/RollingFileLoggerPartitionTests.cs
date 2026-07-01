@@ -277,9 +277,9 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
 
     private static (string Dir, string DaemonPath) TempPaths()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"netclaw-partition-{Guid.NewGuid():N}");
+        var dir = Path.Join(Path.GetTempPath(), $"netclaw-partition-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
-        return (dir, Path.Combine(dir, "daemon.log"));
+        return (dir, Path.Join(dir, "daemon.log"));
     }
 
     private static string ReadDaemonLog(string dir)

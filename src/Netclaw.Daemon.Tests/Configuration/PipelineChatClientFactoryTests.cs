@@ -72,6 +72,7 @@ public sealed class PipelineChatClientFactoryTests
             new SessionScopedChatOptions { SessionId = "ch/thread" },
             TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         Assert.True(logger.HasSessionScope("ch/thread"));
@@ -99,6 +100,7 @@ public sealed class PipelineChatClientFactoryTests
             new SessionScopedChatOptions { SessionId = "ch/thread" },
             TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         var retryWarning = Assert.Single(

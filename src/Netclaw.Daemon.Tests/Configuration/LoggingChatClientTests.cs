@@ -75,6 +75,7 @@ public sealed class LoggingChatClientTests
                 ]
             }, TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         Assert.Contains(logs, l => l.Contains("LLM prompt summary"));
@@ -107,6 +108,7 @@ public sealed class LoggingChatClientTests
             new SessionScopedChatOptions { SessionId = "ch/thread" },
             TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         Assert.True(logger.HasSessionScope("ch/thread"));
@@ -122,6 +124,7 @@ public sealed class LoggingChatClientTests
         await foreach (var _ in client.GetStreamingResponseAsync(
             [new ChatMessage(ChatRole.User, "hi")], new ChatOptions(), TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
 
         Assert.False(logger.HasAnySessionScope());
@@ -132,6 +135,7 @@ public sealed class LoggingChatClientTests
         await foreach (var _ in client.GetStreamingResponseAsync(
             [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
         {
+            // Drain the stream to completion so the pipeline (scope/retry/logging) runs; updates aren't asserted here.
         }
     }
 
