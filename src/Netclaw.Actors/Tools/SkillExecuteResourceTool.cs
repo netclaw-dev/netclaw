@@ -272,11 +272,35 @@ public sealed partial class SkillExecuteResourceTool : NetclawTool<SkillExecuteR
 
     private static string BuildShellCommand(string interpreter, string stagedPath, string? arguments)
     {
-        var command = string.Concat(interpreter, " ", QuoteShellToken(stagedPath));
+        var renderedPath = RenderPathForInterpreter(interpreter, stagedPath);
+        var command = string.Concat(interpreter, " ", QuoteShellToken(renderedPath));
         if (!string.IsNullOrWhiteSpace(arguments))
             command = string.Concat(command, " ", arguments.Trim());
         return command;
     }
+
+    private static string RenderPathForInterpreter(string interpreter, string stagedPath)
+    {
+        if (!OperatingSystem.IsWindows() || !IsPosixShell(interpreter))
+            return stagedPath;
+
+        var fullPath = Path.GetFullPath(stagedPath);
+        if (fullPath.Length >= 2 && fullPath[1] == ':')
+        {
+            var drive = char.ToLowerInvariant(fullPath[0]);
+            var remainder = fullPath[2..].Replace('\\', '/');
+            if (!remainder.StartsWith("/", StringComparison.Ordinal))
+                remainder = string.Concat("/", remainder);
+
+            return string.Concat("/", drive, remainder);
+        }
+
+        return fullPath.Replace('\\', '/');
+    }
+
+    private static bool IsPosixShell(string interpreter)
+        => interpreter.Equals("bash", StringComparison.Ordinal)
+           || interpreter.Equals("sh", StringComparison.Ordinal);
 
     private static string QuoteShellToken(string value)
     {

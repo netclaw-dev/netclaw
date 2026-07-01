@@ -71,26 +71,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             return "Error: Command references a protected file path. Access denied by security policy.";
 
         var isWindows = OperatingSystem.IsWindows();
-        var psi = new ProcessStartInfo
-        {
-            FileName = isWindows ? "cmd.exe" : "/bin/bash",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        if (isWindows)
-        {
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(args.Command);
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(args.Command);
-        }
+        var psi = CreateShellStartInfo(args.Command, isWindows);
 
         // Resolve working directory in priority order: explicit arg →
         // WorkingContext.ProjectDirectory (declared via set_working_directory)
@@ -309,26 +290,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
 
             var isWindows = OperatingSystem.IsWindows();
-            var psi = new ProcessStartInfo
-            {
-                FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            if (isWindows)
-            {
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add(args.Command);
-            }
-            else
-            {
-                psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add(args.Command);
-            }
+            var psi = CreateShellStartInfo(args.Command, isWindows);
 
             var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
             if (!string.IsNullOrWhiteSpace(resolvedCwd))
@@ -526,6 +488,34 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
         }
+    }
+
+    private static ProcessStartInfo CreateShellStartInfo(string command, bool isWindows)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = isWindows ? "cmd.exe" : "/bin/bash",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        if (isWindows)
+        {
+            // The command string is interpreted by cmd.exe, not by the Windows C
+            // runtime. Passing it through ArgumentList escapes embedded quotes in
+            // a way cmd.exe treats as literal backslashes.
+            psi.Arguments = "/d /c " + command;
+        }
+        else
+        {
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(command);
+        }
+
+        return psi;
     }
 
     // Retained for compatibility with tests/benchmark that call it directly; the
