@@ -243,25 +243,28 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ResolveMemoryHandleAsync_fails_loudly_when_canonical_handle_is_ambiguous()
+    public async Task ResolveMemoryHandleAsync_maps_each_id_form_to_its_exact_storage_key()
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = _store.CreateDefaultAnchor("ambiguous-memory");
+        var anchor = _store.CreateDefaultAnchor("distinct-memory");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        // Two distinct rows whose keys differ only by the legacy prefix. Because the parsed id is
+        // used as the exact primary key, each id form resolves to exactly one row — no ambiguity.
         await _store.UpsertDocumentAsync(CreateDocument("abc", anchor, "Bare ID", now), TestContext.Current.CancellationToken);
         await _store.UpsertDocumentAsync(CreateDocument("doc-abc", anchor, "Legacy ID", now), TestContext.Current.CancellationToken);
 
-        var resolved = await _store.ResolveMemoryHandleAsync(
-            "doc:abc",
-            TrustBoundary.TrustedInstanceValue,
-            TrustAudience.Personal,
-            TestContext.Current.CancellationToken);
+        var bare = await _store.ResolveMemoryHandleAsync("doc:abc", TrustBoundary.TrustedInstanceValue, TrustAudience.Personal, TestContext.Current.CancellationToken);
+        var dash = await _store.ResolveMemoryHandleAsync("doc-abc", TrustBoundary.TrustedInstanceValue, TrustAudience.Personal, TestContext.Current.CancellationToken);
+        var envelope = await _store.ResolveMemoryHandleAsync("doc:doc-abc", TrustBoundary.TrustedInstanceValue, TrustAudience.Personal, TestContext.Current.CancellationToken);
 
-        Assert.False(resolved.Resolved);
-        Assert.Contains("ambiguous", resolved.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("doc:abc", resolved.Error);
-        Assert.Contains("doc:doc-abc", resolved.Error);
+        Assert.True(bare.Resolved);
+        Assert.Equal("abc", bare.StorageId!.Value.Value);
+        Assert.True(dash.Resolved);
+        Assert.Equal("doc-abc", dash.StorageId!.Value.Value);
+        // The colon envelope over the dash key resolves to the same row as the dash key.
+        Assert.True(envelope.Resolved);
+        Assert.Equal("doc-abc", envelope.StorageId!.Value.Value);
     }
 
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;

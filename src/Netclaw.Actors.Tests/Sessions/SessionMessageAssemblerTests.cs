@@ -154,7 +154,7 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
-    public void BuildVolatileContextBlock_formats_recall_ids_as_typed_memory_handles()
+    public void BuildVolatileContextBlock_emits_storage_id_verbatim()
     {
         var input = MakeInput(
             SeedHistory("hi"),
@@ -170,8 +170,9 @@ public sealed class SessionMessageAssemblerTests
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
 
-        Assert.Contains("[doc:doc-auto]", block);
-        Assert.DoesNotContain("[doc-auto]", block);
+        // The recall block surfaces the storage id verbatim so it round-trips back into the tools.
+        Assert.Contains("[doc-auto]", block);
+        Assert.DoesNotContain("doc:doc-auto", block);
     }
 
     [Fact]

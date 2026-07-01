@@ -754,14 +754,8 @@ public sealed class SQLiteMemoryStore
     {
         var parsed = MemoryTypedId.Parse(rawId);
         if (parsed.Kind is not (MemoryKind.Document or MemoryKind.Record))
-            return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID must be prefixed with doc: or rec:.");
-
-        var candidates = parsed.CandidateStorageIds()
-            .Where(x => !x.IsEmpty)
-            .GroupBy(x => x.Value, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.First())
-            .ToArray();
-        if (candidates.Length == 0)
+            return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID must be prefixed with doc- or rec-.");
+        if (parsed.Id.IsEmpty)
             return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID payload is required.");
 
         var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
@@ -769,22 +763,12 @@ public sealed class SQLiteMemoryStore
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
-        var matches = new List<MemoryStorageId>();
-        foreach (var candidate in candidates)
-        {
-            if (await MemoryIdVisibleAsync(conn, parsed.Kind, candidate, boundary, allowedAudiences, ct))
-                matches.Add(candidate);
-        }
-
-        return matches.Count switch
-        {
-            1 => ResolvedMemoryHandle.Found(rawId, parsed.Kind, matches[0]),
-            0 => ResolvedMemoryHandle.Failed(rawId, parsed.Kind, $"Memory \"{rawId}\" was not found or is not accessible from this session."),
-            _ => ResolvedMemoryHandle.Failed(
-                rawId,
-                parsed.Kind,
-                $"Memory ID \"{rawId}\" is ambiguous. Use one of: {string.Join(", ", matches.Select(x => MemoryTypedId.ToWireValue(parsed.Kind, x)))}.")
-        };
+        // The parsed id is the exact storage key (primary key, unique per table), so a single
+        // visibility-scoped lookup either finds it or it does not — no candidate guessing.
+        var visible = await MemoryIdVisibleAsync(conn, parsed.Kind, parsed.Id, boundary, allowedAudiences, ct);
+        return visible
+            ? ResolvedMemoryHandle.Found(rawId, parsed.Kind, parsed.Id)
+            : ResolvedMemoryHandle.Failed(rawId, parsed.Kind, $"Memory \"{rawId}\" was not found or is not accessible from this session.");
         }, ct);
     }
 
@@ -1931,9 +1915,11 @@ public sealed record ResolvedMemoryHandle(
 {
     public bool Resolved => StorageId is not null && Error is null;
 
-    public string WireValue => StorageId is null
-        ? RawId
-        : MemoryTypedId.ToWireValue(Kind, StorageId.Value);
+    /// <summary>
+    /// The canonical model-facing handle for this memory — its opaque storage id verbatim.
+    /// Falls back to the raw input when resolution failed.
+    /// </summary>
+    public string Handle => StorageId?.Value ?? RawId;
 
     public static ResolvedMemoryHandle Found(string rawId, MemoryKind kind, MemoryStorageId storageId)
         => new(rawId, kind, storageId, null);

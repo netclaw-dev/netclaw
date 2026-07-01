@@ -57,13 +57,10 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         var sb = new StringBuilder();
         foreach (var entry in entries.OrderByDescending(e => e.UpdatedAtMs))
         {
-            var typedId = new MemoryTypedId(
-                MemoryDomainEnumExtensions.TryFromWireValue(entry.Kind, out MemoryKind kind) ? kind : MemoryKind.Document,
-                entry.Id);
             var isStaleEvidence = string.Equals(entry.MemoryClass, MemoryClass.Evidence.ToWireValue(), StringComparison.OrdinalIgnoreCase)
                 && entry.ExpiresAtMs is long expiresAt
                 && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            sb.AppendLine($"━━━ {entry.Title} [{typedId.ToWireValue()}] ━━━");
+            sb.AppendLine($"━━━ {entry.Title} [{entry.Id}] ━━━");
             sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine(entry.Content);
             sb.AppendLine();

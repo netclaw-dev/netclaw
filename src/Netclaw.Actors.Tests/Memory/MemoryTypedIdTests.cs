@@ -44,22 +44,10 @@ public class MemoryTypedIdTests
     }
 
     [Fact]
-    public void ToWireValue_returns_colon_format()
+    public void ToString_returns_storage_id_verbatim()
     {
-        var doc = new MemoryTypedId(MemoryKind.Document, "abc123");
-        var rec = new MemoryTypedId(MemoryKind.Record, "xyz789");
-        var unknown = new MemoryTypedId(MemoryKind.Unknown, "orphan");
-
-        Assert.Equal("doc:abc123", doc.ToWireValue());
-        Assert.Equal("rec:xyz789", rec.ToWireValue());
-        Assert.Equal("orphan", unknown.ToWireValue());
-    }
-
-    [Fact]
-    public void ToString_matches_ToWireValue()
-    {
-        var id = new MemoryTypedId(MemoryKind.Document, "abc123");
-        Assert.Equal("doc:abc123", id.ToString());
+        var id = new MemoryTypedId(MemoryKind.Document, "doc-abc123");
+        Assert.Equal("doc-abc123", id.ToString());
     }
 
     [Fact]
@@ -79,43 +67,27 @@ public class MemoryTypedIdTests
     }
 
     [Fact]
-    public void Round_trip_dash_to_parse_to_wire()
+    public void Generated_storage_id_round_trips_to_the_same_key()
     {
+        // The id we surface to the model is the storage id verbatim; parsing what the model
+        // sends back must yield the exact same primary key.
         var generated = MemoryTypedId.NewDocumentId();
         var parsed = MemoryTypedId.Parse(generated.Value);
-        var wire = parsed.ToWireValue();
 
         Assert.Equal(MemoryKind.Document, parsed.Kind);
-        Assert.Equal($"doc:{generated.Value}", wire);
+        Assert.Equal(generated.Value, parsed.Id.Value);
     }
 
     [Fact]
-    public void Round_trip_wire_to_parse_to_string()
+    public void Legacy_colon_envelope_resolves_to_the_same_key_as_the_dash_id()
     {
-        // Simulates find_memories output: agent receives "doc:{guid}"
-        var wire = "doc:abc123";
-        var parsed = MemoryTypedId.Parse(wire);
-        var output = parsed.ToString();
+        // Both the bare storage id and a legacy "doc:{storageId}" envelope must map to the
+        // one real key — this is what makes the single-lookup resolver unambiguous.
+        var dash = MemoryTypedId.Parse("doc-abc123");
+        var enveloped = MemoryTypedId.Parse("doc:doc-abc123");
 
-        Assert.Equal(MemoryKind.Document, parsed.Kind);
-        Assert.Equal("doc:abc123", output);
-    }
-
-    [Fact]
-    public void CandidateStorageIds_include_legacy_prefixed_candidate_for_bare_handle_payload()
-    {
-        var parsed = MemoryTypedId.Parse("doc:abc123");
-        var candidates = parsed.CandidateStorageIds().Select(x => x.Value).ToArray();
-
-        Assert.Equal(["abc123", "doc-abc123"], candidates);
-    }
-
-    [Fact]
-    public void CandidateStorageIds_preserve_legacy_raw_storage_id()
-    {
-        var parsed = MemoryTypedId.Parse("doc-abc123");
-        var candidates = parsed.CandidateStorageIds().Select(x => x.Value).ToArray();
-
-        Assert.Equal(["doc-abc123"], candidates);
+        Assert.Equal("doc-abc123", dash.Id.Value);
+        Assert.Equal("doc-abc123", enveloped.Id.Value);
+        Assert.Equal(dash.Id.Value, enveloped.Id.Value);
     }
 }

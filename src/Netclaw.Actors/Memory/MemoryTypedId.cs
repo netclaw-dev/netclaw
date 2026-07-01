@@ -13,8 +13,10 @@ public readonly record struct MemoryStorageId(string Value)
 }
 
 /// <summary>
-/// Strongly-typed model-facing memory handle with kind prefix (doc: or rec:).
-/// Storage IDs are opaque and may include legacy doc-/rec- prefixes.
+/// A memory identity: its <see cref="MemoryKind"/> plus its opaque storage id
+/// (the primary key, e.g. "doc-{guid}" / "rec-{guid}"). The storage id IS the
+/// model-facing handle — it is surfaced verbatim and passed back verbatim, so a
+/// value always round-trips to the exact row it came from.
 /// </summary>
 public readonly record struct MemoryTypedId(MemoryKind Kind, MemoryStorageId Id)
 {
@@ -24,28 +26,10 @@ public readonly record struct MemoryTypedId(MemoryKind Kind, MemoryStorageId Id)
     }
 
     /// <summary>
-    /// Formats as the prefixed wire representation: "doc:{id}" or "rec:{id}".
-    /// </summary>
-    public string ToWireValue() => Kind switch
-    {
-        MemoryKind.Document => $"doc:{Id.Value}",
-        MemoryKind.Record => $"rec:{Id.Value}",
-        _ => Id.Value
-    };
-
-    /// <summary>
-    /// Formats a storage ID for model-visible output. Existing storage IDs are
-    /// not rewritten; the kind prefix is added as the tool handle envelope.
-    /// </summary>
-    public static string ToWireValue(MemoryKind kind, string storageId)
-        => new MemoryTypedId(kind, storageId).ToWireValue();
-
-    public static string ToWireValue(MemoryKind kind, MemoryStorageId storageId)
-        => new MemoryTypedId(kind, storageId).ToWireValue();
-
-    /// <summary>
-    /// Parses a model-visible handle like "doc:abc123" or "rec:def456".
-    /// Also accepts legacy raw storage IDs such as "doc-abc123" and "rec-def456".
+    /// Resolves an id supplied by the model to its kind plus exact storage key. Storage ids
+    /// are self-describing via their "doc-"/"rec-" prefix; a legacy "doc:"/"rec:" envelope is
+    /// also accepted and stripped. The remaining string is used as the storage key verbatim —
+    /// it is never rewritten — so there is exactly one key per input and no ambiguity.
     /// Returns <see cref="MemoryKind.Unknown"/> with the raw value when the prefix is unrecognized.
     /// </summary>
     public static MemoryTypedId Parse(string raw)
@@ -62,22 +46,7 @@ public readonly record struct MemoryTypedId(MemoryKind Kind, MemoryStorageId Id)
         return new MemoryTypedId(MemoryKind.Unknown, raw);
     }
 
-    public IReadOnlyList<MemoryStorageId> CandidateStorageIds() => Kind switch
-    {
-        MemoryKind.Document => CandidateStorageIdsFor("doc-"),
-        MemoryKind.Record => CandidateStorageIdsFor("rec-"),
-        _ => [Id]
-    };
-
-    private IReadOnlyList<MemoryStorageId> CandidateStorageIdsFor(string legacyPrefix)
-    {
-        if (Id.Value.StartsWith(legacyPrefix, StringComparison.OrdinalIgnoreCase))
-            return [Id];
-
-        return [Id, new MemoryStorageId(legacyPrefix + Id.Value)];
-    }
-
-    public override string ToString() => ToWireValue();
+    public override string ToString() => Id.Value;
 
     public static string AnchorId(string canonicalName)
         => $"anchor:{canonicalName.Trim().ToLowerInvariant().Replace(' ', '-')}";

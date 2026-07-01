@@ -21,7 +21,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
     private readonly ILogger _logger;
 
     public record Params(
-        [property: Description("Memory ID to update or delete. Use the doc:/rec: ID shown by memory recall, find_memories, or get_memories.")]
+        [property: Description("Memory ID to update or delete. Copy the id shown by memory recall, find_memories, or get_memories verbatim (e.g. doc-… or rec-…).")]
         string Id,
         [property: Description("Text to find in the memory content (required for document edits)")]
         string? OldText = null,
@@ -60,10 +60,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
                 ? await _store.TombstoneDocumentAsync(storageId.Value, ct)
                 : await _store.TombstoneRecordAsync(storageId.Value, ct);
             if (!tombstoned)
-                return $"Memory \"{resolved.WireValue}\" not found.";
+                return $"Memory \"{resolved.Handle}\" not found.";
 
-            _logger.LogInformation("SQLite update_memory tombstoned memory={MemoryId}", resolved.WireValue);
-            return $"Memory \"{resolved.WireValue}\" tombstoned.";
+            _logger.LogInformation("SQLite update_memory tombstoned memory={MemoryId}", resolved.Handle);
+            return $"Memory \"{resolved.Handle}\" tombstoned.";
         }
 
         if (resolved.Kind == MemoryKind.Document)
@@ -77,10 +77,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
 
                 var replaced = await _store.ReplaceDocumentTextAsync(storageId.Value, args.NewContent, ct);
                 if (!replaced)
-                    return $"Edit failed for \"{resolved.WireValue}\". Document missing.";
+                    return $"Edit failed for \"{resolved.Handle}\". Document missing.";
 
-                _logger.LogInformation("SQLite update_memory replaced document memory={MemoryId}", resolved.WireValue);
-                return $"Memory \"{resolved.WireValue}\" updated.";
+                _logger.LogInformation("SQLite update_memory replaced document memory={MemoryId}", resolved.Handle);
+                return $"Memory \"{resolved.Handle}\" updated.";
             }
 
             if (string.IsNullOrEmpty(args.OldText) || args.NewText is null)
@@ -88,10 +88,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
 
             var updated = await _store.UpdateDocumentTextAsync(storageId.Value, args.OldText, args.NewText, ct);
             if (!updated)
-                return $"Edit failed for \"{resolved.WireValue}\". Document missing or old_text not found.";
+                return $"Edit failed for \"{resolved.Handle}\". Document missing or old_text not found.";
 
-            _logger.LogInformation("SQLite update_memory edited document memory={MemoryId}", resolved.WireValue);
-            return $"Memory \"{resolved.WireValue}\" updated.";
+            _logger.LogInformation("SQLite update_memory edited document memory={MemoryId}", resolved.Handle);
+            return $"Memory \"{resolved.Handle}\" updated.";
         }
 
         if (args.OldText is not null)
@@ -103,10 +103,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
 
         var superseded = await _store.SupersedeRecordAsync(storageId.Value, recordPayload, ct);
         if (!superseded)
-            return $"Record \"{resolved.WireValue}\" not found.";
+            return $"Record \"{resolved.Handle}\" not found.";
 
-        _logger.LogInformation("SQLite update_memory superseded record memory={MemoryId}", resolved.WireValue);
-        return $"Record \"{resolved.WireValue}\" superseded.";
+        _logger.LogInformation("SQLite update_memory superseded record memory={MemoryId}", resolved.Handle);
+        return $"Record \"{resolved.Handle}\" superseded.";
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

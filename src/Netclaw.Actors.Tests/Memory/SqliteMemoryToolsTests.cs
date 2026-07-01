@@ -298,10 +298,14 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
             PersonalContext(),
             CancellationToken.None);
 
+        // Both the raw storage id and a legacy doc: envelope are accepted as input, and the
+        // output surfaces the storage id verbatim (no doc: envelope).
         Assert.Contains("Auto recalled note", rawResult);
-        Assert.Contains("doc:doc-auto", rawResult);
+        Assert.Contains("[doc-auto]", rawResult);
+        Assert.DoesNotContain("doc:doc-auto", rawResult);
         Assert.Contains("Auto recalled note", typedResult);
-        Assert.Contains("doc:doc-auto", typedResult);
+        Assert.Contains("[doc-auto]", typedResult);
+        Assert.DoesNotContain("doc:doc-auto", typedResult);
     }
 
     [Fact]

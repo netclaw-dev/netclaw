@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
@@ -278,8 +277,7 @@ public static class SessionMessageAssembler
         sb.AppendLine("mode: automatic");
         foreach (var item in recall.Items)
         {
-            var typedId = MemoryTypedId.Parse(item.Id.Value).ToWireValue();
-            sb.AppendLine($"- {item.Title} [{typedId}] sensitivity={item.Sensitivity} score={item.Score:F2}");
+            sb.AppendLine($"- {item.Title} [{item.Id.Value}] sensitivity={item.Sensitivity} score={item.Score:F2}");
             sb.AppendLine($"  {item.Content}");
         }
         return sb.ToString().TrimEnd();

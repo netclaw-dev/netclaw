@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.6.1"
+  version: "1.6.2"
 ---
 
 # Netclaw Memory
@@ -41,8 +41,8 @@ Both gates must pass for memory to function.
 - Memory is SQLite-backed and cross-session only within the active
   domain/boundary policy envelope.
 - Memory IDs shown by automatic recall, `find_memories`, and `get_memories`
-  are stable handles. Reuse them directly with `get_memories` or
-  `update_memory`; do not rewrite `doc:` / `rec:` prefixes by hand.
+  (e.g. `doc-…` / `rec-…`) are stable, opaque handles. Copy them **verbatim**
+  into `get_memories` or `update_memory` — do not rewrite or reformat them.
 
 ## When to Use Explicit Tools
 
