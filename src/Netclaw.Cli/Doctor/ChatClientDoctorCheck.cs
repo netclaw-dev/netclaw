@@ -82,7 +82,7 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
                 CheckName,
                 $"No-Op chat client will be active ({validation.Reason}). " +
                 "The daemon will start, but chat turns return a configuration banner instead of model output.",
-                "Run `netclaw model` to pick a provider/model interactively, or edit `netclaw.json` and restart the daemon."),
+                BuildNoProviderRemediation(validation.AvailableProviders)),
 
             ProviderRuntimeStatus.Invalid => DoctorCheckResult.Error(
                 CheckName,
@@ -95,6 +95,15 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
                 $"Unexpected validation status: {validation.Status}",
                 "File a bug — this status is not handled by the doctor check."),
         });
+    }
+
+    private static string BuildNoProviderRemediation(IReadOnlyList<string> availableProviders)
+    {
+        return availableProviders.Count == 0
+            ? "Run `netclaw init` to configure a provider and main model. "
+              + "For manual repair, run `netclaw provider add` first, then `netclaw model set main ...`."
+            : "Run `netclaw model` to pick one of the configured providers and a main model, "
+              + "or run `netclaw init` and choose start over to re-run setup.";
     }
 
     private DoctorCheckResult? ValidateProviderReadiness(

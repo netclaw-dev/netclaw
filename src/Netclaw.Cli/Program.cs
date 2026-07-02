@@ -1646,7 +1646,7 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
             Console.WriteLine("model: (none — No-Op chat client active)");
             if (!string.IsNullOrWhiteSpace(model.DegradedReason))
                 Console.WriteLine($"  reason: {model.DegradedReason}");
-            Console.WriteLine("  fix: run `netclaw doctor` for details, then `netclaw model` to configure.");
+            Console.WriteLine("  fix: run `netclaw doctor` for details; use `netclaw init` if no provider is configured.");
         }
         else
         {
@@ -2012,7 +2012,9 @@ static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, Da
     {
         return new ModelCapabilities
         {
-            ModelId = "(no model - run `netclaw model`)",
+            ModelId = validation.AvailableProviders.Count == 0
+                ? "(no model - run `netclaw init`)"
+                : "(no model - run `netclaw model`)",
             ContextWindowTokens = 0,
             CompactionModelId = null,
         };

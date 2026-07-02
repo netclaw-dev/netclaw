@@ -28,8 +28,8 @@ public sealed class ChatClientDoctorCheckTests
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("No-Op chat client", result.Message);
-        Assert.Contains("netclaw model", result.Remediation, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("netclaw.json", result.Remediation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("netclaw init", result.Remediation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("netclaw provider add", result.Remediation, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -79,6 +79,7 @@ public sealed class ChatClientDoctorCheckTests
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Models:Main missing", result.Message);
         Assert.DoesNotContain("Real chat client configured", result.Message);
+        Assert.Contains("netclaw model", result.Remediation, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

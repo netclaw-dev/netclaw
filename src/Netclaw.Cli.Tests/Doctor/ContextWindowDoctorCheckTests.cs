@@ -48,6 +48,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Context window unavailable", result.Message);
         Assert.Contains("Models:Main missing", result.Message);
+        Assert.Contains("netclaw init", result.Remediation, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("32,768", result.Message);
     }
 
@@ -65,7 +66,24 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Context window unavailable", result.Message);
+        Assert.Contains("netclaw init", result.Remediation, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("local-ollama", result.Message);
+    }
+
+    [Fact]
+    public async Task MissingModelWithProvider_ReferencesModelCommand()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama")
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("netclaw model", result.Remediation, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -52,7 +52,7 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
             return DoctorCheckResult.Warning(
                 "Context Window",
                 $"Context window unavailable because inference configuration is not valid: {runtimeValidation.Reason}.",
-                "Run `netclaw model` to pick a provider/model, or edit `netclaw.json` and rerun `netclaw doctor`.");
+                BuildInferenceRemediation(runtimeValidation.AvailableProviders));
         }
 
         if (main is null)
@@ -60,7 +60,7 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
             return DoctorCheckResult.Warning(
                 "Context Window",
                 "No Models.Main section in config. Context window cannot be resolved until a model is selected.",
-                "Run `netclaw model` to pick a provider/model, or add Models.Main to netclaw.json.");
+                "Run `netclaw init` to configure a provider and main model, or add Models.Main to netclaw.json.");
         }
 
         var contextWindow = main["ContextWindow"];
@@ -141,6 +141,13 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
             // value stands and there is nothing to reconcile against.
             return null;
         }
+    }
+
+    private static string BuildInferenceRemediation(IReadOnlyList<string> availableProviders)
+    {
+        return availableProviders.Count == 0
+            ? "Run `netclaw init` to configure a provider and main model, then rerun `netclaw doctor`."
+            : "Run `netclaw model` to pick one of the configured providers and a main model, then rerun `netclaw doctor`.";
     }
 
     private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(

@@ -147,7 +147,7 @@ public sealed class ContextWindowResolutionTests
             daemon);
 
         Assert.True(result.Degraded);
-        Assert.Equal("(no model - run `netclaw model`)", result.ModelId);
+        Assert.Equal("(no model - run `netclaw init`)", result.ModelId);
         Assert.Equal("", result.Provider);
         Assert.Equal(0, result.ContextWindowTokens);
     }

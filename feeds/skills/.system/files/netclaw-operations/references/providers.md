@@ -42,8 +42,11 @@ points to a provider that is not configured), the daemon launches in
 `local-ollama/qwen3:30b` do not count as operator configuration unless those
 fields are actually present in config. Every chat turn returns a fixed
 configuration banner beginning with `"No valid model configuration detected."`
-and listing recovery steps: `netclaw doctor`, `netclaw model`, or edit
-`netclaw.json`.
+and listing recovery steps. If no provider is configured, send the operator
+through `netclaw init`; it configures both a provider and main model. If a
+provider already exists but the main model is missing or points to the wrong
+provider name, use `netclaw model`. Manual repair means editing `netclaw.json`
+/ `secrets.json` and restarting the daemon.
 
 If the operator reports seeing that banner, do not troubleshoot model behavior;
 the daemon has no working provider. Direct them through the recovery steps and

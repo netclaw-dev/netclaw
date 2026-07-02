@@ -64,8 +64,11 @@ public sealed class NoOpChatClient : IChatClient
         sb.Append("Netclaw is running, but no inference provider/model is configured.\n");
         sb.Append("To get chat working:\n\n");
         sb.Append("  1. Run `netclaw doctor` to see what's missing.\n");
-        sb.Append("  2. Run `netclaw model` to pick a provider and model interactively.\n");
-        sb.Append("  3. Or edit `netclaw.json` directly and restart the daemon.");
+        if (availableProviders is { Count: > 0 })
+            sb.Append("  2. Run `netclaw model` to pick one of the configured providers and a model.\n");
+        else
+            sb.Append("  2. Run `netclaw init` to configure both a provider and model.\n");
+        sb.Append("  3. Or repair `netclaw.json` / `secrets.json` manually and restart the daemon.");
 
         if (availableProviders is { Count: > 0 })
         {

@@ -417,7 +417,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
         Assert.True(providerItem.Passed);
         Assert.True(providerItem.IsWarning);
         Assert.Contains("No-Op", providerItem.Label);
-        Assert.Contains("netclaw model", providerItem.Label, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("netclaw init", providerItem.Label, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

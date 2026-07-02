@@ -241,7 +241,9 @@ When trust-context policy is configured, diagnostics SHALL surface:
   `Models:Main` provider/model is configured, no providers exist, or Main points
   to an unconfigured provider. Bound defaults do not count as configuration.
   The daemon starts in degraded mode and chat turns return a fixed recovery
-  banner. Remediation references `netclaw model` and editing `netclaw.json`.
+  banner. Remediation references `netclaw init` for first-time provider/model
+  setup, `netclaw model` when a provider already exists, and manual
+  `netclaw.json` / `secrets.json` repair.
 - **fail** — provider configuration is malformed (declared provider missing
   required credentials or `Type`, schema violation, explicit Fallback/Compaction
   role is incomplete, or explicit Fallback/Compaction points to an unconfigured

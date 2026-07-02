@@ -515,7 +515,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         else
         {
             runner.Add(new HealthCheckItem(
-                "No provider configured — No-Op chat client will be active (run `netclaw model` or edit `netclaw.json`)",
+                "No provider configured — No-Op chat client will be active (run `netclaw init` or edit `netclaw.json`)",
                 Passed: true,
                 IsWarning: true));
         }

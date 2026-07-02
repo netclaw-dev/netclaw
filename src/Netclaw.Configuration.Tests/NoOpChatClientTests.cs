@@ -36,7 +36,7 @@ public sealed class NoOpChatClientTests
 
         var text = response.Text;
         Assert.Contains("netclaw doctor", text);
-        Assert.Contains("netclaw model", text);
+        Assert.Contains("netclaw init", text);
         Assert.Contains("netclaw.json", text);
     }
 
@@ -53,6 +53,7 @@ public sealed class NoOpChatClientTests
         Assert.Contains("Available providers:", response.Text);
         Assert.Contains("openrouter", response.Text);
         Assert.Contains("anthropic", response.Text);
+        Assert.Contains("netclaw model", response.Text);
     }
 
     [Fact]

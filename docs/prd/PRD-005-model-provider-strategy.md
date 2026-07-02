@@ -135,7 +135,8 @@ succeed in a degraded mode. Bound object defaults such as
 unless `Models:Main:Provider` and `Models:Main:ModelId` are present in config.
 The host registers a No-Op `IChatClient` that returns a fixed banner beginning
 with `"No valid model configuration detected."` and lists the recovery commands
-(`netclaw doctor`, `netclaw model`, edit `netclaw.json`). The No-Op client
+(`netclaw doctor`, `netclaw init` for first-time provider/model setup,
+`netclaw model` when a provider already exists, or manual config repair). The No-Op client
 SHALL NOT contact any external service and SHALL NOT emit tool calls.
 
 Malformed provider configuration (declared provider missing required
