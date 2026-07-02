@@ -14,8 +14,8 @@ namespace Netclaw.Actors.Skills;
 /// <summary>
 /// Discovers skills under the skills directory using the AgentSkills.io
 /// directory layout: each skill is a directory containing <c>SKILL.md</c>
-/// with YAML frontmatter. Optional subdirectories (<c>scripts/</c>,
-/// <c>references/</c>, <c>assets/</c>) hold progressive-disclosure resources.
+/// with YAML frontmatter. Additional files under the skill directory are
+/// progressive-disclosure resources.
 /// </summary>
 public static partial class SkillScanner
 {
@@ -27,11 +27,6 @@ public static partial class SkillScanner
     /// The directory name for system skills (synced from CDN, read-only).
     /// </summary>
     public const string SystemCategory = ".system";
-
-    /// <summary>
-    /// Standard subdirectories within a skill directory that contain resources.
-    /// </summary>
-    private static readonly string[] ResourceSubdirectories = ["scripts", "references", "assets"];
 
     [GeneratedRegex(@"^#\s+(.+)$", RegexOptions.Multiline)]
     private static partial Regex HeadingRegex();
@@ -571,7 +566,7 @@ public static partial class SkillScanner
     }
 
     /// <summary>
-    /// Enumerates resource files in standard subdirectories of a skill directory.
+    /// Enumerates non-root resource files under a skill directory.
     /// Returns null if no resources are found.
     /// </summary>
     private static IReadOnlyList<string>? EnumerateResources(string skillDirectory, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
@@ -579,39 +574,32 @@ public static partial class SkillScanner
         List<string>? resources = null;
         var canonicalRoot = PathUtility.Normalize(rootDirectory);
 
-        foreach (var subDirName in ResourceSubdirectories)
+        string[] files;
+        try
         {
-            var subDir = Path.Combine(skillDirectory, subDirName);
-            if (!Directory.Exists(subDir))
+            files = Directory.GetFiles(skillDirectory, "*", SearchOption.AllDirectories);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            issues.Add(new SkillScanIssue(
+                Path: skillDirectory,
+                Kind: SkillScanIssueKind.ResourceEnumerationFailed,
+                Message: $"Failed to enumerate resources: {ex.Message}"));
+            return null;
+        }
+
+        foreach (var file in files.OrderBy(static f => f, StringComparer.Ordinal))
+        {
+            if (PathUtility.AreEquivalentPaths(file, Path.Combine(skillDirectory, SkillFileName)))
                 continue;
 
-            if (ValidateCanonicalPath(subDir, canonicalRoot, issues, $"resource directory '{subDirName}'", allowSymlinks) is null)
+            if (ValidateCanonicalPath(file, canonicalRoot, issues, "resource file", allowSymlinks) is null)
                 return null;
 
-            string[] files;
-            try
-            {
-                files = Directory.GetFiles(subDir, "*", SearchOption.AllDirectories);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                issues.Add(new SkillScanIssue(
-                    Path: subDir,
-                    Kind: SkillScanIssueKind.ResourceEnumerationFailed,
-                    Message: $"Failed to enumerate resources: {ex.Message}"));
-                return null;
-            }
-
-            foreach (var file in files)
-            {
-                if (ValidateCanonicalPath(file, canonicalRoot, issues, "resource file", allowSymlinks) is null)
-                    return null;
-
-                var relativePath = Path.GetRelativePath(skillDirectory, file)
-                    .Replace(Path.DirectorySeparatorChar, '/');
-                resources ??= [];
-                resources.Add(relativePath);
-            }
+            var relativePath = Path.GetRelativePath(skillDirectory, file)
+                .Replace(Path.DirectorySeparatorChar, '/');
+            resources ??= [];
+            resources.Add(relativePath);
         }
 
         return resources;

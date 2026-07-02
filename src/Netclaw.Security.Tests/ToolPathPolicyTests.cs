@@ -176,8 +176,6 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
-            "/home/user/.netclaw/skills/.system",
-            "/home/user/.netclaw/skills/.server-feeds",
         };
         return new ToolPathPolicy(writeDeny, readDeny, shellIndicators);
     }
@@ -257,6 +255,16 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/netclaw.pid"));
         Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/netclaw.lock"));
         Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/cache/restart-manifest.json"));
+    }
+
+    [Theory]
+    [InlineData("bash /home/user/.netclaw/skills/.system/my-skill/tools/check")]
+    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/tools/check")]
+    public void CommandReferencesDeniedPath_allows_synced_skill_resource_execution(string command)
+    {
+        var policy = CreateProductionPolicy();
+
+        Assert.False(policy.CommandReferencesDeniedPath(command));
     }
 
     // Regression: directory-scoped approvals let a user grant a single root

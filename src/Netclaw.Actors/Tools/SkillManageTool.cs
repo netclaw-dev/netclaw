@@ -24,9 +24,6 @@ namespace Netclaw.Actors.Tools;
     Grant = "builtin")]
 public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params>
 {
-    private static readonly HashSet<string> AllowedResourcePrefixes =
-        new(StringComparer.OrdinalIgnoreCase) { "references", "scripts", "assets" };
-
     [GeneratedRegex(@"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
     private static partial Regex ValidNameRegex();
 
@@ -212,9 +209,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var targetPath = skill.FilePath;
         if (!string.IsNullOrWhiteSpace(args.FilePath))
         {
-            var fileError = ValidateResourcePath(args.FilePath);
-            if (fileError is not null) return fileError;
-            targetPath = Path.Combine(skill.SkillDirectory, args.FilePath);
+            if (!SkillResourcePath.TryNormalize(args.FilePath, out var normalizedPath, out var fileError))
+                return SkillResourcePath.FormatManageError(fileError);
+            targetPath = Path.Combine(skill.SkillDirectory, normalizedPath);
         }
 
         if (!File.Exists(targetPath))
@@ -244,7 +241,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         var scanSubject = targetPath == skill.FilePath
             ? name
-            : $"{name}:{args.FilePath}";
+            : $"{name}:{Path.GetRelativePath(skill.SkillDirectory, targetPath).Replace(Path.DirectorySeparatorChar, '/')}";
         var scanResult = await _scanner.ScanAsync(scanSubject, newContent, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
@@ -319,15 +316,15 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var readOnlyError = GuardReadOnly(skill, "write files in");
         if (readOnlyError is not null) return readOnlyError;
 
-        var fileError = ValidateResourcePath(args.FilePath);
-        if (fileError is not null) return fileError;
+        if (!SkillResourcePath.TryNormalize(args.FilePath, out var normalizedPath, out var fileError))
+            return SkillResourcePath.FormatManageError(fileError);
 
-        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
+        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, normalizedPath));
         if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
             return "Resolved path is outside the skill directory.";
 
         var scanResult = await _scanner.ScanAsync(
-            $"{name}:{args.FilePath}",
+            $"{name}:{normalizedPath}",
             args.FileContent,
             ct);
         if (!scanResult.IsAllowed)
@@ -338,7 +335,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         AtomicWrite(fullPath, args.FileContent);
         var rescan = RescanAndUpdateIndex();
 
-        var message = $"File written: {args.FilePath}";
+        var message = $"File written: {normalizedPath}";
         if (scanResult.Verdict == ScanVerdict.Warning)
             message += $" (warning: {scanResult.Reason})";
 
@@ -361,15 +358,15 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var readOnlyError = GuardReadOnly(skill, "remove files from");
         if (readOnlyError is not null) return readOnlyError;
 
-        var fileError = ValidateResourcePath(args.FilePath);
-        if (fileError is not null) return fileError;
+        if (!SkillResourcePath.TryNormalize(args.FilePath, out var normalizedPath, out var fileError))
+            return SkillResourcePath.FormatManageError(fileError);
 
-        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
+        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, normalizedPath));
         if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
             return "Resolved path is outside the skill directory.";
 
         if (!File.Exists(fullPath))
-            return $"File not found: {args.FilePath}";
+            return $"File not found: {normalizedPath}";
 
         File.Delete(fullPath);
 
@@ -381,7 +378,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             Directory.Delete(dir);
         }
 
-        return AppendScanWarnings($"File removed: {args.FilePath}", RescanAndUpdateIndex());
+        return AppendScanWarnings($"File removed: {normalizedPath}", RescanAndUpdateIndex());
     }
 
     // --- Helpers ---
@@ -437,25 +434,6 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         {
             return $"Frontmatter name '{normalizedFrontmatterName}' does not match target skill '{targetName}'.";
         }
-
-        return null;
-    }
-
-    private static string? ValidateResourcePath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return "FilePath is required.";
-
-        if (Path.IsPathRooted(path))
-            return "Absolute paths are not allowed.";
-
-        if (path.Contains("..", StringComparison.Ordinal))
-            return "Path traversal ('..') is not allowed.";
-
-        var normalized = path.Replace('\\', '/');
-        var firstSegment = normalized.Split('/')[0];
-        if (!AllowedResourcePrefixes.Contains(firstSegment))
-            return $"FilePath must start with one of: {string.Join(", ", AllowedResourcePrefixes)}. Got '{firstSegment}'.";
 
         return null;
     }

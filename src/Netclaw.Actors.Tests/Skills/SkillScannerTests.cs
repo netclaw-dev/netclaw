@@ -136,6 +136,7 @@ public class SkillScannerTests : IDisposable
         WriteSkillFile("web-search", "references/flight-pricing.md", "# Flight Pricing");
         WriteSkillFile("web-search", "references/restaurant-search.md", "# Restaurant Search");
         WriteSkillFile("web-search", "scripts/validate.sh", "#!/bin/bash\necho ok");
+        WriteSkillFile("web-search", "tools/check", "#!/bin/bash\necho check");
 
         var result = SkillScanner.Scan(_skillsDir);
 
@@ -145,10 +146,11 @@ public class SkillScannerTests : IDisposable
         Assert.Equal(Path.Combine(_skillsDir, "web-search", "SKILL.md"), result.AcceptedSkills[0].FilePath);
         Assert.Equal(Path.Combine(_skillsDir, "web-search"), result.AcceptedSkills[0].SkillDirectory);
         Assert.NotNull(result.AcceptedSkills[0].ResourcePaths);
-        Assert.Equal(3, result.AcceptedSkills[0].ResourcePaths!.Count);
+        Assert.Equal(4, result.AcceptedSkills[0].ResourcePaths!.Count);
         Assert.Contains("references/flight-pricing.md", result.AcceptedSkills[0].ResourcePaths!);
         Assert.Contains("references/restaurant-search.md", result.AcceptedSkills[0].ResourcePaths!);
         Assert.Contains("scripts/validate.sh", result.AcceptedSkills[0].ResourcePaths!);
+        Assert.Contains("tools/check", result.AcceptedSkills[0].ResourcePaths!);
     }
 
     [Fact]

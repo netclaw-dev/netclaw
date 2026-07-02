@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.IO.Compression;
 using System.Net.Http.Headers;
+using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
@@ -23,6 +25,10 @@ namespace Netclaw.Daemon.Services;
 /// </summary>
 internal sealed class ServerFeedSkillSyncService : BackgroundService
 {
+    private const string ArchiveType = "archive";
+    private const string SkillFileName = "SKILL.md";
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _skillRegistry;
@@ -190,66 +196,81 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
             try
             {
-                var mainContent = await DownloadAndVerifyAsync(
-                    httpClient, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
-                if (mainContent is null)
-                    continue;
-
-                var mainScan = await _scanner.ScanAsync(entry.Name, mainContent, cancellationToken);
-                if (!mainScan.IsAllowed)
+                List<DownloadedSkillFile>? downloadedFiles;
+                if (string.Equals(entry.Type, ArchiveType, StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogWarning(
-                        "Rejected skill '{SkillName}' from feed '{FeedName}': {Reason}",
-                        entry.Name, feed.Name, mainScan.Reason);
-                    continue;
+                    var archiveBytes = await DownloadAndVerifyBytesAsync(
+                        httpClient, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
+                    if (archiveBytes is null)
+                        continue;
+
+                    downloadedFiles = await ExtractArchiveAsync(entry.Name, feed.Name, archiveBytes, cancellationToken);
+                    if (downloadedFiles is null)
+                        continue;
                 }
-
-                var downloadedFiles = new List<DownloadedSkillFile>
+                else
                 {
-                    new("SKILL.md", mainContent)
-                };
+                    var mainContent = await DownloadAndVerifyAsync(
+                        httpClient, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
+                    if (mainContent is null)
+                        continue;
 
-                if (entry.Resources is { Count: > 0 })
-                {
-                    var allFilesOk = true;
-                    foreach (var resource in entry.Resources)
+                    var mainScan = await _scanner.ScanAsync(entry.Name, mainContent, cancellationToken);
+                    if (!mainScan.IsAllowed)
                     {
-                        var normalizedPath = SkillSyncHelpers.ValidateResourcePath(resource.Path);
-                        if (normalizedPath is null)
-                        {
-                            _logger.LogWarning(
-                                "Rejected resource path for '{SkillName}' from feed '{FeedName}': {Path}",
-                                entry.Name, feed.Name, resource.Path);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var resourceDigest = NormalizeDigest(resource.Digest);
-                        var fileContent = await DownloadAndVerifyAsync(
-                            httpClient, resource.Url, resourceDigest,
-                            $"{entry.Name}/{resource.Path}", feed.TimeoutSeconds, cancellationToken);
-                        if (fileContent is null)
-                        {
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var fileScan = await _scanner.ScanAsync(
-                            $"{entry.Name}:{normalizedPath}", fileContent, cancellationToken);
-                        if (!fileScan.IsAllowed)
-                        {
-                            _logger.LogWarning(
-                                "Rejected resource for '{SkillName}' from feed '{FeedName}' at {Path}: {Reason}",
-                                entry.Name, feed.Name, normalizedPath, fileScan.Reason);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        downloadedFiles.Add(new DownloadedSkillFile(normalizedPath, fileContent));
+                        _logger.LogWarning(
+                            "Rejected skill '{SkillName}' from feed '{FeedName}': {Reason}",
+                            entry.Name, feed.Name, mainScan.Reason);
+                        continue;
                     }
 
-                    if (!allFilesOk)
-                        continue;
+                    downloadedFiles = new List<DownloadedSkillFile>
+                    {
+                        new(SkillFileName, mainContent)
+                    };
+
+                    if (entry.Resources is { Count: > 0 })
+                    {
+                        var allFilesOk = true;
+                        foreach (var resource in entry.Resources)
+                        {
+                            var normalizedPath = SkillSyncHelpers.ValidateResourcePath(resource.Path);
+                            if (normalizedPath is null)
+                            {
+                                _logger.LogWarning(
+                                    "Rejected resource path for '{SkillName}' from feed '{FeedName}': {Path}",
+                                    entry.Name, feed.Name, resource.Path);
+                                allFilesOk = false;
+                                break;
+                            }
+
+                            var resourceDigest = NormalizeDigest(resource.Digest);
+                            var fileContent = await DownloadAndVerifyAsync(
+                                httpClient, resource.Url, resourceDigest,
+                                $"{entry.Name}/{resource.Path}", feed.TimeoutSeconds, cancellationToken);
+                            if (fileContent is null)
+                            {
+                                allFilesOk = false;
+                                break;
+                            }
+
+                            var fileScan = await _scanner.ScanAsync(
+                                $"{entry.Name}:{normalizedPath}", fileContent, cancellationToken);
+                            if (!fileScan.IsAllowed)
+                            {
+                                _logger.LogWarning(
+                                    "Rejected resource for '{SkillName}' from feed '{FeedName}' at {Path}: {Reason}",
+                                    entry.Name, feed.Name, normalizedPath, fileScan.Reason);
+                                allFilesOk = false;
+                                break;
+                            }
+
+                            downloadedFiles.Add(new DownloadedSkillFile(normalizedPath, fileContent));
+                        }
+
+                        if (!allFilesOk)
+                            continue;
+                    }
                 }
 
                 await SkillSyncHelpers.ReplaceSkillDirectoryAsync(
@@ -308,12 +329,32 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         HttpClient httpClient, string url, string expectedSha256Hex, string label,
         int timeoutSeconds, CancellationToken cancellationToken)
     {
+        var contentBytes = await DownloadAndVerifyBytesAsync(
+            httpClient, url, expectedSha256Hex, label, timeoutSeconds, cancellationToken);
+        if (contentBytes is null)
+            return null;
+
+        try
+        {
+            return StrictUtf8.GetString(contentBytes);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            _logger.LogWarning("Downloaded content for {Label} is not valid UTF-8: {Message}", label, ex.Message);
+            return null;
+        }
+    }
+
+    private async Task<byte[]?> DownloadAndVerifyBytesAsync(
+        HttpClient httpClient, string url, string expectedSha256Hex, string label,
+        int timeoutSeconds, CancellationToken cancellationToken)
+    {
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
-            var content = await httpClient.GetStringAsync(url, cts.Token);
+            var content = await httpClient.GetByteArrayAsync(url, cts.Token);
 
             var hash = SkillSyncHelpers.ComputeSha256(content);
             if (!string.Equals(hash, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
@@ -336,6 +377,163 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
             return null;
         }
+    }
+
+    internal async Task<List<DownloadedSkillFile>?> ExtractArchiveAsync(
+        string skillName,
+        string feedName,
+        byte[] archiveBytes,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var stream = new MemoryStream(archiveBytes);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = new List<DownloadedSkillFile>();
+            var hasSkillFile = false;
+
+            foreach (var entry in archive.Entries)
+            {
+                var isDirectory = entry.FullName.EndsWith("/", StringComparison.Ordinal)
+                    || entry.FullName.EndsWith("\\", StringComparison.Ordinal);
+                var normalizedPath = NormalizeArchiveEntryPath(entry.FullName, isDirectory);
+                if (normalizedPath is null)
+                {
+                    _logger.LogWarning(
+                        "Rejected archive for skill '{SkillName}' from feed '{FeedName}': unsafe entry path '{Path}'",
+                        skillName, feedName, entry.FullName);
+                    return null;
+                }
+
+                if (IsZipSymlink(entry))
+                {
+                    _logger.LogWarning(
+                        "Rejected archive for skill '{SkillName}' from feed '{FeedName}': symlink entry '{Path}'",
+                        skillName, feedName, normalizedPath);
+                    return null;
+                }
+
+                if (isDirectory)
+                    continue;
+
+                if (!paths.Add(normalizedPath))
+                {
+                    _logger.LogWarning(
+                        "Rejected archive for skill '{SkillName}' from feed '{FeedName}': duplicate entry '{Path}'",
+                        skillName, feedName, normalizedPath);
+                    return null;
+                }
+
+                using var entryStream = entry.Open();
+                using var entryBytes = new MemoryStream();
+                await entryStream.CopyToAsync(entryBytes, cancellationToken);
+                var content = entryBytes.ToArray();
+                var unixMode = GetUnixMode(entry);
+                if (unixMode is { } mode && (mode & ~0x1FF) != 0)
+                {
+                    _logger.LogWarning(
+                        "Rejected archive for skill '{SkillName}' from feed '{FeedName}': unsupported Unix mode {UnixMode} on '{Path}'",
+                        skillName, feedName, mode, normalizedPath);
+                    return null;
+                }
+
+                if (string.Equals(normalizedPath, SkillFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    hasSkillFile = true;
+                    string skillContent;
+                    try
+                    {
+                        skillContent = StrictUtf8.GetString(content);
+                    }
+                    catch (DecoderFallbackException ex)
+                    {
+                        _logger.LogWarning(
+                            "Rejected archive for skill '{SkillName}' from feed '{FeedName}': SKILL.md is not valid UTF-8: {Message}",
+                            skillName, feedName, ex.Message);
+                        return null;
+                    }
+
+                    var mainScan = await _scanner.ScanAsync(skillName, skillContent, cancellationToken);
+                    if (!mainScan.IsAllowed)
+                    {
+                        _logger.LogWarning(
+                            "Rejected archive skill '{SkillName}' from feed '{FeedName}': {Reason}",
+                            skillName, feedName, mainScan.Reason);
+                        return null;
+                    }
+                }
+                else if (TryDecodeUtf8(content, out var textContent))
+                {
+                    var fileScan = await _scanner.ScanAsync(
+                        $"{skillName}:{normalizedPath}", textContent, cancellationToken);
+                    if (!fileScan.IsAllowed)
+                    {
+                        _logger.LogWarning(
+                            "Rejected archive resource for '{SkillName}' from feed '{FeedName}' at {Path}: {Reason}",
+                            skillName, feedName, normalizedPath, fileScan.Reason);
+                        return null;
+                    }
+                }
+
+                files.Add(new DownloadedSkillFile(normalizedPath, content, unixMode));
+            }
+
+            if (!hasSkillFile)
+            {
+                _logger.LogWarning(
+                    "Rejected archive for skill '{SkillName}' from feed '{FeedName}': missing SKILL.md",
+                    skillName, feedName);
+                return null;
+            }
+
+            return files
+                .OrderBy(static file => string.Equals(file.RelativePath, SkillFileName, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenBy(static file => file.RelativePath, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (InvalidDataException ex)
+        {
+            _logger.LogWarning(
+                "Rejected archive for skill '{SkillName}' from feed '{FeedName}': invalid ZIP archive: {Message}",
+                skillName, feedName, ex.Message);
+            return null;
+        }
+    }
+
+    private static string? NormalizeArchiveEntryPath(string path, bool isDirectory)
+    {
+        var normalized = path.Trim().Replace('\\', '/');
+        if (isDirectory)
+            normalized = normalized.TrimEnd('/');
+
+        if (string.Equals(normalized, SkillFileName, StringComparison.OrdinalIgnoreCase))
+            return SkillFileName;
+
+        return SkillSyncHelpers.ValidateResourcePath(normalized);
+    }
+
+    private static bool TryDecodeUtf8(byte[] content, out string text)
+    {
+        try
+        {
+            text = StrictUtf8.GetString(content);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            text = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool IsZipSymlink(ZipArchiveEntry entry)
+        => ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000;
+
+    private static int? GetUnixMode(ZipArchiveEntry entry)
+    {
+        var mode = (entry.ExternalAttributes >> 16) & 0xFFF;
+        return mode == 0 ? null : mode;
     }
 
     private void RescanAndUpdateIndex()

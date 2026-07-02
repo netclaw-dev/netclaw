@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.7.1"
+  version: "1.7.2"
 ---
 
 # Skill Authoring
@@ -49,6 +49,7 @@ skill-name/
   references/       # Optional: detail documents loaded on demand
   scripts/          # Optional: executable helpers
   assets/           # Optional: templates, static resources
+  tools/            # Optional: any additional files/directories are allowed
 ```
 
 ### Flat-file layout
@@ -59,8 +60,8 @@ skill-name.md       # YAML frontmatter + markdown instructions (no resources)
 
 Flat `.md` files with valid YAML frontmatter are accepted as skills for
 compatibility with Claude Code and other platforms. Flat-file skills cannot
-have resource subdirectories. If both `skill-name/SKILL.md` and
-`skill-name.md` exist, the directory version takes precedence.
+have resources. If both `skill-name/SKILL.md` and `skill-name.md` exist, the
+directory version takes precedence.
 
 Name matching depends on the source:
 - Netclaw-managed local skills use strict identity checks. The frontmatter
@@ -169,13 +170,16 @@ Keep under 5000 tokens. Include:
 
 ## Progressive Disclosure
 
-Put detail in subdirectories, not in the main SKILL.md:
+Put detail in additional files, not in the main SKILL.md. Netclaw discovers any
+safe relative file under the skill directory as a resource; `references/`,
+`scripts/`, and `assets/` are conventions, not hard requirements:
 
 | Directory | Purpose |
 |-----------|---------|
 | `references/` | Detailed documentation, research, examples |
 | `scripts/` | Executable helpers (shell scripts, Python) |
 | `assets/` | Templates, static files, config samples |
+| `tools/` or other paths | Additional helper files allowed by AgentSkills.io |
 
 The skill body references these files explicitly: "See
 `references/deployment-checklist.md` for the full checklist." The agent loads
@@ -211,7 +215,7 @@ Content scanning rules:
 - All skills are scanned uniformly regardless of origin — system, user, and all other skills use the same policy (High risk → Reject, Medium → Warn, Low → Allow).
 - Rejected scans fail closed: Netclaw returns the rejection reason and leaves the previous on-disk content unchanged.
 - Warnings may still allow a mutation or read, but the warning text is surfaced in the tool result.
-- Resource files must stay under `references/`, `scripts/`, or `assets/`; other paths are rejected.
+- Resource paths must be safe relative file paths under the skill directory. Absolute paths, empty segments, `.`, `..`, and root `SKILL.md` are rejected.
 
 Hard rules:
 - The frontmatter `name` must match the target skill name for `create` and `edit`.
@@ -228,10 +232,12 @@ Skills live in two locations:
 | Directory | Source | Editable |
 |-----------|--------|----------|
 | `~/.netclaw/skills/.system/` | Official Netclaw feed (synced from CDN) | No — read-only |
+| `~/.netclaw/skills/.server-feeds/<feed>/` | Private skill-server feeds | No — read-only |
 | `~/.netclaw/skills/` (root) | Operator-placed or user-created via `skill_manage` | Yes |
 
-System skills (`.system/`) cannot be edited, patched, or deleted via
-`skill_manage`. They are maintained by the Netclaw release process.
+System skills (`.system/`) and private server-feed skills (`.server-feeds/`)
+cannot be edited, patched, or deleted via `skill_manage`. They are maintained
+by their sync services.
 
 All skills — regardless of origin — are visible in the skill index and
 available to all sessions. The skill index is a compressed file listing

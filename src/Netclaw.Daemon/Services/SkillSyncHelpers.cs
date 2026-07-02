@@ -13,8 +13,6 @@ namespace Netclaw.Daemon.Services;
 
 internal static class SkillSyncHelpers
 {
-    internal static readonly string[] AllowedResourcePrefixes = ["references", "scripts", "assets"];
-
     // A directory is a skill iff it owns a SKILL.md — the same rule SkillScanner uses.
     private const string SkillFileName = "SKILL.md";
 
@@ -23,7 +21,12 @@ internal static class SkillSyncHelpers
     internal static string ComputeSha256(string content)
     {
         var bytes = Encoding.UTF8.GetBytes(content);
-        var hash = SHA256.HashData(bytes);
+        return ComputeSha256(bytes);
+    }
+
+    internal static string ComputeSha256(byte[] content)
+    {
+        var hash = SHA256.HashData(content);
         return Convert.ToHexStringLower(hash);
     }
 
@@ -32,15 +35,21 @@ internal static class SkillSyncHelpers
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        if (Path.IsPathRooted(path) || path.Contains("..", StringComparison.Ordinal))
+        if (Path.IsPathRooted(path))
             return null;
 
-        var normalized = path.Replace('\\', '/');
-        var firstSegment = normalized.Split('/')[0];
-        if (!AllowedResourcePrefixes.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
+        var normalized = path.Trim().Replace('\\', '/');
+        if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.EndsWith('/'))
             return null;
 
-        return normalized;
+        var segments = normalized.Split('/');
+        if (segments.Any(static segment => segment.Length == 0 || segment is "." or ".."))
+            return null;
+
+        normalized = string.Join('/', segments);
+        return string.Equals(normalized, SkillFileName, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : normalized;
     }
 
     internal static SkillSyncState ReadSyncState(string path, ILogger logger)
@@ -175,7 +184,9 @@ internal static class SkillSyncHelpers
             {
                 var targetPath = Path.Combine(stagingDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                await File.WriteAllTextAsync(targetPath, file.Content, cancellationToken);
+                await File.WriteAllBytesAsync(targetPath, file.Content, cancellationToken);
+                if (file.UnixMode is { } unixMode && !OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(targetPath, (UnixFileMode)unixMode);
             }
 
             if (Directory.Exists(skillDir))
@@ -204,4 +215,10 @@ internal static class SkillSyncHelpers
     }
 }
 
-internal sealed record DownloadedSkillFile(string RelativePath, string Content);
+internal sealed record DownloadedSkillFile(string RelativePath, byte[] Content, int? UnixMode = null)
+{
+    public DownloadedSkillFile(string relativePath, string content, int? unixMode = null)
+        : this(relativePath, Encoding.UTF8.GetBytes(content), unixMode)
+    {
+    }
+}

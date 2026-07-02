@@ -337,6 +337,25 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
+    public async Task SkillReadResource_ReadsArbitraryAdditionalFilePath()
+    {
+        WriteSkill("my-skill", """
+            ---
+            name: my-skill
+            description: Test skill.
+            ---
+            # My Skill
+            """);
+        WriteFile("my-skill", "tools/check", "#!/bin/bash\necho ok");
+        ScanSkills();
+
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
+        var result = await tool.ExecuteAsync(ToolInput.Create("SkillName", "my-skill", "ResourcePath", "tools/check"), PersonalCtx, TestContext.Current.CancellationToken);
+
+        Assert.Contains("echo ok", result);
+    }
+
+    [Fact]
     public async Task SkillReadResource_RejectsPathTraversal()
     {
         WriteSkill("my-skill", """
@@ -351,7 +370,7 @@ public class SkillToolTests : IDisposable
         var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(ToolInput.Create("SkillName", "my-skill", "ResourcePath", "../../etc/passwd"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.Contains("not allowed", result);
+        Assert.Contains("cannot contain", result);
     }
 
     [Fact]
@@ -387,7 +406,7 @@ public class SkillToolTests : IDisposable
         var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(ToolInput.Create("SkillName", "my-skill", "ResourcePath", "SKILL.md"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.Contains("must start with", result);
+        Assert.Contains("Use skill_load", result);
     }
 
     [Fact]
@@ -495,7 +514,7 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
-    public async Task SkillManage_WriteFile_ValidatesPath()
+    public async Task SkillManage_WriteFile_RejectsTraversalPath()
     {
         WriteSkill("wf-test", """
             ---
@@ -507,9 +526,28 @@ public class SkillToolTests : IDisposable
         ScanSkills();
 
         var tool = CreateManageTool();
-        var result = await tool.ExecuteAsync(ToolInput.Create("Action", "write_file", "Name", "wf-test", "FilePath", "baddir/file.md", "FileContent", "content"), PersonalCtx, TestContext.Current.CancellationToken);
+        var result = await tool.ExecuteAsync(ToolInput.Create("Action", "write_file", "Name", "wf-test", "FilePath", "../file.md", "FileContent", "content"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.Contains("must start with", result);
+        Assert.Contains("cannot contain", result);
+    }
+
+    [Fact]
+    public async Task SkillManage_WriteFile_AllowsArbitraryAdditionalFilePath()
+    {
+        WriteSkill("wf-test", """
+            ---
+            name: wf-test
+            description: Write file test.
+            ---
+            # WF
+            """);
+        ScanSkills();
+
+        var tool = CreateManageTool();
+        var result = await tool.ExecuteAsync(ToolInput.Create("Action", "write_file", "Name", "wf-test", "FilePath", "tools/check", "FileContent", "#!/bin/bash\necho ok"), PersonalCtx, TestContext.Current.CancellationToken);
+
+        Assert.Contains("File written: tools/check", result);
+        Assert.True(File.Exists(Path.Combine(_paths.SkillsDirectory, "wf-test", "tools", "check")));
     }
 
     [Fact]
