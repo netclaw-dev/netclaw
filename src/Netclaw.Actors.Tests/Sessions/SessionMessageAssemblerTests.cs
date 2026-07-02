@@ -154,6 +154,28 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
+    public void BuildVolatileContextBlock_emits_storage_id_verbatim()
+    {
+        var input = MakeInput(
+            SeedHistory("hi"),
+            new AutomaticRecallResult(Items:
+            [
+                new AutomaticRecallItem(
+                    Id: new Netclaw.Actors.Memory.MemoryStorageId("doc-auto"),
+                    Title: "auto memory",
+                    Content: "remembered content",
+                    Sensitivity: "normal",
+                    Score: 0.9)
+            ]));
+
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
+
+        // The recall block surfaces the storage id verbatim so it round-trips back into the tools.
+        Assert.Contains("[doc-auto]", block);
+        Assert.DoesNotContain("doc:doc-auto", block);
+    }
+
+    [Fact]
     public void Static_block_contains_session_id_and_attachment_hint()
     {
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, fileReadGranted: true);
@@ -484,7 +506,7 @@ public sealed class SessionMessageAssemblerTests
         return new AutomaticRecallResult(Items: new[]
         {
             new AutomaticRecallItem(
-                Id: "mem/1",
+                Id: new Netclaw.Actors.Memory.MemoryStorageId("mem/1"),
                 Title: "test memory",
                 Content: content,
                 Sensitivity: "public",

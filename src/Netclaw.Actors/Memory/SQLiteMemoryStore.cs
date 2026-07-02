@@ -611,28 +611,31 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(
-        IReadOnlyList<string> ids,
+    /// <summary>
+    /// Hydrates memories from handles that have already been resolved. Callers that run
+    /// <see cref="ResolveMemoryHandlesAsync"/> up front (e.g. to surface per-ID errors) pass
+    /// the result here so the same IDs are not resolved a second time.
+    /// </summary>
+    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByResolvedHandlesAsync(
+        IReadOnlyList<ResolvedMemoryHandle> resolvedIds,
         string boundary,
         TrustAudience audience,
         CancellationToken ct = default)
     {
-        if (ids.Count == 0)
+        var documents = resolvedIds
+            .Where(x => x.Resolved && x.Kind == MemoryKind.Document)
+            .Select(x => x.StorageId!.Value.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var records = resolvedIds
+            .Where(x => x.Resolved && x.Kind == MemoryKind.Record)
+            .Select(x => x.StorageId!.Value.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (documents.Length == 0 && records.Length == 0)
             return [];
-
-        var documents = ids
-            .Select(ParseTypedId)
-            .Where(x => x.Kind is MemoryKind.Document or MemoryKind.Unknown)
-            .Select(x => x.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var records = ids
-            .Select(ParseTypedId)
-            .Where(x => x.Kind is MemoryKind.Record or MemoryKind.Unknown)
-            .Select(x => x.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
         var output = new List<SQLiteMemoryHydratedItem>();
         var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
@@ -669,8 +672,7 @@ public sealed class SQLiteMemoryStore
                     ExpiresAtMs: reader.IsDBNull(12) ? null : reader.GetInt64(12),
                     UpdatedAtMs: reader.GetInt64(13)));
 
-                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
-                    || !allowedAudiences.Contains(output[^1].Audience))
+                if (!IsAccessible(output[^1].Boundary, output[^1].Audience, boundary, allowedAudiences))
                 {
                     output.RemoveAt(output.Count - 1);
                 }
@@ -706,8 +708,7 @@ public sealed class SQLiteMemoryStore
                     ExpiresAtMs: reader.IsDBNull(12) ? null : reader.GetInt64(12),
                     UpdatedAtMs: reader.GetInt64(13)));
 
-                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
-                    || !allowedAudiences.Contains(output[^1].Audience))
+                if (!IsAccessible(output[^1].Boundary, output[^1].Audience, boundary, allowedAudiences))
                 {
                     output.RemoveAt(output.Count - 1);
                 }
@@ -716,6 +717,74 @@ public sealed class SQLiteMemoryStore
 
         return output;
         }, ct);
+    }
+
+    public async Task<IReadOnlyList<ResolvedMemoryHandle>> ResolveMemoryHandlesAsync(
+        IReadOnlyList<string> rawIds,
+        string boundary,
+        TrustAudience audience,
+        CancellationToken ct = default)
+    {
+        if (rawIds.Count == 0)
+            return [];
+
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Resolve the whole batch over one connection so N ids cost a single connection open
+        // (and one allowedAudiences set), not N of each.
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        var output = new List<ResolvedMemoryHandle>(rawIds.Count);
+        foreach (var rawId in rawIds)
+            output.Add(await ResolveHandleOnConnectionAsync(conn, rawId, boundary, allowedAudiences, ct));
+        return (IReadOnlyList<ResolvedMemoryHandle>)output;
+        }, ct);
+    }
+
+    public async Task<ResolvedMemoryHandle> ResolveMemoryHandleAsync(
+        string rawId,
+        string boundary,
+        TrustAudience audience,
+        CancellationToken ct = default)
+    {
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return await WithConnectionAsync(
+            (conn, ct) => ResolveHandleOnConnectionAsync(conn, rawId, boundary, allowedAudiences, ct),
+            ct);
+    }
+
+    // Core handle resolution against an already-open connection, so a batch (get_memories) can
+    // share a single connection and allowedAudiences set instead of opening a connection per id.
+    private static async Task<ResolvedMemoryHandle> ResolveHandleOnConnectionAsync(
+        SqliteConnection conn,
+        string rawId,
+        string boundary,
+        ISet<string> allowedAudiences,
+        CancellationToken ct)
+    {
+        var parsed = MemoryTypedId.Parse(rawId);
+        if (parsed.Kind is not (MemoryKind.Document or MemoryKind.Record))
+            return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID must be prefixed with doc- or rec-.");
+        if (parsed.Id.IsEmpty)
+            return ResolvedMemoryHandle.Failed(rawId, parsed.Kind, "ID payload is required.");
+
+        // Records are append-only: an edit inserts a new row that supersedes the old one and
+        // leaves the old row physically present. Follow the supersede chain to the head (latest)
+        // row so a stable handle the model was given earlier still resolves to the current
+        // content instead of the pre-edit row. Documents edit in place and have no such chain.
+        var storageId = parsed.Kind == MemoryKind.Record
+            ? await ResolveRecordHeadAsync(conn, parsed.Id, ct)
+            : parsed.Id;
+
+        // The resolved id is the exact storage key (primary key, unique per table), so a single
+        // visibility-scoped lookup either finds it or it does not — no candidate guessing.
+        var visible = await MemoryIdVisibleAsync(conn, parsed.Kind, storageId, boundary, allowedAudiences, ct);
+        return visible
+            ? ResolvedMemoryHandle.Found(rawId, parsed.Kind, storageId)
+            : ResolvedMemoryHandle.Failed(rawId, parsed.Kind, $"Memory \"{rawId}\" was not found or is not accessible from this session.");
     }
 
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanAsync(
@@ -916,6 +985,52 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
+    public async Task<bool> ReplaceDocumentTextAsync(string documentId, string newText, CancellationToken ct = default)
+    {
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+
+        await using var read = conn.CreateCommand();
+        read.Transaction = tx;
+        read.CommandText = "SELECT title, aliases_json, facets_json, recall_mode FROM memory_documents WHERE document_id = $id;";
+        read.Parameters.AddWithValue("$id", documentId);
+
+        string title;
+        string? aliasesJson;
+        string? facetsJson;
+        string recallMode;
+        await using (var reader = await read.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct))
+                return false;
+            title = reader.GetString(0);
+            aliasesJson = reader.IsDBNull(1) ? null : reader.GetString(1);
+            facetsJson = reader.IsDBNull(2) ? null : reader.GetString(2);
+            recallMode = reader.GetString(3);
+        }
+
+        await using var write = conn.CreateCommand();
+        write.Transaction = tx;
+        write.CommandText = """
+            UPDATE memory_documents
+            SET markdown_body = $body,
+                updated_at = $updatedAt
+            WHERE document_id = $id;
+            """;
+        write.Parameters.AddWithValue("$id", documentId);
+        write.Parameters.AddWithValue("$body", newText);
+        write.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        var affected = await write.ExecuteNonQueryAsync(ct);
+
+        if (affected > 0 && IsSearchableRecallMode(recallMode))
+            await UpsertDocumentFtsAsync(conn, tx, documentId, title, newText, aliasesJson, facetsJson, ct);
+
+        await tx.CommitAsync(ct);
+        return affected > 0;
+        }, ct);
+    }
+
     public async Task<bool> TombstoneDocumentAsync(string documentId, CancellationToken ct = default)
     {
         return await WithConnectionAsync(async (conn, ct) =>
@@ -995,7 +1110,7 @@ public sealed class SQLiteMemoryStore
             VALUES($id, $anchorId, $memoryClass, $recordType, $payload, $supersedes,
               '{MemoryUpdateSemantics.SupersedeRecord.ToWireValue()}', $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
             """;
-        insert.Parameters.AddWithValue("$id", newId);
+        insert.Parameters.AddWithValue("$id", newId.Value);
         insert.Parameters.AddWithValue("$anchorId", anchorId);
         insert.Parameters.AddWithValue("$memoryClass", memoryClass);
         insert.Parameters.AddWithValue("$recordType", recordType);
@@ -1013,7 +1128,7 @@ public sealed class SQLiteMemoryStore
         await DeleteRecordFtsAsync(conn, tx, recordId, ct);
 
         if (IsSearchableRecallMode(recallMode))
-            await UpsertRecordFtsAsync(conn, tx, newId, recordType, payloadJson, null, null, ct);
+            await UpsertRecordFtsAsync(conn, tx, newId.Value, recordType, payloadJson, null, null, ct);
 
         await tx.CommitAsync(ct);
         return true;
@@ -1239,7 +1354,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
-                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId() : operation.MemoryId;
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId().Value : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1299,11 +1414,11 @@ public sealed class SQLiteMemoryStore
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? MemoryTypedId.NewDocumentId();
+                    ?? MemoryTypedId.NewDocumentId().Value;
             }
             else
             {
-                documentId = MemoryTypedId.NewDocumentId();
+                documentId = MemoryTypedId.NewDocumentId().Value;
             }
 
             await using var documentCmd = conn.CreateCommand();
@@ -1394,7 +1509,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
-                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId() : operation.MemoryId;
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId().Value : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1457,11 +1572,11 @@ public sealed class SQLiteMemoryStore
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? MemoryTypedId.NewDocumentId();
+                    ?? MemoryTypedId.NewDocumentId().Value;
             }
             else
             {
-                documentId = MemoryTypedId.NewDocumentId();
+                documentId = MemoryTypedId.NewDocumentId().Value;
             }
 
             await using var documentCmd = conn.CreateCommand();
@@ -1549,7 +1664,72 @@ public sealed class SQLiteMemoryStore
         await work(conn, ct);
     }
 
-    private static MemoryTypedId ParseTypedId(string raw) => MemoryTypedId.Parse(raw);
+    /// <summary>
+    /// Walks <c>memory_records.supersedes_record_id</c> forward to the head (latest) row in the
+    /// supersede chain. Returns the input id unchanged when it has not been superseded or does
+    /// not exist. Chains are acyclic (each supersede points at an older row), so the deepest
+    /// reachable row is the head.
+    /// </summary>
+    private static async Task<MemoryStorageId> ResolveRecordHeadAsync(
+        SqliteConnection conn,
+        MemoryStorageId recordId,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            WITH RECURSIVE chain(id, depth) AS (
+                SELECT $id, 0
+                UNION ALL
+                SELECT n.record_id, c.depth + 1
+                FROM memory_records n
+                JOIN chain c ON n.supersedes_record_id = c.id
+            )
+            SELECT id FROM chain ORDER BY depth DESC LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$id", recordId.Value);
+        var head = (string?)await cmd.ExecuteScalarAsync(ct);
+        return string.IsNullOrEmpty(head) ? recordId : new MemoryStorageId(head);
+    }
+
+    private static async Task<bool> MemoryIdVisibleAsync(
+        SqliteConnection conn,
+        MemoryKind kind,
+        MemoryStorageId storageId,
+        string boundary,
+        ISet<string> allowedAudiences,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = kind switch
+        {
+            MemoryKind.Document => """
+                SELECT boundary, audience
+                FROM memory_documents
+                WHERE document_id = $id;
+                """,
+            MemoryKind.Record => """
+                SELECT boundary, audience
+                FROM memory_records
+                WHERE record_id = $id;
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+        };
+        cmd.Parameters.AddWithValue("$id", storageId.Value);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return false;
+
+        var itemBoundary = reader.IsDBNull(0) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(0);
+        var itemAudience = reader.IsDBNull(1) ? TrustAudience.Personal.ToWireValue() : reader.GetString(1);
+        return IsAccessible(itemBoundary, itemAudience, boundary, allowedAudiences);
+    }
+
+    // Single source of truth for the boundary/audience visibility rule, shared by handle
+    // resolution (MemoryIdVisibleAsync) and hydration so the two paths cannot drift.
+    private static bool IsAccessible(string itemBoundary, string itemAudience, string boundary, ISet<string> allowedAudiences)
+        => string.Equals(itemBoundary, boundary, StringComparison.OrdinalIgnoreCase)
+           && allowedAudiences.Contains(itemAudience);
 
     private static async Task EnsureAnchorAsync(
         SqliteConnection conn,
@@ -1773,6 +1953,27 @@ public sealed record SQLiteMemoryHydratedItem(
     long UpdatedAtMs,
     string Boundary = TrustBoundary.LegacyRestrictedValue,
     string Audience = "public");
+
+public sealed record ResolvedMemoryHandle(
+    string RawId,
+    MemoryKind Kind,
+    MemoryStorageId? StorageId,
+    string? Error)
+{
+    public bool Resolved => StorageId is not null && Error is null;
+
+    /// <summary>
+    /// The canonical model-facing handle for this memory — its opaque storage id verbatim.
+    /// Falls back to the raw input when resolution failed.
+    /// </summary>
+    public string Handle => StorageId?.Value ?? RawId;
+
+    public static ResolvedMemoryHandle Found(string rawId, MemoryKind kind, MemoryStorageId storageId)
+        => new(rawId, kind, storageId, null);
+
+    public static ResolvedMemoryHandle Failed(string rawId, MemoryKind kind, string error)
+        => new(rawId, kind, null, error);
+}
 
 public sealed record SQLiteMemoryCurationOperation(
     string Kind,

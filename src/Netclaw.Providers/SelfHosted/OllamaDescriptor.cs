@@ -53,6 +53,9 @@ public sealed class OllamaDescriptor : IProviderDescriptor
         {
             foreach (var model in modelsArray.EnumerateArray())
             {
+                if (IsEmbeddingOnly(model))
+                    continue;
+
                 if (model.TryGetProperty("name", out var name))
                 {
                     models.Add(new DiscoveredModel { ModelId = new(name.GetString()!) });
@@ -61,5 +64,31 @@ public sealed class OllamaDescriptor : IProviderDescriptor
         }
 
         return new ProviderProbeResult(true, null, models);
+    }
+
+    private static bool IsEmbeddingOnly(JsonElement model)
+    {
+        if (!model.TryGetProperty("capabilities", out var capabilities)
+            || capabilities.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var sawCapability = false;
+        foreach (var capability in capabilities.EnumerateArray())
+        {
+            if (capability.ValueKind != JsonValueKind.String)
+                continue;
+
+            sawCapability = true;
+            var value = capability.GetString();
+            if (string.Equals(value, "completion", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "chat", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return sawCapability;
     }
 }

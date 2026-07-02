@@ -277,7 +277,7 @@ public static class SessionMessageAssembler
         sb.AppendLine("mode: automatic");
         foreach (var item in recall.Items)
         {
-            sb.AppendLine($"- {item.Title} [{item.Id}] sensitivity={item.Sensitivity} score={item.Score:F2}");
+            sb.AppendLine($"- {item.Title} [{item.Id.Value}] sensitivity={item.Sensitivity} score={item.Score:F2}");
             sb.AppendLine($"  {item.Content}");
         }
         return sb.ToString().TrimEnd();

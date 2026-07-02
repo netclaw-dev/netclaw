@@ -12,7 +12,7 @@
     <MattermostNetVersion>5.0.0</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.9</MicrosoftAspNetCoreVersion>
-    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
+    <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
@@ -29,15 +29,15 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.31.0" />
+    <PackageVersion Include="Anthropic" Version="12.34.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
     <!-- Transitive security pin: Microsoft.AspNetCore.OpenApi 10.0.9 pulls
-         Microsoft.OpenApi 2.0.0, which trips NU1903 (GHSA-v5pm-xwqc-g5wc,
-         circular schema references can terminate OpenAPI parsing). Keep this on
-         the patched 2.x line until ASP.NET Core ships a non-vulnerable
-         transitive dependency. -->
+         Microsoft.OpenApi 2.0.0, which trips NU1903 (CVE-2026-49451 /
+         GHSA-v5pm-xwqc-g5wc, circular schema references can terminate OpenAPI
+         parsing). Keep this on the patched 2.x line until ASP.NET Core ships a
+         non-vulnerable transitive dependency. -->
     <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
@@ -69,7 +69,7 @@
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.3.1" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.1.5" />
-    <PackageVersion Include="Termina" Version="0.15.0-beta1" />
+    <PackageVersion Include="Termina" Version="0.15.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>

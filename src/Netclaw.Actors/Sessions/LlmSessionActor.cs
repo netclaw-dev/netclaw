@@ -2664,7 +2664,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var recallIds = resolved.Items.Count == 0
                 ? "-"
-                : string.Join(",", resolved.Items.Select(i => i.Id));
+                : string.Join(",", resolved.Items.Select(i => i.Id.Value));
             TurnLog().Info(
                 "turn_memory_recall degraded={Degraded} stage={Stage} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
                 resolved.Degraded,

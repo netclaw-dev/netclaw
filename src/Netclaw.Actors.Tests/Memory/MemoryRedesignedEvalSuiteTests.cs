@@ -261,7 +261,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
             ["where should I stay near Stir Trek"],
             3), TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain(auto.Items, x => x.Id == "rec-hotel-evidence");
+        Assert.DoesNotContain(auto.Items, x => x.Id.Value == "rec-hotel-evidence");
 
         var tool = new SqliteFindMemoriesTool(_store, _timeProvider);
         var search = await tool.ExecuteAsync(
@@ -572,7 +572,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var intentionalEvidenceHitRate = search.Contains("Hotel options", StringComparison.Ordinal) ? 1.0 : 0.0;
         var gateCorrectness = acceptedFact.Count == 1 ? 1.0 : 0.0;
         var explicitWriteTruthfulness = acceptedFact.Count == 1 ? 1.0 : 0.0;
-        var evidenceLeakage = auto.Items.Any(x => x.Id == "rec-report-evidence") ? 1.0 : 0.0;
+        var evidenceLeakage = auto.Items.Any(x => x.Id.Value == "rec-report-evidence") ? 1.0 : 0.0;
 
         Assert.Contains("stale=true", staleDebug);
 

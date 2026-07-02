@@ -432,26 +432,53 @@ frame_needs_retry() {
 }
 
 # run_shot_tape_with_retry <tape> — run a capture tape, then inspect the frames
-# it emits. If any is a transient blank (SHOT_BLANK_RETRIES), re-run the whole
-# tape so the next attempt captures a settled frame. Bounded so a genuinely
-# broken tape still fails at compare time instead of looping forever.
+# it emits. If any is a transient blank or missing (SHOT_BLANK_RETRIES), re-run
+# the whole tape so the next attempt captures a settled frame. Bounded so a
+# genuinely broken tape still fails at compare time instead of looping forever.
+#
+# Two transient shapes are retried:
+#   * blank / partial frame — VHS sampled between a Termina [2J clear and
+#     repaint (frame_needs_retry).
+#   * missing capture — the tape timed out (e.g. a Wait+Screen anchor fired
+#     too early) before reaching the Screenshot command. frame_needs_retry
+#     returns false for missing files, so we handle this case explicitly.
+#
+# In both cases the tape-level failure added by run_shot_tape to failed[] is
+# rolled back before the retry so that a clean retry does not count as a run
+# failure. If all SHOT_BLANK_RETRIES attempts produce a bad frame, the last
+# tape-level failure is left in place for compare_shot_frame to report on.
 run_shot_tape_with_retry() {
   local tape="$1"
   local frames
   frames="$(shot_tape_frames "$tape")"
   local attempt=1
   while :; do
+    local failed_before=${#failed[@]}
     run_shot_tape "$tape"
     [[ -z "$frames" ]] && return          # no frame map → accept the single run
 
     local bad="" f
     for f in $frames; do
+      # A missing capture means the tape timed out before reaching Screenshot.
+      # Treat it the same as a blank/partial frame: retry if budget remains.
+      if [[ ! -f "/tmp/shot-${f}.png" ]]; then
+        bad="${f} (missing — tape timed out)"
+        break
+      fi
       if frame_needs_retry "$f"; then
         bad="$f"
         break
       fi
     done
-    [[ -z "$bad" ]] && return              # all frames settled → done
+
+    if [[ -z "$bad" ]]; then
+      # All captures present and settled. Remove any tape-level failure that
+      # run_shot_tape added for this attempt — a clean retry is not a failure.
+      if (( ${#failed[@]} > failed_before )); then
+        failed=("${failed[@]:0:$failed_before}")
+      fi
+      return
+    fi
 
     if (( attempt >= SHOT_BLANK_RETRIES )); then
       echo "  WARN: ${tape} produced a transient frame (${bad}) on all ${attempt} attempts;" >&2
@@ -460,6 +487,10 @@ run_shot_tape_with_retry() {
     fi
     echo "  RETRY: ${tape} attempt ${attempt} produced a transient frame (${bad}) —" >&2
     echo "         re-running tape (blank or partial Termina full-refresh capture)." >&2
+    # Roll back the tape-level failure before the next attempt.
+    if (( ${#failed[@]} > failed_before )); then
+      failed=("${failed[@]:0:$failed_before}")
+    fi
     attempt=$((attempt + 1))
     for f in $frames; do rm -f "/tmp/shot-${f}.png"; done   # clear stale captures
   done

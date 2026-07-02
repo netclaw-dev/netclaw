@@ -23,7 +23,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
     private readonly ILogger _logger;
 
     public record Params(
-        [property: Description("Comma-separated memory IDs to load (e.g. \"doc:abc, rec:def\")")]
+        [property: Description("Comma-separated memory IDs to load. Copy the ids shown by find_memories, get_memories, or recall verbatim (e.g. \"doc-1a2b3c, rec-9d8e7f\").")]
         string Ids);
 
     public SqliteGetMemoriesTool(SQLiteMemoryStore store, TimeProvider? timeProvider = null, ILogger<SqliteGetMemoriesTool>? logger = null)
@@ -45,24 +45,29 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
         var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
         var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value);
-        var entries = await _store.GetMemoriesByIdsAsync(ids, boundary, audience, ct);
+        var resolved = await _store.ResolveMemoryHandlesAsync(ids, boundary, audience, ct);
+        var unresolved = resolved.Where(x => !x.Resolved).ToArray();
+        if (unresolved.Length == resolved.Count)
+            return string.Join(Environment.NewLine, unresolved.Select(x => $"Error: {x.Error}"));
+
+        var entries = await _store.GetMemoriesByResolvedHandlesAsync(resolved, boundary, audience, ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
 
         var sb = new StringBuilder();
         foreach (var entry in entries.OrderByDescending(e => e.UpdatedAtMs))
         {
-            var typedId = new MemoryTypedId(
-                MemoryDomainEnumExtensions.TryFromWireValue(entry.Kind, out MemoryKind kind) ? kind : MemoryKind.Document,
-                entry.Id);
             var isStaleEvidence = string.Equals(entry.MemoryClass, MemoryClass.Evidence.ToWireValue(), StringComparison.OrdinalIgnoreCase)
                 && entry.ExpiresAtMs is long expiresAt
                 && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            sb.AppendLine($"━━━ {entry.Title} [{typedId.ToWireValue()}] ━━━");
+            sb.AppendLine($"━━━ {entry.Title} [{entry.Id}] ━━━");
             sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine(entry.Content);
             sb.AppendLine();
         }
+
+        foreach (var unresolvedId in unresolved)
+            sb.AppendLine($"Error: {unresolvedId.Error}");
 
         _logger.LogInformation("SQLite memory get completed: requested={Requested}, found={Found}", ids.Length, entries.Count);
         return sb.ToString().TrimEnd();

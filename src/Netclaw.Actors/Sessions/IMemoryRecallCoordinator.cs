@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
@@ -43,11 +44,17 @@ public sealed record AutomaticRecallResult(
 /// A single memory item selected for automatic recall.
 /// </summary>
 public sealed record AutomaticRecallItem(
-    string Id,
+    MemoryStorageId Id,
     string Title,
     string Content,
     string Sensitivity,
-    double Score);
+    double Score)
+{
+    public AutomaticRecallItem(string id, string title, string content, string sensitivity, double score)
+        : this(new MemoryStorageId(id), title, content, sensitivity, score)
+    {
+    }
+}
 
 /// <summary>
 /// No-op automatic recall coordinator used when recall is not configured.

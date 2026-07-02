@@ -1,9 +1,9 @@
 ---
 name: netclaw-memory
-description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, or cross-session memory. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
+description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.5.0"
+  version: "1.6.2"
 ---
 
 # Netclaw Memory
@@ -40,6 +40,9 @@ Both gates must pass for memory to function.
 - **Explicit tools** are a manual-control layer on top of automatic recall.
 - Memory is SQLite-backed and cross-session only within the active
   domain/boundary policy envelope.
+- Memory IDs shown by automatic recall, `find_memories`, and `get_memories`
+  (e.g. `doc-…` / `rec-…`) are stable, opaque handles. Copy them **verbatim**
+  into `get_memories` or `update_memory` — do not rewrite or reformat them.
 
 ## When to Use Explicit Tools
 
@@ -83,6 +86,11 @@ Automatic observation note:
 ### `update_memory`
 
 Use only to correct or supersede an existing memory.
+
+Use the memory ID exactly as shown by automatic recall, `find_memories`, or
+`get_memories`. For documents, prefer `new_content` when replacing a full
+hydrated memory. Use `old_text` + `new_text` only when making a precise
+find-and-replace edit. To delete a memory, pass `delete: true`.
 
 ## Memory Classes
 

@@ -42,8 +42,8 @@ Enter
 Wait+Screen@45s /Select a model/
 # Termina needs a beat to wire up the list's key handler after the probe.
 Sleep 1s
-# Models are alphabetical: all-minilm first, qwen2 second. Move to qwen2:0.5b.
-Down
+# The smoke harness pulls qwen2 before the embedding model, and Ollama returns
+# qwen2 as the default highlighted model. Accept it directly.
 Enter
 
 # ─── Step 2 of 4: Identity ──────────────────────────────────────────

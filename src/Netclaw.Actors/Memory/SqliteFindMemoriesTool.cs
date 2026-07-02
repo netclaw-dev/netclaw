@@ -77,21 +77,18 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         var sb = new StringBuilder();
         foreach (var result in results)
         {
-            var typedId = new MemoryTypedId(
-                MemoryDomainEnumExtensions.TryFromWireValue(result.Kind, out MemoryKind kind) ? kind : MemoryKind.Document,
-                result.Id);
             var isStaleEvidence = string.Equals(result.MemoryClass, MemoryClass.Evidence.ToWireValue(), StringComparison.OrdinalIgnoreCase)
                 && result.ExpiresAtMs is long expiresAt
                 && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             var snippet = BuildSnippet(result.Content);
 
-            sb.AppendLine($"[{typedId.ToWireValue()}] {result.Title}");
+            sb.AppendLine($"[{result.Id}] {result.Title}");
             sb.AppendLine($"  class={result.MemoryClass} sensitivity={result.Sensitivity} recall={result.RecallMode}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine($"  {snippet}");
             sb.AppendLine();
         }
 
-        sb.AppendLine($"Use get_memories(\"{string.Join(", ", results.Select(r => new MemoryTypedId(MemoryDomainEnumExtensions.TryFromWireValue(r.Kind, out MemoryKind k) ? k : MemoryKind.Document, r.Id).ToWireValue()))}\") to load full content.");
+        sb.AppendLine($"Use get_memories(\"{string.Join(", ", results.Select(r => r.Id))}\") to load full content.");
         _logger.LogInformation("SQLite memory find completed: query='{Query}', results={Count}, includeStale={IncludeStale}", args.Query, results.Count, includeStale);
         return sb.ToString().TrimEnd();
     }
