@@ -56,8 +56,8 @@ Enter
 # Connection probe + model discovery. The "Connected! Found N models"
 # success frame auto-advances; wait directly on the model list header.
 Wait+Screen@45s /Select a model/
-# Models are alphabetical: all-minilm first, qwen2 second.
-Down
+# Embedding-only models are filtered from the chat picker, so qwen2 is the
+# default highlighted model. Accept it directly.
 Enter
 
 # ─── Identity (navigated through, not screenshotted) ─────────────────
