@@ -13,6 +13,26 @@ internal static class CliConfigPreflight
 {
     public const string MissingConfigMessage = "daemon not configured - please run netclaw init";
 
+    public static bool TryWriteMissingChatConfig(
+        NetclawPaths paths,
+        string mode,
+        bool chatJsonOutput,
+        TextWriter writer,
+        out int exitCode)
+    {
+        if (mode is not ("chat" or "headless"))
+        {
+            exitCode = 0;
+            return false;
+        }
+
+        return TryWriteMissingConfig(
+            paths,
+            jsonOutput: mode == "headless" && chatJsonOutput,
+            writer,
+            out exitCode);
+    }
+
     public static bool TryWriteMissingConfig(
         NetclawPaths paths,
         bool jsonOutput,

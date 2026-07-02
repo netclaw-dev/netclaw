@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
+using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
@@ -21,7 +23,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -37,15 +39,22 @@ public sealed class ChatClientDoctorCheckTests
             {
               "configVersion": 1,
               "Providers": {
-                "openrouter": { "Type": "openrouter" }
+                "openrouter": { "Type": "openrouter", "AuthMethod": "ApiKey" }
               },
               "Models": {
                 "Main": { "Provider": "openrouter", "ModelId": "anthropic/claude-haiku-4" }
               }
             }
             """);
+        WriteSecrets(paths, """
+            {
+              "Providers": {
+                "openrouter": { "ApiKey": "sk-test" }
+              }
+            }
+            """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
@@ -64,7 +73,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -87,7 +96,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -109,7 +118,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
@@ -132,7 +141,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
@@ -161,7 +170,7 @@ public sealed class ChatClientDoctorCheckTests
             }
             """);
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -177,13 +186,128 @@ public sealed class ChatClientDoctorCheckTests
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
 
-        var check = new ChatClientDoctorCheck(paths);
+        var check = CreateCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         // Missing config short-circuits via DoctorJsonConfigReader and yields its own
         // warning — the chat-client check is not reached.
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Equal(CliConfigPreflight.MissingConfigMessage, result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenKnownApiKeyProviderHasNoApiKey()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "openrouter": { "Type": "openrouter", "AuthMethod": "ApiKey" }
+              },
+              "Models": {
+                "Main": { "Provider": "openrouter", "ModelId": "anthropic/claude-haiku-4" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("requires ApiKey", result.Message);
+        Assert.DoesNotContain("Real chat client configured", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenProviderTypeUnknown()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "custom": { "Type": "not-a-provider" }
+              },
+              "Models": {
+                "Main": { "Provider": "custom", "ModelId": "model-a" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("unknown Type", result.Message);
+        Assert.Contains("not-a-provider", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenProviderTypeValueIsNotString()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "openrouter": { "Type": 123 }
+              },
+              "Models": {
+                "Main": { "Provider": "openrouter", "ModelId": "anthropic/claude-haiku-4" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Providers.openrouter.Type", result.Message);
+        Assert.Contains("must be a string", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenModelProviderValueIsNotString()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Main": { "Provider": 123, "ModelId": "qwen3:30b" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models.Main.Provider", result.Message);
+        Assert.Contains("must be a string", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenModelIdValueIsNotString()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Main": { "Provider": "local-ollama", "ModelId": 123 }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models.Main.ModelId", result.Message);
+        Assert.Contains("must be a string", result.Message);
     }
 
     private static NetclawPaths CreatePathsWithConfig(string configJson)
@@ -194,6 +318,19 @@ public sealed class ChatClientDoctorCheckTests
         File.WriteAllText(paths.NetclawConfigPath, configJson);
         return paths;
     }
+
+    private static ChatClientDoctorCheck CreateCheck(NetclawPaths paths) => new(
+        paths,
+        BuildConfiguration(paths),
+        ProviderCommand.CreateDefaultRegistry());
+
+    private static IConfigurationRoot BuildConfiguration(NetclawPaths paths) => new ConfigurationBuilder()
+        .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+        .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+        .Build();
+
+    private static void WriteSecrets(NetclawPaths paths, string secretsJson) =>
+        File.WriteAllText(paths.SecretsPath, secretsJson);
 
     private static string CreateTempBasePath()
     {

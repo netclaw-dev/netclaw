@@ -46,7 +46,26 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("No Models.Main section", result.Message);
+        Assert.Contains("Context window unavailable", result.Message);
+        Assert.Contains("Models:Main missing", result.Message);
+        Assert.DoesNotContain("32,768", result.Message);
+    }
+
+    [Fact]
+    public async Task MainModelWithoutProvider_ReturnsUnavailableWithoutDefaultProvider()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new { Main = new { ModelId = "qwen3:30b" } }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Context window unavailable", result.Message);
+        Assert.DoesNotContain("local-ollama", result.Message);
     }
 
     [Fact]
@@ -55,6 +74,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "test-model", Provider = "local-ollama", ContextWindow = 131072 } }
         });
         var check = CreateCheck(CreateOfflineDaemonApi());
@@ -71,6 +91,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("openai-codex", "openai"),
             Models = new { Main = new { ModelId = "gpt-5.3-codex", Provider = "openai-codex", ContextWindow = 32768 } }
         });
 
@@ -91,6 +112,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama", ContextWindow = 262144 } }
         });
 
@@ -109,6 +131,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "test-model", Provider = "local-ollama", ContextWindow = -1 } }
         });
         var check = CreateCheck(CreateOfflineDaemonApi());
@@ -124,6 +147,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
         });
 
@@ -143,6 +167,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
         });
 
@@ -163,6 +188,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
         });
 
@@ -184,6 +210,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         WriteConfig(new
         {
             configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
         });
 
@@ -211,8 +238,18 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             return Task.FromResult(probeResult);
         }
 
-        return new ContextWindowDoctorCheck(_paths, daemonApi, FakeProbe);
+        return new ContextWindowDoctorCheck(_paths, daemonApi, BuildConfiguration(), FakeProbe);
     }
+
+    private IConfigurationRoot BuildConfiguration() => new ConfigurationBuilder()
+        .AddJsonFile(_paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+        .AddJsonFile(_paths.SecretsPath, optional: true, reloadOnChange: false)
+        .Build();
+
+    private static Dictionary<string, object> ProviderConfig(string name, string type) => new()
+    {
+        [name] = new { Type = type }
+    };
 
     private void WriteConfig(object config)
     {

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 
@@ -13,20 +14,23 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
 {
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
+    private readonly IConfiguration _configuration;
     private readonly Func<string, string, CancellationToken, Task<int?>> _probeProvider;
 
-    public ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi)
-        : this(paths, daemonApi, (modelId, provider, ct) => ContextWindowDoctorProbe.ProbeAsync(paths, modelId, provider, ct))
+    public ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi, IConfiguration configuration)
+        : this(paths, daemonApi, configuration, (modelId, provider, ct) => ContextWindowDoctorProbe.ProbeAsync(paths, modelId, provider, ct))
     {
     }
 
     internal ContextWindowDoctorCheck(
         NetclawPaths paths,
         DaemonApi daemonApi,
+        IConfiguration configuration,
         Func<string, string, CancellationToken, Task<int?>> probeProvider)
     {
         _paths = paths;
         _daemonApi = daemonApi;
+        _configuration = configuration;
         _probeProvider = probeProvider;
     }
 
@@ -42,23 +46,32 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
         var models = root["Models"] as JsonObject;
         var main = models?["Main"] as JsonObject;
 
+        var runtimeValidation = ValidateRuntimeConfiguration(root);
+        if (runtimeValidation.Status != ProviderRuntimeStatus.Valid)
+        {
+            return DoctorCheckResult.Warning(
+                "Context Window",
+                $"Context window unavailable because inference configuration is not valid: {runtimeValidation.Reason}.",
+                "Run `netclaw model` to pick a provider/model, or edit `netclaw.json` and rerun `netclaw doctor`.");
+        }
+
         if (main is null)
         {
             return DoctorCheckResult.Warning(
                 "Context Window",
-                "No Models.Main section in config. Using default context window (32,768 tokens).",
-                "Add a Models.Main section with ContextWindow to netclaw.json.");
+                "No Models.Main section in config. Context window cannot be resolved until a model is selected.",
+                "Run `netclaw model` to pick a provider/model, or add Models.Main to netclaw.json.");
         }
 
         var contextWindow = main["ContextWindow"];
         if (contextWindow is null)
         {
-            var modelId = main["ModelId"]?.GetValue<string>() ?? "unknown";
-            var providerName = main["Provider"]?.GetValue<string>() ?? "local-ollama";
+            var modelId = _configuration.GetSection("Models:Main:ModelId").Value ?? "unknown";
+            var providerName = _configuration.GetSection("Models:Main:Provider").Value ?? "unknown";
             return await ResolveEffectiveContextWindowAsync(modelId, providerName, cancellationToken);
         }
 
-        if (contextWindow.GetValue<int>() is var cw and > 0)
+        if (TryGetInt32(contextWindow, out var cw) && cw > 0)
         {
             // Runtime (ContextWindowResolution.ResolveRuntimeAsync) prefers the
             // daemon's live context window over the pinned config when the daemon
@@ -82,6 +95,37 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
             "Context Window",
             "Models.Main.ContextWindow must be a positive integer.",
             "Set Models.Main.ContextWindow to the effective runtime context window size in tokens.");
+    }
+
+    private ProviderRuntimeValidation ValidateRuntimeConfiguration(JsonObject root)
+    {
+        var providers = ProviderConfigurationLoader.Load(_configuration.GetSection("Providers"));
+        var models = _configuration.GetSection("Models")
+            .Get<ModelSelection>() ?? new ModelSelection();
+
+        return ProviderRuntimeValidation.Evaluate(
+            providers,
+            models,
+            ProviderRuntimeConfiguration.FromJson(root));
+    }
+
+    private static bool TryGetInt32(JsonNode node, out int value)
+    {
+        try
+        {
+            value = node.GetValue<int>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            value = 0;
+            return false;
+        }
+        catch (FormatException)
+        {
+            value = 0;
+            return false;
+        }
     }
 
     private async Task<int?> TryGetDaemonContextWindowAsync(CancellationToken ct)

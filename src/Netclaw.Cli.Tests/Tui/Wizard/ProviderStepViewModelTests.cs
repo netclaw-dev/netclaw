@@ -448,6 +448,34 @@ public sealed class ProviderStepViewModelTests : IDisposable
         Assert.True(providerItem.Passed);
         Assert.False(providerItem.IsWarning);
         Assert.Contains("LLM provider configured", providerItem.Label);
+
+        var modelItem = items[1];
+        Assert.True(modelItem.Passed);
+        Assert.True(modelItem.IsWarning);
+        Assert.Contains("No model selected", modelItem.Label);
+        Assert.Contains("No-Op", modelItem.Label);
+        Assert.False(runner.AllPassed);
+    }
+
+    [Fact]
+    public async Task ContributeHealthChecks_ProviderAndModelSelected_CountsAsCleanPass()
+    {
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe)
+        {
+            SelectedProviderType = "ollama",
+            SelectedModelId = "qwen3:30b",
+        };
+
+        var items = new List<HealthCheckItem>();
+        var runner = new HealthCheckRunner(items, () => { });
+        await step.ContributeHealthChecksAsync(runner, TestContext.Current.CancellationToken);
+
+        Assert.All(items, item =>
+        {
+            Assert.True(item.Passed);
+            Assert.False(item.IsWarning);
+        });
+        Assert.True(runner.AllPassed);
     }
 
     // Reuse the existing FakeProviderProbe from the monolith tests

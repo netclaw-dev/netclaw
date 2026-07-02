@@ -525,8 +525,9 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         runner.Add(new HealthCheckItem(
             modelOk
                 ? $"Model selected ({SelectedModelId})"
-                : "Model selected (none — will use provider default)",
-            true)); // not a hard failure
+                : "No model selected — No-Op chat client will be active (run `netclaw model` or pick a model)",
+            Passed: true,
+            IsWarning: !modelOk));
 
         return Task.CompletedTask;
     }

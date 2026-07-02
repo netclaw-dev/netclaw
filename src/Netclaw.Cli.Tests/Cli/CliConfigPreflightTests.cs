@@ -63,4 +63,24 @@ public sealed class CliConfigPreflightTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, writer.ToString());
     }
+
+    [Fact]
+    public void TryWriteMissingChatConfig_HeadlessJson_PrintsJsonPayload()
+    {
+        using var writer = new StringWriter();
+
+        var blocked = CliConfigPreflight.TryWriteMissingChatConfig(
+            _paths,
+            mode: "headless",
+            chatJsonOutput: true,
+            writer,
+            out var exitCode);
+
+        var json = JsonNode.Parse(writer.ToString())!.AsObject();
+
+        Assert.True(blocked);
+        Assert.Equal(1, exitCode);
+        Assert.Equal("not-configured", json["overall"]!.GetValue<string>());
+        Assert.Equal(CliConfigPreflight.MissingConfigMessage, json["message"]!.GetValue<string>());
+    }
 }

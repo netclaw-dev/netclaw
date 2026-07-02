@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Providers;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -11,6 +12,7 @@ public static class DoctorRegistrationExtensions
 {
     public static void AddDoctorChecks(this IServiceCollection services)
     {
+        services.AddProviderDescriptors();
         services.AddSingleton<DoctorRunner>();
         services.AddSingleton<DoctorFixService>();
         services.AddSingleton<IDoctorCheck, ConfigSchemaDoctorCheck>();

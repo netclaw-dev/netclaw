@@ -1018,8 +1018,12 @@ static async Task RunAsync(string[] args)
         }
     }
 
-    if (mode is "chat" or "headless"
-        && CliConfigPreflight.TryWriteMissingConfig(new NetclawPaths(), jsonOutput: false, Console.Out, out var chatExitCode))
+    if (CliConfigPreflight.TryWriteMissingChatConfig(
+            new NetclawPaths(),
+            mode,
+            chatJsonOutput,
+            Console.Out,
+            out var chatExitCode))
     {
         Environment.ExitCode = chatExitCode;
         return;
