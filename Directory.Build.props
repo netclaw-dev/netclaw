@@ -8,142 +8,20 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.24.3</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.24.3 — GitHub Enterprise Copilot support, degraded startup mode, synced skill resources via shell
-
-**Features**
-
-* **GitHub Enterprise Copilot support** — Authenticate GitHub Copilot tokens against GHE instances and route requests to the correct data residency endpoint. ([#1509](https://github.com/netclaw-dev/netclaw/pull/1509), [#1512](https://github.com/netclaw-dev/netclaw/pull/1512), [#1555](https://github.com/netclaw-dev/netclaw/pull/1555))
-
-* **Slack native processing status** — Real-time processing indicators in Slack instead of generic "working" messages. ([#1524](https://github.com/netclaw-dev/netclaw/pull/1524))
-
-* **Reminder failure visibility** — Operators can now see when reminders fail or are skipped. ([#1503](https://github.com/netclaw-dev/netclaw/pull/1503))
-
-* **Degraded startup mode** — Daemon starts with a "no valid model" banner when no provider is configured, instead of failing host startup. Removed silent local-ollama default. ([#1540](https://github.com/netclaw-dev/netclaw/pull/1540))
-
-* **Synced skill resources via shell** — Skill resources synced from the cloud can now execute via shell commands. ([#1551](https://github.com/netclaw-dev/netclaw/pull/1551))
+    <VersionPrefix>0.24.4</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.24.4 — Environment-variable-only configuration support, remote daemon CLI fix
 
 **Bug Fixes**
 
-* **Autonomous sessions can write workspace directory** — Autonomous sessions could not write to the workspace directory. ([#1498](https://github.com/netclaw-dev/netclaw/pull/1498))
+* **Environment-variable-only configuration** — Fixed doctor misdiagnosis and OAuth config-file side effect that prevented daemon startup when configuration is supplied entirely via environment variables. ([#1569](https://github.com/netclaw-dev/netclaw/pull/1569))
 
-* **Reminder duplicate-execution guard** — Mode A reminder session wedge prevented the duplicate guard from releasing. ([#1500](https://github.com/netclaw-dev/netclaw/pull/1500))
-
-* **Reset stops daemon first** — `netclaw reset` now stops the daemon before proceeding and shows a progress screen. ([#1494](https://github.com/netclaw-dev/netclaw/pull/1494))
-
-* **MCP tool errors display cleanly** — MCP errors now show as attributed messages instead of raw JSON dumps. ([#1510](https://github.com/netclaw-dev/netclaw/pull/1510))
-
-* **TUI identity redo timezone loop** — Identity redo would loop on timezone; also fixed session browser regression. ([#1518](https://github.com/netclaw-dev/netclaw/pull/1518))
-
-* **Subagent terminal result summaries** — Subagent terminal results not displaying properly. ([#1519](https://github.com/netclaw-dev/netclaw/pull/1519))
-
-* **Flaky host crash during install reset** — Thread-unsafe ReactiveProperty access during reset caused crashes. ([#1525](https://github.com/netclaw-dev/netclaw/pull/1525))
-
-* **Session browser selection highlight** — Session browser didn't show selection highlight in TUI. ([#1531](https://github.com/netclaw-dev/netclaw/pull/1531))
-
-* **Slack active thread status refresh** — Thread status not refreshing during tool loops and buffered messages. ([#1534](https://github.com/netclaw-dev/netclaw/pull/1534))
-
-* **Stable memory handles** — Memory handles were unstable, affecting cross-session memory. ([#1538](https://github.com/netclaw-dev/netclaw/pull/1538))
-
-* **GHE Copilot routing** — GHE Copilot chat now routes to the token's `endpoints.api` host instead of hardcoded `api.githubcopilot.com`. ([#1555](https://github.com/netclaw-dev/netclaw/pull/1555))
-
-* **Security: Microsoft.OpenApi CVE-2026-49451** — Pinned to 2.7.5 to address vulnerability. ([#1543](https://github.com/netclaw-dev/netclaw/pull/1543))
-
-**Breaking Changes**
-
-* **Removed silent local-ollama fallback** — Users without any provider configured will now see a "no valid model" banner instead of an automatic fallback to local Ollama. Explicit provider configuration is now required for full functionality. ([#1540](https://github.com/netclaw-dev/netclaw/pull/1540))
-
-**Performance**
-
-* **Log stream partitioned by session** — Each session now gets its own `session.log` while `daemon.log` remains sparse. Cleaner logs and better observability with OTEL union support. ([#1499](https://github.com/netclaw-dev/netclaw/pull/1499))
-
-Netclaw v0.24.3-beta.3 — Logging partition by session, Slack thread status refresh, TUI session browser highlight
-
-**Bug Fixes**
-
-* **Fixed Slack active thread status refresh** — Slack interactions now properly refresh processing status during tool loops and buffered message processing. ([#1534](https://github.com/netclaw-dev/netclaw/pull/1534))
-
-* **Fixed TUI session browser selection highlight** — Session browser in the TUI now properly shows selection highlights. ([#1531](https://github.com/netclaw-dev/netclaw/pull/1531))
-
-**Internal**
-
-* **Partitioned logging by session** — Session logs are now partitioned per-session (session.log), daemon.log is sparse, and OTEL captures the union. Removed async local threading for session diagnostics. ([#1472](https://github.com/netclaw-dev/netclaw/pull/1499))
-
-Netclaw v0.24.3-beta.2 — GitHub Enterprise Copilot auth, Slack native processing status, reminder failure visibility
-
-**Features**
-
-* **Slack native processing status** — Shows real-time processing indicators in Slack interactions instead of generic "working" messages. ([#1524](https://github.com/netclaw-dev/netclaw/pull/1524))
-
-* **GitHub Enterprise Copilot authentication** — Provider-layer GHE Copilot auth support plus TUI configuration for GitHub Enterprise Copilot authentication. ([#1509](https://github.com/netclaw-dev/netclaw/pull/1509), [#1512](https://github.com/netclaw-dev/netclaw/pull/1512))
-
-* **Reminder failure and skip visibility** — Operators can now see when reminders fail or are skipped, providing debugging insight into reminder execution. ([#1503](https://github.com/netclaw-dev/netclaw/pull/1503))
-
-**Bug Fixes**
-
-* **Fixed flaky host crash during install reset** — Race condition in reset-progress ReactiveProperties causing crashes during host reset; now properly synchronized. ([#1525](https://github.com/netclaw-dev/netclaw/pull/1525))
-
-* **Fixed subagent terminal result summaries** — Subagent result summaries in the terminal were returning incorrect data; now properly surfaces explicit terminal run summaries. ([#1519](https://github.com/netclaw-dev/netclaw/pull/1519))
-
-* **Fixed identity redo timezone infinite loop** — Resolved an infinite loop in the identity redo flow and corrected a session browser regression test. ([#1518](https://github.com/netclaw-dev/netclaw/pull/1518))
-
-* **Fixed daemon reset behavior** — Daemon now properly stops before reset and shows a progress screen. ([#1494](https://github.com/netclaw-dev/netclaw/pull/1494))
-
-* **Clean MCP error messages** — MCP tool errors now display as clean attributed messages instead of raw JSON blobs, allowing models to properly interpret and handle MCP errors. ([#1495](https://github.com/netclaw-dev/netclaw/pull/1510))
+* **Remote daemon CLI** — Fixed: CLI no longer demands a local daemon config file when the daemon is explicitly configured as remote. ([#1567](https://github.com/netclaw-dev/netclaw/pull/1567))
 
 **Dependency Updates**
 
-* **Bump Anthropic SDK** — 12.30.0 → 12.31.0 (semver-minor). ([#1488](https://github.com/netclaw-dev/netclaw/pull/1488))
+* **Bump Anthropic SDK** — 12.34.1 → 12.35.1. ([#1561](https://github.com/netclaw-dev/netclaw/pull/1561))
 
-* **Bump YamlDotNet** — 18.0.0 → 18.1.0 (semver-minor). ([#1516](https://github.com/netclaw-dev/netclaw/pull/1516))
-
-* **Bump Termina** — 0.14.0 → 0.15.0-beta1. ([#1506](https://github.com/netclaw-dev/netclaw/pull/1506))
-
-Netclaw v0.24.3-beta.1 — Reminder duplicate-execution guard fix, autonomous session workspace write support
-
-**Bug Fixes**
-
-* **Reminders: release duplicate-execution guard when a Mode A reminder session wedges** — When a Mode A reminder session wedged, the duplicate-execution guard was never released, blocking subsequent executions. The guard is now properly released when a session wedges. ([#1492](https://github.com/netclaw-dev/netclaw/pull/1500))
-
-* **Tools: allow autonomous sessions to write the workspace directory** — Autonomous sessions were blocked from writing to the workspace directory. This fix grants them write access. ([#1493](https://github.com/netclaw-dev/netclaw/pull/1498))
-
-Netclaw v0.24.2 — DwarfStar provider support, sub-agent operating rule inheritance, systemd update reliability, and reliability improvements
-
-**Features**
-
-* **DwarfStar (ds4) provider support** — Added DwarfStar as a supported provider via the OpenAI-compatible backend strategy. ([#1349](https://github.com/netclaw-dev/netclaw/pull/1349))
-
-* **Sub-agents inherit embedded AGENTS.md operating rules** — Sub-agents spawned by a parent session now inherit the embedded `AGENTS.md` operating rules from the parent's identity context, ensuring consistent operating constraints across the agent hierarchy. ([#1490](https://github.com/netclaw-dev/netclaw/pull/1490))
-
-* **Schema-aware meta argument coercion** — ChatGPT-trained models (Qwen3.6, etc.) were being hard-rejected for using non-canonical meta argument names (`TimeoutSeconds` vs `_timeout_seconds`). This adds schema-aware near-miss resolution that coercively maps model-supplied key variants to canonical names when no real tool parameter shadows them. Fixes "tool was NOT executed" errors that pushed models off tools and into sandbox-style output. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
-
-* **Preserve per-call meta hints across tool-batch re-drive** — Tool calls awaiting approval that passivate and cold-recover were losing meta hints (`_timeout_seconds`, `_rationale`, `_background`), silently falling back to defaults. Long-running tools approved after session recovery now respect the original timeout. ([#1470](https://github.com/netclaw-dev/netclaw/pull/1470))
-
-**Bug Fixes**
-
-* **Subagents: fixed premature kill by parent watchdog during approval waits** — Sub-agents waiting for human approval were incorrectly killed by the parent session's inactivity watchdog. Sub-agents now manage their own liveness end-to-end and are no longer subject to parent-side timeouts. ([#1481](https://github.com/netclaw-dev/netclaw/pull/1481))
-
-* **Subagents: honor approval-pause in every tool-watchdog mode** — In WallClock mode (applied to every opaque tool), the human-approval pause was ignored: the wall-clock budget kept ticking through a human approval, killing healthy tools mid-wait when humans took longer than the budget. Prevents premature tool termination during human-in-the-loop approvals. ([#1473](https://github.com/netclaw-dev/netclaw/pull/1473))
-
-* **Subagents: record spawn lifecycle in the session transcript** — Sub-agent actor logs went through Akka's async logger bridge and were lost because `SessionDiagnosticsContext.AsyncLocal` was gone. Spawns that failed early (guard rejection, watchdog kill, child-actor failure) left the session transcript completely silent. Parent-side breadcrumbs now log spawn lifecycle under the parent session scope. ([#1468](https://github.com/netclaw-dev/netclaw/pull/1468))
-
-* **Skills: block agent mutations to server-feed skill directories** — Agents could freely edit/delete/write files into `.server-feeds/` skill directories via both `skill_manage` and direct file-write tools. Changes were silently overwritten on the next sync cycle. Two enforcement layers added: `skill_manage` guard + `ToolPathPolicy` write-deny for server-feed paths. Prevents wasted agent effort and misleading session state from server-feed mutations. ([#1466](https://github.com/netclaw-dev/netclaw/pull/1466))
-
-* **Providers: refresh inference OAuth tokens** — OpenAI Copilot and other inference providers with OAuth tokens now refresh tokens at runtime rather than relying on stale tokens. Includes Copilot probe-time token refresh. Prevents authentication failures during long-running sessions when tokens expire. ([#1465](https://github.com/netclaw-dev/netclaw/pull/1465))
-
-* **`netclaw update` no longer crash-loops systemd on Linux** — On Linux hosts with Netclaw installed as a systemd `--user` service, `netclaw update` was restarting the daemon as a detached process (bypassing systemd). This left the still-enabled systemd unit in a permanent crash-loop — every 5 seconds it tried to start, failed because the detached daemon held the exclusive lock file, and retried indefinitely (restart counters in the tens of thousands). `netclaw update` now delegates start/stop to `systemctl --user` when an enabled user unit exists. ([#1469](https://github.com/netclaw-dev/netclaw/pull/1469))
-
-**Performance**
-
-* **Optimize `LlmSessionActor` storage** — Only retain the most recent snapshot + last N messages in the journal, instead of storing full history. Reduces memory consumption for long sessions with many messages. ([#1464](https://github.com/netclaw-dev/netclaw/pull/1464))
-
-**Dependency Updates**
-
-* **Bump MessagePack from 2.5.301 to 3.1.7** — Major version bump with serialization improvements. Please test your workflows after upgrading. ([#1420](https://github.com/netclaw-dev/netclaw/pull/1420))
-
-* **Bump Termina from 0.14.0-beta3 to 0.14.0** — TUI framework promoted to stable; includes a fix for the MCP tool permissions page layout. ([#1480](https://github.com/netclaw-dev/netclaw/pull/1480), [#1483](https://github.com/netclaw-dev/netclaw/pull/1483))
-
-* **Bump Anthropic SDK** — 12.29.1 → 12.30.0 (semver-minor). ([#1460](https://github.com/netclaw-dev/netclaw/pull/1460))</PackageReleaseNotes>
+* **Bump Akka group** — Akka.Cluster.Sharding and Akka.Persistence 1.5.69 → 1.5.70. ([#1560](https://github.com/netclaw-dev/netclaw/pull/1560))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
