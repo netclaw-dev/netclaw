@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Providers;
@@ -44,6 +45,26 @@ public sealed class ProviderPluginFactoryTests
         });
 
         Assert.NotNull(client);
+    }
+
+    // Regression guard: every client the factory returns must carry the
+    // ReasoningSuppressionChatClient guarantee (NetclawChatOptionKeys.SuppressReasoning is
+    // always stripped before the wire), not just the ones curation happens to call — the
+    // factory is the single seam that can promise this. This asserts on the concrete wrapper
+    // type (internal, visible via InternalsVisibleTo) rather than on wire behavior because the
+    // real inner clients here would otherwise require a live network call to exercise.
+    [Fact]
+    public void Create_AlwaysWrapsWithReasoningSuppressionChatClient()
+    {
+        var factory = CreateFactory(("local", new ProviderEntry
+        {
+            Type = "ollama",
+            Endpoint = "http://localhost:11434"
+        }));
+
+        var client = factory.Create(new ModelReference { Provider = "local", ModelId = "qwen3:30b" });
+
+        Assert.IsType<ReasoningSuppressionChatClient>(client);
     }
 
     [Fact]
@@ -228,6 +249,33 @@ public sealed class ProviderPluginFactoryTests
         };
 
         Assert.Null(plugin.CreateVendorOptionsSource(entry));
+    }
+
+    [Fact]
+    public void OllamaProviderPlugin_DeclaresOllamaThinkDialect()
+    {
+        var plugin = new OllamaProviderPlugin(new OllamaDescriptor(SharedHttp));
+
+        Assert.Equal(ReasoningSuppressionDialect.OllamaThink, plugin.SuppressionDialect);
+    }
+
+    [Fact]
+    public void OpenAiCompatibleProviderPlugin_DeclaresChatTemplateKwargsDialect()
+    {
+        var plugin = new OpenAiCompatibleProviderPlugin(
+            new OpenAiCompatibleDescriptor(SharedHttp), NullLoggerFactory.Instance);
+
+        Assert.Equal(ReasoningSuppressionDialect.ChatTemplateKwargs, plugin.SuppressionDialect);
+    }
+
+    // Plugins backed by strict SDKs (OpenAI, Anthropic, OpenRouter — all official OpenAI-SDK
+    // adapters) have no known dialect and must inherit the safe strip-only default. Excludes
+    // Ollama from AllPlugins, which declares OllamaThink (covered above).
+    [Fact]
+    public void StrictSdkProviderPlugins_InheritNoneDialect()
+    {
+        foreach (var plugin in AllPlugins.Where(p => p.TypeKey != "ollama"))
+            Assert.Equal(ReasoningSuppressionDialect.None, plugin.SuppressionDialect);
     }
 
     private static ProviderPluginFactory CreateFactory(params (string name, ProviderEntry entry)[] providers)

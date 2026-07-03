@@ -37,6 +37,8 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
 
     public virtual IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry) => null;
 
+    public virtual ReasoningSuppressionDialect SuppressionDialect => ReasoningSuppressionDialect.None;
+
     /// <summary>
     /// Creates an <see cref="HttpClient"/> with a generous timeout suitable for LLM calls.
     /// The default <see cref="HttpClient.Timeout"/> of 100 seconds is far too short for

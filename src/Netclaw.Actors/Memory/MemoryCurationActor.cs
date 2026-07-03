@@ -327,17 +327,22 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 // the memory-core-redesign change.
                 MaxOutputTokens = 4096,
                 // Belt: ask the serving stack not to think at all for this
-                // keyword-classification call. These ride ChatOptions
-                // AdditionalProperties, which the OpenAI-compatible client forwards
-                // as top-level request fields (vLLM/llama.cpp/SGLang honor
-                // chat_template_kwargs.enable_thinking for Qwen-style templates;
-                // servers without support ignore unknown fields — same contract as
-                // the unconditional `return_progress` field) and OllamaSharp maps
-                // `think`. StripThinkBlocks in ParseResponse remains the braces.
+                // keyword-classification call. This expresses intent only — the raw
+                // provider-dialect field name (vLLM/llama.cpp/SGLang's
+                // chat_template_kwargs.enable_thinking, Ollama's think) is NOT this
+                // call site's business, because the model behind SessionId's
+                // provider varies per deployment and strict SDKs (official OpenAI,
+                // Anthropic) reject or ignore unknown top-level fields differently
+                // than self-hosted servers do. NetclawChatOptionKeys.SuppressReasoning
+                // is a provider-agnostic intent key; ReasoningSuppressionChatClient
+                // (Netclaw.Daemon, wrapping every chat client the daemon constructs)
+                // reads it, removes it, and maps it to the dialect the active
+                // provider plugin declares (ILlmProviderPlugin.SuppressionDialect) —
+                // or strips it with no replacement for providers with no equivalent.
+                // StripThinkBlocks in ParseResponse remains the braces.
                 AdditionalProperties = new AdditionalPropertiesDictionary
                 {
-                    ["chat_template_kwargs"] = new Dictionary<string, object?> { ["enable_thinking"] = false },
-                    ["think"] = false
+                    [NetclawChatOptionKeys.SuppressReasoning] = true
                 }
             };
 

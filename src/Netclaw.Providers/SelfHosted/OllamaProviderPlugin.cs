@@ -32,6 +32,9 @@ public sealed class OllamaProviderPlugin : ProviderPluginBase<OllamaDescriptor>
         var vendorOptions = entry.GetVendorOptions<OllamaVendorOptions>() ?? new OllamaVendorOptions();
         return vendorOptions.DisableThinking ? new OllamaVendorOptionsSource() : null;
     }
+
+    // OllamaSharp's request mapping consumes a top-level "think" field.
+    public override ReasoningSuppressionDialect SuppressionDialect => ReasoningSuppressionDialect.OllamaThink;
 }
 
 internal sealed class OllamaVendorOptions : IVendorOptions

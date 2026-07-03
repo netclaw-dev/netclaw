@@ -35,4 +35,9 @@ public sealed class OpenAiCompatibleProviderPlugin : ProviderPluginBase<OpenAiCo
             model.ModelId,
             _loggerFactory.CreateLogger<OpenAiCompatibleChatClient>());
     }
+
+    // OpenAiCompatibleChatClient forwards ChatOptions.AdditionalProperties verbatim as
+    // top-level request JSON (BuildPayload), which is exactly what vLLM/llama.cpp/SGLang's
+    // chat_template_kwargs.enable_thinking dialect needs.
+    public override ReasoningSuppressionDialect SuppressionDialect => ReasoningSuppressionDialect.ChatTemplateKwargs;
 }
