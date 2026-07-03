@@ -312,14 +312,20 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             var options = new SessionScopedChatOptions
             {
                 SessionId = sessionId.Value,
-                // Headroom for reasoning models: with a tight cap a thinking model
-                // spends the whole budget on hidden reasoning and returns empty
-                // content, silently disabling this LLM tier. The July 2026 audit
-                // measured exactly that in production: 512 was still too tight for
-                // Qwen3.6-class models — 0 successful LLM curation decisions ever
-                // (3 timeouts, 3 empty responses). Non-reasoning models stop after
-                // the bare keyword the prompt asks for, so they pay nothing extra.
-                MaxOutputTokens = 1500,
+                // Token cap is the THIRD line of defense, so it must never be the
+                // binding constraint. Layering: (1) reasoning suppression below is
+                // the primary fix — suppressed/non-reasoning models emit just the
+                // keyword and never approach any cap; (2) the 10s call timeout
+                // bounds wall-clock when a model ignores suppression and thinks at
+                // length. The cap only matters in the remaining window — suppression
+                // ignored but thinking finishes inside the timeout — where a tight
+                // cap truncates mid-think and reproduces the measured
+                // responseLength=0 empty-reply failure (July 2026 audit: at 512, a
+                // Qwen3.6-class model produced 0 successful curation decisions
+                // ever). Unemitted tokens cost nothing, so size this generously;
+                // it becomes the Memory.Curation.LlmMaxOutputTokens config knob in
+                // the memory-core-redesign change.
+                MaxOutputTokens = 4096,
                 // Belt: ask the serving stack not to think at all for this
                 // keyword-classification call. These ride ChatOptions
                 // AdditionalProperties, which the OpenAI-compatible client forwards
