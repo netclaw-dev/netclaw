@@ -150,6 +150,13 @@ skill system uses and the de facto format used by Claude Code and OpenCode.
 One file per agent. No JSON sidecar. The filename is a convenience for humans;
 the authoritative agent name comes from the `name` field in the frontmatter.
 
+SkillServer feed sync can also install managed subagent definitions under
+`~/.netclaw/agents/.server-feeds/<feed-name>/<agent-name>.md`. Those files are
+owned by the server-feed sync process: edit local user-authored agents in the
+top-level `~/.netclaw/agents/*.md` namespace instead. If a top-level local agent
+and a managed feed agent declare the same `name`, the local definition wins and
+the managed one is skipped with a warning.
+
 ### Frontmatter fields
 
 ```markdown
@@ -194,15 +201,15 @@ written.
 ### Loader behavior (fail loud)
 
 On the next turn or subagent lookup, `FileSubAgentDefinitionLoader` rescans
-`~/.netclaw/agents/*.md` and logs a specific warning for every file it rejects.
-A rejection does not stop the scan — other valid files in the same directory
-still load. Rejection
-reasons:
+top-level `~/.netclaw/agents/*.md` files first, then managed server-feed files
+under `~/.netclaw/agents/.server-feeds/*/*.md`. It logs a specific warning for
+every file it rejects. A rejection does not stop the scan — other valid files in
+the same directory still load. Rejection reasons:
 
 - Missing or unparseable YAML frontmatter
 - Missing required field (`name` or `description`)
 - Empty body (system prompt)
-- Duplicate `name` across files (the alphabetically-first file wins)
+- Duplicate `name` across files (top-level local files win over managed feed files; managed feed duplicates use configured feed order)
 
 Non-`.md` files in the agents directory (`stray.json`, `README.txt`, etc.) are
 ignored at the glob layer and never logged.

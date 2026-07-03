@@ -135,7 +135,14 @@ How it differs from the flow tapes:
 Every `Screenshot` is preceded by an anchored `Wait+Screen` (we are on the
 right screen) and **bracketed by `Sleep 1s`** — one before so the TUI has
 finished painting, one after so the next keystroke cannot leak into the
-capture. This is the one place a literal `Sleep` is correct: the no-`Sleep`
+capture. The after-sleep is not optional and must sit **between the
+`Screenshot` and the next screen-changing key** (`Ctrl+Q`, `Enter`, `exit`),
+never after it: VHS writes the PNG asynchronously on a later render tick, so a
+teardown key issued immediately after `Screenshot` can win the race and capture
+the restored shell transcript instead of the TUI frame (this broke
+`mcp-permissions` frame 2 — the tool grid rendered, the `Wait+Screen` anchors
+matched, but `Ctrl+Q` tore the alt screen down before the deferred capture
+fired). This is the one place a literal `Sleep` is correct: the no-`Sleep`
 rule above is about flow-tape step *synchronization*, whereas a screenshot
 needs the frame to be visually *settled*, and a settled static screen
 captured at +1s is still deterministic. Never screenshot a screen with a

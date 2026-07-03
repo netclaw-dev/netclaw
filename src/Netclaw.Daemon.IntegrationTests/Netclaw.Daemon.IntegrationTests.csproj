@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Testcontainers" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
+    <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
+    <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
+    <ProjectReference Include="../Netclaw.Security/Netclaw.Security.csproj" />
+    <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
+  </ItemGroup>
+
+</Project>

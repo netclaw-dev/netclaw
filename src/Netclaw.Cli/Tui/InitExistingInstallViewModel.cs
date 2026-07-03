@@ -261,6 +261,16 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
             return;
 
         _quitBlockedForDeletion = false;
+
+        // Register the completion-pause timer BEFORE announcing step 3. RunResetAsync runs off the
+        // loop, so step 3 is the signal observers use to know deletion finished. On a virtualized
+        // clock, advancing before this timer is registered is a lost wakeup that hangs the reset
+        // forever (the delay never fires). Creating the timer first makes "step 3 observed" a
+        // happens-before guarantee that the pause timer already exists, so one clock advance always
+        // fires it. On the real clock this shifts registration a few microseconds earlier; the
+        // visible "Purge complete" dwell is unchanged.
+        var completionPause = Task.Delay(CompletionPause, _timeProvider, ct);
+
         PublishOnLoop(() =>
         {
             CurrentProgressStep.Value = 3;
@@ -273,7 +283,7 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
         try
         {
-            await Task.Delay(CompletionPause, _timeProvider, ct);
+            await completionPause;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

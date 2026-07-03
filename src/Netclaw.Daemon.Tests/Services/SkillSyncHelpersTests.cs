@@ -143,4 +143,48 @@ public sealed class SkillSyncHelpersTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(feedDir, "skill-a")));
         Assert.Single(syncState.Skills);
     }
+
+    [Fact]
+    public void PruneRemovedSubAgents_drops_stale_managed_files_and_state_only()
+    {
+        var feedDir = _dir.Path;
+        File.WriteAllText(Path.Combine(feedDir, "agent-a.md"), "a");
+        File.WriteAllText(Path.Combine(feedDir, "agent-b.md"), "b");
+        File.WriteAllText(Path.Combine(feedDir, "notes.txt"), "not managed");
+        Directory.CreateDirectory(Path.Combine(feedDir, ".staging"));
+
+        var syncState = new SkillSyncState
+        {
+            Skills =
+            {
+                ["agent-a"] = State(),
+                ["agent-b"] = State(),
+                ["agent-c"] = State(),
+            }
+        };
+
+        var changed = SkillSyncHelpers.PruneRemovedSubAgents(
+            feedDir, ["agent-a"], syncState, NullLogger.Instance);
+
+        Assert.True(changed);
+        Assert.True(File.Exists(Path.Combine(feedDir, "agent-a.md")));
+        Assert.False(File.Exists(Path.Combine(feedDir, "agent-b.md")));
+        Assert.True(File.Exists(Path.Combine(feedDir, "notes.txt")));
+        Assert.True(Directory.Exists(Path.Combine(feedDir, ".staging")));
+        Assert.Equal(["agent-a"], syncState.Skills.Keys.OrderBy(k => k));
+    }
+
+    [Theory]
+    [InlineData("code-reviewer", true)]
+    [InlineData("agent123", true)]
+    [InlineData("CodeReviewer", false)]
+    [InlineData("../agent", false)]
+    [InlineData("agent.md", false)]
+    [InlineData("", false)]
+    public void IsSafeManagedFileStem_accepts_only_lowercase_alphanumeric_hyphen(
+        string value,
+        bool expected)
+    {
+        Assert.Equal(expected, SkillSyncHelpers.IsSafeManagedFileStem(value));
+    }
 }

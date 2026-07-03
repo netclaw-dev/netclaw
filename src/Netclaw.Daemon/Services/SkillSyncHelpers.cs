@@ -52,6 +52,22 @@ internal static class SkillSyncHelpers
             : normalized;
     }
 
+    internal static bool IsSafeManagedFileStem(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        foreach (var c in value)
+        {
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
+                continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
     internal static SkillSyncState ReadSyncState(string path, ILogger logger)
     {
         if (!File.Exists(path))
@@ -163,6 +179,52 @@ internal static class SkillSyncHelpers
         return changed;
     }
 
+    internal static bool PruneRemovedSubAgents(
+        string feedDir,
+        IReadOnlyCollection<string> serverAgentNames,
+        SkillSyncState syncState,
+        ILogger logger)
+    {
+        var present = new HashSet<string>(serverAgentNames, StringComparer.Ordinal);
+        var changed = false;
+
+        var staleStateKeys = syncState.Skills.Keys
+            .Where(name => !present.Contains(name))
+            .ToList();
+        foreach (var name in staleStateKeys)
+        {
+            syncState.Skills.Remove(name);
+            changed = true;
+        }
+
+        if (!Directory.Exists(feedDir))
+            return changed;
+
+        foreach (var file in Directory.GetFiles(feedDir, "*.md"))
+        {
+            var agentName = Path.GetFileNameWithoutExtension(file);
+            if (string.IsNullOrEmpty(agentName) || present.Contains(agentName))
+                continue;
+
+            try
+            {
+                File.Delete(file);
+                logger.LogInformation(
+                    "Pruned removed sub-agent '{AgentName}' from feed directory {FeedDir}",
+                    agentName, feedDir);
+                changed = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex,
+                    "Failed to prune removed sub-agent '{AgentName}' from {FeedDir} — leaving in place",
+                    agentName, feedDir);
+            }
+        }
+
+        return changed;
+    }
+
     internal static async Task ReplaceSkillDirectoryAsync(
         string parentDirectory,
         string skillName,
@@ -211,6 +273,57 @@ internal static class SkillSyncHelpers
 
             if (Directory.Exists(backupDir) && !Directory.Exists(skillDir))
                 Directory.Delete(backupDir, recursive: true);
+        }
+    }
+
+    internal static async Task ReplaceTextFileAsync(
+        string parentDirectory,
+        string fileName,
+        string content,
+        CancellationToken cancellationToken)
+        => await ReplaceFileAsync(parentDirectory, fileName, Encoding.UTF8.GetBytes(content), cancellationToken);
+
+    internal static async Task ReplaceFileAsync(
+        string parentDirectory,
+        string fileName,
+        byte[] content,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(parentDirectory);
+
+        var stagingRoot = Path.Combine(parentDirectory, ".staging");
+        Directory.CreateDirectory(stagingRoot);
+
+        var targetPath = Path.Combine(parentDirectory, fileName);
+        var stagingPath = Path.Combine(stagingRoot, $"{fileName}-{Guid.NewGuid():N}.tmp");
+        var backupPath = Path.Combine(stagingRoot, $"{fileName}-backup-{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await File.WriteAllBytesAsync(stagingPath, content, cancellationToken);
+
+            if (File.Exists(targetPath))
+                File.Move(targetPath, backupPath);
+
+            File.Move(stagingPath, targetPath);
+
+            if (File.Exists(backupPath))
+                File.Delete(backupPath);
+        }
+        catch
+        {
+            if (!File.Exists(targetPath) && File.Exists(backupPath))
+                File.Move(backupPath, targetPath);
+
+            throw;
+        }
+        finally
+        {
+            if (File.Exists(stagingPath))
+                File.Delete(stagingPath);
+
+            if (File.Exists(backupPath) && !File.Exists(targetPath))
+                File.Delete(backupPath);
         }
     }
 }

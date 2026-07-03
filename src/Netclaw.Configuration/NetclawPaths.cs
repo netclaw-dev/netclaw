@@ -62,6 +62,13 @@ public sealed class NetclawPaths
 
     // ── Agent definitions directory ──
     public string AgentsDirectory => Path.Combine(BasePath, "agents");
+    public string ServerFeedAgentsDirectory => Path.Combine(AgentsDirectory, ".server-feeds");
+
+    public string ServerFeedAgentDirectory(string feedName)
+        => Path.Combine(ServerFeedAgentsDirectory, feedName);
+
+    public string ServerFeedAgentSyncStatePath(string feedName)
+        => Path.Combine(ServerFeedAgentDirectory(feedName), ".sync-state.json");
 
     // ── Project workspaces ──
     /// <summary>
@@ -175,6 +182,7 @@ public sealed class NetclawPaths
         yield return LogsDirectory;
         yield return SessionLogsDirectory;
         yield return AgentsDirectory;
+        yield return ServerFeedAgentsDirectory;
         yield return SessionsDirectory;
         yield return BinDirectory;
         yield return KeysDirectory;

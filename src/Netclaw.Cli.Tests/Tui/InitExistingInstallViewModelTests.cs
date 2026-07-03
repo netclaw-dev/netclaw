@@ -402,12 +402,12 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
     private async Task CompleteResetAsync(InitExistingInstallViewModel vm)
     {
-        for (var i = 0; i < 10 && vm.ResetTask is { IsCompleted: false }; i++)
-        {
-            _time.Advance(InitExistingInstallViewModel.CompletionPause);
-            await Task.Yield();
-        }
-
+        // RunResetAsync registers the completion-pause timer before it publishes step 3, so once
+        // step 3 is observed the fake timer is guaranteed registered on _time. That makes a single
+        // advance fire it deterministically. The old advance/yield loop only ever masked the
+        // advance-before-registration lost wakeup this helper used to hit on loaded CI runners.
+        await WaitForProgressAsync(vm, 3);
+        _time.Advance(InitExistingInstallViewModel.CompletionPause);
         await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
     }
 

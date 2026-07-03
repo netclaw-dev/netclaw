@@ -41,6 +41,13 @@ Wait+Screen@5s /Ollama/
 Screenshot "/tmp/shot-provider-manager-empty.png"
 
 # Frame captured; quit the TUI back to the shell.
+# Sleep 1s BEFORE Ctrl+Q: VHS's Screenshot is captured asynchronously on a
+# later render tick, so a screen-destroying key here can race the deferred
+# capture and land the restored shell transcript in the PNG instead of this
+# frame. This frame has not regressed on that race, but the guard makes it
+# immune to the timing jitter that broke mcp-permissions frame 2 (see that
+# tape's Exit-TUI comment for the full mechanism + repro).
+Sleep 1s
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 

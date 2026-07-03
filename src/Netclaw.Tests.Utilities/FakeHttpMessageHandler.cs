@@ -30,6 +30,15 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
             Content = new StringContent(content, Encoding.UTF8, contentType)
         };
 
+    public void AddByteResponse(string url, byte[] content, string contentType = "application/octet-stream")
+        => _routes[url] = _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(content)
+            {
+                Headers = { ContentType = new(contentType) }
+            }
+        };
+
     public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
         => _routes[url] = _ => new HttpResponseMessage(status)
         {

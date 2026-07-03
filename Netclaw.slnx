@@ -15,6 +15,7 @@
     <Project Path="src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <Project Path="src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj" />
+    <Project Path="src/Netclaw.Daemon.IntegrationTests/Netclaw.Daemon.IntegrationTests.csproj" />
     <Project Path="src/Netclaw.Daemon/Netclaw.Daemon.csproj" />
     <Project Path="src/Netclaw.Media.Tests/Netclaw.Media.Tests.csproj" />
     <Project Path="src/Netclaw.Media/Netclaw.Media.csproj" />

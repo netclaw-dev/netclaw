@@ -84,6 +84,12 @@ Screenshot "/tmp/shot-wizard-security-posture.png"
 
 # Both frames captured; abandon the wizard. Ctrl+Q is the TUI quit
 # shortcut (Ctrl+C requires a double-press under raw input mode).
+# Sleep 1s BEFORE Ctrl+Q: VHS's Screenshot is captured asynchronously on a
+# later render tick, so quitting immediately can race the deferred capture
+# and land the restored shell transcript in the PNG instead of this frame.
+# Guards this final capture against the timing jitter that broke
+# mcp-permissions frame 2 (see that tape's Exit-TUI comment for mechanism).
+Sleep 1s
 Ctrl+Q
 
 # VHS's screen scraper needs a beat to pick up the restored main buffer

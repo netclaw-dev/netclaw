@@ -59,6 +59,12 @@ Wait+Screen@10s /validated and saved/
 Wait+Screen@5s /\[Enter\] Settings Areas/
 Screenshot "/tmp/shot-config-search-saved.png"
 
+# Sleep 1s BEFORE Ctrl+Q: VHS's Screenshot is captured asynchronously on a
+# later render tick, so a screen-destroying key here can race the deferred
+# capture and land the restored shell transcript in the PNG instead of this
+# frame. Guards this final capture against the timing jitter that broke
+# mcp-permissions frame 2 (see that tape's Exit-TUI comment for mechanism).
+Sleep 1s
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 

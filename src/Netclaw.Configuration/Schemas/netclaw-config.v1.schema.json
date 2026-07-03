@@ -471,6 +471,7 @@
             "properties": {
               "Name": {
                 "type": "string",
+                "pattern": "^[a-z0-9-]+$",
                 "description": "Unique feed identifier (used as directory name). Lowercase alphanumeric and hyphens."
               },
               "Url": {
