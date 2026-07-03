@@ -65,6 +65,41 @@ public sealed class CliConfigPreflightTests : IDisposable
     }
 
     [Fact]
+    public void TryWriteMissingConfig_RemoteEndpointEnvVar_AllowsCommand()
+    {
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", "http://127.0.0.1:5299");
+        try
+        {
+            using var writer = new StringWriter();
+
+            var blocked = CliConfigPreflight.TryWriteMissingConfig(_paths, jsonOutput: false, writer, out var exitCode);
+
+            // The daemon is explicitly remote — its config lives on the daemon
+            // host, so a missing local config must not block the command.
+            Assert.False(blocked);
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, writer.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
+        }
+    }
+
+    [Fact]
+    public void TryWriteMissingConfig_PairedClientEndpoint_AllowsCommand()
+    {
+        Netclaw.Cli.Config.ClientConfigFile.WriteEndpoint(_paths, "https://daemon.example.net:5299");
+        using var writer = new StringWriter();
+
+        var blocked = CliConfigPreflight.TryWriteMissingConfig(_paths, jsonOutput: false, writer, out var exitCode);
+
+        Assert.False(blocked);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, writer.ToString());
+    }
+
+    [Fact]
     public void TryWriteMissingChatConfig_HeadlessJson_PrintsJsonPayload()
     {
         using var writer = new StringWriter();
