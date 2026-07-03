@@ -120,8 +120,11 @@ Command ownership stays explicit:
 - `netclaw daemon status` — check if daemon is running, show PID and uptime
 - `netclaw daemon install` — register as a systemd user service
   (`~/.config/systemd/user/netclaw.service`, no sudo). Supports
-  `loginctl enable-linger` for surviving logout.
-- `netclaw daemon uninstall` — remove systemd user service registration
+  `loginctl enable-linger` for surviving logout. Captures the operator's real
+  shell `PATH` into `~/.netclaw/config/daemon.env` (loaded via `EnvironmentFile=`)
+  so the daemon's shell tool resolves the same binaries the operator can.
+- `netclaw daemon uninstall` — remove systemd user service registration and the
+  captured `daemon.env`
 
 ### TUI-Interactive Commands (Termina, daemon required)
 
@@ -317,8 +320,12 @@ The CLI SHALL provide commands to manage the daemon lifecycle:
 - `netclaw daemon status` SHALL report daemon state (running/stopped, PID, uptime)
 - `netclaw daemon install` SHALL register as a systemd user service (Linux) or
   LaunchAgent (macOS). No sudo required — uses `systemctl --user` and
-  `loginctl enable-linger` on Linux.
-- `netclaw daemon uninstall` SHALL remove the service registration
+  `loginctl enable-linger` on Linux. On Linux it SHALL capture the operator's
+  real `PATH` (from the CLI process, without spawning a shell) into a
+  netclaw-owned `EnvironmentFile` so the daemon's shell tool resolves
+  operator-installed binaries; `netclaw doctor --fix` SHALL rehydrate it.
+- `netclaw daemon uninstall` SHALL remove the service registration and the
+  captured environment file
 
 ### CLI-013 Daemon Process
 

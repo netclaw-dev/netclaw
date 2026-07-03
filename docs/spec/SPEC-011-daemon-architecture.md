@@ -224,15 +224,17 @@ capture crash signals even when the process is unstable.
 
 ```ini
 [Unit]
-Description=Netclaw Agent Daemon
+Description=Netclaw Daemon
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=/path/to/netclawd
+ExecStop=/path/to/netclaw daemon stop
 Restart=always
 RestartSec=5
 Environment=DOTNET_ENVIRONMENT=Production
+EnvironmentFile=-/home/you/.netclaw/config/daemon.env
 
 [Install]
 WantedBy=default.target
@@ -241,7 +243,26 @@ WantedBy=default.target
 No sudo required. Uses `systemctl --user enable netclaw` and
 `loginctl enable-linger $USER` to survive user logout.
 
-`netclaw daemon uninstall` stops the service and removes the unit file.
+**Shell-tool PATH.** A systemd `--user` service starts with a sanitized,
+non-interactive environment that does not inherit the operator's login-shell
+`PATH`, so the agent's shell tool cannot resolve `netclaw`, `dotnet`, or
+`~/.local/bin` binaries. Rather than bake a guessed directory list into the unit
+(which can never anticipate every environment — see issue #1544), `install`
+**captures the operator's real `PATH` from its own process** (the CLI is a child
+of the operator's shell, so no shell is spawned and no dotfiles are sourced) and
+writes `PATH=<installDir>:<captured>:<system floor>` (de-duplicated, empty elements dropped; the
+floor `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` keeps the shell functional even if the
+captured PATH was empty or partial) to `~/.netclaw/config/daemon.env`. The unit
+loads it via `EnvironmentFile=-…` (the `-` makes a missing file degrade tool
+resolution rather than block startup). `netclaw doctor --fix` rehydrates the file
+from the operator's current `PATH`; `SystemdUnitPathDoctorCheck` validates the
+wiring and contents. Producer, rehydrator, and validator share
+`DaemonPathEnvironmentFile`. The value is a snapshot as of the last
+`install`/`doctor --fix`, so after installing new tools re-run either and then
+`systemctl --user restart netclaw`.
+
+`netclaw daemon uninstall` stops the service and removes the unit file and the
+`daemon.env` file.
 
 ### Service Registration (macOS)
 

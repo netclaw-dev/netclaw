@@ -89,6 +89,16 @@ public sealed class NetclawPaths
     /// </summary>
     public string HardDenyOverridesPath => Path.Combine(ConfigDirectory, "hard-deny-overrides.json");
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
+
+    /// <summary>
+    /// Netclaw-owned systemd <c>EnvironmentFile=</c> that supplies the installed
+    /// daemon's shell-tool <c>PATH</c>. Written by <c>netclaw daemon install</c>
+    /// and rehydrated by <c>netclaw doctor --fix</c> from the operator's real
+    /// (captured, not guessed) <c>PATH</c>; the daemon only ever reads it. Single
+    /// source of truth shared by the installer, the systemd PATH doctor check, and
+    /// uninstall so the producer/consumer contract stays in lockstep.
+    /// </summary>
+    public string DaemonEnvironmentFilePath => Path.Combine(ConfigDirectory, "daemon.env");
     public string ClientConfigPath => Path.Combine(ClientDirectory, "config.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");

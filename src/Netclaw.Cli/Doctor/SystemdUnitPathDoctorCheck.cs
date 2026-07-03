@@ -9,24 +9,33 @@ namespace Netclaw.Cli.Doctor;
 
 /// <summary>
 /// Validates that the systemd <c>--user</c> unit installed by
-/// <c>netclaw daemon install</c> bakes a PATH that resolves the daemon's
-/// install directory. Without this, <c>ShellTool</c> and
-/// <c>BackgroundJobExecutionActor</c> spawn <c>bash -c</c> with the
-/// sanitized systemd default PATH and cannot find <c>netclaw</c>,
-/// <c>~/.local/bin</c> tools, or anything else outside the system path.
+/// <c>netclaw daemon install</c> supplies the daemon's shell-tool PATH via a
+/// netclaw-owned <c>EnvironmentFile=</c> that resolves the daemon's install
+/// directory. Without it, <c>ShellTool</c> and <c>BackgroundJobExecutionActor</c>
+/// spawn <c>bash -c</c> with the sanitized systemd default PATH and cannot find
+/// <c>netclaw</c>, <c>dotnet</c>, or anything else outside the system path.
 /// </summary>
 /// <remarks>
-/// This is a Linux-only diagnostic. On non-Linux platforms — and on Linux
-/// boxes where the user runs <c>netclaw daemon start</c> directly instead
-/// of installing the service — this check passes silently because the
-/// daemon inherits the operator's interactive shell PATH and the failure
-/// mode does not apply.
+/// This is the consumer side of the PATH provisioning contract; the producer is
+/// <see cref="DaemonManager"/> install and the rehydrator is <c>DoctorFixService</c>.
+/// All three share <see cref="DaemonPathEnvironmentFile"/> so the file format, the
+/// <c>EnvironmentFile=</c> wiring, and the install-dir semantics stay in agreement.
+///
+/// Linux-only. On non-Linux platforms — and on Linux boxes where the operator runs
+/// <c>netclaw daemon start</c> directly instead of installing the service — this check
+/// passes silently, because the manual daemon inherits the operator's interactive shell
+/// PATH and the failure mode does not apply.
 /// </remarks>
 public sealed class SystemdUnitPathDoctorCheck : IDoctorCheck
 {
     private const string CheckName = "Systemd Unit PATH";
-    private const string ExecStartPrefix = "ExecStart=";
-    private const string PathDirectivePrefix = "Environment=PATH=";
+
+    private const string ReinstallRemediation =
+        "Reinstall to migrate to the environment-file model: " +
+        "`netclaw daemon uninstall && netclaw daemon install`, then `systemctl --user restart netclaw`.";
+
+    private const string RehydrateRemediation =
+        "Rehydrate it: `netclaw doctor --fix`, then `systemctl --user restart netclaw`.";
 
     private readonly string _unitFilePath;
     private readonly bool _enabledOnThisPlatform;
@@ -37,8 +46,8 @@ public sealed class SystemdUnitPathDoctorCheck : IDoctorCheck
     }
 
     /// <summary>
-    /// Test seam: explicit unit path and platform gate so tests can exercise
-    /// the parser on any host without needing a real systemd installation.
+    /// Test seam: explicit unit path and platform gate so tests can exercise the
+    /// parser on any host without needing a real systemd installation.
     /// </summary>
     internal SystemdUnitPathDoctorCheck(string unitFilePath, bool enabledOnThisPlatform)
     {
@@ -73,86 +82,83 @@ public sealed class SystemdUnitPathDoctorCheck : IDoctorCheck
                 "Check file permissions."));
         }
 
-        var execStart = FindDirective(lines, ExecStartPrefix);
-        if (execStart is null)
+        if (!DaemonPathEnvironmentFile.TryGetInstallDir(lines, out var installDir))
         {
             return Task.FromResult(DoctorCheckResult.Warning(
                 CheckName,
-                $"{unitPath} is missing ExecStart=. Unit file may be malformed.",
-                "Reinstall: `netclaw daemon uninstall && netclaw daemon install`."));
+                $"Could not determine the daemon install directory from ExecStart in {unitPath}. "
+                + "The unit file may be malformed.",
+                ReinstallRemediation));
         }
 
-        // systemd unit paths are always POSIX-style; use forward-slash semantics
-        // regardless of host OS so the parser is portable across CI runners.
-        var binaryPath = ExtractFirstToken(execStart);
-        var lastSlash = binaryPath.LastIndexOf('/');
-        var installDir = lastSlash > 0 ? binaryPath[..lastSlash] : string.Empty;
-        if (string.IsNullOrEmpty(installDir))
+        // Legacy/unwired unit: the pre-#1544 install baked an inline Environment=PATH= and
+        // no EnvironmentFile=. Such a unit is still fully functional if its inline PATH
+        // resolves the install dir (e.g. after an in-place binary upgrade without reinstall),
+        // so pass with a migration nudge rather than a false alarm. Only warn when the inline
+        // PATH is missing/incomplete, and route to reinstall (doctor --fix owns only the env
+        // file, not unit rewrites).
+        if (!DaemonPathEnvironmentFile.TryGetEnvironmentFilePath(lines, out var envFilePath))
         {
+            if (DaemonPathEnvironmentFile.TryGetInlinePath(lines, out var inlinePath)
+                && DaemonPathEnvironmentFile.PathContainsDirectory(inlinePath, installDir))
+            {
+                return Task.FromResult(DoctorCheckResult.Pass(
+                    CheckName,
+                    $"Legacy unit supplies PATH inline and includes {installDir}. Re-run "
+                    + "`netclaw daemon install` to migrate to the managed environment file."));
+            }
+
             return Task.FromResult(DoctorCheckResult.Warning(
                 CheckName,
-                $"Could not determine install directory from ExecStart in {unitPath}.",
-                "Reinstall: `netclaw daemon uninstall && netclaw daemon install`."));
+                $"Systemd unit at {unitPath} does not supply the daemon's shell-tool PATH "
+                + "(no `EnvironmentFile=`, and no inline PATH that includes the install "
+                + "directory). The shell tool will fall back to the sanitized systemd PATH and "
+                + "cannot resolve `netclaw`, `dotnet`, or `~/.local/bin` tools.",
+                ReinstallRemediation));
         }
 
-        var pathDirective = FindDirective(lines, PathDirectivePrefix);
-        if (pathDirective is null)
+        if (!File.Exists(envFilePath))
         {
             return Task.FromResult(DoctorCheckResult.Warning(
                 CheckName,
-                $"Systemd unit at {unitPath} does not set PATH. The daemon's shell tool will fail to resolve `netclaw`, " +
-                "`~/.local/bin` tools, and anything outside the systemd default PATH.",
-                "Reinstall to refresh the unit file: `netclaw daemon uninstall && netclaw daemon install`, " +
-                "then `systemctl --user restart netclaw`."));
+                $"The PATH environment file referenced by {unitPath} is missing ({envFilePath}). "
+                + "The daemon's shell tool will fall back to the sanitized systemd PATH.",
+                RehydrateRemediation));
         }
 
-        var pathValue = pathDirective[PathDirectivePrefix.Length..];
-        var entries = pathValue.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var hasInstallDir = entries.Any(e => string.Equals(e, installDir, StringComparison.Ordinal));
-
-        if (!hasInstallDir)
+        string envContent;
+        try
+        {
+            envContent = File.ReadAllText(envFilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Task.FromResult(DoctorCheckResult.Warning(
                 CheckName,
-                $"Systemd unit PATH at {unitPath} does not include the daemon's install directory ({installDir}). " +
-                "Shell tool invocations may fail to resolve `netclaw`.",
-                "Reinstall: `netclaw daemon uninstall && netclaw daemon install`."));
+                $"Could not read {envFilePath}: {ex.Message}",
+                "Check file permissions."));
+        }
+
+        var pathValue = DaemonPathEnvironmentFile.ReadPathValue(envContent);
+        if (pathValue is null)
+        {
+            return Task.FromResult(DoctorCheckResult.Warning(
+                CheckName,
+                $"The PATH environment file {envFilePath} does not set PATH.",
+                RehydrateRemediation));
+        }
+
+        if (!DaemonPathEnvironmentFile.PathContainsDirectory(pathValue, installDir))
+        {
+            return Task.FromResult(DoctorCheckResult.Warning(
+                CheckName,
+                $"The PATH in {envFilePath} does not include the daemon's install directory "
+                + $"({installDir}). Shell tool invocations may fail to resolve `netclaw`.",
+                RehydrateRemediation));
         }
 
         return Task.FromResult(DoctorCheckResult.Pass(
             CheckName,
-            $"Systemd unit PATH includes {installDir} ({entries.Length} entries)."));
-    }
-
-    /// <summary>
-    /// Returns the first line whose trimmed start matches <paramref name="prefix"/>,
-    /// stripped of leading whitespace. systemd unit files allow whitespace before
-    /// directives; we accept it. Returns <c>null</c> if no match exists.
-    /// </summary>
-    private static string? FindDirective(string[] lines, string prefix)
-    {
-        foreach (var rawLine in lines)
-        {
-            var line = rawLine.TrimStart();
-            if (line.StartsWith(prefix, StringComparison.Ordinal))
-                return line;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Extracts the first whitespace-delimited token from a directive value
-    /// (e.g., <c>ExecStart=/path/to/netclawd --flag</c> → <c>/path/to/netclawd</c>).
-    /// </summary>
-    private static string ExtractFirstToken(string directive)
-    {
-        var equalsIndex = directive.IndexOf('=');
-        if (equalsIndex < 0 || equalsIndex == directive.Length - 1)
-            return string.Empty;
-
-        var value = directive[(equalsIndex + 1)..].TrimStart();
-        var spaceIndex = value.IndexOf(' ');
-        return spaceIndex < 0 ? value : value[..spaceIndex];
+            $"Daemon shell-tool PATH is sourced from {envFilePath} and includes {installDir}."));
     }
 }
