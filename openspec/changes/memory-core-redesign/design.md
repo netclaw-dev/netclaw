@@ -2,7 +2,7 @@
 
 ## Context
 
-The July 2026 audit (`tools/recall-research/AUDIT-2026-07.md`) measured the
+The July 2026 audit (`docs/research/memory-audit-2026-07.md`) measured the
 memory system end-to-end against the live 1,216-document corpus: 46% of
 auto-injected memories are pollution (relevance judged, κ=0.754); the lexical
 composite score carries no relevance signal (precision flat across every
@@ -20,7 +20,7 @@ This change is the structural remainder: add the missing **judgment**
 (embeddings), add the missing **metabolism** (lifecycle: lossless merge,
 expiry, consolidation), and **subtract** the dead structure that three
 redesign cycles accreted. Prior art constraints come from the May 2026
-autoresearch (`FINDINGS-2026-05.md`): nominate-by-cosine/decide-by-LLM is
+autoresearch (`docs/research/memory-recall-findings-2026-05.md`): nominate-by-cosine/decide-by-LLM is
 ratified (no cosine threshold separates duplicates from siblings — siblings
 live at 0.905–0.941 inside the duplicate band), and the nominator model is
 snowflake-arctic-embed 137M (33M-class models measured inadequate for

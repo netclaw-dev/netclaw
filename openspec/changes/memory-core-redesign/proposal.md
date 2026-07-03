@@ -1,8 +1,8 @@
 # Proposal: memory-core-redesign
 
 Source PRD: PRD-007 (agent personality and local memory). Evidence base:
-`tools/recall-research/AUDIT-2026-07.md` (July 2026 measured audit) and
-`tools/recall-research/FINDINGS-2026-05.md` (May 2026 autoresearch).
+`docs/research/memory-audit-2026-07.md` (July 2026 measured audit) and
+`docs/research/memory-recall-findings-2026-05.md` (May 2026 autoresearch).
 
 ## Why
 
