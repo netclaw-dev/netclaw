@@ -34,6 +34,61 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task InitializeAsync_repairs_legacy_compaction_boundary_recall_mode()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var anchor = _store.CreateDefaultAnchor("session-compaction");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // A pre-#1225 compaction summary (searchable => still in the automatic
+        // recall pool) and an unrelated searchable doc that must NOT be touched.
+        await UpsertSimpleDoc("doc-legacy-compaction", anchor, "compaction-boundary", "searchable", now);
+        await UpsertSimpleDoc("doc-other-searchable", anchor, "Some Other Memory", "searchable", now);
+
+        // Re-running initialization applies the idempotent data repair.
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("manual", await ReadRecallMode("doc-legacy-compaction"));
+        Assert.Equal("searchable", await ReadRecallMode("doc-other-searchable"));
+
+        // Idempotent: a third run changes nothing.
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("manual", await ReadRecallMode("doc-legacy-compaction"));
+    }
+
+    private async Task UpsertSimpleDoc(string id, SQLiteMemoryAnchor anchor, string title, string recallMode, long now)
+    {
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: id,
+            Anchor: anchor,
+            MemoryClass: "evidence",
+            Title: title,
+            MarkdownBody: "Summary body.",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: recallMode,
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
+    }
+
+    private async Task<string?> ReadRecallMode(string documentId)
+    {
+        await using var conn = new SqliteConnection($"Data Source={_dbPath}");
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT recall_mode FROM memory_documents WHERE document_id = $id";
+        cmd.Parameters.AddWithValue("$id", documentId);
+        return (string?)await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task UpsertAndSearchAutoRecallDocuments_filters_by_policy()
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);

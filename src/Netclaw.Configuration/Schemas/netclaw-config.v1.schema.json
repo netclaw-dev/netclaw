@@ -254,6 +254,12 @@
               "type": ["number", "null"],
               "minimum": 0,
               "description": "Optional override for the minimum composite score a memory must reach to be injected via automatic recall. When omitted, the coordinator uses a built-in default. Power-user knob; set to 0 to effectively disable the floor."
+            },
+            "MaxRecallInjectedChars": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2000,
+              "description": "Character budget for memory content injected by automatic recall per turn. Items are admitted in rank order until the budget is exhausted; whole items are dropped, never truncated. Set to 0 to disable."
             }
           },
           "additionalProperties": false

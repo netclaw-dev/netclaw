@@ -314,10 +314,25 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 SessionId = sessionId.Value,
                 // Headroom for reasoning models: with a tight cap a thinking model
                 // spends the whole budget on hidden reasoning and returns empty
-                // content, silently disabling this LLM tier. Non-reasoning models
-                // still stop after the bare keyword the prompt asks for, so they pay
-                // nothing extra. (Fully suppressing reasoning is a provider-level follow-up.)
-                MaxOutputTokens = 512
+                // content, silently disabling this LLM tier. The July 2026 audit
+                // measured exactly that in production: 512 was still too tight for
+                // Qwen3.6-class models — 0 successful LLM curation decisions ever
+                // (3 timeouts, 3 empty responses). Non-reasoning models stop after
+                // the bare keyword the prompt asks for, so they pay nothing extra.
+                MaxOutputTokens = 1500,
+                // Belt: ask the serving stack not to think at all for this
+                // keyword-classification call. These ride ChatOptions
+                // AdditionalProperties, which the OpenAI-compatible client forwards
+                // as top-level request fields (vLLM/llama.cpp/SGLang honor
+                // chat_template_kwargs.enable_thinking for Qwen-style templates;
+                // servers without support ignore unknown fields — same contract as
+                // the unconditional `return_progress` field) and OllamaSharp maps
+                // `think`. StripThinkBlocks in ParseResponse remains the braces.
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    ["chat_template_kwargs"] = new Dictionary<string, object?> { ["enable_thinking"] = false },
+                    ["think"] = false
+                }
             };
 
             var result = await StreamingResponseReader.ReadAsync(llmClient, messages, options, cts.Token);

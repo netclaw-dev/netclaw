@@ -92,6 +92,18 @@ public sealed record SessionTuning
     public double? MinimumRecallCompositeScore { get; init; }
 
     /// <summary>
+    /// Character budget for memory content injected by automatic recall in a
+    /// single turn. Items are admitted in rank order until the next item's
+    /// content would exceed the budget; whole items are dropped, never
+    /// truncated (a truncated memory is worse than an absent one — it reads
+    /// as complete while missing its distinguishing detail). The July 2026
+    /// audit measured a mean 3-item recall at ~1,400 chars (~349 tokens), so
+    /// the default only clips outlier turns dominated by oversized memories.
+    /// Set to 0 to disable the budget.
+    /// </summary>
+    public int MaxRecallInjectedChars { get; init; } = 2_000;
+
+    /// <summary>
     /// Number of completed turns between memory distillation triggers.
     /// When set, the observer distills every N turns regardless of idle state,
     /// ensuring memories form during long active sessions (e.g., 25-turn tool loops).

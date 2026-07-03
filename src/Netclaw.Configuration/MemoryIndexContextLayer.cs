@@ -52,7 +52,8 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Tools: find_memories, get_memories, store_memory, update_memory
                 Durable memory recall is automatic before each user-facing turn.
                 Use explicit memory tools only for deliberate manual control.
-                Automatic recall injects durable_fact only.
+                Automatic recall injects durable_fact and evidence memories, and only
+                injects items that clear a relevance floor — many turns inject nothing.
                 Deliberate find_memories searches may return durable_fact plus evidence.
                 Trace data is excluded from normal search results.
                 Expired evidence is hidden from normal find_memories results unless explicitly requested for audit/debug review.

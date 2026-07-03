@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.6.2"
+  version: "1.7.0"
 ---
 
 # Netclaw Memory
@@ -29,7 +29,12 @@ Both gates must pass for memory to function.
 ## How Memory Works
 
 - **Automatic recall** runs before each user turn and injects relevant
-  `durable_fact` memories into the conversation.
+  `durable_fact` (and occasionally `evidence`) memories into the conversation.
+- Recall is **selective by design**: candidates must clear a relevance floor
+  and a per-turn character budget, so **many turns inject nothing at all**.
+  An absent `[memory-recall]` block means nothing relevant cleared the bar —
+  it is not a malfunction. Use `find_memories` when you believe relevant
+  memories exist that automatic recall did not surface.
 - Recall is **policy-aware**: `audience` and `boundary` still govern what
   can be surfaced for the current turn.
 - Recall resolves once at turn start and the same bundle is reused during
@@ -96,8 +101,8 @@ find-and-replace edit. To delete a memory, pass `delete: true`.
 
 | Class | Recall | Expiry |
 |-------|--------|--------|
-| `durable_fact` | Auto-recalled each turn | Never expires |
-| `evidence` | Search only (`find_memories`) | Expires after 30 days |
+| `durable_fact` | Auto-recall when it clears the relevance floor | Never expires |
+| `evidence` | Search (`find_memories`); auto-recall only on very strong matches | Expires after 30 days |
 | `trace` | Not searchable | Expires after 72 hours |
 
 ## Policy Envelope

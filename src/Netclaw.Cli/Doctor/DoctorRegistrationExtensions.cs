@@ -26,6 +26,7 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, ImageProcessingDoctorCheck>();
         services.AddSingleton<IDoctorCheck, DaemonCrashDoctorCheck>();
         services.AddSingleton<IDoctorCheck, MemoryCheckpointHealthDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, MemoryCurationLlmDoctorCheck>();
         services.AddSingleton<IDoctorCheck, McpServersDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ChatClientDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();

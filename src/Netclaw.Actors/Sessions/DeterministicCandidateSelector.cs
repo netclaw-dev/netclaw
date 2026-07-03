@@ -14,8 +14,16 @@ public sealed class DeterministicCandidateSelector
     private const double MinimumSelectorScore = 2.0;
     private const double LexicalMatchWeight = 4.0;
     private const double FacetMatchWeight = 6.0;
-    private const double AnchorMatchWeight = 8.0;
-    private const double SoftScopeWeight = 3.5;
+
+    // Anchor and soft-scope matches were the measured junk-injection vectors
+    // in the May-2026 recall calibration: anchors are loosely inferred from
+    // conversational tokens, so a strong anchor weight pulled in unrelated
+    // memories that happened to share an anchor word, and soft-scopes merely
+    // re-echo the anchors. Demoting them (8→2) and zeroing soft-scope (3.5→0)
+    // is part of the tuned parameter set validated at +11% precision on
+    // held-out gold (docs/research/memory-recall-findings-2026-05.md).
+    private const double AnchorMatchWeight = 2.0;
+    private const double SoftScopeWeight = 0.0;
 
     public IReadOnlyList<SQLiteMemoryHydratedItem> Select(
         DeterministicRetrievalRequestPlan plan,

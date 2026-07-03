@@ -182,7 +182,9 @@ public sealed class CurationPromptBuilderTests
     [Fact]
     public void BuildUserMessage_truncates_long_content()
     {
-        var longContent = new string('x', 500);
+        // Preview cap is 700 chars (raised from 200 — the decider needs to see
+        // distinguishing detail like dates/readings); exceed it to prove truncation.
+        var longContent = new string('x', 1_000);
         var proposal = new SQLiteMemoryCurationOperation(
             Kind: "document",
             MemoryClass: "durable_fact",

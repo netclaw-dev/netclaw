@@ -188,7 +188,7 @@ public sealed class DeterministicCandidateSelectorTests
     }
 
     [Fact]
-    public void Score_geometry_anchor_match_adds_meaningful_weight()
+    public void Score_geometry_anchor_match_is_a_demoted_tiebreaker()
     {
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
@@ -206,11 +206,17 @@ public sealed class DeterministicCandidateSelectorTests
 
         var result = selector.SelectWithScores(plan, [noAnchor, withAnchor]);
 
+        // Anchor matches were the measured junk-injection vector (anchors are
+        // loosely inferred from conversational tokens), so the weight is
+        // deliberately demoted BELOW a single lexical match: it breaks ties
+        // between lexically-equal candidates but can never outrank content
+        // relevance. See docs/research/memory-audit-2026-07.md / memory-recall-findings-2026-05.md.
         Assert.Equal(2, result.Count);
         Assert.Equal("doc-with-anchor", result[0].Item.Id);
+        var delta = result[0].SelectorScore - result[1].SelectorScore;
         Assert.True(
-            result[0].SelectorScore - result[1].SelectorScore >= 7.0,
-            $"Anchor match should add at least 7 points; got delta {result[0].SelectorScore - result[1].SelectorScore}");
+            delta is > 0 and < 4.0,
+            $"Anchor match should be a positive tiebreaker weaker than one lexical match (4.0); got delta {delta}");
     }
 
 }

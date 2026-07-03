@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 
@@ -16,11 +18,13 @@ public sealed class SQLiteMemoryStore
 {
     private readonly string _connectionString;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<SQLiteMemoryStore> _logger;
 
-    public SQLiteMemoryStore(string sqlitePath, TimeProvider timeProvider)
+    public SQLiteMemoryStore(string sqlitePath, TimeProvider timeProvider, ILogger<SQLiteMemoryStore>? logger = null)
     {
         _connectionString = new SqliteConnectionStringBuilder { DataSource = sqlitePath }.ToString();
         _timeProvider = timeProvider;
+        _logger = logger ?? NullLogger<SQLiteMemoryStore>.Instance;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -157,6 +161,25 @@ public sealed class SQLiteMemoryStore
             );
             """;
         await ftsCreate.ExecuteNonQueryAsync(ct);
+
+        // Data repair (idempotent): #1225 routed NEW compaction-boundary
+        // summaries to Manual recall, but left rows created before the fix at
+        // 'searchable' — which SearchByPlanAsync includes in the AUTOMATIC
+        // recall pool. The July 2026 audit measured those legacy rows among
+        // the top recall polluters (~19 injections/14 days, predominantly
+        // judged irrelevant). Complete the fix retroactively.
+        await using var compactionRepair = conn.CreateCommand();
+        compactionRepair.CommandText = $"""
+            UPDATE memory_documents
+               SET recall_mode = '{MemoryRecallMode.Manual.ToWireValue()}'
+             WHERE title = 'compaction-boundary'
+               AND recall_mode = '{MemoryRecallMode.Searchable.ToWireValue()}';
+            """;
+        var repaired = await compactionRepair.ExecuteNonQueryAsync(ct);
+        if (repaired > 0)
+            _logger.LogInformation(
+                "memory_data_repair_compaction_recall_mode rows={Rows} — legacy compaction-boundary summaries moved out of the automatic recall pool (retroactive #1225)",
+                repaired);
         }, ct);
     }
 

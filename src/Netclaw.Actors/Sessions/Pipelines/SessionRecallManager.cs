@@ -37,7 +37,7 @@ internal sealed class SessionRecallManager
         SessionId sessionId,
         MessageSource? turnSource,
         IMemoryRecallCoordinator coordinator,
-        bool memoryEnabled = true,
+        MemoryConfig memoryConfig,
         TurnContext? turnContext = null)
     {
         var audience = turnContext?.Audience
@@ -45,7 +45,7 @@ internal sealed class SessionRecallManager
             ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);
 
         // Memory recall is disabled for Public audience or when the subsystem is off
-        if (audience == TrustAudience.Public || !memoryEnabled)
+        if (audience == TrustAudience.Public || !memoryConfig.Enabled)
             return new AutomaticRecallResult([]);
 
         var query = string.IsNullOrWhiteSpace(recallQuery)
@@ -65,7 +65,7 @@ internal sealed class SessionRecallManager
             sessionId,
             query,
             recentUser,
-            3,
+            memoryConfig.AutoRecallMaxItems,
             Audience: audience,
             Boundary: turnContext?.Boundary.Value
                       ?? turnSource?.Boundary.Value
@@ -81,7 +81,7 @@ internal sealed class SessionRecallManager
 
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(memoryConfig.RecallTimeoutMs));
             return coordinator.RecallAsync(request, cts.Token)
                 .GetAwaiter()
                 .GetResult();

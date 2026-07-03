@@ -2647,7 +2647,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _sessionId,
                 _currentTurnSource,
                 _memoryRecallCoordinator,
-                _memoryConfig.Enabled,
+                _memoryConfig,
                 turnContext: _currentTurnContext);
             recallSw.Stop();
 

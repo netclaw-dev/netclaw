@@ -35,7 +35,7 @@ public class SessionRecallManagerTests
             new SessionId("slack/thread-1"),
             source,
             new TrackingCoordinator(),
-            memoryEnabled: true);
+            memoryConfig: new MemoryConfig { Enabled = true });
 
         Assert.Empty(result.Items);
         Assert.False(result.Degraded);
@@ -62,7 +62,7 @@ public class SessionRecallManagerTests
             new SessionId("tui/session-1"),
             source,
             new TrackingCoordinator(),
-            memoryEnabled: false);
+            memoryConfig: new MemoryConfig { Enabled = false });
 
         Assert.Empty(result.Items);
         Assert.False(result.Degraded);
@@ -90,7 +90,7 @@ public class SessionRecallManagerTests
             new SessionId("tui/session-1"),
             source,
             coordinator,
-            memoryEnabled: true);
+            memoryConfig: new MemoryConfig { Enabled = true });
 
         // Coordinator was actually called (not short-circuited)
         Assert.Equal(1, coordinator.CallCount);
@@ -110,7 +110,7 @@ public class SessionRecallManagerTests
             new SessionId("webhook/delivery-1"),
             turnSource: null,
             coordinator,
-            memoryEnabled: true);
+            memoryConfig: new MemoryConfig { Enabled = true });
 
         // Should short-circuit as Public audience
         Assert.Empty(result.Items);
@@ -151,7 +151,7 @@ public class SessionRecallManagerTests
             new SessionId("slack/thread-1"),
             source,
             coordinator,
-            memoryEnabled: true,
+            memoryConfig: new MemoryConfig { Enabled = true },
             turnContext: turnContext);
 
         Assert.Equal(1, coordinator.CallCount);

@@ -15,8 +15,17 @@ namespace Netclaw.Actors.Memory;
 /// </summary>
 public static class CurationPromptBuilder
 {
-    private const int ContentPreviewMaxChars = 200;
+    // 200 chars starved the decider: distinguishing detail (dates, readings,
+    // qualifiers) routinely sits past that cut, which is how the May 2026 eval
+    // measured a dated-observation being UPDATE-clobbered. 700 keeps the whole
+    // typical memory body visible while bounding worst-case prompt size.
+    private const int ContentPreviewMaxChars = 700;
 
+    // The "balanced" prompt measured in the May 2026 decider eval
+    // (docs/research/memory-recall-findings-2026-05.md; decider replay harness in the local research store): vs the
+    // original baseline it fixed the dated-observation overwrite, improved
+    // hard-negative precision (55%→73% combined keep), and shifted decisions
+    // from destructive UPDATE to lossless CONSOLIDATE, at −7pt dupe recall.
     public static string SystemPrompt { get; } = """
         You are a memory curator. You decide whether a proposed memory should be
         saved, and if so, how it relates to existing memories.
@@ -26,27 +35,45 @@ public static class CurationPromptBuilder
         - Zero or more EXISTING memories that may be related (title, anchor name,
           content, timestamp, memory ID)
 
+        THE TEST: do the proposed memory and a candidate describe the SAME
+        underlying fact or thing?
+        - If they are the same fact merely worded differently, under a different
+          title, or with more/less detail — they are the SAME memory. Merge them.
+          Different titles and phrasing do NOT make them different memories; only
+          different facts do.
+        - If they are about DIFFERENT things — a different date, reading, event,
+          entity, metric, or point in time — they are DISTINCT. Keep them separate
+          (CREATE), even if they share a topic and look similar.
+
+        Merging is destructive, so when you genuinely cannot tell whether two
+        memories are the same fact, prefer CREATE. But do NOT split memories that
+        are plainly the same fact in other words — that just creates duplicates,
+        which is the problem you exist to prevent.
+
+        Dated observations, logs, check-ins, price checks, and time-series
+        readings are append-only: a newer reading NEVER overwrites an older one.
+        Keep both (CREATE).
+
         Make exactly ONE decision:
 
-        SKIP — The proposed memory is redundant. An existing memory already
-        captures this information with equal or greater detail. Do not save.
+        SKIP — Redundant: a candidate already captures this exact fact with equal
+        or greater detail and the proposal adds nothing.
 
-        UPDATE <memory_id> — The proposed memory contains newer or more accurate
-        information than the identified existing memory. Replace the existing
-        memory's content with the proposed content. Use this when:
-        - A version number, date, price, or status has changed
-        - The proposal adds meaningful detail to an existing fact
-        - The existing memory is stale (older timestamp, outdated information)
+        UPDATE <memory_id> — The proposal is a newer version of the SAME single
+        living value (a current setting/status/canonical fact) and the old value
+        is now obsolete. NOT for dated readings in a series.
 
-        CONSOLIDATE <memory_id> [<memory_id>...] — The proposed memory and one or
-        more existing memories describe the same concept under different names.
-        Merge them into a single memory under the best anchor name. Use this when:
-        - Anchor names are variations of the same thing
-          (e.g., "akka-net-release" and "akka-net-latest-version")
-        - Content overlaps substantially but is spread across multiple entries
+        CONSOLIDATE <memory_id> [<memory_id>...] — The proposal and one or more
+        candidates are the same concept under different names/phrasings; merge
+        into one, losing nothing.
 
-        CREATE — The proposed memory is genuinely new. No existing memory covers
-        this topic. Save it as a new entry.
+        CREATE — Genuinely new, OR distinct from the candidates in what it is
+        ABOUT (different date, entity, event, or reading).
+
+        SAME fact, merge: "DB pool size is 20" and "the database connection pool
+        max is set to 20".
+        DISTINCT, create: a CPU temperature logged at 14:00 vs the same metric at
+        15:00; a staging-server config vs a production-server config.
 
         Respond with ONLY the decision keyword and any required IDs. No explanation.
 

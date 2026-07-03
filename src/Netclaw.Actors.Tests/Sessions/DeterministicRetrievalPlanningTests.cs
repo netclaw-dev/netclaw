@@ -223,10 +223,19 @@ public sealed class DeterministicRetrievalPlanningTests
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
+        // This test pins the CLASS plumbing (evidence memories can flow through
+        // the coordinator), not floor policy. Under default scoring, evidence
+        // carries a small class prior (+0.4 composite vs durable_fact's +4.8),
+        // so a two-term match sits below the default floor by design — loosen
+        // the floor explicitly to observe the plumbing.
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
+            sessionTuning: new SessionTuning
+            {
+                DeterministicRetrievalEnabled = true,
+                MinimumRecallCompositeScore = 10.0
+            });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: (SessionId)"D0AC6CKBK5K/1774371415.126439",
@@ -236,6 +245,64 @@ public sealed class DeterministicRetrievalPlanningTests
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, x => x.Id.Value == "doc-reelfarm-research");
+    }
+
+    [Fact]
+    public async Task Coordinator_enforces_recall_char_budget_dropping_whole_items()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-char-budget-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var anchor = store.CreateDefaultAnchor("budget-fixture");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        // Three durable facts that all match the query strongly; each body is
+        // ~600 chars so two of them exceed a 700-char budget.
+        for (var i = 1; i <= 3; i++)
+        {
+            await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+                DocumentId: $"doc-budget-{i}",
+                Anchor: anchor,
+                MemoryClass: "durable_fact",
+                Title: $"Grafana dashboard convention {i}",
+                MarkdownBody: "Grafana dashboard provisioning convention. " + new string('x', 560),
+                AliasesJson: null,
+                FacetsJson: null,
+                SlotsJson: null,
+                UpdateSemantics: "merge-document",
+                Sensitivity: "normal",
+                RecallMode: "auto",
+                Confidence: 0.9,
+                FreshnessAtMs: now,
+                ExpiresAtMs: null,
+                CreatedAtMs: now,
+                UpdatedAtMs: now), TestContext.Current.CancellationToken);
+        }
+
+        var request = new AutomaticRecallRequest(
+            SessionId: (SessionId)"D0AC6CKBK5K/1774371415.126439",
+            Query: "what is our grafana dashboard provisioning convention?",
+            RecentUserMessages: ["what is our grafana dashboard provisioning convention?"],
+            MaxItems: 3);
+
+        var budgeted = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionTuning: new SessionTuning { MaxRecallInjectedChars = 700 });
+        var budgetedResult = await budgeted.RecallAsync(request, TestContext.Current.CancellationToken);
+
+        // First-ranked item is always admitted; the rest exceed the budget and
+        // are dropped whole (never truncated).
+        var single = Assert.Single(budgetedResult.Items);
+        Assert.EndsWith("x", single.Content);
+
+        var unbounded = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionTuning: new SessionTuning { MaxRecallInjectedChars = 0 });
+        var unboundedResult = await unbounded.RecallAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(3, unboundedResult.Items.Count);
     }
 
     [Fact]
