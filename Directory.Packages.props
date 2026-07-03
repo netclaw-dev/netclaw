@@ -85,7 +85,7 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="CsCheck" Version="4.7.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.20.0" />
-    <PackageVersion Include="Testcontainers" Version="4.12.0" />
+    <PackageVersion Include="Testcontainers" Version="4.13.0" />
   </ItemGroup>
   <!-- .NET Aspire (samples/Netclaw.Demo.AppHost only) -->
   <ItemGroup>
