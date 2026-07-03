@@ -311,6 +311,45 @@ public sealed class ChatClientDoctorCheckTests
         Assert.Contains("must be a string", result.Message);
     }
 
+    [Fact]
+    public async Task EvaluatesBoundConfiguration_OnEnvOnlyInstance()
+    {
+        // No netclaw.json at all — configuration arrives entirely through the
+        // bound IConfiguration (in production: NETCLAW_ env vars). The check
+        // must evaluate what the daemon will actually run with, not report
+        // "not configured" because the file is absent.
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:openrouter:Type"] = "openrouter",
+                ["Providers:openrouter:AuthMethod"] = "ApiKey",
+                ["Providers:openrouter:ApiKey"] = "sk-test",
+                ["Models:Main:Provider"] = "openrouter",
+                ["Models:Main:ModelId"] = "anthropic/claude-haiku-4",
+            })
+            .Build();
+
+        // Trip the reader's env-config detection (process-level signal that
+        // this is an env-configured instance rather than an unconfigured one).
+        Environment.SetEnvironmentVariable("NETCLAW_Models__Main__ModelId", "anthropic/claude-haiku-4");
+        try
+        {
+            var check = new ChatClientDoctorCheck(paths, configuration, ProviderCommand.CreateDefaultRegistry());
+            var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(DoctorSeverity.Pass, result.Severity);
+            Assert.Contains("Real chat client configured", result.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NETCLAW_Models__Main__ModelId", null);
+        }
+    }
+
     private static NetclawPaths CreatePathsWithConfig(string configJson)
     {
         var basePath = CreateTempBasePath();

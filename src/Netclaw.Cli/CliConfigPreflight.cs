@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
@@ -40,6 +41,21 @@ internal static class CliConfigPreflight
         out int exitCode)
     {
         if (File.Exists(paths.NetclawConfigPath))
+        {
+            exitCode = 0;
+            return false;
+        }
+
+        // A missing local daemon config only means "not initialized" when THIS
+        // machine hosts the daemon. When the caller explicitly targets a remote
+        // daemon (NETCLAW_DAEMON_ENDPOINT) or this install is a paired client
+        // (client.json endpoint), the daemon's configuration lives on the
+        // daemon host — blocking here regressed paired/remote clients and the
+        // containerized eval harness after #1540. These are exactly the
+        // endpoint sources DaemonApi.ResolveEndpoint prefers over the local
+        // daemon config.
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT"))
+            || ClientConfigFile.ReadEndpoint(paths) is not null)
         {
             exitCode = 0;
             return false;

@@ -36,10 +36,17 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
     public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
         var (root, error) = DoctorJsonConfigReader.TryReadConfig(_paths);
-        if (error is not null)
+
+        // This check's job is "is a real provider configured" — the daemon
+        // answers that from the BOUND configuration (env vars over an optional
+        // JSON file), so a missing file with NETCLAW_ env config present is
+        // not a short-circuit: evaluate exactly what the host will evaluate.
+        // The reader signals that state with a Pass-severity result.
+        var envOnly = root is null && error is { Severity: DoctorSeverity.Pass };
+        if (error is not null && !envOnly)
             return Task.FromResult(error);
 
-        if (TryFindNonStringInferenceValue(root, out var invalidPath))
+        if (root is not null && TryFindNonStringInferenceValue(root, out var invalidPath))
         {
             return Task.FromResult(DoctorCheckResult.Error(
                 CheckName,
@@ -55,7 +62,12 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
         {
             providers = ProviderConfigurationLoader.Load(_configuration.GetSection("Providers"));
             models = _configuration.GetSection("Models").Get<ModelSelection>() ?? new ModelSelection();
-            runtimeConfiguration = ProviderRuntimeConfiguration.FromJson(root);
+            // File present: read explicit provider types from the file (matches
+            // historical behavior). Env-only: derive them from the bound
+            // configuration, exactly like the daemon does at startup.
+            runtimeConfiguration = root is not null
+                ? ProviderRuntimeConfiguration.FromJson(root)
+                : ProviderRuntimeConfiguration.FromConfiguration(_configuration);
             validation = ProviderRuntimeValidation.Evaluate(
                 providers,
                 models,

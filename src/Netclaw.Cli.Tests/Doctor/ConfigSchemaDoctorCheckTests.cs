@@ -27,6 +27,51 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsPass_WhenConfigFileMissingButEnvConfigPresent()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        // An env-only instance: no netclaw.json, configuration bound from
+        // NETCLAW_ env vars. Schema validation applies to the file only —
+        // warning "run netclaw init" here would misdiagnose a healthy daemon.
+        Environment.SetEnvironmentVariable("NETCLAW_Models__Main__ModelId", "test-model");
+        try
+        {
+            var check = new ConfigSchemaDoctorCheck(paths);
+            var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(DoctorSeverity.Pass, result.Severity);
+            Assert.Contains("environment configuration detected", result.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NETCLAW_Models__Main__ModelId", null);
+        }
+    }
+
+    [Fact]
+    public void HasEnvironmentConfig_CountsOnlyConfigBindingVariables()
+    {
+        // Control variables (path/endpoint resolution) are not daemon config.
+        Assert.False(DoctorJsonConfigReader.HasEnvironmentConfig(
+            new System.Collections.Hashtable
+            {
+                ["NETCLAW_HOME"] = "/tmp/x",
+                ["NETCLAW_DAEMON_ENDPOINT"] = "http://127.0.0.1:5299",
+                ["UNRELATED"] = "1",
+            }));
+
+        // Double-underscore section keys are configuration binding.
+        Assert.True(DoctorJsonConfigReader.HasEnvironmentConfig(
+            new System.Collections.Hashtable
+            {
+                ["NETCLAW_Providers__eval__Type"] = "openai-compatible",
+            }));
+    }
+
+    [Fact]
     public async Task ReturnsPass_WhenConfigMatchesSchemaV1()
     {
         var basePath = CreateTempBasePath();

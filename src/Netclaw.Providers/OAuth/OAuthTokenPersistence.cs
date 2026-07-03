@@ -67,12 +67,15 @@ public static class OAuthTokenPersistence
 
     private static void PersistTokenExpiry(NetclawPaths paths, string providerName, DateTimeOffset? expiresAt)
     {
-        if (!expiresAt.HasValue && !File.Exists(paths.NetclawConfigPath))
+        // Never CREATE netclaw.json here: an instance configured purely via
+        // NETCLAW_ environment variables has no config file by design, and a
+        // token refresh silently materializing one turns the deployment
+        // stateful (and throws on a read-only home). Expiry is refresh-timing
+        // metadata, not required state — when there is no file to update, skip.
+        if (!File.Exists(paths.NetclawConfigPath))
             return;
 
-        var configJson = File.Exists(paths.NetclawConfigPath)
-            ? File.ReadAllText(paths.NetclawConfigPath)
-            : "{}";
+        var configJson = File.ReadAllText(paths.NetclawConfigPath);
         var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
         var configProviders = configRoot["Providers"]?.AsObject();
 

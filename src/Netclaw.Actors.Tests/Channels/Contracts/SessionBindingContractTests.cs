@@ -477,6 +477,14 @@ public abstract class SessionBindingContractTests : TestKit
 
         var actor = CreateBindingActor(sid, pipeline, detector);
 
+        // Gate on pipeline creation (persistent-actor recovery + init round-trip)
+        // before polling for rendered output. Under CI CPU starvation the cold
+        // start alone can exceed the default 3s AwaitAssert budget — the poll loop
+        // observed only ~2 attempts before the deadline on the Windows runner — so
+        // a linear await on the real readiness signal removes the race. Matches the
+        // Reminder_delivery_* and Stashes_messages_during_init siblings.
+        await pipeline.Created.WaitAsync(ct);
+
         // Wait for approval to be rendered
         await AwaitAssertAsync(() =>
         {

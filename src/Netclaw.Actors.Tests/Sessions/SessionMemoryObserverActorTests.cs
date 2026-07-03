@@ -459,6 +459,20 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var observer = CreateObserver("accepted-only", client: firstClient);
         var replyProbe = CreateTestProbe("accepted-only-probe");
 
+        // Gate on recovery before timing the distillation round-trip below. This is
+        // an early persistent actor, so its journal/snapshot plugin cold start +
+        // recovery otherwise races the fixed 5s ExpectMsg (observed on the Windows
+        // runner: "session_observer_recovery_complete" logged right at the deadline).
+        // Persistent actors stash commands until RecoveryCompleted; an empty
+        // RecordAcceptedDistillationProposals is answered immediately post-recovery
+        // with no Persist and no state change, so awaiting it is a side-effect-free
+        // readiness ack. The generous ceiling absorbs cold start without polling; the
+        // behavioral 5s windows are then measured from a warm actor.
+        await observer.Ask<AcceptedDistillationProposalsRecorded>(
+            new RecordAcceptedDistillationProposals([]),
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
         observer.Tell(new SendUserMessage
         {
             SessionId = new SessionId("test-channel/accepted-only"),
