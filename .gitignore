@@ -451,3 +451,8 @@ phase*-mattermost-*.png
 
 # macOS Finder metadata
 .DS_Store
+
+# Memory research tooling lives in the operator-local research store
+# (~/recall-research-local/), never in the repo — it operates on real
+# (PII) corpus data and embeds instance-specific labels/endpoints.
+tools/recall-research/
