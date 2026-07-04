@@ -91,9 +91,10 @@ daemon start when `AutoDownload=true` (atomic temp+rename download, hash
 verify, then one warm-up inference), or the operator runs
 `netclaw memory backfill-embeddings`. The ~90–140 MB artifact is never an
 embedded resource (would bloat every RID publish). Default model:
-snowflake-arctic-embed 137M int8 (May-ratified; mxbai-embed-large 335M is the
-allowlisted fallback). Post-PoC decision deferred: mirroring artifacts into
-the existing R2 feeds channel vs pinned upstream URLs.
+snowflake-arctic-embed-m (~110M params, fp32 ONNX, pinned by hash — int8 is a
+future optimization, not what Stage A shipped; May-ratified), mxbai-embed-large
+335M is the allowlisted fallback. Post-PoC decision deferred: mirroring
+artifacts into the existing R2 feeds channel vs pinned upstream URLs.
 
 ### D3. Vector storage: separate `memory_embeddings` table, owned by the store
 
