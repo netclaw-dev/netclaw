@@ -109,6 +109,19 @@
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
+  <!-- Memory embeddings (Netclaw.Embeddings + Netclaw.Embeddings.Tests). CPU-only ONNX
+       inference + a pure-managed WordPiece tokenizer, per memory-core-redesign D1: no
+       sidecar process, no native dependency beyond the ONNX Runtime CPU EP that already
+       ships linux-x64 + linux-arm64 native assets. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" />
+    <PackageVersion Include="FastBertTokenizer" Version="1.0.28" />
+    <!-- Pinned to 10.0.9 (matches $(MicrosoftAspNetCoreVersion)), not the lowest version that
+         compiles: Microsoft.Extensions.AI 10.6.0 already pulls System.Numerics.Tensors
+         >= 10.0.8 transitively, and CentralPackageTransitivePinningEnabled requires the
+         central pin to be at least as high as every transitive floor in the graph. -->
+    <PackageVersion Include="System.Numerics.Tensors" Version="10.0.9" />
+  </ItemGroup>
   <!-- Source generators -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />

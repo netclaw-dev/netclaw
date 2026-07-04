@@ -8,6 +8,8 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Netclaw.Actors/Netclaw.Actors.csproj" />
+    <Project Path="src/Netclaw.Embeddings/Netclaw.Embeddings.csproj" />
+    <Project Path="src/Netclaw.Embeddings.Tests/Netclaw.Embeddings.Tests.csproj" />
     <Project Path="src/Netclaw.Channels/Netclaw.Channels.csproj" />
     <Project Path="src/Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <Project Path="src/Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />

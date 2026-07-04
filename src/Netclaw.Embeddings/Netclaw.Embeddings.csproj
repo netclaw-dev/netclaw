@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Netclaw.Embeddings.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="FastBertTokenizer" />
+    <PackageReference Include="System.Numerics.Tensors" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Implements Netclaw.Actors.Memory.IMemoryEmbedder — the dependency direction is
+         one-way: Netclaw.Actors never references this project (actor code carries no
+         OnnxRuntime dependency), Netclaw.Embeddings references Netclaw.Actors solely to
+         see the seam interface it implements. -->
+    <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
+  </ItemGroup>
+
+</Project>
