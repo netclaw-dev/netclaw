@@ -5,10 +5,10 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 
 ## 1. Shared curation evaluator (behavior-neutral refactor)
 
-- [ ] 1.1 Extract `MemoryCurationEvaluator` from `MemoryCurationActor.EvaluateSingleAsync` and wire the actor through it
-- [ ] 1.2 Route `MemoryCurationEngine` (daemon worker) through the same evaluator, including `GuardDestructiveUpdate`, deleting the divergent inline logic
-- [ ] 1.3 Characterization tests proving inline and daemon paths produce identical decisions for the same inputs
-- [ ] 1.4 Run full memory test suites + slopwatch; no behavior change expected (decision-mix log fields unchanged)
+- [x] 1.1 Extract `MemoryCurationEvaluator` from `MemoryCurationActor.EvaluateSingleAsync` and wire the actor through it
+- [x] 1.2 Route `MemoryCurationEngine` (daemon worker) through the same evaluator, including `GuardDestructiveUpdate`, deleting the divergent inline logic
+- [x] 1.3 Characterization tests proving inline and daemon paths produce identical decisions for the same inputs
+- [x] 1.4 Run full memory test suites + slopwatch; no behavior change expected (decision-mix log fields unchanged)
 
 ## 2. Embedding foundation
 
