@@ -12,12 +12,12 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 
 ## 2. Embedding foundation
 
-- [ ] 2.1 Create `src/Netclaw.Embeddings` project (Microsoft.ML.OnnxRuntime CPU, FastBertTokenizer, System.Numerics.Tensors) and `IMemoryEmbedder` seam in `Netclaw.Actors/Memory`
-- [ ] 2.2 Implement `OnnxMemoryEmbedder` (single InferenceSession, bounded intra-op threads, concurrency semaphore) + `UnavailableMemoryEmbedder`
-- [ ] 2.3 Implement `EmbeddingModelProvisioner`: pinned allowlist (id → URL, size, SHA-256), atomic download, hash verification, rejection of unknown ids
-- [ ] 2.4 Add `memory_embeddings` table + `UpsertEmbeddingAsync`/`FindNearestByEmbeddingAsync`/coverage queries to `SQLiteMemoryStore.InitializeAsync` (idempotent DDL)
-- [ ] 2.5 Implement `MemoryContentHasher` (normalized title+body SHA-256) and hash-skip on re-embed
-- [ ] 2.6 Implement `MemoryVectorIndex` (per-model flat float[] brute-force cosine, store-version invalidation)
+- [x] 2.1 Create `src/Netclaw.Embeddings` project (Microsoft.ML.OnnxRuntime CPU, FastBertTokenizer, System.Numerics.Tensors) and `IMemoryEmbedder` seam in `Netclaw.Actors/Memory`
+- [x] 2.2 Implement `OnnxMemoryEmbedder` (single InferenceSession, bounded intra-op threads, concurrency semaphore) + `UnavailableMemoryEmbedder`
+- [x] 2.3 Implement `EmbeddingModelProvisioner`: pinned allowlist (id → URL, size, SHA-256), atomic download, hash verification, rejection of unknown ids
+- [x] 2.4 Add `memory_embeddings` table + `UpsertEmbeddingAsync`/`FindNearestByEmbeddingAsync`/coverage queries to `SQLiteMemoryStore.InitializeAsync` (idempotent DDL)
+- [x] 2.5 Implement `MemoryContentHasher` (normalized title+body SHA-256) and hash-skip on re-embed
+- [x] 2.6 Implement `MemoryVectorIndex` (per-model flat float[] brute-force cosine, store-version invalidation)
 - [ ] 2.7 `EmbeddingWarmupHostedService`: provision-or-degrade at startup, warm-up inference, gap-repair sweep; register `IMemoryEmbedder` in daemon DI
 - [ ] 2.8 Embed-on-write after both curation batch commit paths
 - [ ] 2.9 `netclaw memory backfill-embeddings [--force]` CLI command
