@@ -173,11 +173,15 @@ the outer bounds.
 
 *Alternative considered*: RRF fusion — rejected: rank-only fusion always
 admits the top item even when nothing is relevant; the zero-injection
-behavior requires an absolute score. *Latency risk is explicit*: Ollama
-measurements ran far above the 10–50 ms/query assumption; the ONNX int8
-short-query latency MUST be measured before this slice ships (mitigations:
-raise `RecallTimeoutMs`, pre-warmed session, or skip-vector-under-pressure —
-all loud, none silent).
+behavior requires an absolute score. *Latency measured, not assumed*: Ollama
+measurements ran far above the 10–50 ms/query assumption, and the in-process
+ONNX fp32 measurement (Slice 2 task 2.13; full numbers in Open Questions)
+shows the same problem persists — p95 ≈ 315 ms on the i9-9900K reference box,
+~2× over the 150 ms sub-budget, because the embedder pads every input to a
+fixed 512 tokens regardless of actual length. The 150 ms sub-budget does
+**not** hold as implemented; Slice 4 must land a query-specific max-length
+(the largest unexplored lever) and/or raise `RecallTimeoutMs` / accept
+skip-vector-under-pressure — all loud, none silent.
 
 ### D7. Taxonomy rebalance: recall modes mean what they say
 
@@ -248,10 +252,13 @@ compatibility; only dead *behavior* is deleted.
 - [Model download unavailable offline at first run] → loud degraded mode:
   doctor Error, daemon status `embeddings: degraded`, rate-limited logs;
   lexical recall keeps serving. Never silent.
-- [Query-embedding latency blows the 300 ms recall budget on CPU] → measured
-  gate before Slice 4 ships; warmup inference at start; per-turn vector
-  sub-budget with logged lexical fallback; `RecallTimeoutMs` already
-  operator-tunable.
+- [Query-embedding latency blows the 300 ms recall budget on CPU] →
+  **confirmed, not hypothetical** (Slice 2 task 2.13: p95 ≈ 315 ms, ~2× over
+  the 150 ms sub-budget on the reference box; see Open Questions for the full
+  table). Mitigation before Slice 4 ships: a query-specific max-length well
+  below the current fixed 512 tokens (largest unexplored lever); warmup
+  inference at start; per-turn vector sub-budget with logged lexical
+  fallback; `RecallTimeoutMs` already operator-tunable as the last resort.
 - [LLM merge synthesis loses information] → MergeGuard token-retention check
   + structural-append fallback; consolidation applies only via human-ratified
   plan files with a backup taken first.
@@ -289,8 +296,31 @@ compatibility; only dead *behavior* is deleted.
 
 ## Open Questions
 
-- ONNX int8 query-embedding latency on reference hardware (measure in Slice 2;
-  gates Slice 4's sub-budget design).
+- ~~ONNX int8 query-embedding latency on reference hardware (measure in
+  Slice 2; gates Slice 4's sub-budget design)~~ **MEASURED (Slice 2 task
+  2.13, `tools/embed-latency-bench`, batch=1, 200 timed iterations/corpus
+  after 20 warmups)**. Production path is fp32, not int8 (int8 remains a
+  deferred D2 optimization). Reference box: i9-9900K, 8 logical cores,
+  contended condition (load avg 2.0–3.6, ~11/15 GiB RAM in use, live daemon
+  running):
+
+  | corpus                      | tokens (mean) | p50     | p95    |
+  |------------------------------|---------------|---------|--------|
+  | short query                  | 13.8          | 281 ms  | 315 ms |
+  | medium (~180 tok)             | 178.2         | 274 ms  | 298 ms |
+  | doc-length (~440 tok)         | 442.1         | 275 ms  | 294 ms |
+  | short, concurrency=2          | 13.8          | 274 ms  | 291 ms |
+  | cold load (model load + 1st embed) | —        | 1069 ms | —      |
+
+  All three corpora cost nearly the same regardless of length, because
+  `OnnxMemoryEmbedder` always runs a fixed 512-token forward pass (no
+  length-based truncation) — the fp32 matmul, not tokenization, dominates.
+  Concurrency=2 gave no throughput benefit on this contended box (two
+  parallel 100-call loops took as long in aggregate as one sequential
+  200-call stream). **Verdict: the 150 ms query-embedding sub-budget does
+  not hold on this hardware — p95 is ~2.1× over budget (margin ≈ −165 ms)**;
+  the highest-leverage unexplored mitigation is a query-specific max-length
+  (e.g. 64 tokens, not int8 quantization) before Slice 4 ships.
 - Final `MinCosineSimilarity` default (calibrate against `gold-prod-2026-07`
   during Slice 4; 0.55 is the working hypothesis).
 - Whether the R2 feeds channel should mirror model artifacts (post-PoC
