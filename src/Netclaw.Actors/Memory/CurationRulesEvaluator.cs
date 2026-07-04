@@ -265,11 +265,16 @@ public static class CurationRulesEvaluator
         return NormalizeForContainment(proposed).Contains(existingNorm, StringComparison.Ordinal);
     }
 
-    private static string NormalizeForContainment(string value)
+    /// <summary>
+    /// Lowercase and collapse all whitespace runs to single spaces so formatting differences
+    /// don't hide a genuine containment. Case folding happens here so the <c>Contains</c>
+    /// check above can stay Ordinal. Internal (not private) because
+    /// <see cref="MemoryContentHasher"/> reuses the exact same normalization for its content
+    /// hash — the two "does this content actually differ" judgments in the memory subsystem
+    /// must agree, so this is the one place either can drift from the other.
+    /// </summary>
+    internal static string NormalizeForContainment(string value)
     {
-        // Lowercase and collapse all whitespace runs to single spaces so formatting
-        // differences don't hide a genuine containment. Case folding happens here so
-        // the Contains check can stay Ordinal.
         return string.Join(' ', (value ?? string.Empty)
             .ToLowerInvariant()
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
