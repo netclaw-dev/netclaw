@@ -22,6 +22,7 @@ using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Mattermost;
+using Netclaw.Cli.Memory;
 using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
@@ -852,6 +853,16 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Memory management (memory-core-redesign Slice 2) ──
+    if (mode is "memory")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        // All memory subcommands are offline — direct SQLite/model-file access, no daemon needed
+        Environment.ExitCode = await MemoryCommand.RunAsync(args, paths, BuildCliConfig());
+        return;
+    }
+
     // ── Webhook management ──
     if (mode is "webhooks")
     {
@@ -1243,6 +1254,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
+    Console.WriteLine("  memory                   Manage cross-session memory (embeddings backfill, offline)");
     Console.WriteLine("  skill                    Manage skills and skill sources");
     Console.WriteLine("  webhooks                 Manage inbound webhook routes");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
