@@ -55,16 +55,29 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     private readonly SessionId _sessionId;
     private readonly ILoggingAdapter _log;
     private readonly MemoryCurationEvaluator _evaluator;
+    private readonly MemoryEmbedderHolder? _embedderHolder;
 
     private IActorRef? _currentRequester;
 
     public IStash Stash { get; set; } = null!;
 
-    public MemoryCurationActor(SQLiteMemoryStore store, SessionId sessionId, IChatClientProvider? clientProvider = null)
+    /// <param name="embedderHolder">
+    /// Resolves the process's <see cref="IMemoryEmbedder"/> at write time (memory-core-redesign
+    /// Slice 2, task 2.8). Optional like <paramref name="clientProvider"/> above: a null holder
+    /// is a genuine operating mode (a test harness or a session wired without the embedding
+    /// subsystem), not a placeholder — <see cref="MemoryEmbedOnWriteCoordinator"/> treats a null
+    /// holder identically to an unavailable embedder and skips embedding with a debug log.
+    /// </param>
+    public MemoryCurationActor(
+        SQLiteMemoryStore store,
+        SessionId sessionId,
+        IChatClientProvider? clientProvider = null,
+        MemoryEmbedderHolder? embedderHolder = null)
     {
         _store = store;
         _sessionId = sessionId;
         _log = Context.GetLogger();
+        _embedderHolder = embedderHolder;
 
         var llmClient = clientProvider != null
             ? clientProvider.GetClient(ModelRole.Compaction)
@@ -77,8 +90,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     /// <summary>
     /// Create Props for the MemoryCurationActor.
     /// </summary>
-    public static Props CreateProps(SQLiteMemoryStore store, SessionId sessionId, IChatClientProvider? clientProvider = null)
-        => Props.Create(() => new MemoryCurationActor(store, sessionId, clientProvider));
+    public static Props CreateProps(
+        SQLiteMemoryStore store,
+        SessionId sessionId,
+        IChatClientProvider? clientProvider = null,
+        MemoryEmbedderHolder? embedderHolder = null)
+        => Props.Create(() => new MemoryCurationActor(store, sessionId, clientProvider, embedderHolder));
 
     // ── Idle behavior ───────────────────────────────────────────────
 
@@ -241,7 +258,14 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 // Write all accepted operations in a single batch
                 if (toWrite.Count > 0)
                 {
-                    await _store.ApplyInlineCurationBatchAsync(toWrite);
+                    var writtenDocs = await _store.ApplyInlineCurationBatchAsync(toWrite);
+
+                    // Embed-on-write (memory-core-redesign Slice 2, task 2.8): runs after the
+                    // write above has already committed. Vectors are derived data — a failure
+                    // here must never fail this write; MemoryEmbedOnWriteCoordinator isolates
+                    // and logs per-item failures instead of propagating them.
+                    await MemoryEmbedOnWriteCoordinator.EmbedWrittenDocumentsAsync(
+                        _embedderHolder, _store, writtenDocs, _log);
                 }
 
                 self.Tell(new WriteBatchResult(new CurationCompleted(

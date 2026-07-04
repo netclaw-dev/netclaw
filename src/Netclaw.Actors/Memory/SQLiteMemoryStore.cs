@@ -1129,11 +1129,15 @@ public sealed class SQLiteMemoryStore
     /// no row change, no <see cref="EmbeddingDataVersion"/> bump — when the stored
     /// <paramref name="contentHash"/> already matches, so a naive caller that re-embeds on
     /// every write (or a backfill re-run) pays no cost when nothing changed (design D3).
+    /// Returns whether a row was actually written (false for the hash-unchanged skip) so
+    /// callers like <c>netclaw memory backfill-embeddings</c> can report accurate
+    /// embedded/skipped counts, including when a concurrent live daemon has already embedded
+    /// the same item between the caller's candidate scan and this call.
     /// <paramref name="vector"/> is written as a little-endian float32 blob; every supported
     /// deployment target (linux-x64, linux-arm64) is little-endian, so no byte-order handling
     /// is needed on read.
     /// </summary>
-    public async Task UpsertEmbeddingAsync(
+    public async Task<bool> UpsertEmbeddingAsync(
         string itemId,
         string itemKind,
         string modelId,
@@ -1176,6 +1180,8 @@ public sealed class SQLiteMemoryStore
 
         if (wrote)
             Interlocked.Increment(ref _embeddingDataVersion);
+
+        return wrote;
     }
 
     /// <summary>
@@ -1219,29 +1225,8 @@ public sealed class SQLiteMemoryStore
     {
         return await WithConnectionAsync(async (conn, ct) =>
         {
-        await using var docsCmd = conn.CreateCommand();
-        docsCmd.CommandText = $"""
-            SELECT document_id, title, markdown_body FROM memory_documents
-            WHERE update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}';
-            """;
-
-        var documents = new List<(string Id, string Title, string Body)>();
-        await using (var reader = await docsCmd.ExecuteReaderAsync(ct))
-        {
-            while (await reader.ReadAsync(ct))
-                documents.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
-        }
-
-        await using var embCmd = conn.CreateCommand();
-        embCmd.CommandText = "SELECT item_id, content_hash FROM memory_embeddings WHERE model_id = $modelId;";
-        embCmd.Parameters.AddWithValue("$modelId", modelId);
-
-        var currentModelHashes = new Dictionary<string, string>(StringComparer.Ordinal);
-        await using (var reader = await embCmd.ExecuteReaderAsync(ct))
-        {
-            while (await reader.ReadAsync(ct))
-                currentModelHashes[reader.GetString(0)] = reader.GetString(1);
-        }
+        var documents = await LoadNonTombstonedDocumentsAsync(conn, ct);
+        var currentModelHashes = await LoadCurrentModelHashesAsync(conn, modelId, ct);
 
         var embeddedCurrentHash = 0;
         foreach (var doc in documents)
@@ -1260,6 +1245,78 @@ public sealed class SQLiteMemoryStore
 
         return new MemoryEmbeddingCoverage(documents.Count, embeddedCurrentHash, otherModelCount);
         }, ct);
+    }
+
+    /// <summary>
+    /// Documents lacking a current-model, current-hash embedding — the same "derived backfill
+    /// state" <see cref="GetEmbeddingCoverageAsync"/> counts, but returning the actual rows so
+    /// callers (the daemon warmup service's gap-repair sweep, <c>netclaw memory
+    /// backfill-embeddings</c>) can embed them. Backfill state is never tracked in a separate
+    /// progress table (design D3) — this is always a fresh LEFT-JOIN-shaped comparison against
+    /// the current model id and content hash. When <paramref name="force"/> is true, every
+    /// non-tombstoned document is returned regardless of its current embedding state (used by
+    /// <c>--force</c> backfill after a model change).
+    /// </summary>
+    public async Task<IReadOnlyList<MemoryDocumentWriteResult>> GetDocumentsNeedingEmbeddingAsync(
+        string modelId,
+        bool force = false,
+        CancellationToken ct = default)
+    {
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        var documents = await LoadNonTombstonedDocumentsAsync(conn, ct);
+
+        if (force)
+        {
+            return (IReadOnlyList<MemoryDocumentWriteResult>)documents
+                .Select(d => new MemoryDocumentWriteResult(d.Id, d.Title, d.Body))
+                .ToList();
+        }
+
+        var currentModelHashes = await LoadCurrentModelHashesAsync(conn, modelId, ct);
+        var missing = new List<MemoryDocumentWriteResult>();
+        foreach (var doc in documents)
+        {
+            var currentHash = MemoryContentHasher.ComputeHash(doc.Title, doc.Body);
+            if (!currentModelHashes.TryGetValue(doc.Id, out var storedHash)
+                || !string.Equals(storedHash, currentHash, StringComparison.Ordinal))
+            {
+                missing.Add(new MemoryDocumentWriteResult(doc.Id, doc.Title, doc.Body));
+            }
+        }
+
+        return (IReadOnlyList<MemoryDocumentWriteResult>)missing;
+        }, ct);
+    }
+
+    private static async Task<List<(string Id, string Title, string Body)>> LoadNonTombstonedDocumentsAsync(
+        SqliteConnection conn, CancellationToken ct)
+    {
+        await using var docsCmd = conn.CreateCommand();
+        docsCmd.CommandText = $"""
+            SELECT document_id, title, markdown_body FROM memory_documents
+            WHERE update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}';
+            """;
+
+        var documents = new List<(string Id, string Title, string Body)>();
+        await using var reader = await docsCmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            documents.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        return documents;
+    }
+
+    private static async Task<Dictionary<string, string>> LoadCurrentModelHashesAsync(
+        SqliteConnection conn, string modelId, CancellationToken ct)
+    {
+        await using var embCmd = conn.CreateCommand();
+        embCmd.CommandText = "SELECT item_id, content_hash FROM memory_embeddings WHERE model_id = $modelId;";
+        embCmd.Parameters.AddWithValue("$modelId", modelId);
+
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var reader = await embCmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            hashes[reader.GetString(0)] = reader.GetString(1);
+        return hashes;
     }
 
     private static byte[] VectorToBlob(ReadOnlySpan<float> vector)
@@ -1531,11 +1588,17 @@ public sealed class SQLiteMemoryStore
     /// Write a batch of curation operations without an associated checkpoint.
     /// Used by the inline curation actor path where proposals are sent directly
     /// from the session actor rather than through the checkpoint queue.
+    /// Returns the <c>memory_documents</c> rows written in this batch (never immutable
+    /// <c>memory_records</c>) so the caller can embed them post-commit
+    /// (<see cref="MemoryEmbedOnWriteCoordinator"/>, memory-core-redesign Slice 2) knowing the
+    /// final document id — which for a Create decision is only assigned inside this method.
     /// </summary>
-    public async Task ApplyInlineCurationBatchAsync(
+    public async Task<IReadOnlyList<MemoryDocumentWriteResult>> ApplyInlineCurationBatchAsync(
         IReadOnlyList<SQLiteMemoryCurationOperation> operations,
         CancellationToken ct = default)
     {
+        var written = new List<MemoryDocumentWriteResult>();
+
         await WithConnectionAsync(async (conn, ct) =>
         {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
@@ -1677,6 +1740,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$createdAt", now);
             documentCmd.Parameters.AddWithValue("$updatedAt", now);
             await documentCmd.ExecuteNonQueryAsync(ct);
+            written.Add(new MemoryDocumentWriteResult(documentId, operation.Title, operation.Content));
 
             if (IsSearchableRecallMode(resolvedRecallMode))
                 await UpsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
@@ -1684,13 +1748,22 @@ public sealed class SQLiteMemoryStore
 
         await tx.CommitAsync(ct);
         }, ct);
+
+        return written;
     }
 
-    public async Task ApplyCurationBatchAsync(
+    /// <summary>
+    /// Returns the <c>memory_documents</c> rows written in this batch — see
+    /// <see cref="ApplyInlineCurationBatchAsync"/>'s remarks for why the caller needs this to
+    /// embed post-commit.
+    /// </summary>
+    public async Task<IReadOnlyList<MemoryDocumentWriteResult>> ApplyCurationBatchAsync(
         string checkpointId,
         IReadOnlyList<SQLiteMemoryCurationOperation> operations,
         CancellationToken ct = default)
     {
+        var written = new List<MemoryDocumentWriteResult>();
+
         await WithConnectionAsync(async (conn, ct) =>
         {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
@@ -1835,6 +1908,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$createdAt", now);
             documentCmd.Parameters.AddWithValue("$updatedAt", now);
             await documentCmd.ExecuteNonQueryAsync(ct);
+            written.Add(new MemoryDocumentWriteResult(documentId, operation.Title, operation.Content));
 
             if (IsSearchableRecallMode(resolvedRecallMode))
                 await UpsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
@@ -1854,6 +1928,8 @@ public sealed class SQLiteMemoryStore
 
         await tx.CommitAsync(ct);
         }, ct);
+
+        return written;
     }
 
     private async Task<T> WithConnectionAsync<T>(

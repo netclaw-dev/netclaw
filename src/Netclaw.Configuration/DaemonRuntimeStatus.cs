@@ -147,6 +147,24 @@ public static class DaemonRuntimeStatus
         public string? DatabasePath { get; init; }
 
         public int? PendingCheckpoints { get; init; }
+
+        public Embeddings? Embeddings { get; init; }
+    }
+
+    /// <summary>
+    /// Embedding subsystem status (memory-core-redesign D2/Requirement "Loud degradation
+    /// without silent fallback"). <see cref="Status"/> is one of <c>"ok"</c> (embedder loaded
+    /// and warmed up), <c>"degraded"</c> (provisioning/load failed — memory falls back to
+    /// lexical-only paths), or <c>"disabled"</c> (<c>Memory.Embeddings.Enabled</c> is false).
+    /// </summary>
+    public sealed class Embeddings : IWireType
+    {
+        public required string Status { get; init; }
+
+        public string? ModelId { get; init; }
+
+        /// <summary>Human-readable cause when <see cref="Status"/> is <c>"degraded"</c>.</summary>
+        public string? DegradedReason { get; init; }
     }
 
     public sealed class Reminders : IWireType

@@ -107,6 +107,14 @@ public sealed class EmbeddingModelProvisioner
     /// entry — a hash mismatch discards the temp file and throws
     /// <see cref="EmbeddingModelProvisioningException"/> without ever creating or replacing the
     /// destination file.
+    ///
+    /// <para>
+    /// When both destination files already exist and hash-verify against the allowlist entry,
+    /// this method returns immediately without any network access (memory-core-redesign task
+    /// 2.7: "already-provisioned+hash-valid loads without network"). This makes repeated calls
+    /// — e.g. the daemon's warmup service running on every restart — idempotent and safe to run
+    /// with <c>AutoDownload=false</c> once a model has been provisioned at least once.
+    /// </para>
     /// </summary>
     public async Task<ProvisionedEmbeddingModel> ProvisionAsync(
         string modelId,
@@ -123,10 +131,56 @@ public sealed class EmbeddingModelProvisioner
         var modelPath = Path.Combine(destinationDirectory, "model.onnx");
         var vocabPath = Path.Combine(destinationDirectory, "vocab.txt");
 
+        if (await IsValidAsync(modelPath, entry.ModelSha256, entry.ModelByteSize, ct).ConfigureAwait(false)
+            && await IsValidAsync(vocabPath, entry.TokenizerSha256, expectedByteSize: null, ct).ConfigureAwait(false))
+        {
+            return new ProvisionedEmbeddingModel(modelId, modelPath, vocabPath, entry.Dimensions);
+        }
+
         await DownloadAndVerifyAsync(entry.ModelUrl, modelPath, entry.ModelSha256, entry.ModelByteSize, ct).ConfigureAwait(false);
         await DownloadAndVerifyAsync(entry.TokenizerUrl, vocabPath, entry.TokenizerSha256, expectedByteSize: null, ct).ConfigureAwait(false);
 
         return new ProvisionedEmbeddingModel(modelId, modelPath, vocabPath, entry.Dimensions);
+    }
+
+    /// <summary>
+    /// Verifies whether <paramref name="modelId"/>'s artifacts are already present and
+    /// hash-valid at <paramref name="destinationDirectory"/>, without ever accessing the
+    /// network. Returns null when the model id is unknown to the allowlist, or either file is
+    /// missing or fails verification (including a corrupted local copy) — callers that must
+    /// never trigger a download use this instead of <see cref="ProvisionAsync"/>
+    /// (memory-core-redesign task 2.7: <c>Memory.Embeddings.AutoDownload=false</c> gates the
+    /// network path entirely, even to repair a bad local copy).
+    /// </summary>
+    public async Task<ProvisionedEmbeddingModel?> TryLoadVerifiedAsync(
+        string modelId,
+        string destinationDirectory,
+        CancellationToken ct = default)
+    {
+        if (!_allowlist.TryGetValue(modelId, out var entry))
+            return null;
+
+        var modelPath = Path.Combine(destinationDirectory, "model.onnx");
+        var vocabPath = Path.Combine(destinationDirectory, "vocab.txt");
+
+        if (!await IsValidAsync(modelPath, entry.ModelSha256, entry.ModelByteSize, ct).ConfigureAwait(false))
+            return null;
+        if (!await IsValidAsync(vocabPath, entry.TokenizerSha256, expectedByteSize: null, ct).ConfigureAwait(false))
+            return null;
+
+        return new ProvisionedEmbeddingModel(modelId, modelPath, vocabPath, entry.Dimensions);
+    }
+
+    private static async Task<bool> IsValidAsync(string path, string expectedSha256, long? expectedByteSize, CancellationToken ct)
+    {
+        if (!File.Exists(path))
+            return false;
+
+        if (expectedByteSize is { } expected && new FileInfo(path).Length != expected)
+            return false;
+
+        var actualSha256 = await ComputeSha256Async(path, ct).ConfigureAwait(false);
+        return string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task DownloadAndVerifyAsync(

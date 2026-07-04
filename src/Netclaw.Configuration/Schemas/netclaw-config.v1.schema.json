@@ -364,6 +364,28 @@
           "maximum": 10,
           "default": 3,
           "description": "Maximum number of memory items auto-injected per turn."
+        },
+        "Embeddings": {
+          "type": "object",
+          "description": "In-process ONNX embedding runtime settings (memory-core-redesign).",
+          "properties": {
+            "Enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the daemon provisions the embedding model at startup and computes embeddings on memory writes. Defaults to false: this slice only writes vectors, nothing consumes them yet."
+            },
+            "ModelId": {
+              "type": "string",
+              "default": "snowflake-arctic-embed-m",
+              "description": "Allowlisted embedding model id. An id absent from the in-code allowlist is a configuration error."
+            },
+            "AutoDownload": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, downloads the model artifact at daemon startup if not already provisioned. When false, a missing model degrades loudly instead of fetching over the network."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

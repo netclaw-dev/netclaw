@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -201,6 +202,81 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetDocumentsNeedingEmbeddingAsync_returns_only_missing_or_stale_documents()
+    {
+        var anchor = _store.CreateDefaultAnchor("gap-repair-test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        async Task SeedDocAsync(string id, string title, string body)
+        {
+            await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+                DocumentId: id,
+                Anchor: anchor,
+                MemoryClass: "durable_fact",
+                Title: title,
+                MarkdownBody: body,
+                AliasesJson: null,
+                FacetsJson: null,
+                SlotsJson: null,
+                UpdateSemantics: "merge-document",
+                Sensitivity: "normal",
+                RecallMode: "auto",
+                Confidence: 0.9,
+                FreshnessAtMs: now,
+                ExpiresAtMs: null,
+                CreatedAtMs: now,
+                UpdatedAtMs: now), TestContext.Current.CancellationToken);
+        }
+
+        await SeedDocAsync("doc-current", "Current", "up to date body");
+        var currentHash = MemoryContentHasher.ComputeHash("Current", "up to date body");
+        await _store.UpsertEmbeddingAsync("doc-current", "document", "model-a", currentHash, new float[] { 1f }, TestContext.Current.CancellationToken);
+
+        await SeedDocAsync("doc-stale", "Stale", "edited body");
+        await _store.UpsertEmbeddingAsync("doc-stale", "document", "model-a", "stale-hash-from-before-the-edit", new float[] { 2f }, TestContext.Current.CancellationToken);
+
+        await SeedDocAsync("doc-unembedded", "Unembedded", "never embedded");
+
+        var missing = await _store.GetDocumentsNeedingEmbeddingAsync("model-a", force: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new[] { "doc-stale", "doc-unembedded" },
+            missing.Select(m => m.DocumentId).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetDocumentsNeedingEmbeddingAsync_with_force_returns_every_recallable_document()
+    {
+        var anchor = _store.CreateDefaultAnchor("gap-repair-force-test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-current",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Current",
+            MarkdownBody: "up to date body",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
+        var currentHash = MemoryContentHasher.ComputeHash("Current", "up to date body");
+        await _store.UpsertEmbeddingAsync("doc-current", "document", "model-a", currentHash, new float[] { 1f }, TestContext.Current.CancellationToken);
+
+        var forced = await _store.GetDocumentsNeedingEmbeddingAsync("model-a", force: true, TestContext.Current.CancellationToken);
+
+        // Already fully current, but --force means "every recallable document" regardless.
+        var doc = Assert.Single(forced);
+        Assert.Equal("doc-current", doc.DocumentId);
+    }
+
+    [Fact]
     public async Task GetEmbeddingCoverageAsync_excludes_tombstoned_documents_from_the_total()
     {
         var anchor = _store.CreateDefaultAnchor("coverage-tombstone-test");
@@ -245,4 +321,107 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
 
         Assert.Equal(1, coverage.TotalRecallableDocuments);
     }
+
+    // ── Batch-apply write results (memory-core-redesign Slice 2, task 2.8: the seam
+    // MemoryEmbedOnWriteCoordinator needs post-commit document ids+content) ──
+
+    [Fact]
+    public async Task ApplyInlineCurationBatchAsync_returns_written_documents_but_not_records()
+    {
+        var operations = new[]
+        {
+            DocumentOperation(memoryId: null, title: "New Doc", content: "doc body"),
+            RecordOperation(memoryId: "rec-1", title: "Evidence", content: "evidence body"),
+        };
+
+        var written = await _store.ApplyInlineCurationBatchAsync(operations, TestContext.Current.CancellationToken);
+
+        var doc = Assert.Single(written);
+        Assert.Equal("New Doc", doc.Title);
+        Assert.Equal("doc body", doc.Body);
+        Assert.False(string.IsNullOrWhiteSpace(doc.DocumentId));
+    }
+
+    [Fact]
+    public async Task ApplyInlineCurationBatchAsync_reports_the_final_document_id_for_an_update()
+    {
+        var written = await _store.ApplyInlineCurationBatchAsync(
+            [DocumentOperation(memoryId: "doc-explicit-id", title: "Updated", content: "updated body")],
+            TestContext.Current.CancellationToken);
+
+        var doc = Assert.Single(written);
+        Assert.Equal("doc-explicit-id", doc.DocumentId);
+    }
+
+    [Fact]
+    public async Task ApplyCurationBatchAsync_returns_written_documents_but_not_records()
+    {
+        await _store.EnqueueCheckpointAsync(new SQLiteMemoryCheckpoint(
+            CheckpointId: "cp-embed-1",
+            SessionId: "chan/thread",
+            TurnId: "turn-1",
+            TriggerType: "turn-complete",
+            Priority: 10,
+            Status: "pending",
+            PayloadJson: "{}",
+            RetryCount: 0,
+            CreatedAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            UpdatedAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), TestContext.Current.CancellationToken);
+
+        var operations = new[]
+        {
+            DocumentOperation(memoryId: null, title: "Worker Doc", content: "worker body"),
+            RecordOperation(memoryId: "rec-2", title: "Worker Evidence", content: "worker evidence body"),
+        };
+
+        var written = await _store.ApplyCurationBatchAsync("cp-embed-1", operations, TestContext.Current.CancellationToken);
+
+        var doc = Assert.Single(written);
+        Assert.Equal("Worker Doc", doc.Title);
+        Assert.Equal("worker body", doc.Body);
+    }
+
+    private static SQLiteMemoryCurationOperation DocumentOperation(string? memoryId, string title, string content)
+        => new(
+            Kind: "document",
+            MemoryClass: "durable_fact",
+            MemoryId: memoryId,
+            AnchorCanonicalName: title,
+            AnchorType: "topic",
+            Title: title,
+            Content: content,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            Relations: null,
+            UpdateSemantics: "merge-document",
+            Boundary: TrustBoundary.TrustedInstanceValue,
+            Audience: TrustAudience.Team,
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ExpiresAtMs: null);
+
+    private static SQLiteMemoryCurationOperation RecordOperation(string memoryId, string title, string content)
+        => new(
+            Kind: "record",
+            MemoryClass: "evidence",
+            MemoryId: memoryId,
+            AnchorCanonicalName: title,
+            AnchorType: "topic",
+            Title: title,
+            Content: content,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            Relations: null,
+            UpdateSemantics: "immutable-record",
+            Boundary: TrustBoundary.TrustedInstanceValue,
+            Audience: TrustAudience.Team,
+            Sensitivity: "normal",
+            RecallMode: "searchable",
+            Confidence: 0.8,
+            FreshnessAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ExpiresAtMs: null);
 }

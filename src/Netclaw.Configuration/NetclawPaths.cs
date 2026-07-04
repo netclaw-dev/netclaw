@@ -126,6 +126,22 @@ public sealed class NetclawPaths
     public string McpOAuthMetadataPath => Path.Combine(ConfigDirectory, "mcp-oauth-metadata.json");
     public string KeysDirectory => Path.Combine(BasePath, "keys");
 
+    // ── Downloaded model artifacts (memory-core-redesign D2: embedding models) ──
+    /// <summary>
+    /// Root directory for downloaded/provisioned model artifacts (currently embedding models;
+    /// <see cref="EmbeddingModelDirectory"/> is the per-model subdirectory). Kept separate from
+    /// <see cref="CacheDirectory"/> because these artifacts are large (tens to hundreds of MB),
+    /// hash-verified, and intentionally never embedded in the application binary.
+    /// </summary>
+    public string ModelsDirectory => Path.Combine(BasePath, "models");
+
+    /// <summary>
+    /// Directory for one embedding model's provisioned files (<c>model.onnx</c>,
+    /// <c>vocab.txt</c>), keyed by allowlist model id so switching
+    /// <c>Memory.Embeddings.ModelId</c> never collides with a previously provisioned model.
+    /// </summary>
+    public string EmbeddingModelDirectory(string modelId) => Path.Combine(ModelsDirectory, modelId);
+
     public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)
     {
         BasePath = PathExpansion.ExpandHome(basePath)
@@ -188,6 +204,7 @@ public sealed class NetclawPaths
         yield return KeysDirectory;
         yield return CacheDirectory;
         yield return WorkspacesDirectory;
+        yield return ModelsDirectory;
     }
 }
 

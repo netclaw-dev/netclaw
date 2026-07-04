@@ -72,6 +72,85 @@ public sealed class EmbeddingModelProvisionerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProvisionAsync_skips_the_network_entirely_when_a_valid_local_copy_already_exists()
+    {
+        var modelBytes = Encoding.UTF8.GetBytes("fake-onnx-model-bytes");
+        var vocabBytes = Encoding.UTF8.GetBytes("[PAD]\n[UNK]\n[CLS]\n[SEP]\n");
+
+        var modelUrl = _server.AddRoute("/model.onnx", modelBytes);
+        var vocabUrl = _server.AddRoute("/vocab.txt", vocabBytes);
+
+        var allowlist = new Dictionary<string, EmbeddingModelManifestEntry>
+        {
+            ["test-model"] = new EmbeddingModelManifestEntry(
+                "test-model", modelUrl, vocabUrl,
+                Sha256Hex(modelBytes), Sha256Hex(vocabBytes),
+                Dimensions: 8, ModelByteSize: modelBytes.Length),
+        };
+        var provisioner = new EmbeddingModelProvisioner(_httpClient, allowlist);
+        await provisioner.ProvisionAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
+
+        // Tear down the server: any further attempt to reach the network would now throw.
+        _server.Dispose();
+
+        // Task 2.7: "already-provisioned+hash-valid loads without network" — this call must
+        // succeed even though the server is gone, proving it never re-downloaded.
+        var result = await provisioner.ProvisionAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
+
+        Assert.Equal("test-model", result.ModelId);
+        Assert.Equal(modelBytes, await File.ReadAllBytesAsync(result.ModelPath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task TryLoadVerifiedAsync_returns_null_when_no_local_copy_exists()
+    {
+        var allowlist = new Dictionary<string, EmbeddingModelManifestEntry>
+        {
+            ["test-model"] = DummyEntry("test-model"),
+        };
+        var provisioner = new EmbeddingModelProvisioner(_httpClient, allowlist);
+
+        var result = await provisioner.TryLoadVerifiedAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task TryLoadVerifiedAsync_returns_null_for_an_unknown_model_id_without_touching_the_network()
+    {
+        var provisioner = new EmbeddingModelProvisioner(_httpClient, new Dictionary<string, EmbeddingModelManifestEntry>());
+
+        var result = await provisioner.TryLoadVerifiedAsync("nonexistent-model", _destinationDirectory, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task TryLoadVerifiedAsync_returns_the_provisioned_model_without_network_when_the_local_copy_is_valid()
+    {
+        var modelBytes = Encoding.UTF8.GetBytes("fake-onnx-model-bytes");
+        var vocabBytes = Encoding.UTF8.GetBytes("[PAD]\n[UNK]\n[CLS]\n[SEP]\n");
+        var modelUrl = _server.AddRoute("/model.onnx", modelBytes);
+        var vocabUrl = _server.AddRoute("/vocab.txt", vocabBytes);
+
+        var allowlist = new Dictionary<string, EmbeddingModelManifestEntry>
+        {
+            ["test-model"] = new EmbeddingModelManifestEntry(
+                "test-model", modelUrl, vocabUrl,
+                Sha256Hex(modelBytes), Sha256Hex(vocabBytes),
+                Dimensions: 8, ModelByteSize: modelBytes.Length),
+        };
+        var provisioner = new EmbeddingModelProvisioner(_httpClient, allowlist);
+        await provisioner.ProvisionAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
+        _server.Dispose();
+
+        var result = await provisioner.TryLoadVerifiedAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(8, result!.Dimensions);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_rejects_unknown_model_id_listing_the_allowlist()
     {
         var allowlist = new Dictionary<string, EmbeddingModelManifestEntry>

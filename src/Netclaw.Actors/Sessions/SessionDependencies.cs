@@ -40,13 +40,18 @@ public sealed record SessionToolServices(
 
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.
+/// <see cref="EmbedderHolder"/> resolves the process's embedder for embed-on-write
+/// (memory-core-redesign Slice 2). Null is a genuine state — same as
+/// <see cref="MemoryStore"/> being null — for any session/test harness that has not wired
+/// up the embedding subsystem at all.
 /// </summary>
 public sealed record SessionMemoryServices(
     IMemoryExtractor MemoryExtractor,
     IMemoryRecallCoordinator RecallCoordinator,
     IMemoryCheckpointSink CheckpointSink,
     SQLiteMemoryStore? MemoryStore,
-    MemoryConfig? MemoryConfig = null);
+    MemoryConfig? MemoryConfig = null,
+    MemoryEmbedderHolder? EmbedderHolder = null);
 
 /// <summary>
 /// Metrics and lifecycle observation.

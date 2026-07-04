@@ -18,6 +18,7 @@ internal sealed class LocalArtifactServer : IDisposable
     private readonly HttpListener _listener;
     private readonly Dictionary<string, byte[]> _routes = new(StringComparer.Ordinal);
     private readonly Task _serveLoop;
+    private bool _disposed;
 
     public LocalArtifactServer()
     {
@@ -86,6 +87,12 @@ internal sealed class LocalArtifactServer : IDisposable
 
     public void Dispose()
     {
+        // Idempotent: some tests dispose the server early (mid-test) to prove a later call
+        // makes no network access, then the test class's own DisposeAsync disposes it again.
+        if (_disposed)
+            return;
+        _disposed = true;
+
         _listener.Stop();
         _listener.Close();
     }
