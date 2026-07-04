@@ -520,6 +520,17 @@ public sealed class MemoryCurationEngine(
 
     private readonly ILogger<MemoryCurationEngine> _logger = logger ?? NullLogger<MemoryCurationEngine>.Instance;
 
+    // Same evaluator the inline per-session actor uses (memory-core-redesign Slice 1),
+    // constructed with no LLM client: the daemon checkpoint worker has none to give it
+    // today, so every Ambiguous decision here resolves via
+    // CurationRulesEvaluator.TryAutoResolveAmbiguous rather than escalating. This is the
+    // one place the daemon path previously performed no dedup/relationship evaluation at
+    // all beyond the fingerprint check below — routing through the shared evaluator is
+    // what makes GuardDestructiveUpdate (previously inline-actor-only; audit finding D14)
+    // apply here too.
+    private readonly MemoryCurationEvaluator _evaluator =
+        new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), llmClient: null);
+
     public async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> CurateAsync(
         SQLiteMemoryCheckpoint checkpoint,
         CancellationToken ct = default)
@@ -569,7 +580,7 @@ public sealed class MemoryCurationEngine(
             return [];
         }
 
-        return candidates.Select(c => new SQLiteMemoryCurationOperation(
+        var operations = candidates.Select(c => new SQLiteMemoryCurationOperation(
             Kind: c.Kind.ToWireValue(),
             MemoryClass: c.MemoryClass.ToWireValue(),
             MemoryId: c.MemoryId,
@@ -590,6 +601,37 @@ public sealed class MemoryCurationEngine(
             FreshnessAtMs: c.FreshnessAtMs,
             ExpiresAtMs: c.ExpiresAtMs,
             SupersedesRecordId: c.SupersedesRecordId)).ToArray();
+
+        return await EvaluateAndApplyAsync(operations, checkpoint, ct);
+    }
+
+    /// <summary>
+    /// Runs each extracted candidate through the shared evaluator (dedup/relationship
+    /// decision, then the decision-to-write-operation mapping) before the caller persists
+    /// the result via <see cref="SQLiteMemoryStore.ApplyCurationBatchAsync"/> — the same
+    /// evaluate-then-apply sequence the inline actor's write phase runs. A Skip decision
+    /// drops the candidate here rather than at the caller.
+    /// </summary>
+    private async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> EvaluateAndApplyAsync(
+        IReadOnlyList<SQLiteMemoryCurationOperation> operations,
+        SQLiteMemoryCheckpoint checkpoint,
+        CancellationToken ct)
+    {
+        if (operations.Count == 0)
+            return operations;
+
+        var sessionId = (SessionId)checkpoint.SessionId;
+        var results = new List<SQLiteMemoryCurationOperation>(operations.Count);
+
+        foreach (var operation in operations)
+        {
+            var decision = await _evaluator.EvaluateAsync(operation, sessionId, ct);
+            var writeOp = await _evaluator.ApplyDecisionAsync(operation, decision, ct);
+            if (writeOp is not null)
+                results.Add(writeOp);
+        }
+
+        return results;
     }
 
     private void LogCheckpointDropped(
