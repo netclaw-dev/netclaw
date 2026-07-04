@@ -20,7 +20,10 @@
 // against EmbeddingModelProvisioner.Allowlist, this exits with an error instead of fetching it.
 
 using System.Diagnostics;
+using System.Numerics.Tensors;
 using FastBertTokenizer;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using Netclaw.Embeddings;
 
 // Captured before any other work so the cold-load number can include .NET host/runtime
@@ -31,6 +34,16 @@ const int WarmupIterations = 20;
 const int TimedIterations = 200;
 const int ConcurrencyIterationsPerLoop = 100;
 const int MaxTokens = 512;
+const int DynamicLengthBucket = 8;
+
+// Honest contention context: load average is one line in /proc/loadavg (1m 5m 15m ...).
+// Read once here, and again at the very end, so the report shows what the box looked like
+// before this ~5-6 minute run started and what it drifted to by the time it finished.
+string ReadLoadAverage() => File.Exists("/proc/loadavg")
+    ? string.Join(' ', File.ReadAllText("/proc/loadavg").Split(' ').Take(3))
+    : "unavailable (non-Linux host)";
+
+var loadAverageBefore = ReadLoadAverage();
 
 var modelDir = args.Length > 0
     ? args[0]
@@ -52,6 +65,37 @@ if (verified is null)
 }
 
 Console.WriteLine($"Verified model: {verified.ModelId} ({verified.Dimensions} dims) at {verified.ModelPath}");
+
+// --- Dynamic-sequence-length feasibility check (Slice 4 design experiment) ------------------
+//
+// A -1 (or named symbolic) dimension on the sequence axis means the exported ONNX graph
+// accepts any sequence length at inference time — the padding to a fixed MaxTokens=512 in
+// OnnxMemoryEmbedder is an application choice, not something the graph requires. A concrete
+// positive dimension there means the graph was exported with a static shape and rejects
+// anything else; dynamic length would need a re-export, not just a code change.
+bool sequenceAxisIsDynamic;
+using (var diagSession = new InferenceSession(verified.ModelPath))
+{
+    Console.WriteLine();
+    Console.WriteLine("ONNX graph input metadata (dynamic-sequence-length feasibility check):");
+    var seqDims = new List<bool>();
+    foreach (var (name, meta) in diagSession.InputMetadata)
+    {
+        var dims = string.Join(", ", meta.Dimensions);
+        var symbolic = string.Join(", ", meta.SymbolicDimensions.Select(s => string.IsNullOrEmpty(s) ? "<fixed>" : s));
+        Console.WriteLine($"  {name}: dims=[{dims}] symbolic=[{symbolic}]");
+
+        // Sequence axis is conventionally dimension index 1 (dim 0 is batch) for a
+        // [batch, sequence] BERT input tensor.
+        if (meta.Dimensions.Length > 1)
+            seqDims.Add(meta.Dimensions[1] < 0 || !string.IsNullOrEmpty(meta.SymbolicDimensions[1]));
+    }
+
+    sequenceAxisIsDynamic = seqDims.Count > 0 && seqDims.All(d => d);
+    Console.WriteLine(sequenceAxisIsDynamic
+        ? "  Verdict: sequence axis is DYNAMIC on every input — graph accepts variable-length sequences."
+        : "  Verdict: sequence axis is FIXED on at least one input — graph requires the exported shape.");
+}
 
 // --- Corpora (deterministic, hardcoded) ---------------------------------------------------
 
@@ -131,6 +175,14 @@ string[] mediumCorpus = Enumerable.Range(0, 20)
 string[] docCorpus = Enumerable.Range(0, 20)
     .Select(i => BuildFromBank(startIndex: i * 7, count: 15))
     .ToArray();
+
+// Fixed 10-sentence correctness set spanning short queries and longer bank sentences, so the
+// fixed-512-vs-dynamic-length parity check isn't only exercised at one length.
+string[] correctnessSentences =
+[
+    .. shortQueries.Take(5),
+    .. sentenceBank.Take(5),
+];
 
 // --- Token-count diagnostic: measure the corpora shape claim rather than assume it ----------
 
@@ -238,6 +290,115 @@ rows.Add(Percentiles("short (concurrency=2)", concurrentSamples));
 Console.WriteLine();
 Console.WriteLine($"Concurrency-2 pass total wall time: {concurrencySw.Elapsed.TotalMilliseconds:F1} ms for {concurrentSamples.Count} total calls (2x{ConcurrencyIterationsPerLoop})");
 
+// Capture fixed-512 embeddings for the correctness set before disposing the fixed embedder —
+// these are compared against the dynamic-length variant below (bitwise-different padding, same
+// semantic content, should cosine-agree near 1.0 if the attention mask does its job).
+var fixedCorrectnessEmbeddings = new ReadOnlyMemory<float>[correctnessSentences.Length];
+for (var i = 0; i < correctnessSentences.Length; i++)
+    fixedCorrectnessEmbeddings[i] = await embedder.EmbedAsync(correctnessSentences[i], CancellationToken.None);
+
+embedder.Dispose();
+
+// --- Dynamic sequence length experiment (Slice 4 design decision) --------------------------
+//
+// Bench-only parallel code path: OnnxMemoryEmbedder is not touched. This loads its own
+// InferenceSession + BertTokenizer and pads each input only to its actual tokenized length,
+// rounded up to a multiple of DynamicLengthBucket, instead of the fixed MaxTokens=512.
+List<(string Sentence, float Cosine)>? correctnessResults = null;
+
+if (sequenceAxisIsDynamic)
+{
+    using var dynamicSessionOptions = new SessionOptions { IntraOpNumThreads = 4 };
+    using var dynamicSession = new InferenceSession(verified.ModelPath, dynamicSessionOptions);
+    var dynamicTokenizer = new BertTokenizer();
+    await dynamicTokenizer.LoadVocabularyAsync(verified.VocabPath, convertInputToLowercase: true);
+    var outputName = dynamicSession.OutputMetadata.Keys.Single();
+
+    ReadOnlyMemory<float> EmbedOneDynamic(string text)
+    {
+        var scratchIds = new long[MaxTokens];
+        var scratchMask = new long[MaxTokens];
+        var scratchTypes = new long[MaxTokens];
+        dynamicTokenizer.Encode(text, scratchIds, scratchMask, scratchTypes, MaxTokens);
+
+        var actualLen = (int)scratchMask.Sum();
+        var bucketLen = Math.Max(DynamicLengthBucket, ((actualLen + DynamicLengthBucket - 1) / DynamicLengthBucket) * DynamicLengthBucket);
+
+        var inputIds = scratchIds[..bucketLen];
+        var attentionMask = scratchMask[..bucketLen];
+        var tokenTypeIds = scratchTypes[..bucketLen];
+
+        var available = new Dictionary<string, NamedOnnxValue>(StringComparer.Ordinal)
+        {
+            ["input_ids"] = NamedOnnxValue.CreateFromTensor("input_ids", new DenseTensor<long>(inputIds, [1, bucketLen])),
+            ["attention_mask"] = NamedOnnxValue.CreateFromTensor("attention_mask", new DenseTensor<long>(attentionMask, [1, bucketLen])),
+            ["token_type_ids"] = NamedOnnxValue.CreateFromTensor("token_type_ids", new DenseTensor<long>(tokenTypeIds, [1, bucketLen])),
+        };
+
+        var feed = new List<NamedOnnxValue>(dynamicSession.InputMetadata.Count);
+        foreach (var inputName in dynamicSession.InputMetadata.Keys)
+            feed.Add(available[inputName]);
+
+        using var outputs = dynamicSession.Run(feed);
+        var lastHiddenState = outputs.First(o => o.Name == outputName).AsTensor<float>();
+        var dims = lastHiddenState.Dimensions[^1];
+
+        var vector = new float[dims];
+        for (var d = 0; d < dims; d++)
+            vector[d] = lastHiddenState[0, 0, d]; // CLS token
+
+        var norm = TensorPrimitives.Norm((ReadOnlySpan<float>)vector);
+        if (norm > 0f)
+            TensorPrimitives.Divide(vector, norm, vector);
+
+        return vector;
+    }
+
+    List<double> RunCorpusDynamic(string[] corpus, int warmup, int timed)
+    {
+        for (var i = 0; i < warmup; i++)
+            _ = EmbedOneDynamic(corpus[i % corpus.Length]);
+
+        var samples = new List<double>(timed);
+        for (var i = 0; i < timed; i++)
+        {
+            var sw = Stopwatch.StartNew();
+            _ = EmbedOneDynamic(corpus[i % corpus.Length]);
+            sw.Stop();
+            samples.Add(sw.Elapsed.TotalMilliseconds);
+        }
+
+        return samples;
+    }
+
+    rows.Add(Percentiles("short (dynamic-len)", RunCorpusDynamic(shortQueries, WarmupIterations, TimedIterations)));
+    rows.Add(Percentiles("medium (dynamic-len)", RunCorpusDynamic(mediumCorpus, WarmupIterations, TimedIterations)));
+    rows.Add(Percentiles("doc (dynamic-len)", RunCorpusDynamic(docCorpus, WarmupIterations, TimedIterations)));
+
+    // Correctness: same 10 sentences, dynamic-length path, cosine-compared to the fixed-512
+    // embeddings captured above. Both vectors are already L2-normalized, so cosine similarity
+    // reduces to a plain dot product.
+    correctnessResults = new List<(string, float)>(correctnessSentences.Length);
+    for (var i = 0; i < correctnessSentences.Length; i++)
+    {
+        var dynamicVec = EmbedOneDynamic(correctnessSentences[i]);
+        var cosine = TensorPrimitives.Dot(fixedCorrectnessEmbeddings[i].Span, dynamicVec.Span);
+        correctnessResults.Add((correctnessSentences[i], cosine));
+    }
+}
+else
+{
+    Console.WriteLine();
+    Console.WriteLine(
+        "Dynamic-length pass SKIPPED: the ONNX graph's sequence axis is fixed on at least one " +
+        "input, so it rejects any shape other than the exported one. Padding to a different " +
+        "fixed size (e.g. 64) is not an option either — a statically-shaped graph has exactly " +
+        "one legal input shape, not a small set of them. Verdict: dynamic sequence length is " +
+        "NOT a drop-in change here; it would require re-exporting the ONNX graph with dynamic " +
+        "axes on the sequence dimension, or pursuing int8 quantization (the deferred D2 lever) " +
+        "instead.");
+}
+
 // --- Report ------------------------------------------------------------------------------
 
 Console.WriteLine();
@@ -248,7 +409,25 @@ foreach (var row in rows)
         $"{row.Label,-24}{row.N,5}{row.P50,8:F1}{row.P90,8:F1}{row.P95,8:F1}{row.P99,8:F1}{row.Max,8:F1}{row.Mean,8:F1}");
 }
 
-embedder.Dispose();
+if (correctnessResults is not null)
+{
+    Console.WriteLine();
+    Console.WriteLine("Fixed-512 vs dynamic-length correctness check (cosine similarity, 10 fixed sentences):");
+    foreach (var (sentence, cosine) in correctnessResults)
+    {
+        var preview = sentence.Length > 60 ? sentence[..60] + "..." : sentence;
+        Console.WriteLine($"  {cosine:F6}  \"{preview}\"");
+    }
+
+    var minCosine = correctnessResults.Min(r => r.Cosine);
+    var meanCosine = correctnessResults.Average(r => r.Cosine);
+    Console.WriteLine($"  min={minCosine:F6} mean={meanCosine:F6}");
+}
+
+Console.WriteLine();
+Console.WriteLine($"Load average before run (1m 5m 15m): {loadAverageBefore}");
+Console.WriteLine($"Load average after run  (1m 5m 15m): {ReadLoadAverage()}");
+
 return 0;
 
 internal readonly record struct Row(string Label, int N, double P50, double P90, double P95, double P99, double Max, double Mean);
