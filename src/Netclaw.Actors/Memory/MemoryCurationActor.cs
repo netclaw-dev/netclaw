@@ -5,9 +5,6 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Event;
-using Microsoft.Extensions.AI;
-using Netclaw.Actors.Sessions;
-using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using SessionId = Netclaw.Actors.Protocol.SessionId;
 
@@ -54,12 +51,10 @@ internal sealed record WriteBatchFailed(Exception Exception);
 /// </summary>
 public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 {
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(10);
-
     private readonly SQLiteMemoryStore _store;
-    private readonly IChatClient? _llmClient;
     private readonly SessionId _sessionId;
     private readonly ILoggingAdapter _log;
+    private readonly MemoryCurationEvaluator _evaluator;
 
     private IActorRef? _currentRequester;
 
@@ -69,10 +64,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     {
         _store = store;
         _sessionId = sessionId;
-        _llmClient = clientProvider != null
+        _log = Context.GetLogger();
+
+        var llmClient = clientProvider != null
             ? clientProvider.GetClient(ModelRole.Compaction)
             : null;
-        _log = Context.GetLogger();
+        _evaluator = new MemoryCurationEvaluator(_store, _log, llmClient);
 
         Become(Idle);
     }
@@ -187,197 +184,10 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         });
     }
 
-    private async Task<CurationDecision> EvaluateSingleAsync(
-        SQLiteMemoryCurationOperation operation)
-    {
-        // Immutable records bypass evaluation
-        if (MemoryDomainEnumExtensions.TryFromWireValue(operation.Kind, out MemoryKind kind)
-            && kind == MemoryKind.Record)
-        {
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "immutable record bypass");
-        }
-
-        // Query existing anchors for matches (by name)
-        var anchorCandidates = await _store.FindFuzzyAnchorMatchesAsync(
-            operation.AnchorCanonicalName);
-
-        // Build a mutable candidate list — content search may add more candidates below.
-        var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
-
-        // Run content-based search when there is no exact anchor match.
-        // This catches semantically identical content under very different anchor names
-        // (e.g., "netclaw-github-repo" vs "netclaw-source-location" — different names, same info).
-        var hasExactAnchorMatch = anchorCandidates.Any(c => c.IsExactAnchorMatch);
-        if (!hasExactAnchorMatch && !string.IsNullOrWhiteSpace(operation.Content))
-        {
-            var contentTerms = operation.Content
-                .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(t => t.Length >= 3)
-                .Select(t => t.ToLowerInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(8)
-                .ToArray();
-
-            if (contentTerms.Length > 0)
-            {
-                var contentCandidates = await _store.FindCandidatesByContentAsync(
-                    contentTerms);
-
-                // Merge content candidates with anchor candidates, deduplicating by DocumentId.
-                if (contentCandidates.Count > 0)
-                {
-                    var existingDocIds = new HashSet<string>(
-                        candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
-                    foreach (var cc in contentCandidates)
-                    {
-                        if (!existingDocIds.Contains(cc.DocumentId))
-                            candidates.Add(cc);
-                    }
-
-                    _log.Debug(
-                        "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
-                        operation.AnchorCanonicalName,
-                        anchorCandidates.Count,
-                        contentCandidates.Count,
-                        candidates.Count);
-                }
-            }
-        }
-
-        // Apply rules tier
-        var rulesDecision = CurationRulesEvaluator.Evaluate(operation, candidates);
-
-        // If rules tier is ambiguous and LLM is available, escalate
-        if (rulesDecision.Kind == CurationDecisionKind.Ambiguous && _llmClient is not null)
-        {
-            var llmDecision = await TryLlmEvaluationAsync(_llmClient, _sessionId, operation, candidates, _log);
-            if (llmDecision is not null)
-            {
-                var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(llmDecision, operation, candidates);
-                _log.Info(
-                    "curation_llm_decision anchor={0} decision={1} reason={2}",
-                    operation.AnchorCanonicalName,
-                    guarded.Kind,
-                    guarded.Reason);
-                return guarded;
-            }
-
-            // LLM failed — fall through to deterministic auto-resolution below
-        }
-
-        // Ambiguous (LLM unavailable or failed) — try deterministic auto-resolution
-        if (rulesDecision.Kind == CurationDecisionKind.Ambiguous)
-        {
-            var autoResolved = CurationRulesEvaluator.TryAutoResolveAmbiguous(operation, candidates);
-            if (autoResolved is not null)
-            {
-                _log.Info(
-                    "curation_ambiguous_auto_resolved anchor={0} decision={1} reason={2}",
-                    operation.AnchorCanonicalName,
-                    autoResolved.Kind,
-                    autoResolved.Reason);
-                return autoResolved;
-            }
-
-            _log.Warning("curation_ambiguous_create_fallback anchor={0} llm_available={1}",
-                operation.AnchorCanonicalName, _llmClient is not null);
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null,
-                "ambiguous: auto-resolve insufficient, defaulting to create");
-        }
-
-        return CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates);
-    }
-
-    internal static async Task<CurationDecision?> TryLlmEvaluationAsync(
-        IChatClient llmClient,
-        SessionId sessionId,
-        SQLiteMemoryCurationOperation operation,
-        IReadOnlyList<ExistingMemoryCandidate> candidates,
-        ILoggingAdapter log)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(LlmTimeout);
-
-            var messages = new List<ChatMessage>
-            {
-                new(ChatRole.System, CurationPromptBuilder.SystemPrompt),
-                new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates))
-            };
-
-            // SessionScopedChatOptions carries the session id so this sidecar's chat-client
-            // diagnostics route to the session's session.log and correlate in Seq/OTLP (replaces
-            // the deleted SessionDiagnosticsContext AsyncLocal).
-            var options = new SessionScopedChatOptions
-            {
-                SessionId = sessionId.Value,
-                // Token cap is the THIRD line of defense, so it must never be the
-                // binding constraint. Layering: (1) reasoning suppression below is
-                // the primary fix — suppressed/non-reasoning models emit just the
-                // keyword and never approach any cap; (2) the 10s call timeout
-                // bounds wall-clock when a model ignores suppression and thinks at
-                // length. The cap only matters in the remaining window — suppression
-                // ignored but thinking finishes inside the timeout — where a tight
-                // cap truncates mid-think and reproduces the measured
-                // responseLength=0 empty-reply failure (July 2026 audit: at 512, a
-                // Qwen3.6-class model produced 0 successful curation decisions
-                // ever). Unemitted tokens cost nothing, so size this generously;
-                // it becomes the Memory.Curation.LlmMaxOutputTokens config knob in
-                // the memory-core-redesign change.
-                MaxOutputTokens = 4096,
-                // Belt: ask the serving stack not to think at all for this
-                // keyword-classification call. This expresses intent only — the raw
-                // provider-dialect field name (vLLM/llama.cpp/SGLang's
-                // chat_template_kwargs.enable_thinking, Ollama's think) is NOT this
-                // call site's business, because the model behind SessionId's
-                // provider varies per deployment and strict SDKs (official OpenAI,
-                // Anthropic) reject or ignore unknown top-level fields differently
-                // than self-hosted servers do. NetclawChatOptionKeys.SuppressReasoning
-                // is a provider-agnostic intent key; ReasoningSuppressionChatClient
-                // (Netclaw.Daemon, wrapping every chat client the daemon constructs)
-                // reads it, removes it, and maps it to the dialect the active
-                // provider plugin declares (ILlmProviderPlugin.SuppressionDialect) —
-                // or strips it with no replacement for providers with no equivalent.
-                // StripThinkBlocks in ParseResponse remains the braces.
-                AdditionalProperties = new AdditionalPropertiesDictionary
-                {
-                    [NetclawChatOptionKeys.SuppressReasoning] = true
-                }
-            };
-
-            var result = await StreamingResponseReader.ReadAsync(llmClient, messages, options, cts.Token);
-            var responseText = result.Response.Text?.Trim();
-            var decision = string.IsNullOrWhiteSpace(responseText)
-                ? null
-                : CurationPromptBuilder.ParseResponse(responseText);
-
-            if (decision is null)
-            {
-                // No silent fallback: a curation LLM that yields nothing parseable is a
-                // real signal (empty/garbled output, or a reasoning model that consumed
-                // its token budget). Surface it so the deterministic fallback that
-                // follows is observable rather than invisible.
-                log.Warning(
-                    "curation_llm_no_decision anchor={0} responseLength={1} — using deterministic fallback",
-                    operation.AnchorCanonicalName,
-                    responseText?.Length ?? 0);
-                return null;
-            }
-
-            return decision;
-        }
-        catch (OperationCanceledException)
-        {
-            log.Warning("curation_llm_timeout anchor={0}", operation.AnchorCanonicalName);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "curation_llm_error anchor={0}", operation.AnchorCanonicalName);
-            return null;
-        }
-    }
+    // Decision logic lives in MemoryCurationEvaluator (shared with the daemon checkpoint
+    // worker — memory-core-redesign Slice 1) so the two write pipelines cannot diverge.
+    private Task<CurationDecision> EvaluateSingleAsync(SQLiteMemoryCurationOperation operation)
+        => _evaluator.EvaluateAsync(operation, _sessionId);
 
     // ── Write pipeline ──────────────────────────────────────────────
 
@@ -398,60 +208,34 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
                 foreach (var (operation, decision) in decisions)
                 {
+                    // Decision -> write-operation mapping (including Consolidate's
+                    // re-anchor/tombstone side effects) lives in MemoryCurationEvaluator,
+                    // shared with the daemon checkpoint worker.
+                    var writeOp = await _evaluator.ApplyDecisionAsync(operation, decision);
+
                     switch (decision.Kind)
                     {
                         case CurationDecisionKind.Skip:
-                            _log.Info(
-                                "curation_skip anchor={0} reason={1}",
-                                operation.AnchorCanonicalName,
-                                decision.Reason);
                             skipped++;
                             break;
-
                         case CurationDecisionKind.Update:
-                            _log.Info(
-                                "curation_update anchor={0} targetDoc={1} reason={2}",
-                                operation.AnchorCanonicalName,
-                                decision.TargetDocumentId,
-                                decision.Reason);
-
-                            // Set the operation's MemoryId to the existing document ID
-                            // so the ON CONFLICT UPDATE fires
-                            toWrite.Add(operation with { MemoryId = decision.TargetDocumentId });
                             updated++;
                             break;
-
                         case CurationDecisionKind.Consolidate:
-                            _log.Info(
-                                "curation_consolidate anchor={0} canonicalAnchor={1} targetIds=[{2}] reason={3}",
-                                operation.AnchorCanonicalName,
-                                decision.CanonicalAnchorName,
-                                decision.ConsolidationTargetIds is not null ? string.Join(",", decision.ConsolidationTargetIds) : "",
-                                decision.Reason);
-
-                            await ExecuteConsolidationAsync(operation, decision);
-                            // After consolidation, write the new proposal under the canonical anchor
-                            var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
-                            toWrite.Add(operation with { AnchorCanonicalName = canonicalAnchor });
                             consolidated++;
                             break;
-
                         case CurationDecisionKind.Create:
-                            _log.Info(
-                                "curation_create anchor={0} reason={1}",
-                                operation.AnchorCanonicalName,
-                                decision.Reason);
-                            toWrite.Add(operation);
-                            created++;
-                            break;
-
                         case CurationDecisionKind.Ambiguous:
-                            // Should not reach here — ambiguous is resolved before writing
-                            _log.Warning("curation_unexpected_ambiguous anchor={0}, defaulting to create", operation.AnchorCanonicalName);
-                            toWrite.Add(operation);
+                        default:
+                            // Ambiguous should not reach here — it is resolved before
+                            // writing — but ApplyDecisionAsync defaults it to Create,
+                            // so the count follows the same default.
                             created++;
                             break;
                     }
+
+                    if (writeOp is not null)
+                        toWrite.Add(writeOp);
                 }
 
                 // Write all accepted operations in a single batch
@@ -472,51 +256,5 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 self.Tell(new WriteBatchFailed(ex));
             }
         });
-    }
-
-    private async Task ExecuteConsolidationAsync(
-        SQLiteMemoryCurationOperation operation,
-        CurationDecision decision)
-    {
-        if (decision.ConsolidationTargetIds is null || decision.ConsolidationTargetIds.Count == 0)
-            return;
-
-        var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
-        var canonicalAnchorId = MemoryTypedId.AnchorId(canonicalAnchor);
-
-        // For each consolidation target document, re-anchor it if it belongs to a different anchor,
-        // then tombstone the redundant anchor
-        var tombstonedAnchors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var docId in decision.ConsolidationTargetIds)
-        {
-            // Re-anchor the document to the canonical anchor
-            await _store.ReanchorDocumentAsync(docId, canonicalAnchorId);
-
-            _log.Info(
-                "curation_reanchor docId={0} newAnchor={1}",
-                docId,
-                canonicalAnchorId);
-        }
-
-        // Find and tombstone anchors that are no longer canonical
-        // We need to look up the anchor IDs for the consolidated documents
-        var candidates = await _store.FindFuzzyAnchorMatchesAsync(
-            operation.AnchorCanonicalName);
-
-        foreach (var candidate in candidates)
-        {
-            if (!string.Equals(candidate.AnchorId, canonicalAnchorId, StringComparison.OrdinalIgnoreCase)
-                && !tombstonedAnchors.Contains(candidate.AnchorId))
-            {
-                await _store.TombstoneAnchorAsync(candidate.AnchorId);
-                tombstonedAnchors.Add(candidate.AnchorId);
-
-                _log.Info(
-                    "curation_tombstone_anchor anchorId={0} canonicalName={1}",
-                    candidate.AnchorId,
-                    candidate.AnchorCanonicalName);
-            }
-        }
     }
 }

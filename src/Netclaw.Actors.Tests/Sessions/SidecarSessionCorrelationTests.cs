@@ -120,8 +120,8 @@ public sealed class SidecarSessionCorrelationTests : TestKit
             FreshnessAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
             ExpiresAtMs: null);
 
-        await MemoryCurationActor.TryLlmEvaluationAsync(
-            captor, sessionId, operation, candidates: [], log: NoLogger.Instance);
+        await MemoryCurationEvaluator.TryLlmEvaluationAsync(
+            captor, sessionId, operation, candidates: [], log: new AkkaCurationLog(NoLogger.Instance));
 
         AssertScopedTo(sessionId, captor);
     }
