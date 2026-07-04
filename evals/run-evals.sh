@@ -587,16 +587,16 @@ store_metrics() {
 
     # When no explicit usage line is passed, read the last one in STDOUT_FILE.
     if [[ -z "$usage_line" ]]; then
-        usage_line=$(grep -o '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+        usage_line=$(grep -ao '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
     fi
 
     # Parse fields from: [usage] in=X out=Y total=Z cached=C prompt_ms=P tok_s=T
     local input_tokens output_tokens cached_tokens prompt_ms tok_s
-    input_tokens=$(echo "$usage_line" | grep -oP 'in=\K[0-9]+' || echo "")
-    output_tokens=$(echo "$usage_line" | grep -oP 'out=\K[0-9]+' || echo "")
-    cached_tokens=$(echo "$usage_line" | grep -oP 'cached=\K[0-9]+' || echo "")
-    prompt_ms=$(echo "$usage_line" | grep -oP 'prompt_ms=\K[0-9.]+' || echo "")
-    tok_s=$(echo "$usage_line" | grep -oP 'tok_s=\K[0-9.]+' || echo "")
+    input_tokens=$(echo "$usage_line" | grep -aoP 'in=\K[0-9]+' || echo "")
+    output_tokens=$(echo "$usage_line" | grep -aoP 'out=\K[0-9]+' || echo "")
+    cached_tokens=$(echo "$usage_line" | grep -aoP 'cached=\K[0-9]+' || echo "")
+    prompt_ms=$(echo "$usage_line" | grep -aoP 'prompt_ms=\K[0-9.]+' || echo "")
+    tok_s=$(echo "$usage_line" | grep -aoP 'tok_s=\K[0-9.]+' || echo "")
 
     # Skip if no metrics found
     [[ -z "$input_tokens" && -z "$cached_tokens" && -z "$prompt_ms" ]] && return 0
@@ -770,7 +770,7 @@ run_prompt_resume() {
     cat "$turn_file" >> "$STDOUT_FILE"
 
     # Per-turn metrics — read the usage line from this turn's file only.
-    LAST_TURN_USAGE_LINE=$(grep -o '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
+    LAST_TURN_USAGE_LINE=$(grep -ao '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
 
     sleep 2
 }
@@ -843,20 +843,25 @@ run_multi_turn_case() {
 
 # ─── Assertion Helpers ────────────────────────────────────────────────────────
 
+# Transcript greps use -a as cheap hardening: captured CLI output may carry
+# terminal control bytes, and -a keeps grep in text mode regardless. Note the
+# memory_identity_preference_routing flake was NOT this — it was a substring
+# bug in that assertion's pattern (see the comment there).
+
 stdout_contains() {
-    grep -qi "$1" "$STDOUT_FILE" 2>/dev/null
+    grep -qia "$1" "$STDOUT_FILE" 2>/dev/null
 }
 
 stdout_not_contains() {
-    ! grep -qi "$1" "$STDOUT_FILE" 2>/dev/null
+    ! grep -qia "$1" "$STDOUT_FILE" 2>/dev/null
 }
 
 stdout_response_contains() {
-    grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"
+    grep -av '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qia "$1"
 }
 
 stdout_response_not_contains() {
-    if grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"; then
+    if grep -av '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qia "$1"; then
         return 1
     fi
     return 0
@@ -869,20 +874,20 @@ daemon_log_tail() {
 }
 
 daemon_log_contains() {
-    daemon_log_tail | grep -qE "$1" 2>/dev/null
+    daemon_log_tail | grep -qaE "$1" 2>/dev/null
 }
 
 daemon_log_skill_loaded() {
     local skill_name="$1"
-    daemon_log_tail | grep -qE "turn_skill_loaded skill=$skill_name" 2>/dev/null
+    daemon_log_tail | grep -qaE "turn_skill_loaded skill=$skill_name" 2>/dev/null
 }
 
 daemon_log_no_skill_loaded() {
-    ! daemon_log_tail | grep -qE "turn_skill_loaded" 2>/dev/null
+    ! daemon_log_tail | grep -qaE "turn_skill_loaded" 2>/dev/null
 }
 
 stdout_tool_called() {
-    grep -qE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
+    grep -qaE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
 }
 
 # ─── Case Assertion Functions ─────────────────────────────────────────────────
@@ -1000,9 +1005,12 @@ assert_memory_recall_active() {
 # fact is already in durable memory rather than re-storing it — both are correct
 # routing. The hard failure we guard against is a SOUL.md (file_edit/file_write) edit.
 assert_memory_identity_preference_routing() {
+    # 'memor' not 'memory': correct responses often say "memories", and the
+    # plural drops the y — "memories" does not contain the substring "memory".
+    # Run af0883b5 rejected two behaviorally-correct runs on exactly this.
     ! stdout_tool_called 'file_edit' \
         && ! stdout_tool_called 'file_write' \
-        && { stdout_tool_called 'store_memory' || stdout_contains 'memory'; }
+        && { stdout_tool_called 'store_memory' || stdout_contains 'memor'; }
 }
 
 assert_memory_explicit_store() {
@@ -1189,7 +1197,7 @@ assert_multi_turn_text_growth() {
     # The point of this case is the per-turn metrics, not a behavioral assertion.
     # We require that at least 5 [usage] lines were emitted (one per turn).
     local usage_count
-    usage_count=$(grep -c '\[usage\]' "$STDOUT_FILE" 2>/dev/null)
+    usage_count=$(grep -ac '\[usage\]' "$STDOUT_FILE" 2>/dev/null)
     usage_count="${usage_count:-0}"
     [[ "$usage_count" -ge 5 ]]
 }
@@ -1246,8 +1254,8 @@ assert_approval_set_working_directory_positive() {
     # If shell_execute also happened, ensure set_working_directory came first.
     if stdout_tool_called 'shell_execute'; then
         local swd_line shell_line
-        swd_line=$(grep -nE '\[tool:call\] set_working_directory' "$STDOUT_FILE" | head -1 | cut -d: -f1)
-        shell_line=$(grep -nE '\[tool:call\] shell_execute' "$STDOUT_FILE" | head -1 | cut -d: -f1)
+        swd_line=$(grep -anE '\[tool:call\] set_working_directory' "$STDOUT_FILE" | head -1 | cut -d: -f1)
+        shell_line=$(grep -anE '\[tool:call\] shell_execute' "$STDOUT_FILE" | head -1 | cut -d: -f1)
         [[ -n "$swd_line" && -n "$shell_line" && "$swd_line" -lt "$shell_line" ]]
     fi
 }
