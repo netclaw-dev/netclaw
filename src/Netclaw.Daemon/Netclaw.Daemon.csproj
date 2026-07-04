@@ -61,6 +61,7 @@
     <ItemGroup>
         <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj"/>
         <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj"/>
+        <ProjectReference Include="..\Netclaw.Embeddings\Netclaw.Embeddings.csproj"/>
         <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj"/>
         <ProjectReference Include="..\Netclaw.Channels.Discord\Netclaw.Channels.Discord.csproj"/>
         <ProjectReference Include="..\Netclaw.Channels.Mattermost\Netclaw.Channels.Mattermost.csproj"/>

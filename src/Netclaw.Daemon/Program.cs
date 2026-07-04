@@ -47,6 +47,7 @@ using Netclaw.Daemon.Services;
 using Netclaw.Daemon.Lifecycle;
 using Netclaw.Daemon.Reminders;
 using Netclaw.Daemon.Webhooks;
+using Netclaw.Embeddings;
 using Netclaw.Search;
 using Netclaw.Tools;
 using Netclaw.Security;
@@ -732,6 +733,20 @@ static void ConfigureDaemonServices(
         toolRegistry.Register(new SqliteGetMemoriesTool(memoryStore));
         toolRegistry.Register(new SqliteStoreMemoryTool(new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
         toolRegistry.Register(new SqliteUpdateMemoryTool(memoryStore));
+
+        // Embedding foundation (memory-core-redesign Slice 2). The holder always exists —
+        // starts pointed at an Unavailable stub so any consumer resolving it before warmup
+        // completes gets a safe, explicit degraded value rather than a null reference — and
+        // EmbeddingWarmupHostedService populates it at startup (see that type's remarks for why
+        // a mutable holder is required instead of constructor injection).
+        services.AddHttpClient("EmbeddingModelProvisioner").AddNetclawHeaders("embedding-provisioner");
+        services.AddSingleton(sp => new EmbeddingModelProvisioner(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("EmbeddingModelProvisioner"),
+            EmbeddingModelProvisioner.Allowlist));
+        services.AddSingleton(new MemoryEmbedderHolder(
+            new UnavailableMemoryEmbedder(memoryConfig.Embeddings.ModelId, "embedding warmup has not completed yet")));
+        services.AddSingleton<EmbeddingWarmupHostedService>();
+        services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmbeddingWarmupHostedService>());
     }
 
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
@@ -979,7 +994,8 @@ static void ConfigureDaemonServices(
         sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
         sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
         sp.GetService<SQLiteMemoryStore>(),
-        sp.GetService<MemoryConfig>()));
+        sp.GetService<MemoryConfig>(),
+        sp.GetService<MemoryEmbedderHolder>()));
 
     services.AddSingleton(sp => new SessionObservability(
         sp.GetService<Netclaw.Actors.Telemetry.ISessionMetrics>(),

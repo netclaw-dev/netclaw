@@ -36,6 +36,8 @@ internal sealed class DaemonRuntimeStatusService(
     ProviderRuntimeValidation providerValidation,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
+    MemoryEmbedderHolder? memoryEmbedderHolder = null,
+    MemoryConfig? memoryConfig = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -292,7 +294,8 @@ internal sealed class DaemonRuntimeStatusService(
                 Provider = "sqlite",
                 Status = "healthy",
                 DatabasePath = paths.MemorySqliteDbPath,
-                PendingCheckpoints = pending
+                PendingCheckpoints = pending,
+                Embeddings = BuildEmbeddingsStatus()
             };
         }
         catch
@@ -301,9 +304,38 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = "sqlite",
                 Status = "degraded",
-                DatabasePath = paths.MemorySqliteDbPath
+                DatabasePath = paths.MemorySqliteDbPath,
+                Embeddings = BuildEmbeddingsStatus()
             };
         }
+    }
+
+    /// <summary>
+    /// Embeddings status (memory-core-redesign D2/Requirement "Loud degradation without silent
+    /// fallback"): <c>"disabled"</c> when <c>Memory.Embeddings.Enabled</c> is false, <c>"ok"</c>
+    /// when the resolved <see cref="IMemoryEmbedder"/> is available, otherwise <c>"degraded"</c>.
+    /// </summary>
+    private DaemonRuntimeStatus.Embeddings BuildEmbeddingsStatus()
+    {
+        if (memoryConfig?.Embeddings.Enabled != true)
+        {
+            return new DaemonRuntimeStatus.Embeddings { Status = "disabled" };
+        }
+
+        var embedder = memoryEmbedderHolder?.Current;
+        if (embedder is { IsAvailable: true })
+        {
+            return new DaemonRuntimeStatus.Embeddings { Status = "ok", ModelId = embedder.ModelId };
+        }
+
+        return new DaemonRuntimeStatus.Embeddings
+        {
+            Status = "degraded",
+            ModelId = embedder?.ModelId ?? memoryConfig.Embeddings.ModelId,
+            DegradedReason = memoryEmbedderHolder is null
+                ? "embedding subsystem not wired up"
+                : "embedding model unavailable — see daemon logs for memory_embedding_unavailable"
+        };
     }
 
     private async Task<DaemonRuntimeStatus.Reminders?> BuildReminderHealthAsync(CancellationToken ct)

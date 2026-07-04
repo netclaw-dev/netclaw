@@ -54,7 +54,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         McpClientManager? mcpClientManager = null,
         SQLiteMemoryStore? sqliteMemoryStore = null,
         IChatClientProvider? chatClientProvider = null,
-        ProviderRuntimeValidation? providerValidation = null)
+        ProviderRuntimeValidation? providerValidation = null,
+        MemoryEmbedderHolder? memoryEmbedderHolder = null,
+        MemoryConfig? memoryConfig = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -69,7 +71,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             chatClientProvider ?? new TestChatClientProvider(),
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             mcpClientManager,
-            sqliteMemoryStore);
+            sqliteMemoryStore,
+            memoryEmbedderHolder,
+            memoryConfig);
     }
 
     private static IChannelRegistry CreateRegistry(
@@ -369,6 +373,65 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StatusReportsEmbeddingsDisabled_WhenConfigOff()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = false } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("disabled", status.Memory!.Embeddings!.Status);
+    }
+
+    [Fact]
+    public async Task StatusReportsEmbeddingsOk_WhenHolderIsAvailable()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var holder = new MemoryEmbedderHolder(new FakeAvailableEmbedder("tiny-fixture"));
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryEmbedderHolder: holder,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = true, ModelId = "tiny-fixture" } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("ok", status.Memory!.Embeddings!.Status);
+        Assert.Equal("tiny-fixture", status.Memory.Embeddings.ModelId);
+    }
+
+    [Fact]
+    public async Task StatusReportsEmbeddingsDegraded_WhenEnabledButHolderIsUnavailable()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var holder = new MemoryEmbedderHolder(new UnavailableMemoryEmbedder("tiny-fixture", "model missing"));
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryEmbedderHolder: holder,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = true, ModelId = "tiny-fixture" } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("degraded", status.Memory!.Embeddings!.Status);
+    }
+
+    [Fact]
     public async Task StatusIncludesChannelCountersForEnabledChannels()
     {
         var slack = ChannelTelemetry.For(Netclaw.Actors.Channels.ChannelType.Slack);
@@ -429,5 +492,20 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     private sealed class TestChatClientProvider : IChatClientProvider
     {
         public IChatClient GetClient(ModelRole role) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeAvailableEmbedder(string modelId) : IMemoryEmbedder
+    {
+        public string ModelId => modelId;
+
+        public int Dimensions => 8;
+
+        public bool IsAvailable => true;
+
+        public ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, CancellationToken ct)
+            => ValueTask.FromResult<ReadOnlyMemory<float>>(new float[Dimensions]);
+
+        public ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(texts.Select(_ => (ReadOnlyMemory<float>)new float[Dimensions]).ToList());
     }
 }

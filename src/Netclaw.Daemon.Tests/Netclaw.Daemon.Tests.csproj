@@ -37,4 +37,11 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared tiny fixture ONNX model (no network downloads in tests) — same physical files
+         Netclaw.Embeddings.Tests uses, linked here for EmbeddingWarmupHostedServiceTests. -->
+    <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.onnx" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.txt" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
