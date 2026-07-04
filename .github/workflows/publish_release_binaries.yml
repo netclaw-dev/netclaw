@@ -143,6 +143,35 @@ jobs:
         --output-dir ./publish
         --version ${{ github.ref_name }}
 
+    # ARM64 cross-compile verification: since ARM64 binaries are built on x64 runners,
+    # we cannot execute them. Instead, verify the build actually produced ARM64 ELF
+    # files (not x64) using the `file` command to detect architecture mismatch. This
+    # catches silent cross-compile failures. See CONTRIBUTING.md § Cross-Platform
+    # Publishing for context.
+    - name: Verify ARM64 binaries are actually ARM64 (not x64)
+      if: matrix.rid == 'linux-arm64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        CLI="./publish/cli/netclaw"
+        DAEMON="./publish/daemon/netclawd"
+
+        for binary in "$CLI" "$DAEMON"; do
+          if [ ! -f "$binary" ]; then
+            echo "ERROR: Expected binary not found: $binary" >&2
+            exit 1
+          fi
+
+          # Check architecture with `file` command
+          file_output=$(file "$binary")
+          if ! echo "$file_output" | grep -q "ARM aarch64"; then
+            echo "ERROR: Binary $binary is not ARM64:" >&2
+            echo "  $file_output" >&2
+            exit 1
+          fi
+          echo "✓ $binary is ARM64"
+        done
+
     - name: Package archives (Unix)
       if: runner.os != 'Windows'
       run: |

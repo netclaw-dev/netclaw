@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.7.0"
+  version: "1.8.0"
 ---
 
 # Netclaw Memory
@@ -152,6 +152,19 @@ Useful log events:
 **Formation pipeline** (grep for `memory_observation`):
 - `memory_observation_sidecar_completed`
 - `memory_observation_gate_result`
+
+### Embeddings
+
+Embeddings are provisioned at daemon start when `Memory.Embeddings.Enabled` is
+`true` (default `false` for now). When unavailable:
+- Log: `memory_embedding_unavailable`
+- Daemon status shows: `embeddings: degraded`
+- Lexical recall continues to work normally
+
+To repopulate existing memory vectors after enabling embeddings:
+```
+netclaw memory backfill-embeddings [--force]
+```
 
 ## Eval Gate
 

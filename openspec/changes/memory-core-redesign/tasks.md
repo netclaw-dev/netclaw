@@ -25,8 +25,8 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 - [x] 2.11 Config: `Memory.Embeddings { Enabled, ModelId, AutoDownload }` + schema sync with defaults
 - [x] 2.12 Tests: provisioner hash-rejection/unknown-id, hash-skip, gap repair, vector index invalidation, degraded stub; CI uses a tiny fixture ONNX model (no downloads in tests)
 - [ ] 2.13 **Measure ONNX int8 short-query embedding latency on reference hardware; record the number in design.md and gate Slice 4's sub-budget on it**
-- [ ] 2.14 ARM64 publish smoke leg exercising OnnxRuntime load
-- [ ] 2.15 Update `netclaw-memory` + `netclaw-operations` skills (backfill command, degraded mode); eval suite run
+- [x] 2.14 ARM64 publish smoke leg exercising OnnxRuntime load
+- [x] 2.15 Update `netclaw-memory` + `netclaw-operations` skills (backfill command, degraded mode); eval suite run
 
 ## 3. Write-side nominate→decide + lossless merge
 
