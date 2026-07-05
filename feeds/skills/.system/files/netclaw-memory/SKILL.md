@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.8.0"
+  version: "1.9.0"
 ---
 
 # Netclaw Memory
@@ -45,6 +45,13 @@ Both gates must pass for memory to function.
 - **Explicit tools** are a manual-control layer on top of automatic recall.
 - Memory is SQLite-backed and cross-session only within the active
   domain/boundary policy envelope.
+- **Duplicate detection is semantic when embeddings are enabled**
+  (`Memory.Embeddings.Enabled`): a near-duplicate proposal is nominated by
+  embedding similarity and adjudicated by the curator LLM (skip, update,
+  consolidate, or create) — similarity alone never merges or skips anything.
+  Merges are lossless-or-append: the curator writes a merged body that keeps
+  every source fact, and a deterministic guard falls back to appending the
+  proposal instead of overwriting when that check fails.
 - Memory IDs shown by automatic recall, `find_memories`, and `get_memories`
   (e.g. `doc-…` / `rec-…`) are stable, opaque handles. Copy them **verbatim**
   into `get_memories` or `update_memory` — do not rewrite or reformat them.
