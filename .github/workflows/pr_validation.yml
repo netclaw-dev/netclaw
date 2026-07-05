@@ -6,11 +6,13 @@ on:
       - master
       - dev
       - main
+      - feature/*
   pull_request:
     branches:
       - master
       - dev
       - main
+      - feature/*
 
 permissions:
   contents: read

@@ -20,9 +20,11 @@ on:
   push:
     branches:
       - dev
+      - feature/*
   pull_request:
     branches:
       - dev
+      - feature/*
     types:
       - opened
       - synchronize
