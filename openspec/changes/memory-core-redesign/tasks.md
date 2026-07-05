@@ -31,10 +31,10 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 ## 3. Write-side nominate→decide + lossless merge
 
 - [ ] 3.1 Nominator in the shared evaluator: kNN shortlist at `Memory.Curation.NominatorSimilarityThreshold`/`NominatorK`; any nominee forces the LLM tier; no-nominee-no-anchor creates without LLM; lexical candidate search becomes the logged degraded path
-- [ ] 3.2 Extend `CurationPromptBuilder` response protocol: CONSOLIDATE/UPDATE emit a merged body; `CurationDecision.MergedBody`; full-content previews for nominated candidates
-- [ ] 3.3 Implement `MergeGuard` (load-bearing-token retention ≥95%, length collapse check) with structural-append fallback producing `AppendDocument` semantics
-- [ ] 3.4 Route all curation UPDATE/CONSOLIDATE writes through guard-validated merged bodies; make raw whole-body overwrite unreachable from curation decisions
-- [ ] 3.5 Config: `Memory.Curation { NominatorSimilarityThreshold, NominatorK, LlmMaxOutputTokens, LlmTimeoutSeconds }` (replacing hardcoded constants) + schema sync
+- [x] 3.2 Extend `CurationPromptBuilder` response protocol: CONSOLIDATE/UPDATE emit a merged body; `CurationDecision.MergedBody`; full-content previews for nominated candidates
+- [x] 3.3 Implement `MergeGuard` (load-bearing-token retention ≥95%, length collapse check) with structural-append fallback producing `AppendDocument` semantics
+- [x] 3.4 Route all curation UPDATE/CONSOLIDATE writes through guard-validated merged bodies; make raw whole-body overwrite unreachable from curation decisions
+- [x] 3.5 Config: `Memory.Curation { NominatorSimilarityThreshold, NominatorK, LlmMaxOutputTokens, LlmTimeoutSeconds }` (replacing hardcoded constants) + schema sync
 - [ ] 3.6 Tests: paraphrase-dupe nomination (fixture pairs from the audit corpus shape), sibling pairs never auto-merge, MergeGuard property tests, append fallback, both-pipelines parity
 - [ ] 3.7 Eval suite (memory category) + skill sync; update decision-mix expectations (consolidate share should rise from ~0.1%)
 

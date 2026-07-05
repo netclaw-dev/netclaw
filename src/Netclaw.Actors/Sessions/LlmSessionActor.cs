@@ -314,7 +314,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (_memoryStore is not null)
             {
                 _curationActor = Context.ActorOf(
-                    Memory.MemoryCurationActor.CreateProps(_memoryStore, _sessionId, _clientProvider, _memoryEmbedderHolder),
+                    Memory.MemoryCurationActor.CreateProps(
+                        _memoryStore, _sessionId, _memoryConfig.Curation, _clientProvider, _memoryEmbedderHolder),
                     "memory-curation");
 
                 // Distillation processes a full transcript — allow 5x normal sidecar timeout

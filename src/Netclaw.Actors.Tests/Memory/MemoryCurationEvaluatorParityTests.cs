@@ -222,9 +222,9 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             freshnessAtMs: 2000);
 
         var evaluator = new MemoryCurationEvaluator(
-            _store, (ILoggingAdapter)NoLogger.Instance, new ScriptedCurationChatClient("SKIP"));
+            _store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig(), new ScriptedCurationChatClient("SKIP"));
 
-        var decision = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
+        var decision = (await evaluator.EvaluateAsync(operation, TestSessionId, ct)).Decision;
 
         Assert.Equal(CurationDecisionKind.Skip, decision.Kind);
         Assert.Contains("LLM decision", decision.Reason);
@@ -253,9 +253,9 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         // TryLlmEvaluationAsync must surface curation_llm_no_decision and fall through to
         // the same deterministic auto-resolve path the no-LLM matrix case exercises.
         var evaluator = new MemoryCurationEvaluator(
-            _store, (ILoggingAdapter)NoLogger.Instance, new ScriptedCurationChatClient(responseText: null));
+            _store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig(), new ScriptedCurationChatClient(responseText: null));
 
-        var decision = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
+        var decision = (await evaluator.EvaluateAsync(operation, TestSessionId, ct)).Decision;
 
         Assert.Equal(CurationDecisionKind.Skip, decision.Kind);
         Assert.Contains("auto-resolved", decision.Reason);
@@ -269,11 +269,11 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         // Constructed exactly as MemoryCurationActor and MemoryCurationEngine construct
         // their evaluators today: no LLM client, differing only in which logger stack
         // they log through.
-        var actorLike = new MemoryCurationEvaluator(_store, (ILoggingAdapter)NoLogger.Instance);
-        var engineLike = new MemoryCurationEvaluator(_store, (ILogger)NullLogger.Instance);
+        var actorLike = new MemoryCurationEvaluator(_store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig());
+        var engineLike = new MemoryCurationEvaluator(_store, (ILogger)NullLogger.Instance, new MemoryCurationConfig());
 
-        var fromActor = await actorLike.EvaluateAsync(operation, TestSessionId, ct);
-        var fromEngine = await engineLike.EvaluateAsync(operation, TestSessionId, ct);
+        var fromActor = (await actorLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
+        var fromEngine = (await engineLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
         return (fromActor, fromEngine);
     }
 

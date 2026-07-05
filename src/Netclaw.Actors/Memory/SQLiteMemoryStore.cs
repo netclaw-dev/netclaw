@@ -30,6 +30,15 @@ public sealed class SQLiteMemoryStore
     }
 
     /// <summary>
+    /// The clock this store persists timestamps with. Exposed so callers that need dates
+    /// consistent with the store's own persisted timestamps (e.g.
+    /// <see cref="MemoryCurationEvaluator"/>'s structural-append fallback separator,
+    /// memory-core-redesign Slice 3) reuse this instance instead of threading a second
+    /// <see cref="TimeProvider"/> dependency through the same call chain.
+    /// </summary>
+    public TimeProvider TimeProvider => _timeProvider;
+
+    /// <summary>
     /// Process-local monotonic counter bumped whenever <c>memory_embeddings</c> rows change
     /// (a real write in <see cref="UpsertEmbeddingAsync"/>, or a deletion via
     /// <see cref="TombstoneDocumentAsync"/>). <see cref="MemoryVectorIndex"/> uses this to

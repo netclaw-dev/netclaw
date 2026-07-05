@@ -509,6 +509,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 public sealed class MemoryCurationEngine(
     SQLiteMemoryStore store,
     MemoryRulesFirstExtractor rules,
+    MemoryConfig memoryConfig,
     ILogger<MemoryCurationEngine>? logger = null)
 {
     private const string CheckpointDroppedEvent = "memory_checkpoint_dropped_before_curation";
@@ -529,7 +530,7 @@ public sealed class MemoryCurationEngine(
     // what makes GuardDestructiveUpdate (previously inline-actor-only; audit finding D14)
     // apply here too.
     private readonly MemoryCurationEvaluator _evaluator =
-        new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), llmClient: null);
+        new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), memoryConfig.Curation, llmClient: null);
 
     public async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> CurateAsync(
         SQLiteMemoryCheckpoint checkpoint,
@@ -625,8 +626,8 @@ public sealed class MemoryCurationEngine(
 
         foreach (var operation in operations)
         {
-            var decision = await _evaluator.EvaluateAsync(operation, sessionId, ct);
-            var writeOp = await _evaluator.ApplyDecisionAsync(operation, decision, ct);
+            var evaluation = await _evaluator.EvaluateAsync(operation, sessionId, ct);
+            var writeOp = await _evaluator.ApplyDecisionAsync(operation, evaluation.Decision, evaluation.Candidates, ct);
             if (writeOp is not null)
                 results.Add(writeOp);
         }

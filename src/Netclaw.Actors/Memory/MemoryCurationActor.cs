@@ -36,7 +36,7 @@ public sealed record CurationFailed(string Reason);
 // ── Internal messages ───────────────────────────────────────────────
 
 internal sealed record EvaluationBatchResult(
-    IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationDecision Decision)> Decisions);
+    IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationEvaluation Evaluation)> Evaluations);
 
 internal sealed record WriteBatchResult(CurationCompleted Summary);
 
@@ -61,6 +61,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
     public IStash Stash { get; set; } = null!;
 
+    /// <param name="curationConfig">
+    /// Write-side curation settings (memory-core-redesign Slice 3): nominator threshold/K
+    /// (not yet consumed — Stage B) and the curation LLM's timeout/token-cap, threaded to
+    /// <see cref="MemoryCurationEvaluator"/> in place of the hardcoded constants Slice 1
+    /// shipped with.
+    /// </param>
     /// <param name="embedderHolder">
     /// Resolves the process's <see cref="IMemoryEmbedder"/> at write time (memory-core-redesign
     /// Slice 2, task 2.8). Optional like <paramref name="clientProvider"/> above: a null holder
@@ -71,6 +77,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     public MemoryCurationActor(
         SQLiteMemoryStore store,
         SessionId sessionId,
+        MemoryCurationConfig curationConfig,
         IChatClientProvider? clientProvider = null,
         MemoryEmbedderHolder? embedderHolder = null)
     {
@@ -82,7 +89,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         var llmClient = clientProvider != null
             ? clientProvider.GetClient(ModelRole.Compaction)
             : null;
-        _evaluator = new MemoryCurationEvaluator(_store, _log, llmClient);
+        _evaluator = new MemoryCurationEvaluator(_store, _log, curationConfig, llmClient);
 
         Become(Idle);
     }
@@ -93,9 +100,10 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     public static Props CreateProps(
         SQLiteMemoryStore store,
         SessionId sessionId,
+        MemoryCurationConfig curationConfig,
         IChatClientProvider? clientProvider = null,
         MemoryEmbedderHolder? embedderHolder = null)
-        => Props.Create(() => new MemoryCurationActor(store, sessionId, clientProvider, embedderHolder));
+        => Props.Create(() => new MemoryCurationActor(store, sessionId, curationConfig, clientProvider, embedderHolder));
 
     // ── Idle behavior ───────────────────────────────────────────────
 
@@ -121,8 +129,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     {
         Receive<EvaluationBatchResult>(msg =>
         {
-            _log.Info("curation_actor_evaluated decisionCount={0}", msg.Decisions.Count);
-            StartWriting(msg.Decisions);
+            _log.Info("curation_actor_evaluated decisionCount={0}", msg.Evaluations.Count);
+            StartWriting(msg.Evaluations);
         });
 
         // Stash incoming proposals while evaluating
@@ -184,15 +192,15 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         {
             try
             {
-                var decisions = new List<(SQLiteMemoryCurationOperation, CurationDecision)>();
+                var evaluations = new List<(SQLiteMemoryCurationOperation, CurationEvaluation)>();
 
                 foreach (var operation in operations)
                 {
-                    var decision = await EvaluateSingleAsync(operation);
-                    decisions.Add((operation, decision));
+                    var evaluation = await EvaluateSingleAsync(operation);
+                    evaluations.Add((operation, evaluation));
                 }
 
-                self.Tell(new EvaluationBatchResult(decisions));
+                self.Tell(new EvaluationBatchResult(evaluations));
             }
             catch (Exception ex)
             {
@@ -203,12 +211,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
     // Decision logic lives in MemoryCurationEvaluator (shared with the daemon checkpoint
     // worker — memory-core-redesign Slice 1) so the two write pipelines cannot diverge.
-    private Task<CurationDecision> EvaluateSingleAsync(SQLiteMemoryCurationOperation operation)
+    private Task<CurationEvaluation> EvaluateSingleAsync(SQLiteMemoryCurationOperation operation)
         => _evaluator.EvaluateAsync(operation, _sessionId);
 
     // ── Write pipeline ──────────────────────────────────────────────
 
-    private void StartWriting(IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationDecision Decision)> decisions)
+    private void StartWriting(IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationEvaluation Evaluation)> evaluations)
     {
         Become(Writing);
         var self = Self;
@@ -223,12 +231,15 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 var created = 0;
                 var toWrite = new List<SQLiteMemoryCurationOperation>();
 
-                foreach (var (operation, decision) in decisions)
+                foreach (var (operation, evaluation) in evaluations)
                 {
+                    var decision = evaluation.Decision;
+
                     // Decision -> write-operation mapping (including Consolidate's
-                    // re-anchor/tombstone side effects) lives in MemoryCurationEvaluator,
-                    // shared with the daemon checkpoint worker.
-                    var writeOp = await _evaluator.ApplyDecisionAsync(operation, decision);
+                    // re-anchor/tombstone side effects and Slice 3's guard-validated
+                    // merge/append routing) lives in MemoryCurationEvaluator, shared with
+                    // the daemon checkpoint worker.
+                    var writeOp = await _evaluator.ApplyDecisionAsync(operation, decision, evaluation.Candidates);
 
                     switch (decision.Kind)
                     {
@@ -269,7 +280,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 }
 
                 self.Tell(new WriteBatchResult(new CurationCompleted(
-                    Evaluated: decisions.Count,
+                    Evaluated: evaluations.Count,
                     Skipped: skipped,
                     Updated: updated,
                     Consolidated: consolidated,
