@@ -468,30 +468,37 @@ static void ConfigureDaemonServices(
             .GetAwaiter().GetResult();
         var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected, logger: logger);
 
-        if (detected is not null)
+        // Report the *effective* capabilities the runtime will use, with per-field
+        // provenance — not the raw detector output. Precedence mirrors
+        // ModelCapabilityResolution: configured override > detected > default. The
+        // previous version logged the detected values, so setting an InputModalities
+        // override on a provider that reports no modalities but does report a context
+        // window (e.g. vLLM) printed "input=unknown" and looked like the override had
+        // been ignored, even though it was applied.
+        var inputSource = models.Main.InputModalities is not null ? "configured"
+            : detected?.InputModalities is not null ? "detected" : "default";
+        var outputSource = models.Main.OutputModalities is not null ? "configured"
+            : detected?.OutputModalities is not null ? "detected" : "default";
+        var contextSource = models.Main.ContextWindow is not null ? "configured"
+            : detected?.ContextWindowTokens is > 0 ? "detected" : "default";
+
+        logger.LogInformation(
+            "Resolved model capabilities for {ModelId}: input={Input} ({InputSource}), "
+            + "output={Output} ({OutputSource}), context_window={ContextWindow} ({ContextSource})",
+            models.Main.ModelId,
+            resolved.InputModalities, inputSource,
+            resolved.OutputModalities, outputSource,
+            resolved.ContextWindowTokens, contextSource);
+
+        // Nudge for the common trap: a multimodal model behind a provider that
+        // advertises no modality metadata runs text-only until an operator sets the
+        // override. Fires only when nothing supplied input modalities.
+        if (inputSource == "default")
         {
             logger.LogInformation(
-                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                models.Main.ModelId,
-                detected.InputModalities?.ToString() ?? "unknown",
-                detected.OutputModalities?.ToString() ?? "unknown",
-                detected.ContextWindowTokens?.ToString() ?? "unknown");
-        }
-        else if (models.Main.ContextWindow is not null
-                 || models.Main.InputModalities is not null
-                 || models.Main.OutputModalities is not null)
-        {
-            logger.LogInformation(
-                "Using configured model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                models.Main.ModelId,
-                resolved.InputModalities,
-                resolved.OutputModalities,
-                resolved.ContextWindowTokens);
-        }
-        else
-        {
-            logger.LogInformation(
-                "Model {ModelId} not found in capability oracles; defaulting to text-only",
+                "{ModelId} resolved to text-only input; no modality data came from the provider or "
+                + "capability oracles. If this model accepts images, set Models:Main:InputModalities "
+                + "to \"Text, Image\" to enable vision.",
                 models.Main.ModelId);
         }
 
