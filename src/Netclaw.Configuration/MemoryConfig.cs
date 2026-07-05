@@ -32,6 +32,12 @@ public sealed class MemoryConfig
     /// foundation). See <see cref="MemoryEmbeddingsConfig.Enabled"/> for why this defaults off.
     /// </summary>
     public MemoryEmbeddingsConfig Embeddings { get; set; } = new();
+
+    /// <summary>
+    /// Write-side curation settings (memory-core-redesign Slice 3: nominate→decide +
+    /// lossless merge). See <see cref="MemoryCurationConfig"/>.
+    /// </summary>
+    public MemoryCurationConfig Curation { get; set; } = new();
 }
 
 /// <summary>
@@ -66,4 +72,48 @@ public sealed class MemoryEmbeddingsConfig
     /// offline.
     /// </summary>
     public bool AutoDownload { get; set; } = true;
+}
+
+/// <summary>
+/// Configuration for write-side curation: the embedding kNN nominator and the curation LLM
+/// call (memory-core-redesign Slice 3, design D4/D5).
+/// </summary>
+public sealed class MemoryCurationConfig
+{
+    /// <summary>
+    /// Embedding cosine similarity threshold above which an existing memory is nominated as a
+    /// dedup candidate, forcing the curator LLM to adjudicate the relationship (design D4: "no
+    /// cosine threshold separates duplicates from siblings," so similarity only nominates —
+    /// it never auto-merges or auto-skips). <b>Not yet consumed</b>: the kNN nominator that
+    /// reads this is Slice 3 Stage B (task 3.1), a later change. Defined here now so the
+    /// config surface and schema exist ahead of that wiring.
+    /// </summary>
+    public double NominatorSimilarityThreshold { get; set; } = 0.86;
+
+    /// <summary>
+    /// Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal.
+    /// <b>Not yet consumed</b> — see <see cref="NominatorSimilarityThreshold"/>'s remarks;
+    /// this is also Stage B (task 3.1).
+    /// </summary>
+    public int NominatorK { get; set; } = 5;
+
+    /// <summary>
+    /// Maximum output tokens for the curation LLM call
+    /// (<see cref="Netclaw.Actors.Memory.MemoryCurationEvaluator"/>'s
+    /// <c>TryLlmEvaluationAsync</c>). Sized generously by default: the token cap is the third
+    /// line of defense against a truncated reply (after reasoning suppression and the call
+    /// timeout below), so it must never be the binding constraint — the July 2026 audit found
+    /// a 512-token cap produced zero successful curation decisions ever, because a
+    /// reasoning-capable model was truncated mid-think before emitting its answer. Raising
+    /// this further is nearly free (unemitted tokens cost nothing); lowering it below what a
+    /// verbose merged body needs risks reproducing that failure with the new merged-body
+    /// protocol (task 3.2).
+    /// </summary>
+    public int LlmMaxOutputTokens { get; set; } = 4096;
+
+    /// <summary>
+    /// Wall-clock timeout, in seconds, for the curation LLM call. Bounds latency when a model
+    /// ignores reasoning suppression and thinks at length regardless of the token cap above.
+    /// </summary>
+    public int LlmTimeoutSeconds { get; set; } = 10;
 }

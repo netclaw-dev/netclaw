@@ -386,6 +386,40 @@
             }
           },
           "additionalProperties": false
+        },
+        "Curation": {
+          "type": "object",
+          "description": "Write-side curation settings: embedding kNN nominator and curation LLM call (memory-core-redesign Slice 3).",
+          "properties": {
+            "NominatorSimilarityThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.86,
+              "description": "Embedding cosine similarity threshold above which an existing memory is nominated for the curator LLM to adjudicate. Not yet consumed (Slice 3 Stage B)."
+            },
+            "NominatorK": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5,
+              "description": "Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal. Not yet consumed (Slice 3 Stage B)."
+            },
+            "LlmMaxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 4096,
+              "description": "Maximum output tokens for the curation LLM call. Sized generously — the token cap is a defense-in-depth bound, not the primary control."
+            },
+            "LlmTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300,
+              "default": 10,
+              "description": "Wall-clock timeout in seconds for the curation LLM call."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

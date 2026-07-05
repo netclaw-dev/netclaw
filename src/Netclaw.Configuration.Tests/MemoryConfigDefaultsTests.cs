@@ -43,4 +43,34 @@ public sealed class MemoryConfigDefaultsTests
         var config = new MemoryConfig();
         Assert.True(config.Enabled);
     }
+
+    // ── MemoryCurationConfig (memory-core-redesign Slice 3, task 3.5) ──
+
+    [Fact]
+    public void Curation_nominator_similarity_threshold_defaults_to_0_86()
+    {
+        var config = new MemoryConfig();
+        Assert.Equal(0.86, config.Curation.NominatorSimilarityThreshold);
+    }
+
+    [Fact]
+    public void Curation_nominator_k_defaults_to_5()
+    {
+        var config = new MemoryConfig();
+        Assert.Equal(5, config.Curation.NominatorK);
+    }
+
+    [Fact]
+    public void Curation_llm_max_output_tokens_defaults_to_4096()
+    {
+        var config = new MemoryConfig();
+        Assert.Equal(4096, config.Curation.LlmMaxOutputTokens);
+    }
+
+    [Fact]
+    public void Curation_llm_timeout_seconds_defaults_to_10()
+    {
+        var config = new MemoryConfig();
+        Assert.Equal(10, config.Curation.LlmTimeoutSeconds);
+    }
 }
