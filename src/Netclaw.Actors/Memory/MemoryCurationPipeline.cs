@@ -510,7 +510,9 @@ public sealed class MemoryCurationEngine(
     SQLiteMemoryStore store,
     MemoryRulesFirstExtractor rules,
     MemoryConfig memoryConfig,
-    ILogger<MemoryCurationEngine>? logger = null)
+    ILogger<MemoryCurationEngine>? logger = null,
+    MemoryEmbedderHolder? embedderHolder = null,
+    MemoryVectorIndexHolder? vectorIndexHolder = null)
 {
     private const string CheckpointDroppedEvent = "memory_checkpoint_dropped_before_curation";
     private const string CheckpointDroppedTemplate =
@@ -529,8 +531,15 @@ public sealed class MemoryCurationEngine(
     // all beyond the fingerprint check below — routing through the shared evaluator is
     // what makes GuardDestructiveUpdate (previously inline-actor-only; audit finding D14)
     // apply here too.
+    //
+    // embedderHolder/vectorIndexHolder ARE wired here (memory-core-redesign Slice 3 Stage B,
+    // task 3.1): the embedding kNN nominator runs on this pipeline too, even with no LLM
+    // client — a nominee found with no LLM available forces the conservative no-auto-merge
+    // Create outcome documented on MemoryCurationEvaluator.EvaluateAsync, never a silent
+    // auto-skip/auto-merge on cosine alone.
     private readonly MemoryCurationEvaluator _evaluator =
-        new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), memoryConfig.Curation, llmClient: null);
+        new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), memoryConfig.Curation,
+            llmClient: null, embedderHolder, vectorIndexHolder);
 
     public async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> CurateAsync(
         SQLiteMemoryCheckpoint checkpoint,

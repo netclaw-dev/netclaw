@@ -62,24 +62,31 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     public IStash Stash { get; set; } = null!;
 
     /// <param name="curationConfig">
-    /// Write-side curation settings (memory-core-redesign Slice 3): nominator threshold/K
-    /// (not yet consumed — Stage B) and the curation LLM's timeout/token-cap, threaded to
-    /// <see cref="MemoryCurationEvaluator"/> in place of the hardcoded constants Slice 1
-    /// shipped with.
+    /// Write-side curation settings (memory-core-redesign Slice 3): nominator threshold/K and
+    /// the curation LLM's timeout/token-cap, threaded to <see cref="MemoryCurationEvaluator"/>
+    /// in place of the hardcoded constants Slice 1 shipped with.
     /// </param>
     /// <param name="embedderHolder">
-    /// Resolves the process's <see cref="IMemoryEmbedder"/> at write time (memory-core-redesign
-    /// Slice 2, task 2.8). Optional like <paramref name="clientProvider"/> above: a null holder
-    /// is a genuine operating mode (a test harness or a session wired without the embedding
-    /// subsystem), not a placeholder — <see cref="MemoryEmbedOnWriteCoordinator"/> treats a null
-    /// holder identically to an unavailable embedder and skips embedding with a debug log.
+    /// Resolves the process's <see cref="IMemoryEmbedder"/> for embed-on-write (memory-core-
+    /// redesign Slice 2, task 2.8) AND for the evaluator's embedding kNN nominator (Slice 3
+    /// Stage B, task 3.1) — the same holder serves both. Optional like
+    /// <paramref name="clientProvider"/> above: a null holder is a genuine operating mode (a
+    /// test harness or a session wired without the embedding subsystem), not a placeholder —
+    /// both <see cref="MemoryEmbedOnWriteCoordinator"/> and <see cref="MemoryCurationEvaluator"/>
+    /// treat a null holder identically to an unavailable embedder and degrade accordingly.
+    /// </param>
+    /// <param name="vectorIndexHolder">
+    /// Resolves the process's <see cref="MemoryVectorIndex"/> for the nominator (Slice 3 Stage
+    /// B). Provided alongside <paramref name="embedderHolder"/> in production; independently
+    /// nullable for the same test-harness reason.
     /// </param>
     public MemoryCurationActor(
         SQLiteMemoryStore store,
         SessionId sessionId,
         MemoryCurationConfig curationConfig,
         IChatClientProvider? clientProvider = null,
-        MemoryEmbedderHolder? embedderHolder = null)
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
     {
         _store = store;
         _sessionId = sessionId;
@@ -89,7 +96,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         var llmClient = clientProvider != null
             ? clientProvider.GetClient(ModelRole.Compaction)
             : null;
-        _evaluator = new MemoryCurationEvaluator(_store, _log, curationConfig, llmClient);
+        _evaluator = new MemoryCurationEvaluator(
+            _store, _log, curationConfig, llmClient, embedderHolder, vectorIndexHolder);
 
         Become(Idle);
     }
@@ -102,8 +110,10 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         SessionId sessionId,
         MemoryCurationConfig curationConfig,
         IChatClientProvider? clientProvider = null,
-        MemoryEmbedderHolder? embedderHolder = null)
-        => Props.Create(() => new MemoryCurationActor(store, sessionId, curationConfig, clientProvider, embedderHolder));
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
+        => Props.Create(() => new MemoryCurationActor(
+            store, sessionId, curationConfig, clientProvider, embedderHolder, vectorIndexHolder));
 
     // ── Idle behavior ───────────────────────────────────────────────
 

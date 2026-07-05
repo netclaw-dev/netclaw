@@ -29,6 +29,16 @@ public enum CurationDecisionKind
 /// <summary>
 /// An existing memory document that is a candidate for matching against a proposal.
 /// </summary>
+/// <param name="CosineSimilarity">
+/// The embedding cosine similarity that nominated this candidate via
+/// <see cref="MemoryVectorIndex.TopK"/> (memory-core-redesign Slice 3 Stage B, task 3.1). Null
+/// for candidates sourced only from anchor-name matching or lexical content search — those
+/// carry no embedding evidence. A non-null value here is what
+/// <see cref="MemoryCurationEvaluator.EvaluateAsync"/> uses to force the decision to the LLM
+/// tier: per design D4, cosine similarity is nomination evidence only and must never itself
+/// decide skip/merge/create, so this field is read for "is a nominee present" and then handed
+/// to the curator LLM as context — never compared against a threshold to auto-decide.
+/// </param>
 public sealed record ExistingMemoryCandidate(
     string DocumentId,
     string AnchorId,
@@ -36,7 +46,8 @@ public sealed record ExistingMemoryCandidate(
     string Content,
     long? FreshnessAtMs,
     double Confidence,
-    bool IsExactAnchorMatch);
+    bool IsExactAnchorMatch,
+    double? CosineSimilarity = null);
 
 /// <summary>
 /// Result of curation evaluation for a single proposal.

@@ -84,16 +84,16 @@ public sealed class MemoryCurationConfig
     /// Embedding cosine similarity threshold above which an existing memory is nominated as a
     /// dedup candidate, forcing the curator LLM to adjudicate the relationship (design D4: "no
     /// cosine threshold separates duplicates from siblings," so similarity only nominates —
-    /// it never auto-merges or auto-skips). <b>Not yet consumed</b>: the kNN nominator that
-    /// reads this is Slice 3 Stage B (task 3.1), a later change. Defined here now so the
-    /// config surface and schema exist ahead of that wiring.
+    /// it never auto-merges or auto-skips). Consumed by
+    /// <see cref="Netclaw.Actors.Memory.MemoryCurationEvaluator"/>'s embedding kNN nominator
+    /// (memory-core-redesign Slice 3 Stage B, task 3.1) via
+    /// <c>Netclaw.Actors.Memory.MemoryVectorIndex.TopK</c>.
     /// </summary>
     public double NominatorSimilarityThreshold { get; set; } = 0.86;
 
     /// <summary>
     /// Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal.
-    /// <b>Not yet consumed</b> — see <see cref="NominatorSimilarityThreshold"/>'s remarks;
-    /// this is also Stage B (task 3.1).
+    /// See <see cref="NominatorSimilarityThreshold"/>'s remarks — same Slice 3 Stage B consumer.
     /// </summary>
     public int NominatorK { get; set; } = 5;
 

@@ -41,9 +41,10 @@ public sealed record SessionToolServices(
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.
 /// <see cref="EmbedderHolder"/> resolves the process's embedder for embed-on-write
-/// (memory-core-redesign Slice 2). Null is a genuine state — same as
-/// <see cref="MemoryStore"/> being null — for any session/test harness that has not wired
-/// up the embedding subsystem at all.
+/// (memory-core-redesign Slice 2) and for the curation evaluator's embedding kNN nominator
+/// (Slice 3 Stage B, task 3.1); <see cref="VectorIndexHolder"/> resolves the nominator's
+/// vector index. Null is a genuine state — same as <see cref="MemoryStore"/> being null —
+/// for any session/test harness that has not wired up the embedding subsystem at all.
 /// </summary>
 public sealed record SessionMemoryServices(
     IMemoryExtractor MemoryExtractor,
@@ -51,7 +52,8 @@ public sealed record SessionMemoryServices(
     IMemoryCheckpointSink CheckpointSink,
     SQLiteMemoryStore? MemoryStore,
     MemoryConfig? MemoryConfig = null,
-    MemoryEmbedderHolder? EmbedderHolder = null);
+    MemoryEmbedderHolder? EmbedderHolder = null,
+    MemoryVectorIndexHolder? VectorIndexHolder = null);
 
 /// <summary>
 /// Metrics and lifecycle observation.

@@ -752,6 +752,13 @@ static void ConfigureDaemonServices(
             EmbeddingModelProvisioner.Allowlist));
         services.AddSingleton(new MemoryEmbedderHolder(
             new UnavailableMemoryEmbedder(memoryConfig.Embeddings.ModelId, "embedding warmup has not completed yet")));
+
+        // Vector index for the curation evaluator's embedding kNN nominator (memory-core-
+        // redesign Slice 3 Stage B, task 3.1). Registered alongside MemoryEmbedderHolder above:
+        // both are optional dependencies of MemoryCurationActor/MemoryCurationEngine that
+        // degrade to the lexical content-term search when either is absent or the embedder is
+        // unavailable.
+        services.AddSingleton(new MemoryVectorIndexHolder(memoryStore));
         services.AddSingleton<EmbeddingWarmupHostedService>();
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmbeddingWarmupHostedService>());
     }
@@ -1002,7 +1009,8 @@ static void ConfigureDaemonServices(
         sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
         sp.GetService<SQLiteMemoryStore>(),
         sp.GetService<MemoryConfig>(),
-        sp.GetService<MemoryEmbedderHolder>()));
+        sp.GetService<MemoryEmbedderHolder>(),
+        sp.GetService<MemoryVectorIndexHolder>()));
 
     services.AddSingleton(sp => new SessionObservability(
         sp.GetService<Netclaw.Actors.Telemetry.ISessionMetrics>(),

@@ -1223,6 +1223,63 @@ public sealed class SQLiteMemoryStore
     }
 
     /// <summary>
+    /// Hydrates documents by id into full-content <see cref="ExistingMemoryCandidate"/> rows —
+    /// how the embedding kNN nominator (memory-core-redesign Slice 3 Stage B, task 3.1) turns
+    /// <see cref="MemoryVectorIndex.TopK"/> nominee ids into candidates the curation evaluator
+    /// can reason about (and hand full-content to the curator LLM,
+    /// <see cref="CurationPromptBuilder"/>'s <c>useFullCandidateContent</c>). Non-tombstoned
+    /// documents under active anchors only, mirroring <see cref="FindFuzzyAnchorMatchesAsync"/>'s
+    /// filters. <see cref="ExistingMemoryCandidate.IsExactAnchorMatch"/> is always false here —
+    /// cosine nomination is a distinct signal from anchor-name matching, tagged onto the result
+    /// by the caller (which already has each id's cosine from <see cref="MemoryVectorIndex.TopK"/>).
+    /// One id per query, over a single connection, mirroring
+    /// <see cref="GetMemoriesByResolvedHandlesAsync"/>'s per-id loop rather than a dynamic SQL
+    /// IN clause — the nominee count is bounded by <c>Memory.Curation.NominatorK</c> (default 5),
+    /// so this is never a large batch.
+    /// </summary>
+    public async Task<IReadOnlyList<ExistingMemoryCandidate>> GetCandidatesByIdsAsync(
+        IReadOnlyList<string> documentIds,
+        CancellationToken ct = default)
+    {
+        if (documentIds.Count == 0)
+            return [];
+
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        var results = new List<ExistingMemoryCandidate>();
+        foreach (var documentId in documentIds)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT a.anchor_id, a.canonical_name,
+                       d.document_id, d.markdown_body, d.freshness_at, d.confidence
+                FROM memory_documents d
+                JOIN memory_anchors a ON d.anchor_id = a.anchor_id
+                WHERE d.document_id = $id
+                  AND a.status = 'active'
+                  AND d.update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}';
+                """;
+            cmd.Parameters.AddWithValue("$id", documentId);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                results.Add(new ExistingMemoryCandidate(
+                    DocumentId: reader.GetString(2),
+                    AnchorId: reader.GetString(0),
+                    AnchorCanonicalName: reader.GetString(1),
+                    Content: reader.GetString(3),
+                    FreshnessAtMs: reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                    Confidence: reader.IsDBNull(5) ? 0.0 : reader.GetDouble(5),
+                    IsExactAnchorMatch: false));
+            }
+        }
+
+        return (IReadOnlyList<ExistingMemoryCandidate>)results;
+        }, ct);
+    }
+
+    /// <summary>
     /// Coverage diagnostics for <paramref name="modelId"/> (memory-embeddings spec: "Embedding
     /// coverage diagnostics"). <see cref="MemoryEmbeddingCoverage.EmbeddedCurrentHashCount"/>
     /// requires recomputing <see cref="MemoryContentHasher.ComputeHash"/> per document in

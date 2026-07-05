@@ -17,9 +17,11 @@ namespace Netclaw.Actors.Memory;
 
 /// <summary>
 /// Minimal logging seam so <see cref="MemoryCurationEvaluator"/> emits one set of log
-/// markers (<c>curation_dual_search</c>, <c>curation_llm_decision</c>,
-/// <c>curation_llm_no_decision</c>, <c>curation_llm_timeout</c>, <c>curation_llm_error</c>,
-/// <c>curation_ambiguous_auto_resolved</c>, <c>curation_ambiguous_create_fallback</c>,
+/// markers (<c>curation_dual_search</c>, <c>curation_nominated</c>,
+/// <c>curation_nominator_degraded</c>, <c>curation_nominee_no_llm_decision</c>,
+/// <c>curation_llm_decision</c>, <c>curation_llm_no_decision</c>, <c>curation_llm_timeout</c>,
+/// <c>curation_llm_error</c>, <c>curation_ambiguous_auto_resolved</c>,
+/// <c>curation_ambiguous_create_fallback</c>,
 /// <c>curation_skip</c>/<c>_update</c>/<c>_consolidate</c>/<c>_create</c>,
 /// <c>curation_reanchor</c>, <c>curation_tombstone_anchor</c>) regardless of which of the
 /// two callers is driving the evaluator: the inline per-session actor
@@ -75,10 +77,20 @@ internal sealed class MicrosoftCurationLog(ILogger log) : ICurationLog
 /// slice (finding D14) and the daemon path performed no relationship evaluation at all.
 ///
 /// Decision flow (<see cref="EvaluateAsync"/>): immutable records bypass evaluation; fuzzy
-/// anchor candidates are queried, then content-term candidates are added when there is no
-/// exact anchor match; <see cref="CurationRulesEvaluator.Evaluate"/> runs the deterministic
-/// tier; an Ambiguous result escalates to the LLM tier (when available) followed by
-/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else falls back to
+/// anchor candidates are queried; on an exact anchor match, the deterministic fast path
+/// (<see cref="CurationRulesEvaluator.Evaluate"/>'s <c>EvaluateExactMatch</c>) decides Skip/Update
+/// with no further evidence gathering. Otherwise, the embedding kNN nominator (memory-core-
+/// redesign Slice 3 Stage B, task 3.1, design D4) queries <see cref="MemoryVectorIndex.TopK"/>
+/// when the embedder is available: <b>any nominee forces the decision to the LLM tier</b>,
+/// regardless of what the lexical rules tier would have decided — the May 2026 measurement
+/// (<c>docs/research/memory-recall-findings-2026-05.md</c>; corroborated at corpus scale in
+/// <c>docs/research/memory-audit-2026-07.md</c> §5) found no cosine threshold that separates true
+/// duplicates from merely-related siblings, so cosine similarity is nomination evidence ONLY —
+/// it never auto-merges and never auto-skips. When no nominee fires (or the embedder is
+/// unavailable, in which case the pre-Slice-3 lexical content-term search runs instead as an
+/// explicitly-logged degraded path), <see cref="CurationRulesEvaluator.Evaluate"/> runs the
+/// deterministic tier as before; an Ambiguous result escalates to the LLM tier (when available)
+/// followed by <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else falls back to
 /// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create default.
 /// <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that should
 /// be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
@@ -109,6 +121,8 @@ public sealed class MemoryCurationEvaluator
     private readonly IChatClient? _llmClient;
     private readonly ICurationLog _log;
     private readonly MemoryCurationConfig _curationConfig;
+    private readonly MemoryEmbedderHolder? _embedderHolder;
+    private readonly MemoryVectorIndexHolder? _vectorIndexHolder;
 
     /// <summary>
     /// Constructs an evaluator that logs through Akka's actor logging (the inline
@@ -118,9 +132,27 @@ public sealed class MemoryCurationEvaluator
     /// which case Ambiguous decisions resolve via
     /// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> only.
     /// </summary>
+    /// <param name="embedderHolder">
+    /// Resolves the process's <see cref="IMemoryEmbedder"/> for the kNN nominator
+    /// (memory-core-redesign Slice 3 Stage B). Optional like <paramref name="llmClient"/>: a
+    /// null holder is a genuine operating mode (a test harness, or a build with the embedding
+    /// subsystem not wired up at all) — <see cref="EvaluateAsync"/> treats it identically to an
+    /// unavailable embedder and runs the lexical degraded path.
+    /// </param>
+    /// <param name="vectorIndexHolder">
+    /// Resolves the process's <see cref="MemoryVectorIndex"/> for the same nominator. Optional
+    /// for the same reason as <paramref name="embedderHolder"/> — the two are provided together
+    /// in production (see <c>Netclaw.Daemon.Program</c>), but each is independently nullable so
+    /// a caller missing one still degrades safely rather than throwing.
+    /// </param>
     public MemoryCurationEvaluator(
-        SQLiteMemoryStore store, ILoggingAdapter log, MemoryCurationConfig curationConfig, IChatClient? llmClient = null)
-        : this(store, (ICurationLog)new AkkaCurationLog(log), curationConfig, llmClient)
+        SQLiteMemoryStore store,
+        ILoggingAdapter log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient = null,
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
+        : this(store, (ICurationLog)new AkkaCurationLog(log), curationConfig, llmClient, embedderHolder, vectorIndexHolder)
     {
     }
 
@@ -128,21 +160,37 @@ public sealed class MemoryCurationEvaluator
     /// Constructs an evaluator that logs through Microsoft.Extensions.Logging (the daemon
     /// checkpoint-worker path). The daemon worker has no LLM client to give this evaluator
     /// today — that absence is intentional and permanent for this call site, not a
-    /// placeholder to be filled in later in this slice.
+    /// placeholder to be filled in later in this slice. <paramref name="embedderHolder"/> and
+    /// <paramref name="vectorIndexHolder"/> ARE wired here (memory-core-redesign Slice 3 Stage
+    /// B): the nominator runs on both write pipelines even though only the inline pipeline has
+    /// an LLM client — a nominee found with no LLM available still forces the conservative
+    /// no-auto-merge Create outcome documented on <see cref="EvaluateAsync"/>.
     /// </summary>
     public MemoryCurationEvaluator(
-        SQLiteMemoryStore store, ILogger log, MemoryCurationConfig curationConfig, IChatClient? llmClient = null)
-        : this(store, (ICurationLog)new MicrosoftCurationLog(log), curationConfig, llmClient)
+        SQLiteMemoryStore store,
+        ILogger log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient = null,
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
+        : this(store, (ICurationLog)new MicrosoftCurationLog(log), curationConfig, llmClient, embedderHolder, vectorIndexHolder)
     {
     }
 
     private MemoryCurationEvaluator(
-        SQLiteMemoryStore store, ICurationLog log, MemoryCurationConfig curationConfig, IChatClient? llmClient)
+        SQLiteMemoryStore store,
+        ICurationLog log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient,
+        MemoryEmbedderHolder? embedderHolder,
+        MemoryVectorIndexHolder? vectorIndexHolder)
     {
         _store = store;
         _log = log;
         _curationConfig = curationConfig;
         _llmClient = llmClient;
+        _embedderHolder = embedderHolder;
+        _vectorIndexHolder = vectorIndexHolder;
     }
 
     /// <summary>
@@ -173,44 +221,144 @@ public sealed class MemoryCurationEvaluator
         // Build a mutable candidate list — content search may add more candidates below.
         var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
 
-        // Run content-based search when there is no exact anchor match.
-        // This catches semantically identical content under very different anchor names
-        // (e.g., "netclaw-github-repo" vs "netclaw-source-location" — different names, same info).
+        // Embedding kNN nomination (memory-core-redesign Slice 3 Stage B, task 3.1, design D4)
+        // vs. the pre-Slice-3 lexical content-term search: these are alternatives, not additive.
+        // An exact anchor match already resolves deterministically below with no further
+        // evidence gathering (the "existing exact-anchor deterministic fast path" design D4
+        // calls out as unchanged), so neither runs in that case.
         var hasExactAnchorMatch = anchorCandidates.Any(c => c.IsExactAnchorMatch);
-        if (!hasExactAnchorMatch && !string.IsNullOrWhiteSpace(operation.Content))
+        if (!hasExactAnchorMatch)
         {
-            var contentTerms = operation.Content
-                .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(t => t.Length >= 3)
-                .Select(t => t.ToLowerInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(8)
-                .ToArray();
-
-            if (contentTerms.Length > 0)
+            var embedder = _embedderHolder?.Current;
+            if (embedder is not null && embedder.IsAvailable && _vectorIndexHolder is not null)
             {
-                var contentCandidates = await _store.FindCandidatesByContentAsync(contentTerms, ct: ct);
-
-                // Merge content candidates with anchor candidates, deduplicating by DocumentId.
-                if (contentCandidates.Count > 0)
+                var (nominees, topCosine) = await NominateAsync(embedder, operation, ct);
+                if (nominees.Count > 0)
                 {
-                    var existingDocIds = new HashSet<string>(
-                        candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
-                    foreach (var cc in contentCandidates)
+                    // Merge like the content-term path below: dedup by DocumentId, but a nominee
+                    // that is ALSO already present (e.g. it also fuzzy-matched by anchor name)
+                    // must keep its cosine tag rather than being dropped as a duplicate.
+                    var byDocId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    for (var i = 0; i < candidates.Count; i++)
+                        byDocId[candidates[i].DocumentId] = i;
+
+                    foreach (var nominee in nominees)
                     {
-                        if (!existingDocIds.Contains(cc.DocumentId))
-                            candidates.Add(cc);
+                        if (byDocId.TryGetValue(nominee.DocumentId, out var existingIndex))
+                            candidates[existingIndex] = candidates[existingIndex] with { CosineSimilarity = nominee.CosineSimilarity };
+                        else
+                            candidates.Add(nominee);
                     }
 
-                    _log.Debug(
-                        "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
+                    _log.Info(
+                        "curation_nominated anchor={0} count={1} topCosine={2}",
                         operation.AnchorCanonicalName,
-                        anchorCandidates.Count,
-                        contentCandidates.Count,
-                        candidates.Count);
+                        nominees.Count,
+                        topCosine.ToString("F4", System.Globalization.CultureInfo.InvariantCulture));
                 }
             }
+            else
+            {
+                // Degraded path (design D4 point 4): no healthy embedder/index, so fall back to
+                // the lexical content-term search exactly as before Slice 3 — this catches
+                // semantically identical content under very different anchor names (e.g.,
+                // "netclaw-github-repo" vs "netclaw-source-location") when there is no embedding
+                // evidence available to do better. Logged unconditionally in this branch (not
+                // gated on content being non-blank) so the degraded condition itself is always
+                // observable, independent of whether a search ends up running. Debug level, not
+                // Warning: "embedder unavailable" is the default operating mode while
+                // Memory.Embeddings.Enabled is false (task 3.1's target default), so this would
+                // otherwise be Warning-level spam on every single curation evaluation in the
+                // common case — the loud, once-per-transition signal already exists at startup
+                // (EmbeddingWarmupHostedService's memory_embedding_unavailable /
+                // memory_embedding_disabled) and in doctor/status, matching
+                // MemoryEmbedOnWriteCoordinator's identical reasoning for its own
+                // embedder-unavailable skip log.
+                _log.Debug(
+                    "curation_nominator_degraded anchor={0} reason={1}",
+                    operation.AnchorCanonicalName,
+                    embedder is null ? "no_embedder_configured" : !embedder.IsAvailable ? "embedder_unavailable" : "vector_index_unavailable");
+
+                if (!string.IsNullOrWhiteSpace(operation.Content))
+                {
+                    var contentTerms = operation.Content
+                        .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
+                            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(t => t.Length >= 3)
+                        .Select(t => t.ToLowerInvariant())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(8)
+                        .ToArray();
+
+                    if (contentTerms.Length > 0)
+                    {
+                        var contentCandidates = await _store.FindCandidatesByContentAsync(contentTerms, ct: ct);
+
+                        // Merge content candidates with anchor candidates, deduplicating by DocumentId.
+                        if (contentCandidates.Count > 0)
+                        {
+                            var existingDocIds = new HashSet<string>(
+                                candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
+                            foreach (var cc in contentCandidates)
+                            {
+                                if (!existingDocIds.Contains(cc.DocumentId))
+                                    candidates.Add(cc);
+                            }
+
+                            _log.Debug(
+                                "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
+                                operation.AnchorCanonicalName,
+                                anchorCandidates.Count,
+                                contentCandidates.Count,
+                                candidates.Count);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Any nominee forces the LLM tier, regardless of what the lexical rules tier below would
+        // have decided (design D4: "no cosine threshold separates duplicates from siblings," so
+        // similarity nominates only — it never auto-merges or auto-skips on its own).
+        var hasNominee = candidates.Any(c => c.CosineSimilarity.HasValue);
+        if (hasNominee)
+        {
+            if (_llmClient is not null)
+            {
+                var nomineeLlmDecision = await TryLlmEvaluationAsync(
+                    _llmClient, sessionId, operation, candidates, _log, _curationConfig, useFullCandidateContent: true);
+                if (nomineeLlmDecision is not null)
+                {
+                    // GuardDestructiveUpdate is deliberately NOT applied here — see this class's
+                    // remarks; write-time MergeGuard/structural-append routing supersedes it for
+                    // every LLM-tier decision.
+                    _log.Info(
+                        "curation_llm_decision anchor={0} decision={1} reason={2}",
+                        operation.AnchorCanonicalName,
+                        nomineeLlmDecision.Kind,
+                        nomineeLlmDecision.Reason);
+                    return new CurationEvaluation(nomineeLlmDecision, candidates);
+                }
+
+                // LLM failed to produce a parseable decision — fall through to the conservative
+                // no-LLM handling below rather than a second (Jaccard-based) attempt.
+            }
+
+            // No LLM available, or the LLM call failed: a nominee is semantic-near evidence that
+            // TryAutoResolveAmbiguous's Jaccard heuristics cannot safely adjudicate (that is
+            // exactly the ambiguity the May 2026 measurement showed deterministic logic cannot
+            // resolve), so this does NOT call TryAutoResolveAmbiguous — doing so risks an
+            // auto-Skip driven by cosine-adjacent content that is actually a distinct sibling.
+            // The conservative outcome is Create: the cost is a possible duplicate document,
+            // recoverable by a future curation pass; a wrong auto-merge is not.
+            _log.Warning(
+                "curation_nominee_no_llm_decision anchor={0} llm_available={1} — conservative create",
+                operation.AnchorCanonicalName,
+                _llmClient is not null);
+            return new CurationEvaluation(
+                new CurationDecision(CurationDecisionKind.Create, null, null, null,
+                    "nominee present but no LLM decision available: conservative create (no auto-merge on cosine alone)"),
+                candidates);
         }
 
         // Apply rules tier
@@ -266,13 +414,86 @@ public sealed class MemoryCurationEvaluator
             candidates);
     }
 
+    /// <summary>
+    /// Embedding kNN nomination step (memory-core-redesign Slice 3 Stage B, task 3.1). Embeds
+    /// the proposal's <c>"{title}\n{content}"</c> text — the exact concatenation
+    /// <see cref="MemoryEmbedOnWriteCoordinator"/> embeds a written document with, so a proposal
+    /// and its eventual stored form land in the same region of embedding space — queries
+    /// <paramref name="embedder"/>'s current <see cref="MemoryVectorIndex"/> for up to
+    /// <see cref="MemoryCurationConfig.NominatorK"/> neighbors at or above
+    /// <see cref="MemoryCurationConfig.NominatorSimilarityThreshold"/>, then hydrates the
+    /// matched document ids into full-content candidates tagged with their cosine.
+    ///
+    /// <para>
+    /// <b>Cost:</b> curation runs off the interactive turn path (checkpoint/session-boundary
+    /// triggered, via the daemon worker or the inline actor's post-turn write phase) — unlike
+    /// the sub-150ms recall-query budget (design D6), there is no per-turn latency budget here,
+    /// so the ~210ms median / ~280ms mean single-embed cost measured for the nominator model
+    /// (<c>docs/research/memory-audit-2026-07.md</c> §4, snowflake-arctic-embed 137M) is
+    /// acceptable — it does not block a user-visible response.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Known limitation (intra-batch nomination):</b> a proposal is nominated against the
+    /// store's already-committed embeddings only — it cannot nominate itself (it has not been
+    /// written yet), which is correct. But when a caller evaluates several proposals as one
+    /// batch (both write pipelines evaluate a checkpoint's candidates in a loop before any of
+    /// them commits), two mutually-near-duplicate proposals within that SAME batch will not see
+    /// each other, because neither is in the index yet when the other is nominated. This is an
+    /// accepted gap for this slice, not a design goal: cross-batch and steady-state dedup (the
+    /// overwhelming majority of write traffic) both work correctly, and closing the intra-batch
+    /// case would require either serializing writes mid-batch or a second batch-local similarity
+    /// pass — deferred until evidence shows same-batch near-duplicates are common enough to
+    /// justify the added complexity.
+    /// </para>
+    /// </summary>
+    private async Task<(IReadOnlyList<ExistingMemoryCandidate> Nominees, double TopCosine)> NominateAsync(
+        IMemoryEmbedder embedder,
+        SQLiteMemoryCurationOperation operation,
+        CancellationToken ct)
+    {
+        var vectorIndex = await _vectorIndexHolder!.GetCurrentAsync(embedder, ct);
+        if (vectorIndex is null)
+            return ([], 0);
+
+        var queryVector = await embedder.EmbedAsync($"{operation.Title}\n{operation.Content}", ct);
+        var matches = vectorIndex.TopK(
+            queryVector.Span, _curationConfig.NominatorK, _curationConfig.NominatorSimilarityThreshold);
+        if (matches.Count == 0)
+            return ([], 0);
+
+        // Only "document" items are ever embedded (MemoryEmbedOnWriteCoordinator.DocumentItemKind)
+        // — immutable records bypass curation and are never embedded — but filter defensively
+        // rather than assume, since a future item kind sharing this model's embedding table
+        // would otherwise be silently mis-hydrated as a document candidate.
+        var documentIds = matches
+            .Where(m => string.Equals(m.ItemKind, MemoryEmbedOnWriteCoordinator.DocumentItemKind, StringComparison.Ordinal))
+            .Select(m => m.ItemId)
+            .ToArray();
+        if (documentIds.Length == 0)
+            return ([], 0);
+
+        var hydrated = await _store.GetCandidatesByIdsAsync(documentIds, ct);
+        if (hydrated.Count == 0)
+            return ([], 0);
+
+        var cosineByDocId = matches.ToDictionary(m => m.ItemId, m => m.Cosine, StringComparer.Ordinal);
+        var tagged = hydrated
+            .Select(c => cosineByDocId.TryGetValue(c.DocumentId, out var cosine) ? c with { CosineSimilarity = cosine } : c)
+            .ToArray();
+
+        // matches is already sorted descending by cosine (MemoryVectorIndex.TopK's contract).
+        return (tagged, matches[0].Cosine);
+    }
+
     internal static async Task<CurationDecision?> TryLlmEvaluationAsync(
         IChatClient llmClient,
         SessionId sessionId,
         SQLiteMemoryCurationOperation operation,
         IReadOnlyList<ExistingMemoryCandidate> candidates,
         ICurationLog log,
-        MemoryCurationConfig curationConfig)
+        MemoryCurationConfig curationConfig,
+        bool useFullCandidateContent = false)
     {
         try
         {
@@ -281,7 +502,7 @@ public sealed class MemoryCurationEvaluator
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, CurationPromptBuilder.SystemPrompt),
-                new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates))
+                new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates, useFullCandidateContent))
             };
 
             // SessionScopedChatOptions carries the session id so this sidecar's chat-client

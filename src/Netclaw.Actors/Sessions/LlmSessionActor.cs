@@ -70,6 +70,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly Memory.SQLiteMemoryStore? _memoryStore;
     private readonly Memory.MemoryEmbedderHolder? _memoryEmbedderHolder;
+    private readonly Memory.MemoryVectorIndexHolder? _memoryVectorIndexHolder;
     private readonly IChatClientProvider _clientProvider;
     private readonly ILoggingAdapter _log;
 
@@ -241,6 +242,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
         _memoryEmbedderHolder = memory?.EmbedderHolder;
+        _memoryVectorIndexHolder = memory?.VectorIndexHolder;
         _memoryConfig = memory?.MemoryConfig ?? new MemoryConfig();
         _timeProvider = services.TimeProvider;
         _sessionsBasePath = services.Paths.SessionsDirectory;
@@ -315,7 +317,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _curationActor = Context.ActorOf(
                     Memory.MemoryCurationActor.CreateProps(
-                        _memoryStore, _sessionId, _memoryConfig.Curation, _clientProvider, _memoryEmbedderHolder),
+                        _memoryStore, _sessionId, _memoryConfig.Curation, _clientProvider,
+                        _memoryEmbedderHolder, _memoryVectorIndexHolder),
                     "memory-curation");
 
                 // Distillation processes a full transcript — allow 5x normal sidecar timeout
