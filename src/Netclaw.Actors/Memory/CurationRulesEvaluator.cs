@@ -41,12 +41,38 @@ public sealed record ExistingMemoryCandidate(
 /// <summary>
 /// Result of curation evaluation for a single proposal.
 /// </summary>
+/// <param name="MergedBody">
+/// The complete, lossless-union markdown body synthesized by the curation LLM for an
+/// UPDATE/CONSOLIDATE decision (memory-core-redesign Slice 3, design D5;
+/// <see cref="CurationPromptBuilder.ParseResponse"/> is the only producer). Null for
+/// SKIP/CREATE, for any decision produced by the deterministic rules tier (which never
+/// synthesizes a body), and for keyword-only LLM UPDATE/CONSOLIDATE responses.
+/// <see cref="MemoryCurationEvaluator.ApplyDecisionAsync"/> validates this against every
+/// source body via <see cref="MergeGuard"/> before writing it; on guard failure or when
+/// this is null for an LLM-tier decision, the write degrades to a structural append
+/// instead of the raw overwrite this field's absence would otherwise imply.
+/// </param>
+/// <param name="FromLlmTier">
+/// True when <see cref="CurationPromptBuilder.ParseResponse"/> produced this decision, as
+/// opposed to the deterministic rules tier (<see cref="CurationRulesEvaluator"/>). Governs
+/// write routing in <see cref="MemoryCurationEvaluator.ApplyDecisionAsync"/>: the
+/// deterministic tier's UPDATE (exact-anchor path) keeps its pre-Slice-3 guarantee — a raw
+/// overwrite that <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> has already
+/// verified is a proposal-preserves-existing-content superset — while every LLM-tier
+/// UPDATE/CONSOLIDATE routes through <see cref="MergeGuard"/>-validated merge or structural
+/// append instead. Deterministic-tier CONSOLIDATE never sets this either, but it flows
+/// through the same guarded path anyway because it never carries a <see cref="MergedBody"/>
+/// (the rules tier does not synthesize one) — see <see cref="MemoryCurationEvaluator"/>'s
+/// remarks for why that unification is safe.
+/// </param>
 public sealed record CurationDecision(
     CurationDecisionKind Kind,
     string? TargetDocumentId,
     IReadOnlyList<string>? ConsolidationTargetIds,
     string? CanonicalAnchorName,
-    string Reason);
+    string Reason,
+    string? MergedBody = null,
+    bool FromLlmTier = false);
 
 /// <summary>
 /// Deterministic rules-based evaluator for memory curation decisions.
