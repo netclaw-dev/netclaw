@@ -8,20 +8,21 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.24.4</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.24.4 — Environment-variable-only configuration support, remote daemon CLI fix
+    <VersionPrefix>0.25.0-beta.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.25.0-beta.1 — SkillServer native sub-agent sync, memory curation unification, systemd PATH fix
+
+**Features**
+
+* **SkillServer native sub-agent sync** — Optional native manifest sidecar sync for server-managed sub-agents. Local sub-agent files load before server-feed files so user-authored definitions always win. ([#1539](https://github.com/netclaw-dev/netclaw/pull/1539))
 
 **Bug Fixes**
 
-* **Environment-variable-only configuration** — Fixed doctor misdiagnosis and OAuth config-file side effect that prevented daemon startup when configuration is supplied entirely via environment variables. ([#1569](https://github.com/netclaw-dev/netclaw/pull/1569))
+* **Systemd shell tool PATH** — Fixed: daemon now captures the operator's full PATH into the systemd EnvironmentFile instead of relying on a hardcoded list. ([#1565](https://github.com/netclaw-dev/netclaw/pull/1565))
 
-* **Remote daemon CLI** — Fixed: CLI no longer demands a local daemon config file when the daemon is explicitly configured as remote. ([#1567](https://github.com/netclaw-dev/netclaw/pull/1567))
+**Memory**
 
-**Dependency Updates**
-
-* **Bump Anthropic SDK** — 12.34.1 → 12.35.1. ([#1561](https://github.com/netclaw-dev/netclaw/pull/1561))
-
-* **Bump Akka group** — Akka.Cluster.Sharding and Akka.Persistence 1.5.69 → 1.5.70. ([#1560](https://github.com/netclaw-dev/netclaw/pull/1560))</PackageReleaseNotes>
+* **Shared curation evaluator** — Unified curation logic across both memory write pipelines so they can never diverge again. ([#1575](https://github.com/netclaw-dev/netclaw/pull/1575))
+* **Memory audit quick wins** — July 2026 audit: revived curation LLM, balanced prompt, and recall precision re-tune. ([#1568](https://github.com/netclaw-dev/netclaw/pull/1568))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
