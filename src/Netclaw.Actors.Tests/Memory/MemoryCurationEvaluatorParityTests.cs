@@ -261,6 +261,66 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         Assert.Contains("auto-resolved", decision.Reason);
     }
 
+    // ── Nominator-present parity (memory-core-redesign Slice 3 Stage B) ──
+
+    /// <summary>
+    /// Extends the parity contract to the embedding kNN nominator (task 3.1): both evaluator
+    /// constructions — actor-style (<see cref="ILoggingAdapter"/>) and engine-style
+    /// (<see cref="ILogger"/>) — must reach the SAME forced-LLM decision when a nominee fires,
+    /// sharing one <see cref="MemoryEmbedderHolder"/> and <see cref="MemoryVectorIndexHolder"/>
+    /// exactly as <see cref="EvaluateOnBothAsync"/> shares one <see cref="SQLiteMemoryStore"/>.
+    /// </summary>
+    [Fact]
+    public async Task NomineePresent_returns_identical_forced_LLM_decision_on_both_paths()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+
+        const string existingBody = "The build pipeline stores intermediate render artifacts in a graphite-backed cache layer.";
+        var anchor = _store.CreateDefaultAnchor("graphite-render-cache");
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-existing",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Existing",
+            MarkdownBody: existingBody,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: 1000,
+            ExpiresAtMs: null,
+            CreatedAtMs: 1000,
+            UpdatedAtMs: 1000), ct);
+        await _store.UpsertEmbeddingAsync(
+            "doc-existing", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model", "hash-existing",
+            new float[] { 1f, 0f }, ct);
+
+        var operation = MakeOperation(
+            "sunfish-deploy-queue", "Deployment jobs wait in a queue before promotion to production.", freshnessAtMs: 2000);
+
+        var embedderHolder = new MemoryEmbedderHolder(
+            new ScriptedEmbedder("test-nominator-model", dimensions: 2, [0.93f, 0.367623f]));
+        var vectorIndexHolder = new MemoryVectorIndexHolder(_store);
+
+        var actorLike = new MemoryCurationEvaluator(
+            _store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig(),
+            new ScriptedCurationChatClient("SKIP"), embedderHolder, vectorIndexHolder);
+        var engineLike = new MemoryCurationEvaluator(
+            _store, (ILogger)NullLogger.Instance, new MemoryCurationConfig(),
+            new ScriptedCurationChatClient("SKIP"), embedderHolder, vectorIndexHolder);
+
+        var fromActor = (await actorLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
+        var fromEngine = (await engineLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
+
+        AssertSameDecision(fromActor, fromEngine);
+        Assert.True(fromActor.FromLlmTier);
+        Assert.Equal(CurationDecisionKind.Skip, fromActor.Kind);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────
 
     private async Task<(CurationDecision FromActor, CurationDecision FromEngine)> EvaluateOnBothAsync(
@@ -368,5 +428,26 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         public void Dispose()
         {
         }
+    }
+
+    /// <summary>
+    /// Fake embedder that ignores its input text and always returns the same hand-crafted query
+    /// vector — sufficient for <see cref="NomineePresent_returns_identical_forced_LLM_decision_on_both_paths"/>,
+    /// which embeds at most one proposal per evaluator.
+    /// </summary>
+    private sealed class ScriptedEmbedder(string modelId, int dimensions, float[] queryVector) : IMemoryEmbedder
+    {
+        public string ModelId => modelId;
+
+        public int Dimensions => dimensions;
+
+        public bool IsAvailable => true;
+
+        public ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, CancellationToken ct)
+            => ValueTask.FromResult<ReadOnlyMemory<float>>(queryVector);
+
+        public ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(
+                texts.Select(_ => (ReadOnlyMemory<float>)queryVector).ToList());
     }
 }
