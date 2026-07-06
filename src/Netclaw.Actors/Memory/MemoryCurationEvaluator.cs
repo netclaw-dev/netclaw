@@ -21,7 +21,7 @@ namespace Netclaw.Actors.Memory;
 /// <c>curation_nominator_degraded</c>, <c>curation_nominee_no_llm_decision</c>,
 /// <c>curation_llm_decision</c>, <c>curation_llm_no_decision</c>, <c>curation_llm_timeout</c>,
 /// <c>curation_llm_error</c>, <c>curation_ambiguous_auto_resolved</c>,
-/// <c>curation_ambiguous_create_fallback</c>,
+/// <c>curation_ambiguous_create_fallback</c>, <c>curation_guard_fallthrough</c>,
 /// <c>curation_skip</c>/<c>_update</c>/<c>_consolidate</c>/<c>_create</c>,
 /// <c>curation_reanchor</c>, <c>curation_tombstone_anchor</c>) regardless of which of the
 /// two callers is driving the evaluator: the inline per-session actor
@@ -79,23 +79,47 @@ internal sealed class MicrosoftCurationLog(ILogger log) : ICurationLog
 /// Decision flow (<see cref="EvaluateAsync"/>): immutable records bypass evaluation; fuzzy
 /// anchor candidates are queried; on an exact anchor match, the deterministic fast path
 /// (<see cref="CurationRulesEvaluator.Evaluate"/>'s <c>EvaluateExactMatch</c>) decides Skip/Update
-/// with no further evidence gathering. Otherwise, the embedding kNN nominator (memory-core-
-/// redesign Slice 3 Stage B, task 3.1, design D4) queries <see cref="MemoryVectorIndex.TopK"/>
-/// when the embedder is available: <b>any nominee forces the decision to the LLM tier</b>,
-/// regardless of what the lexical rules tier would have decided — the May 2026 measurement
-/// (<c>docs/research/memory-recall-findings-2026-05.md</c>; corroborated at corpus scale in
-/// <c>docs/research/memory-audit-2026-07.md</c> §5) found no cosine threshold that separates true
-/// duplicates from merely-related siblings, so cosine similarity is nomination evidence ONLY —
-/// it never auto-merges and never auto-skips. When no nominee fires (or the embedder is
-/// unavailable, in which case the pre-Slice-3 lexical content-term search runs instead as an
-/// explicitly-logged degraded path), <see cref="CurationRulesEvaluator.Evaluate"/> runs the
-/// deterministic tier as before; an Ambiguous result escalates to the LLM tier (when available)
-/// followed by <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else falls back to
-/// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create default.
-/// <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that should
-/// be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
+/// with no further evidence gathering — UNLESS that Update is downgraded by
+/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> (see "Guard fall-through" below),
+/// in which case evidence gathering resumes rather than terminating. Otherwise, the embedding
+/// kNN nominator (memory-core-redesign Slice 3 Stage B, task 3.1, design D4) queries
+/// <see cref="MemoryVectorIndex.TopK"/> when the embedder is available: <b>any nominee forces the
+/// decision to the LLM tier</b>, regardless of what the lexical rules tier would have decided —
+/// the May 2026 measurement (<c>docs/research/memory-recall-findings-2026-05.md</c>; corroborated
+/// at corpus scale in <c>docs/research/memory-audit-2026-07.md</c> §5) found no cosine threshold
+/// that separates true duplicates from merely-related siblings, so cosine similarity is
+/// nomination evidence ONLY — it never auto-merges and never auto-skips. When no nominee fires
+/// (or the embedder is unavailable, in which case the pre-Slice-3 lexical content-term search
+/// runs instead as an explicitly-logged degraded path), <see cref="CurationRulesEvaluator.Evaluate"/>
+/// runs the deterministic tier as before; an Ambiguous result escalates to the LLM tier (when
+/// available) followed by <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else
+/// falls back to <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create
+/// default. <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that
+/// should be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
 /// effects — this mapping is unified too, since a second, hand-copied switch statement per
 /// caller is exactly the kind of divergence this slice removes.
+///
+/// <para>
+/// <b>Guard fall-through (memory-core-redesign, July 2026 audit finding, eval run
+/// <c>ad9a2312</c>):</b> when the exact-anchor deterministic path picks Update and
+/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> downgrades it to Skip because the
+/// proposal would not preserve the target's content, that Skip must NOT be returned as the final
+/// decision — an explicit <c>store_memory</c> proposal silently ending as a no-op (no write, no
+/// further evidence gathering) is a silent-fallback violation, observed when an LLM-emitted junk
+/// anchor (e.g. the bare stopword <c>the</c>) collided with an unrelated existing document sharing
+/// the same junk anchor text. The guard's protective effect is correct and must be kept — the
+/// mismatched target must never be overwritten — but the correct response to "this anchor match
+/// doesn't apply" is to re-run evaluation exactly as if there had been no exact anchor match at
+/// all: every candidate that carried <c>IsExactAnchorMatch</c> is demoted to an ordinary fuzzy
+/// candidate (so the rules tier cannot re-derive the same Update/guard-reject pair and loop), then
+/// the embedding nominator / lexical content-term search that the exact-match fast path had
+/// short-circuited runs for the first time, followed by the usual rules-tier/LLM-tier/auto-resolve
+/// chain with a Create default. This is deliberately NOT a fix to anchor-name hygiene — junk
+/// anchors like <c>the</c> should arguably never be stored or fuzzy-matched at all, but filtering
+/// them is a broader behavior change to anchor matching left as a follow-up; this fall-through
+/// fixes the narrower "explicit store becomes a silent no-op" failure regardless of why the guard
+/// rejected the match.
+/// </para>
 ///
 /// Guard-validated write routing (memory-core-redesign Slice 3, design D5): an LLM-tier
 /// UPDATE/CONSOLIDATE decision (<see cref="CurationDecision.FromLlmTier"/>) never overwrites
@@ -221,12 +245,38 @@ public sealed class MemoryCurationEvaluator
         // Build a mutable candidate list — content search may add more candidates below.
         var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
 
+        return await EvaluateCandidatesAsync(
+            operation, sessionId, candidates, anchorCandidates.Any(c => c.IsExactAnchorMatch), ct);
+    }
+
+    /// <summary>
+    /// The evaluation body proper, factored out of <see cref="EvaluateAsync"/> so the guard
+    /// fall-through case (see this class's remarks) can re-run the same evidence-gathering and
+    /// decision chain a second time with <paramref name="hasExactAnchorMatch"/> forced false —
+    /// exactly as if the anchor query at the top of <see cref="EvaluateAsync"/> had found no
+    /// exact match — without re-querying the store for anchors a second time.
+    /// </summary>
+    private async Task<CurationEvaluation> EvaluateCandidatesAsync(
+        SQLiteMemoryCurationOperation operation,
+        SessionId sessionId,
+        List<ExistingMemoryCandidate> candidates,
+        bool hasExactAnchorMatch,
+        CancellationToken ct)
+    {
         // Embedding kNN nomination (memory-core-redesign Slice 3 Stage B, task 3.1, design D4)
         // vs. the pre-Slice-3 lexical content-term search: these are alternatives, not additive.
         // An exact anchor match already resolves deterministically below with no further
         // evidence gathering (the "existing exact-anchor deterministic fast path" design D4
-        // calls out as unchanged), so neither runs in that case.
-        var hasExactAnchorMatch = anchorCandidates.Any(c => c.IsExactAnchorMatch);
+        // calls out as unchanged), so neither runs in that case — unless the guard fall-through
+        // below re-invokes this method with hasExactAnchorMatch forced false, in which case this
+        // runs for the first time for this proposal.
+        //
+        // Captured before any mutation below: on the first (normal) call this is exactly the
+        // anchor-name-fuzzy-match hit count `curation_dual_search` below reports; on a guard
+        // fall-through re-entry it is that same anchor-hit count with the rejected match(es)
+        // demoted rather than removed, which is the correct "anchor_hits" figure for this pass
+        // either way (no nomination/content-search candidates have been merged in yet).
+        var anchorHitCount = candidates.Count;
         if (!hasExactAnchorMatch)
         {
             var embedder = _embedderHolder?.Current;
@@ -308,7 +358,7 @@ public sealed class MemoryCurationEvaluator
                             _log.Debug(
                                 "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
                                 operation.AnchorCanonicalName,
-                                anchorCandidates.Count,
+                                anchorHitCount,
                                 contentCandidates.Count,
                                 candidates.Count);
                         }
@@ -409,9 +459,38 @@ public sealed class MemoryCurationEvaluator
                 candidates);
         }
 
-        return new CurationEvaluation(
-            CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates),
-            candidates);
+        var guardedDecision = CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates);
+
+        // Guard fall-through (see this class's remarks): the ONLY decision shape
+        // GuardDestructiveUpdate ever changes is Update -> Skip, and Update can only be
+        // produced by the exact-anchor deterministic fast path (CurationRulesEvaluator's fuzzy
+        // tier never returns Update) — so this downgrade is only reachable when
+        // hasExactAnchorMatch was true for this call. Terminating on that Skip would silently
+        // drop an explicit proposal with no further evidence gathering (the July 2026 audit
+        // bug); instead, demote every exact-anchor-matched candidate to an ordinary fuzzy
+        // candidate and re-run the full evaluation chain as if there had been no exact anchor
+        // match at all. The demotion is what keeps this from looping: with no candidate left
+        // claiming IsExactAnchorMatch, CurationRulesEvaluator.Evaluate cannot re-derive the same
+        // Update decision on the re-run, so this branch cannot fire twice for one proposal.
+        if (hasExactAnchorMatch
+            && rulesDecision.Kind == CurationDecisionKind.Update
+            && guardedDecision.Kind == CurationDecisionKind.Skip)
+        {
+            _log.Warning(
+                "curation_guard_fallthrough anchor={0} rejectedTarget={1}",
+                operation.AnchorCanonicalName,
+                guardedDecision.TargetDocumentId ?? "(unknown)");
+
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].IsExactAnchorMatch)
+                    candidates[i] = candidates[i] with { IsExactAnchorMatch = false };
+            }
+
+            return await EvaluateCandidatesAsync(operation, sessionId, candidates, hasExactAnchorMatch: false, ct);
+        }
+
+        return new CurationEvaluation(guardedDecision, candidates);
     }
 
     /// <summary>

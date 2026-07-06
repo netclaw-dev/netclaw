@@ -175,10 +175,19 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         Assert.Equal(CurationDecisionKind.Create, fromActor.Kind);
     }
 
-    // ── guard downgrade: Update whose proposal drops existing body -> Skip ──
+    // ── guard downgrade: Update whose proposal drops existing body -> falls through ──
 
+    /// <summary>
+    /// Guard-fallthrough fix (July 2026 audit, eval run <c>ad9a2312</c>): before this fix, a
+    /// guard-rejected anchor-matched Update terminated as Skip — an explicit proposal silently
+    /// becoming a no-op with zero writes. No other candidate exists in this store for the
+    /// fallen-through content search or embedding nominator (both unavailable/empty here) to
+    /// find, so the terminal decision is the Create default the flow's remarks document — NOT
+    /// the old Skip. This is the same fixture <c>GuardDowngrade_narrowerProposal_downgradesUpdateToSkip_identically</c>
+    /// used pre-fix (renamed here since Skip was exactly the bug).
+    /// </summary>
     [Fact]
-    public async Task GuardDowngrade_narrowerProposal_downgradesUpdateToSkip_identically()
+    public async Task GuardDowngrade_narrowerProposal_noOtherCandidates_fallsThroughToCreate_identically()
     {
         var ct = TestContext.Current.CancellationToken;
         await _store.InitializeAsync(ct);
@@ -189,17 +198,167 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             freshnessAtMs: 1000,
             ct);
 
-        // Newer, but narrower — the rules tier would pick Update (exact anchor, low
-        // overlap, fresher), and GuardDestructiveUpdate must downgrade it on BOTH paths
-        // now (audit finding D14: this guard used to run only on the inline actor path).
+        // Newer, but narrower — the rules tier would pick Update (exact anchor, low overlap,
+        // fresher), and GuardDestructiveUpdate downgrades it on BOTH paths (audit finding D14:
+        // this guard used to run only on the inline actor path). Pre-fix, that downgrade was
+        // returned as the terminal Skip decision — the silent-fallback bug. Post-fix, the guard
+        // rejection triggers a fall-through re-evaluation (no exact anchor match, nomination/
+        // content search run for the first time, rules tier re-runs as pure fuzzy) which here
+        // finds nothing else to match against and lands on Create.
         var operation = MakeOperation("widget-specs", "Widget pricing is TBD as of Q2.", freshnessAtMs: 2000);
 
         var (fromActor, fromEngine) = await EvaluateOnBothAsync(operation, ct);
 
         AssertSameDecision(fromActor, fromEngine);
+        Assert.Equal(CurationDecisionKind.Create, fromActor.Kind);
+        Assert.Contains("fuzzy anchor match but low content overlap", fromActor.Reason);
+    }
+
+    /// <summary>
+    /// Regression companion to the Create case above: when the guard-rejected proposal IS close
+    /// enough in content to the anchor target to clear the deterministic auto-resolve thresholds
+    /// (<see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/>'s 60% content-overlap / 50%
+    /// anchor-Jaccard bars) once re-evaluated as an ordinary fuzzy candidate, the fall-through
+    /// must NOT force Create — it must let the normal ambiguous/auto-resolve machinery decide,
+    /// which correctly lands on Skip here. This proves the fix doesn't trade "always drops the
+    /// fact" for "never skips a real duplicate" — the fall-through defers to whatever the rest of
+    /// the flow genuinely produces.
+    /// </summary>
+    [Fact]
+    public async Task GuardDowngrade_contentCloseEnoughToAutoResolve_fallsThroughToLegitimateSkip_identically()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+        await SeedDocumentAsync(
+            "widget-specs",
+            "doc-widget",
+            "Widget specs: 16 cores, 64GB RAM, 2 NICs. Warranty is 3 years from Acme Corp in Denver.",
+            freshnessAtMs: 1000,
+            ct);
+
+        // Reworded/reordered restatement of the SAME facts: word-level overlap is ~62% (inside
+        // the exact-match tier's Update band, ≤80%) but GuardDestructiveUpdate's stricter
+        // substring-containment check fails (the words are reordered, not a literal superset),
+        // so the guard still rejects. Re-evaluated as a fuzzy candidate after fall-through, that
+        // same ~62% overlap clears TryAutoResolveAmbiguous's 60% content / 100% anchor-Jaccard
+        // (identical anchor name) thresholds, so this is genuine skip territory rather than the
+        // guard's blunt termination.
+        var operation = MakeOperation(
+            "widget-specs",
+            "Acme Corp widget in Denver: 2 NICs, 64GB RAM, 16 cores, and a 3 year warranty included.",
+            freshnessAtMs: 2000);
+
+        var (fromActor, fromEngine) = await EvaluateOnBothAsync(operation, ct);
+
+        AssertSameDecision(fromActor, fromEngine);
         Assert.Equal(CurationDecisionKind.Skip, fromActor.Kind);
-        Assert.Contains("update guarded", fromActor.Reason);
+        Assert.Contains("auto-resolved", fromActor.Reason);
         Assert.Equal("doc-widget", fromActor.TargetDocumentId);
+    }
+
+    /// <summary>
+    /// Asserts the structured <c>curation_guard_fallthrough</c> marker fires with the rejected
+    /// anchor and target — the July 2026 audit tooling greps daemon logs for this exact string
+    /// (per this class's remarks), so the marker itself is a load-bearing observability
+    /// contract, not incidental.
+    /// </summary>
+    [Fact]
+    public async Task GuardDowngrade_logsStructuredFallthroughMarker()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+        await SeedDocumentAsync(
+            "widget-specs",
+            "doc-widget",
+            "Widget specs: 16 cores, 64GB RAM, 2 NICs. Pricing on file. Vendor contacts listed.",
+            freshnessAtMs: 1000,
+            ct);
+
+        var operation = MakeOperation("widget-specs", "Widget pricing is TBD as of Q2.", freshnessAtMs: 2000);
+
+        var recordingLogger = new RecordingLogger();
+        var evaluator = new MemoryCurationEvaluator(_store, (ILogger)recordingLogger, new MemoryCurationConfig());
+
+        var evaluation = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
+
+        Assert.Equal(CurationDecisionKind.Create, evaluation.Decision.Kind);
+        Assert.Contains(
+            recordingLogger.Entries,
+            e => e.Contains("curation_guard_fallthrough", StringComparison.Ordinal)
+                 && e.Contains("widget-specs", StringComparison.Ordinal)
+                 && e.Contains("doc-widget", StringComparison.Ordinal));
+    }
+
+    // ── guard downgrade + nominator: near-dupe elsewhere still forces the LLM tier ──
+
+    /// <summary>
+    /// A guard-rejected anchor Update must not merely fall through to Create/auto-resolve when a
+    /// real embedding nominee is available — the fall-through re-runs nomination (this proposal's
+    /// exact anchor match previously short-circuited it entirely, so it had never run at all), and
+    /// a nominee at or above <see cref="MemoryCurationConfig.NominatorSimilarityThreshold"/> must
+    /// still force the LLM tier exactly as it would for a proposal with no anchor match in the
+    /// first place (design D4: cosine nominates, it never auto-decides).
+    /// </summary>
+    [Fact]
+    public async Task GuardDowngrade_withNominatorNearDupe_forcesLlmTier_identically()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+
+        // Same anchor-collision shape as the eval-run repro: an exact anchor match whose content
+        // is unrelated to the proposal (guard will reject the Update), PLUS a real near-duplicate
+        // elsewhere in the store that only the embedding nominator — never run on the first pass
+        // because the exact anchor match short-circuited it — can find.
+        await SeedDocumentAsync(
+            "the",
+            "doc-unrelated-junk-anchor",
+            "Unrelated content that happens to share the same junk anchor name.",
+            freshnessAtMs: 1000,
+            ct);
+
+        const string nearDupeBody = "The build pipeline stores intermediate render artifacts in a graphite-backed cache layer.";
+        var nearDupeAnchor = _store.CreateDefaultAnchor("graphite-render-cache");
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-near-dupe",
+            Anchor: nearDupeAnchor,
+            MemoryClass: "durable_fact",
+            Title: "Existing near-dupe",
+            MarkdownBody: nearDupeBody,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: 1000,
+            ExpiresAtMs: null,
+            CreatedAtMs: 1000,
+            UpdatedAtMs: 1000), ct);
+        await _store.UpsertEmbeddingAsync(
+            "doc-near-dupe", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model", "hash-near-dupe",
+            new float[] { 1f, 0f }, ct);
+
+        var operation = MakeOperation(
+            "the", "Deployment jobs wait in a queue before promotion to production.", freshnessAtMs: 2000);
+
+        var embedderHolder = new MemoryEmbedderHolder(
+            new ScriptedEmbedder("test-nominator-model", dimensions: 2, [0.93f, 0.367623f]));
+        var vectorIndexHolder = new MemoryVectorIndexHolder(_store);
+
+        var actorLike = new MemoryCurationEvaluator(
+            _store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig(),
+            new ScriptedCurationChatClient("SKIP"), embedderHolder, vectorIndexHolder);
+        var engineLike = new MemoryCurationEvaluator(
+            _store, (ILogger)NullLogger.Instance, new MemoryCurationConfig(),
+            new ScriptedCurationChatClient("SKIP"), embedderHolder, vectorIndexHolder);
+
+        var fromActor = (await actorLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
+        var fromEngine = (await engineLike.EvaluateAsync(operation, TestSessionId, ct)).Decision;
+
+        AssertSameDecision(fromActor, fromEngine);
+        Assert.True(fromActor.FromLlmTier);
+        Assert.Equal(CurationDecisionKind.Skip, fromActor.Kind);
     }
 
     // ── LLM tier: parseable decision ─────────────────────────────────
@@ -449,5 +608,26 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         public ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(
                 texts.Select(_ => (ReadOnlyMemory<float>)queryVector).ToList());
+    }
+
+    /// <summary>
+    /// Records every log line emitted through the Microsoft.Extensions.Logging ctor path, so the
+    /// <c>curation_guard_fallthrough</c> marker can be asserted directly rather than only
+    /// inferred from the resulting decision shape. Mirrors
+    /// <c>MemoryCurationNominatorTests.RecordingLogger</c> (kept as a separate private copy per
+    /// that file's own convention for test-only doubles).
+    /// </summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add(formatter(state, exception));
     }
 }
