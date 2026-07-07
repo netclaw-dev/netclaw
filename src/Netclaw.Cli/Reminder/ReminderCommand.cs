@@ -60,6 +60,7 @@ internal static class ReminderCommand
             "show" => await RunShowAsync(daemonApi, args),
             "history" => await RunHistoryAsync(daemonApi, args),
             "status" => await RunStatusAsync(daemonApi, args),
+            "run" => await RunRunAsync(daemonApi, args),
             _ => WriteHelp()
         };
     }
@@ -531,16 +532,18 @@ internal static class ReminderCommand
             }
 
             const int colFiredAt = 25;
+            const int colSource = 10;
             const int colStatus = 8;
             const int colDuration = 12;
 
-            Console.WriteLine($"{"fired_at",-colFiredAt}  {"status",-colStatus}  {"duration_ms",-colDuration}  session_id");
-            Console.WriteLine(new string('-', colFiredAt + colStatus + colDuration + 34));
+            Console.WriteLine($"{"fired_at",-colFiredAt}  {"source",-colSource}  {"status",-colStatus}  {"duration_ms",-colDuration}  session_id");
+            Console.WriteLine(new string('-', colFiredAt + colSource + colStatus + colDuration + 36));
 
             foreach (var r in records)
             {
                 var status = r.Success ? "ok" : "failed";
-                Console.WriteLine($"{r.FiredAt:u,-colFiredAt}  {status,-colStatus}  {r.DurationMs,-colDuration}  {r.SessionId}");
+                var source = r.Source.ToString().ToLowerInvariant();
+                Console.WriteLine($"{r.FiredAt:u,-colFiredAt}  {source,-colSource}  {status,-colStatus}  {r.DurationMs,-colDuration}  {r.SessionId}");
             }
 
             return 0;
@@ -608,11 +611,55 @@ internal static class ReminderCommand
                 {
                     var outcome = r.Success ? "ok" : "failed";
                     var err = string.IsNullOrEmpty(r.ErrorMessage) ? "" : $" — {r.ErrorMessage}";
-                    Console.WriteLine($"  {r.FiredAt:u}  {outcome}{err}");
+                    var source = r.Source.ToString().ToLowerInvariant();
+                    Console.WriteLine($"  {r.FiredAt:u}  {source}  {outcome}{err}");
                 }
             }
 
             return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunRunAsync(DaemonApi api, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder run <id>");
+            return 1;
+        }
+
+        var id = args[2];
+
+        try
+        {
+            using var response = await api.RunReminderAsync(id);
+            var json = await response.Content.ReadAsStringAsync();
+            var result = string.IsNullOrWhiteSpace(json)
+                ? default
+                : JsonSerializer.Deserialize<JsonElement>(json);
+
+            if (response.IsSuccessStatusCode)
+            {
+                if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("message", out var msg))
+                    Console.WriteLine(msg.GetString());
+                else
+                    Console.WriteLine($"Reminder '{id}' run started.");
+                return 0;
+            }
+
+            if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("error", out var err))
+                Console.Error.WriteLine($"[FAIL] {err.GetString()}");
+            else if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("detail", out var detail))
+                Console.Error.WriteLine($"[FAIL] {detail.GetString()}");
+            else
+                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+            return 1;
         }
         catch (Exception ex)
         {
@@ -648,6 +695,7 @@ internal static class ReminderCommand
         Console.WriteLine("  show <id>                                     Show reminder details");
         Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
         Console.WriteLine("  status <id>                                   Show operational status: failures, skipped fires, in-flight");
+        Console.WriteLine("  run <id>                                      Run an enabled reminder immediately");
         Console.WriteLine();
         Console.WriteLine("Create options:");
         Console.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");

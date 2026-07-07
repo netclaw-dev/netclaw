@@ -91,11 +91,54 @@ public class ReminderHistoryStoreTests : IDisposable
         Assert.Equal("session-4", records[2].SessionId);
     }
 
-    private static HistoryRecord MakeRecord(bool success, string? sessionId = null) =>
+    [Fact]
+    public async Task Append_persists_execution_source()
+    {
+        await _store.AppendAsync(TestId, MakeRecord(true, source: ReminderExecutionSource.Manual));
+
+        var records = await _store.ReadAsync(TestId, 10);
+
+        Assert.Single(records);
+        Assert.Equal(ReminderExecutionSource.Manual, records[0].Source);
+    }
+
+    [Fact]
+    public async Task Append_writes_lowercase_source_wire_value()
+    {
+        await _store.AppendAsync(TestId, MakeRecord(true, source: ReminderExecutionSource.Manual));
+
+        var paths = new NetclawPaths(_dir.Path);
+        var path = Path.Combine(paths.RemindersDirectory, $"{Uri.EscapeDataString(TestId.Value)}.history.jsonl");
+        var json = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"source\":\"manual\"", json);
+        Assert.DoesNotContain("\"source\":\"Manual\"", json);
+    }
+
+    [Fact]
+    public async Task Read_defaults_legacy_record_without_source_to_scheduled()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        var path = Path.Combine(paths.RemindersDirectory, $"{Uri.EscapeDataString(TestId.Value)}.history.jsonl");
+        await File.WriteAllTextAsync(path,
+            "{\"firedAt\":\"2026-01-01T00:00:00+00:00\",\"success\":true,\"durationMs\":42,\"sessionId\":\"reminder/test-reminder/123\",\"errorMessage\":null}\n",
+            TestContext.Current.CancellationToken);
+
+        var records = await _store.ReadAsync(TestId, 10);
+
+        Assert.Single(records);
+        Assert.Equal(ReminderExecutionSource.Scheduled, records[0].Source);
+    }
+
+    private static HistoryRecord MakeRecord(
+        bool success,
+        string? sessionId = null,
+        ReminderExecutionSource source = ReminderExecutionSource.Scheduled) =>
         new(
-            FiredAt: DateTimeOffset.UtcNow,
+            FiredAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
             Success: success,
             DurationMs: 1234,
             SessionId: sessionId ?? "reminder/test-reminder/1234567890",
-            ErrorMessage: success ? null : "test error");
+            ErrorMessage: success ? null : "test error",
+            Source: source);
 }

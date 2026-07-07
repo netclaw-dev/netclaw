@@ -54,6 +54,36 @@ netclaw reminder cancel <id>     # disable, keep definition
 netclaw reminder delete <id>     # permanent delete + history
 ```
 
+To run an enabled reminder immediately without changing its schedule, use:
+
+```
+netclaw reminder run <id>
+```
+
+Manual runs go through the same execution pipeline and write normal history with
+`source=manual`, but they do not reschedule cron reminders, consume one-shot
+occurrences, or count toward scheduled consecutive-failure auto-disable. The
+daemon rejects manual runs when scheduling is disabled, the reminder is missing
+or disabled, the recurring reminder has expired, the same reminder is already
+executing, or the global reminder execution limit is full.
+
+After creating a reminder, decide whether to offer an immediate fire-now run:
+
+- **Never offer it for `delivery_kind=current_session`.** Those reminders are
+  conversational check-backs in the active session, not unattended execution.
+- **Offer it for complex out-of-session reminders** — `delivery_kind=channel` or
+  `none` with shell commands, subagents, external APIs, channel delivery,
+  state/dedup files, or pre-approved verbs. Ask plainly: "This reminder has a few
+  moving parts. Want me to run it once now with `netclaw reminder run <id>` so we
+  can exercise the autonomous path before the scheduled fire?"
+- **Do not call it a simulated dry run.** `netclaw reminder run <id>` performs a
+  real execution through the reminder pipeline. Warn the user if the reminder may
+  post to a channel, write files, call external services, or mutate state.
+- **Do not promise approval collection.** Current unattended reminder executions
+  cannot route approval prompts back to a live operator. A manual fire-now run can
+  expose missing approvals by failing visibly, but it does not solve unattended
+  approval escalation.
+
 Reminders that hit 5 consecutive execution failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
 operator can diagnose and re-enable after fixing the root cause.

@@ -133,6 +133,7 @@ The agent and CLI SHALL support:
 - Pause/resume individual tasks
 - Delete tasks
 - Show execution history for a task
+- Trigger an existing task to run immediately via CLI for testing and debugging
 
 ### SCHED-006 Tool Grants
 
@@ -156,7 +157,6 @@ Deferred to Phase 2.
 
 - Event triggers (fire on channel message matching regex)
 - Webhook triggers (fire on incoming POST)
-- Manual triggers (fire via CLI only)
 - One-shot scheduled tasks (fire once at a specific time)
 - Per-routine persistent state (JSON blob per task)
 - Heartbeat system
@@ -171,6 +171,8 @@ Deferred to Phase 2.
 6. Tasks with ungrantable tools are rejected at creation.
 7. Consecutive failures pause the task and notify the operator.
 8. Max concurrent execution limit is enforced.
+9. CLI can trigger an enabled scheduled task to run immediately without changing
+   its existing schedule.
 
 ## Cross-References
 

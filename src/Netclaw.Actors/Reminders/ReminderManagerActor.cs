@@ -82,6 +82,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<DeleteReminderCommand>(HandlePermanentDeleteAsync);
         ReceiveAsync<DisableReminderCommand>(HandleDisableAsync);
         ReceiveAsync<EnableReminderCommand>(HandleEnableAsync);
+        ReceiveAsync<RunReminderNowCommand>(HandleRunNowAsync);
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
         ReceiveAsync<GetReminderCommand>(HandleGetAsync);
 
@@ -541,6 +542,77 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
     }
 
+    private Task HandleRunNowAsync(RunReminderNowCommand cmd)
+    {
+        var replyTo = Sender;
+
+        ReminderRunNowResponse Reject(ReminderRunNowError error, string message) =>
+            new(cmd.Id, Accepted: false, Error: error, ErrorMessage: message);
+
+        if (cmd.Authorization?.SourceAudience is null)
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.Unauthorized,
+                "Running a reminder requires Operator authority."));
+            return Task.CompletedTask;
+        }
+
+        if (!_schedulingConfig.Enabled)
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.SchedulingDisabled,
+                "Scheduling is disabled; reminders cannot be run manually."));
+            return Task.CompletedTask;
+        }
+
+        var definition = _definitionStore.Get(cmd.Id);
+        if (definition is null)
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.NotFound,
+                $"Reminder '{cmd.Id.Value}' was not found."));
+            return Task.CompletedTask;
+        }
+
+        if (!definition.Enabled)
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.Disabled,
+                $"Reminder '{cmd.Id.Value}' is disabled."));
+            return Task.CompletedTask;
+        }
+
+        if (definition.Schedule.Type is not ReminderScheduleType.OneShot
+            && definition.ExpiresAt is { } expiresAt
+            && expiresAt <= _timeProvider.GetUtcNow())
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.Expired,
+                $"Reminder '{cmd.Id.Value}' expired at {expiresAt:u}."));
+            return Task.CompletedTask;
+        }
+
+        if (_activeExecutions.IsExecuting(cmd.Id))
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.AlreadyExecuting,
+                $"Reminder '{cmd.Id.Value}' is already executing."));
+            return Task.CompletedTask;
+        }
+
+        if (_activeExecutions.Count >= MaxConcurrentExecutions)
+        {
+            replyTo.Tell(Reject(
+                ReminderRunNowError.Busy,
+                "The reminder execution limit is full; retry when an active reminder completes."));
+            return Task.CompletedTask;
+        }
+
+        StartExecution(definition, ReminderExecutionSource.Manual);
+        replyTo.Tell(new ReminderRunNowResponse(cmd.Id, Accepted: true));
+        return Task.CompletedTask;
+    }
+
     private async Task HandleReminderFiredAsync(ReminderEnvelope<ReminderPayload> envelope)
     {
         if (!_schedulingConfig.Enabled)
@@ -586,6 +658,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         if (_activeExecutions.IsExecuting(reminderId))
         {
+            if (definition.Schedule.Type == ReminderScheduleType.OneShot
+                && _activeExecutions.TryGetSource(reminderId, out var activeSource)
+                && activeSource == ReminderExecutionSource.Manual)
+            {
+                if (!_deferredQueue.Contains(reminderId))
+                    _deferredQueue.Enqueue(reminderId);
+
+                _log.Info(
+                    "One-shot reminder '{0}' fired while a manual run is active; queued scheduled occurrence behind the manual run.",
+                    reminderId.Value);
+                await _client!.AckAsync(envelope);
+                return;
+            }
+
             RecordSkippedDuplicate(reminderId, definition.Title, "scheduled");
             await _client!.AckAsync(envelope);
             return;
@@ -620,12 +706,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         {
             // CurrentSession: execution actor holds the envelope open and acks
             // itself once the target session has confirmed receipt.
-            StartExecution(definition, envelope);
+            StartExecution(definition, ReminderExecutionSource.Scheduled, envelope);
         }
         else
         {
             // Channel/None: ack envelope eagerly, execution tracks its own success
-            StartExecution(definition);
+            StartExecution(definition, ReminderExecutionSource.Scheduled);
             await _client!.AckAsync(envelope);
         }
     }
@@ -678,8 +764,33 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         if (completed.Success)
         {
-            _failureCounts.Remove(completed.Id);
-            _log.Info("Reminder '{0}' execution completed successfully", completed.Id.Value);
+            if (completed.Source == ReminderExecutionSource.Scheduled)
+                _failureCounts.Remove(completed.Id);
+
+            _log.Info("Reminder '{0}' execution completed successfully source={1}", completed.Id.Value, completed.Source);
+        }
+        else if (completed.Source == ReminderExecutionSource.Manual)
+        {
+            _log.Warning("Manual reminder '{0}' execution failed: {1}", completed.Id.Value, completed.ErrorMessage);
+
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                "reminder.execution.failed",
+                AlertType.ReminderExecutionFailed,
+                $"Manual reminder '{title}' execution failed: {completed.ErrorMessage}",
+                AlertSeverity.Warning,
+                source: completed.Id.Value,
+                context: new Dictionary<string, string>
+                {
+                    ["reminderId"] = completed.Id.Value,
+                    ["title"] = title,
+                    ["error"] = completed.ErrorMessage ?? "unknown",
+                    ["executionSource"] = "manual",
+                }));
+
+            PostFailureNoticeToChannel(
+                definition,
+                $"Manual reminder \"{title}\" failed: {completed.ErrorMessage ?? "unknown error"}");
         }
         else
         {
@@ -752,7 +863,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         // One-shot reminders cannot fire again — soft-delete by disabling.
         // The definition stays on disk so history remains queryable.
         // Startup reconciliation will hard-delete stale disabled one-shots.
-        if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
+        if (completed.Source == ReminderExecutionSource.Scheduled
+            && definition is { Schedule.Type: ReminderScheduleType.OneShot })
         {
             _log.Info("One-shot reminder '{0}' completed, disabling (soft-delete)", completed.Id.Value);
             await DisableReminderInternalAsync(completed.Id);
@@ -839,10 +951,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
     }
 
-    private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
+    private void StartExecution(
+        ReminderDefinition definition,
+        ReminderExecutionSource source,
+        ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         var executionId = Guid.NewGuid();
-        _activeExecutions.Add(definition.Id);
+        _activeExecutions.Add(definition.Id, source);
 
         var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
         var executionActor = Context.ActorOf(
@@ -852,12 +967,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 _pipeline,
                 _timeProvider,
                 _historyStore,
+                source,
                 envelope),
             actorName);
 
         _log.Info(
-            "Started execution actor for reminder '{0}' mode={1}: {2}",
-            definition.Id, envelope is null ? "A" : "B", executionActor.Path);
+            "Started execution actor for reminder '{0}' mode={1} source={2}: {3}",
+            definition.Id, envelope is null ? "A" : "B", source, executionActor.Path);
     }
 
     private async Task ProcessDeferredQueueAsync()
@@ -885,7 +1001,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 continue;
             }
 
-            StartExecution(definition);
+            StartExecution(definition, ReminderExecutionSource.Scheduled);
         }
     }
 

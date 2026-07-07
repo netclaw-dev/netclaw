@@ -395,6 +395,109 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.Empty(_testActor.ReceivedMessages);
     }
 
+    [Fact]
+    public async Task NonOperator_POST_reminders_run_returns_403_and_actor_receives_no_command()
+    {
+        await using var app = await CreateAppAsync(spoofLoopback: false, addNonOperatorScheme: true);
+        var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Add(NonOperatorAuthHandler.HeaderName, NonOperatorAuthHandler.HeaderValue);
+
+        var response = await client.PostAsync(
+            "/api/reminders/non-operator-run/run",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(_testActor.ReceivedMessages);
+    }
+
+    [Fact]
+    public async Task Operator_POST_reminders_run_succeeds_and_actor_receives_RunReminderNowCommand()
+    {
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/api/reminders/run-ok/run",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.True(body.GetProperty("started").GetBoolean());
+        Assert.Contains("run-ok", body.GetProperty("message").GetString());
+
+        var runCmd = _testActor.ReceivedMessages.OfType<RunReminderNowCommand>().FirstOrDefault();
+        Assert.NotNull(runCmd);
+        Assert.Equal("run-ok", runCmd.Id.Value);
+        Assert.Equal(TrustAudience.Personal, runCmd.Authorization?.SourceAudience);
+    }
+
+    [Fact]
+    public async Task POST_reminders_run_surfaces_actor_rejection()
+    {
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/api/reminders/disabled-run/run",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Contains("disabled", body.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        var runCmd = _testActor.ReceivedMessages.OfType<RunReminderNowCommand>().FirstOrDefault();
+        Assert.NotNull(runCmd);
+        Assert.Equal("disabled-run", runCmd.Id.Value);
+        Assert.Equal(TrustAudience.Personal, runCmd.Authorization?.SourceAudience);
+    }
+
+    [Fact]
+    public async Task GET_reminders_history_returns_lowercase_source()
+    {
+        var id = new ReminderId("history-json");
+        var now = _timeProvider.GetUtcNow();
+        _definitionStore.Save(new ReminderDefinition
+        {
+            Id = id,
+            Title = "history-json",
+            Instructions = "check status",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddMinutes(5)
+            },
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        await _historyStore.AppendAsync(id, new HistoryRecord(
+            FiredAt: now,
+            Success: true,
+            DurationMs: 42,
+            SessionId: "reminder/history-json/1",
+            ErrorMessage: null,
+            Source: ReminderExecutionSource.Manual));
+
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        var response = await client.GetAsync(
+            "/api/reminders/history-json/history",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("manual", doc.RootElement[0].GetProperty("source").GetString());
+    }
+
     // ── App factory ──
 
     private async Task<WebApplication> CreateAppAsync(
@@ -543,6 +646,22 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
             {
                 sink.Record(cmd);
                 Sender.Tell(new ReminderStateResponse(cmd.Id, Found: false, Enabled: false));
+            });
+
+            Receive<RunReminderNowCommand>(cmd =>
+            {
+                sink.Record(cmd);
+                if (cmd.Id.Value == "disabled-run")
+                {
+                    Sender.Tell(new ReminderRunNowResponse(
+                        cmd.Id,
+                        Accepted: false,
+                        Error: ReminderRunNowError.Disabled,
+                        ErrorMessage: "Reminder 'disabled-run' is disabled."));
+                    return;
+                }
+
+                Sender.Tell(new ReminderRunNowResponse(cmd.Id, Accepted: true));
             });
         }
     }

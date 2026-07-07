@@ -55,6 +55,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private readonly ReminderDefinition _definition;
     private readonly ReminderHistoryStore _historyStore;
     private readonly TimeProvider _timeProvider;
+    private readonly ReminderExecutionSource _source;
     private readonly ReminderEnvelope<ReminderPayload>? _envelope;
     private readonly ILoggingAdapter _log;
     private readonly DateTimeOffset _dispatchedAt;
@@ -77,8 +78,9 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         ISessionPipeline pipeline,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore,
+        ReminderExecutionSource source,
         ReminderEnvelope<ReminderPayload>? envelope = null) =>
-        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, timeProvider, historyStore, envelope));
+        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, timeProvider, historyStore, source, envelope));
 
     public ReminderExecutionActor(
         Guid executionId,
@@ -86,12 +88,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         ISessionPipeline pipeline,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore,
+        ReminderExecutionSource source,
         ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         _executionId = executionId;
         _definition = definition;
         _historyStore = historyStore;
         _timeProvider = timeProvider;
+        _source = source;
         _envelope = envelope;
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
@@ -120,7 +124,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     protected override void PreStart()
     {
         _log.Info(
-            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt} delivery_kind={_definition.Delivery.Kind}");
+            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} source={_source} dispatched_at={_dispatchedAt} delivery_kind={_definition.Delivery.Kind}");
 
         if (RoutesBackToOriginSession)
         {
@@ -221,15 +225,16 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             var audience = _definition.Audience;
             var boundary = GetPersistedBoundaryOrThrow();
 
-            // Dedup key must be STABLE across Akka.Reminders redeliveries of the
-            // same fire, or the target session can't recognize a redelivery and
-            // re-runs it (duplicate delivery). The envelope's scheduled fire time
-            // (DueTimeUtc) is identical on every redelivery; _dispatchedAt is
-            // captured fresh per execution actor and drifts, defeating the dedup.
-            // Deferred re-runs carry no envelope and are never redelivered, so the
-            // dispatch time is a fine fallback there.
-            var fireTimeMs = (_envelope?.DueTimeUtc ?? _dispatchedAt).ToUnixTimeMilliseconds();
-            var reminderDeliveryKey = $"{_definition.Id}:{fireTimeMs}";
+            // Scheduled redelivery keys must be stable across Akka.Reminders
+            // retries, so use the envelope fire time when present. Manual runs
+            // are distinct operator actions, so use the execution ID instead of
+            // a millisecond timestamp that can collide under fast repeated runs.
+            var deliveryKeySuffix = _envelope is not null
+                ? _envelope.DueTimeUtc.ToUnixTimeMilliseconds().ToString()
+                : _source == ReminderExecutionSource.Manual
+                    ? $"manual:{_executionId:N}"
+                    : _dispatchedAt.ToUnixTimeMilliseconds().ToString();
+            var reminderDeliveryKey = $"{_definition.Id}:{deliveryKeySuffix}";
 
             _log.Info(
                 "ReminderExecution CurrentSession Initialized: execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} origin={Origin} audience={Audience}",
@@ -591,7 +596,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             Success: success,
             DurationMs: durationMs,
             SessionId: _sessionIdValue ?? $"reminder/{_definition.Id}/unknown",
-            ErrorMessage: errorMessage);
+            ErrorMessage: errorMessage,
+            Source: _source);
 
         if (!success)
         {
@@ -603,6 +609,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             _executionId,
             _definition.Id,
             success,
+            _source,
             errorMessage));
 
         // Drain stream stages before stopping so they complete gracefully

@@ -12,13 +12,16 @@ namespace Netclaw.Actors.Reminders;
 /// </summary>
 internal sealed class ActiveExecutionTracker
 {
-    private readonly HashSet<ReminderId> _executing = [];
+    private readonly Dictionary<ReminderId, ReminderExecutionSource> _executing = [];
 
     public int Count => _executing.Count;
 
-    public bool IsExecuting(ReminderId reminderId) => _executing.Contains(reminderId);
+    public bool IsExecuting(ReminderId reminderId) => _executing.ContainsKey(reminderId);
 
-    public void Add(ReminderId reminderId) => _executing.Add(reminderId);
+    public void Add(ReminderId reminderId, ReminderExecutionSource source) => _executing[reminderId] = source;
+
+    public bool TryGetSource(ReminderId reminderId, out ReminderExecutionSource source) =>
+        _executing.TryGetValue(reminderId, out source);
 
     /// <returns><c>true</c> if the reminder was tracked and has been removed.</returns>
     public bool Remove(ReminderId reminderId) => _executing.Remove(reminderId);

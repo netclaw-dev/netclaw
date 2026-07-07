@@ -14,6 +14,9 @@ explicitly changes priority.
 - Fixed-length approval button labels and richer approval UI.
 - Config hot-reload beyond startup-time configuration.
 - Operator diagnostics refinements beyond current CLI/doctor/status work.
+- Unattended approval escalation for reminders/webhooks: pause the autonomous
+  run, route approval prompts to a live operator channel, and resume under the
+  original autonomous execution context.
 
 ## LATER Candidates
 

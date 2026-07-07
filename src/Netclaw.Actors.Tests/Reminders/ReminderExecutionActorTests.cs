@@ -321,7 +321,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                     definition,
                     pipeline,
                     TimeProvider.System,
-                    historyStore),
+                    historyStore,
+                    ReminderExecutionSource.Scheduled),
                 "exec");
 
             ReceiveAny(msg => probe.Tell(msg));

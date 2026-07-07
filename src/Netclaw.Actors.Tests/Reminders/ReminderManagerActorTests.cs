@@ -25,9 +25,13 @@ public class ReminderManagerActorTests : TestKit
 {
     private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
     private ReminderDefinitionStore _definitionStore = null!;
+    private ReminderHistoryStore _historyStore = null!;
     private TestNotificationSink _notificationSink = null!;
 
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
+
+    private static ReminderAudienceAuthorizationContext OperatorAuthorization() =>
+        new(TrustAudience.Team, "test-operator");
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -42,7 +46,7 @@ public class ReminderManagerActorTests : TestKit
         _definitionStore = new ReminderDefinitionStore(paths);
         _notificationSink = new TestNotificationSink();
         var definitionStore = _definitionStore;
-        var historyStore = new ReminderHistoryStore(paths);
+        _historyStore = new ReminderHistoryStore(paths);
 
         // Wire local reminders with in-memory storage
         var sharedResolver = new TestShardRegionResolver();
@@ -72,7 +76,7 @@ public class ReminderManagerActorTests : TestKit
                     new SchedulingConfig(),
                     TimeProvider.System,
                     definitionStore,
-                    historyStore,
+                    _historyStore,
                     _notificationSink,
                     NullReminderChannelNotifier.Instance)),
                 "reminder-manager-test");
@@ -1129,6 +1133,362 @@ public class ReminderManagerActorTests : TestKit
             a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id.Value);
     }
 
+    [Fact]
+    public async Task Run_now_dispatches_current_session_manual_execution_and_keeps_oneshot_enabled()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("manual-run-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-manual-run");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition("manual-run-oneshot", deliveryRequired: false);
+        _definitionStore.Save(definition);
+
+        var response = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(response.Accepted);
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(definition.Delivery.SessionId, delivered.SessionId.Value);
+        Assert.Contains(definition.Instructions, delivered.Content);
+        Assert.NotNull(delivered.Source.ReminderId);
+        Assert.StartsWith("manual-run-oneshot:manual:", delivered.Source.ReminderId!.Value.Value);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance,
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+
+            var stored = _definitionStore.Get(definition.Id);
+            Assert.NotNull(stored);
+            Assert.True(stored!.Enabled);
+
+            var history = await _historyStore.ReadAsync(definition.Id, 10);
+            Assert.Single(history);
+            Assert.True(history[0].Success);
+            Assert.Equal(ReminderExecutionSource.Manual, history[0].Source);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Run_now_rejects_missing_authorization_without_dispatch_or_history()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("manual-missing-auth", "Check auth");
+        _definitionStore.Save(definition);
+
+        var response = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, Authorization: null),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(response.Accepted);
+        Assert.Equal(ReminderRunNowError.Unauthorized, response.Error);
+        Assert.Empty(await _historyStore.ReadAsync(definition.Id, 10));
+
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance,
+            TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, health.ActiveExecutions);
+    }
+
+    [Fact]
+    public async Task Scheduled_oneshot_fire_during_manual_run_is_queued_and_runs_after_manual_completion()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("manual-overlap-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-manual-overlap");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition("manual-overlap-oneshot", deliveryRequired: true);
+        _definitionStore.Save(definition);
+
+        var manual = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(manual.Accepted);
+
+        var manualDelivery = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.StartsWith("manual-overlap-oneshot:manual:", manualDelivery.Source.ReminderId!.Value.Value);
+        Assert.NotNull(manualDelivery.Source.DeliveryObserver);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+        await gatewayProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+
+        manualDelivery.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+            manualDelivery.Source.ReminderId!.Value,
+            ChannelType.Slack,
+            Delivered: true,
+            ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+
+        var scheduledDelivery = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.StartsWith("manual-overlap-oneshot:", scheduledDelivery.Source.ReminderId!.Value.Value);
+        Assert.DoesNotContain(":manual:", scheduledDelivery.Source.ReminderId!.Value.Value);
+        Assert.NotNull(scheduledDelivery.Source.DeliveryObserver);
+
+        scheduledDelivery.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+            scheduledDelivery.Source.ReminderId!.Value,
+            ChannelType.Slack,
+            Delivered: true,
+            ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+
+        await AwaitAssertAsync(async () =>
+        {
+            var stored = _definitionStore.Get(definition.Id);
+            Assert.NotNull(stored);
+            Assert.False(stored!.Enabled);
+
+            var history = await _historyStore.ReadAsync(definition.Id, 10);
+            Assert.Equal(2, history.Count);
+            Assert.Contains(history, record => record.Source == ReminderExecutionSource.Manual);
+            Assert.Contains(history, record => record.Source == ReminderExecutionSource.Scheduled);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Run_now_rejects_missing_disabled_and_expired_reminders_without_history()
+    {
+        var manager = await GetManagerAsync();
+
+        var missingId = new ReminderId("manual-missing");
+        var missing = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(missingId, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.False(missing.Accepted);
+        Assert.Equal(ReminderRunNowError.NotFound, missing.Error);
+
+        var disabled = CreateCurrentSessionDefinition("manual-disabled", deliveryRequired: false) with
+        {
+            Enabled = false
+        };
+        _definitionStore.Save(disabled);
+        var disabledResponse = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(disabled.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.False(disabledResponse.Accepted);
+        Assert.Equal(ReminderRunNowError.Disabled, disabledResponse.Error);
+        Assert.Empty(await _historyStore.ReadAsync(disabled.Id, 10));
+
+        var now = TimeProvider.System.GetUtcNow();
+        var expired = CreateCurrentSessionDefinition("manual-expired", deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                Interval = TimeSpan.FromMinutes(15),
+                FireAt = now.AddMinutes(15)
+            },
+            ExpiresAt = now.AddSeconds(-1)
+        };
+        _definitionStore.Save(expired);
+        var expiredResponse = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(expired.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.False(expiredResponse.Accepted);
+        Assert.Equal(ReminderRunNowError.Expired, expiredResponse.Error);
+        Assert.Empty(await _historyStore.ReadAsync(expired.Id, 10));
+    }
+
+    [Fact]
+    public async Task Run_now_rejects_duplicate_in_flight_without_incrementing_skip_count()
+    {
+        var manager = await GetManagerAsync();
+        var deliveryProbe = CreateTestProbe("manual-duplicate-delivery");
+        var slowGateway = Sys.ActorOf(
+            Props.Create(() => new NeverReplyGateway(deliveryProbe.Ref)),
+            "manual-duplicate-never-reply");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(slowGateway);
+
+        var definition = CreateCurrentSessionDefinition("manual-duplicate", deliveryRequired: false);
+        _definitionStore.Save(definition);
+
+        var first = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(first.Accepted);
+
+        await deliveryProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var second = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.False(second.Accepted);
+        Assert.Equal(ReminderRunNowError.AlreadyExecuting, second.Error);
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, status.SkippedDuplicates);
+    }
+
+    [Fact]
+    public async Task Run_now_rejects_global_concurrency_full_without_queueing()
+    {
+        var manager = await GetManagerAsync();
+        var deliveryProbe = CreateTestProbe("manual-busy-delivery");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(deliveryProbe.Ref)),
+            "manual-busy-auto-ack");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        var activeDeliveries = new List<DeliverTrustedSessionTurn>();
+
+        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        {
+            var definition = CreateCurrentSessionDefinition($"manual-busy-{i}", deliveryRequired: true);
+            _definitionStore.Save(definition);
+
+            var accepted = await manager.Ask<ReminderRunNowResponse>(
+                new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.True(accepted.Accepted);
+            var delivered = await deliveryProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.DeliveryObserver);
+            activeDeliveries.Add(delivered);
+        }
+
+        var busyDefinition = CreateCurrentSessionDefinition("manual-busy-rejected", deliveryRequired: false);
+        _definitionStore.Save(busyDefinition);
+
+        var busy = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(busyDefinition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(busy.Accepted);
+        Assert.Equal(ReminderRunNowError.Busy, busy.Error);
+        Assert.Empty(await _historyStore.ReadAsync(busyDefinition.Id, 10));
+
+        foreach (var delivered in activeDeliveries)
+        {
+            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+                delivered.Source.ReminderId!.Value,
+                ChannelType.Slack,
+                Delivered: true,
+                ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+        }
+
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance,
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await deliveryProbe.ExpectNoMsgAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Manual_failure_does_not_increment_scheduled_failure_count_or_disable()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateRecurringCurrentSessionDefinition("manual-failure-accounting");
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(1, status.ConsecutiveFailures);
+            Assert.False(status.Executing);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var manual = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(manual.Accepted);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(1, status.ConsecutiveFailures);
+            Assert.False(status.Executing);
+
+            var stored = _definitionStore.Get(definition.Id);
+            Assert.NotNull(stored);
+            Assert.True(stored!.Enabled);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Manual_success_does_not_reset_scheduled_failure_count()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateRecurringCurrentSessionDefinition("manual-success-accounting");
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(1, status.ConsecutiveFailures);
+            Assert.False(status.Executing);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var gatewayProbe = CreateTestProbe("manual-success-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-manual-success");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        var manual = await manager.Ask<ReminderRunNowResponse>(
+            new RunReminderNowCommand(definition.Id, OperatorAuthorization()),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(manual.Accepted);
+
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(1, status.ConsecutiveFailures);
+            Assert.False(status.Executing);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     /// <summary>
     /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
     /// by forwarding to a probe for assertions and immediately replying
@@ -1218,6 +1578,20 @@ public class ReminderManagerActorTests : TestKit
             CreatedBy = "test",
             CreatedAt = now,
             UpdatedAt = now
+        };
+    }
+
+    private static ReminderDefinition CreateRecurringCurrentSessionDefinition(string id)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        return CreateCurrentSessionDefinition(id, deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                Interval = TimeSpan.FromMinutes(30),
+                FireAt = now.AddMinutes(30)
+            }
         };
     }
 

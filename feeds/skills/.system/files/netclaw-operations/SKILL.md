@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.24.0"
+  version: "2.24.2"
 ---
 
 # Netclaw Operations
@@ -47,10 +47,15 @@ allowed roots); the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`,
 
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always
 set `delivery_kind` explicitly (`current_session` / `channel` / `none`). A reminder
-that fires unattended cannot answer approval prompts, so pre-approve any shell verbs
-it needs first with `netclaw approvals trust-verb <verb>`. Background shell: set
+that fires unattended cannot currently answer approval prompts, so pre-approve any
+obvious shell verbs it needs first with `netclaw approvals trust-verb <verb>`.
+Background shell: set
 `_background: true` on `shell_execute` (max 5 concurrent; cancel servers/watchers
 when done; background jobs are killed when the session passivates).
+Operators can run an enabled reminder immediately with `netclaw reminder run <id>`;
+this requires the daemon and does not change the reminder's schedule. After creating
+a complex out-of-session reminder, offer a manual fire-now run; never offer this for
+`current_session` reminders, and do not describe it as approval collection.
 
 Full detail — delivery contract, proactive channel messaging, approval scoping,
 job lifecycle — is in
