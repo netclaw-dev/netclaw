@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.25.0</VersionPrefix>
-    <VersionSuffix>beta.1</VersionSuffix>
+    <VersionSuffix>beta.2</VersionSuffix>
     <PackageReleaseNotes>Netclaw v0.25.0-beta.1 — SkillServer native sub-agent sync, memory curation unification, systemd PATH fix
 
 **Features**
