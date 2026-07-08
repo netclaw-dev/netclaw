@@ -63,6 +63,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly IToolApprovalService? _approvalService;
     private readonly int _maxToolIterations;
+
+    // Process-wide daily-stats sink (the same singleton the parent session records
+    // to). Nullable because a hosting configuration without the daemon stats backend
+    // is a real runtime state — mirrors LlmSessionActor._sessionMetrics. When present,
+    // every LLM call this sub-agent makes is billed here so its tokens show up in
+    // `netclaw stats` instead of vanishing.
+    private readonly Telemetry.ISessionMetrics? _sessionMetrics;
     private readonly ToolRegistry _toolRegistry;
     private IReadOnlyList<AITool> _aiTools = [];
     private ILoggingAdapter _log;
@@ -73,6 +80,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     // Used for the summary log on completion (ProcessingWatchdog is only a
     // timer scheduler — it doesn't track elapsed time itself).
     private readonly Stopwatch _runStopwatch = Stopwatch.StartNew();
+
+    // Cumulative token usage across every LLM call this sub-agent makes. Summed for
+    // the completion summary log; per-call usage is also recorded to _sessionMetrics
+    // as each call returns (see RecordUsage).
+    private long _runInputTokens;
+    private long _runOutputTokens;
 
     // Conversation state (not persisted — ephemeral)
     private readonly List<AiChatMessage> _history = [];
@@ -137,7 +150,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IChatClient chatClient,
         ToolAccessPolicy? toolAccessPolicy = null,
         IToolApprovalService? approvalService = null,
-        int maxToolIterations = DefaultMaxToolIterations)
+        int maxToolIterations = DefaultMaxToolIterations,
+        Telemetry.ISessionMetrics? sessionMetrics = null)
     {
         if (maxToolIterations <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), maxToolIterations,
@@ -145,6 +159,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         _definition = definition;
         _chatClient = chatClient;
+        _sessionMetrics = sessionMetrics;
         _toolAccessPolicy = toolAccessPolicy ?? new ToolAccessPolicy(
             new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
             new EffectivePolicyDefaults(
@@ -175,14 +190,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IChatClient chatClient,
         ToolAccessPolicy? toolAccessPolicy = null,
         IToolApprovalService? approvalService = null,
-        int maxToolIterations = DefaultMaxToolIterations)
+        int maxToolIterations = DefaultMaxToolIterations,
+        Telemetry.ISessionMetrics? sessionMetrics = null)
     {
         return Props.Create(() => new SubAgentActor(
             definition,
             chatClient,
             toolAccessPolicy,
             approvalService,
-            maxToolIterations));
+            maxToolIterations,
+            sessionMetrics));
     }
 
     /// <summary>
@@ -320,6 +337,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // the synchronous processing that follows (tool dispatch or completion).
             RestartWatchdog(_interDeltaBudget);
             var response = msg.Response;
+
+            // Record this call's token usage before branching so EVERY call is billed —
+            // tool-call turns, retries, the forced-no-tools final turn, and repair turns
+            // all flow through here exactly once. Mirrors the main session, which records
+            // its own per-call usage; without this the sub-agent's tokens never reach the
+            // daily-stats pipeline and `netclaw stats` under-counts by the whole sub-run.
+            RecordUsage(response.Usage);
+
             var lastMessage = response.Messages[^1];
             var analysis = LlmResponseClassifier.Analyze(lastMessage);
 
@@ -630,6 +655,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         });
     }
 
+    // Bill one LLM call's token usage to the shared daily-stats sink and accumulate
+    // the run totals for the completion summary log. We record at the source (here in
+    // the child) rather than propagating totals up to the parent: the parent's
+    // ISessionMetrics is the SAME process-wide singleton, so re-recording there would
+    // double-count, and folding sub-agent tokens into the parent's UsageOutput would
+    // corrupt its context-window percentage (the sub-agent has its own context window).
+    private void RecordUsage(UsageDetails? usage)
+    {
+        if (usage is null)
+            return;
+
+        var input = usage.InputTokenCount ?? 0;
+        var output = usage.OutputTokenCount ?? 0;
+        _runInputTokens += input;
+        _runOutputTokens += output;
+        _sessionMetrics?.RecordTokenUsage(input, output);
+    }
+
     private void HandleToolCalls(AiChatMessage assistantMessage, List<FunctionCallContent> toolCalls)
     {
         _turnState.ResetEmptyResponseGuards();
@@ -752,13 +795,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _log.Info("SubAgent [{AgentName}] completed (success={Success}, outcome={Outcome}, reason={Reason}, output={OutputLength} chars, iterations={Iterations})",
             _definition.Name, success, resolvedOutcome, outcomeReason?.Value ?? "-", output.Length, _turnState.ToolIterationCount);
 
-        // Log cumulative stats for observability — total LLM calls, tool usage, etc.
-        // This gives operators a single summary line for sub-agent duration analysis.
+        // Log cumulative stats for observability — total LLM calls, tool usage, tokens.
+        // This gives operators a single summary line for sub-agent cost/duration analysis.
+        // (success is already on the "completed" line above; omitted here to stay within
+        // ILoggingAdapter's 6-argument ceiling.)
         _log.Info(
-            "SubAgent [{AgentName}] summary: success={Success}, totalToolCalls={TotalToolCalls}, "
-            + "iterations={Iterations}, duration={Duration}s",
-            _definition.Name, success, _turnState.ToolCallCount,
+            "SubAgent [{AgentName}] summary: totalToolCalls={TotalToolCalls}, "
+            + "iterations={Iterations}, inputTokens={InputTokens}, outputTokens={OutputTokens}, "
+            + "duration={Duration}s",
+            _definition.Name, _turnState.ToolCallCount,
             _turnState.ToolIterationCount,
+            _runInputTokens, _runOutputTokens,
             _runStopwatch.Elapsed.TotalSeconds);
 
         var findings = success && _definition.EmitStructuredFindings

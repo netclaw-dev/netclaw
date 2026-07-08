@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ServerFeedSkillSyncService.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -373,16 +373,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(feed.TimeoutSeconds));
 
-            var manifest = await client.GetManifestAsync(cts.Token);
-            if (manifest?.Links?.SubAgents is not { Href.Length: > 0 } subAgentsLink)
-            {
-                _logger.LogDebug(
-                    "Server feed '{FeedName}' native sidecar is unavailable or does not advertise sub-agents",
-                    feed.Name);
-                return;
-            }
-
-            subAgentIndex = await client.GetNativeSubAgentIndexAsync(subAgentsLink, cts.Token);
+            subAgentIndex = await client.GetNativeSubAgentIndexAsync(cts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

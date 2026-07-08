@@ -1415,6 +1415,14 @@ internal sealed class FakeChatClient : IChatClient
 
     public IReadOnlyList<string>? ResponseTextsByCall { get; set; }
 
+    /// <summary>
+    /// When set, every returned response carries these token counts as
+    /// <see cref="ChatResponse.Usage"/>. The streaming reader coalesces that back into
+    /// <c>response.Usage</c>, so a test can prove the sub-agent bills each LLM call's
+    /// tokens to <see cref="Netclaw.Actors.Telemetry.ISessionMetrics"/>.
+    /// </summary>
+    public UsageDetails? UsageOverride { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -1437,7 +1445,7 @@ internal sealed class FakeChatClient : IChatClient
                 var toolCallContents = new List<AIContent>(ToolCallsOnFirstCall);
                 var toolCallMessage = new ChatMessage(
                     ChatRole.Assistant, toolCallContents);
-                return new ChatResponse(toolCallMessage);
+                return new ChatResponse(toolCallMessage) { Usage = UsageOverride };
             }
         }
 
@@ -1448,7 +1456,7 @@ internal sealed class FakeChatClient : IChatClient
         var responseMessage = new ChatMessage(
             ChatRole.Assistant,
             [new TextContent(responseText)]);
-        return new ChatResponse(responseMessage);
+        return new ChatResponse(responseMessage) { Usage = UsageOverride };
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

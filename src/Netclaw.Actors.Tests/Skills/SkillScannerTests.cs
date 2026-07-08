@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using System.Linq;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Skills;
@@ -813,4 +814,114 @@ public class SkillScannerTests : IDisposable
             # {skillName}
             """);
     }
+
+    [Fact]
+    public void ExtractFrontmatter_handles_utf8_bom()
+    {
+        // SKILL.md files saved by some editors (e.g., Notepad on Windows) include
+        // a UTF-8 BOM (\uFEFF) at the start of the file. ExtractFrontmatter should
+        // strip the BOM and still parse the frontmatter correctly.
+        var content = "\uFEFF---\nname: bom-skill\ndescription: \"A skill with BOM\"\n---\n\n# Content\n";
+
+        var result = SkillScanner.ExtractFrontmatter(content);
+
+        Assert.NotNull(result);
+        Assert.Equal("bom-skill", result.Name);
+        Assert.Equal("A skill with BOM", result.Description);
+    }
+
+    [Theory]
+    [InlineData("---\n---\n")]           // empty frontmatter body
+    [InlineData("﻿---\n---\n")]      // BOM-prefixed empty frontmatter body
+    [InlineData("---\n---")]              // no trailing newline
+    public void ExtractFrontmatter_returns_null_for_degenerate_block_without_throwing(string content)
+    {
+        // A degenerate block like "---\n---" has an empty YAML body: the opening line's
+        // newline IS the closing delimiter's newline. The slice must not compute a
+        // negative-length range (ArgumentOutOfRangeException) — it must return null so the
+        // file is reported as invalid frontmatter rather than crashing the scan.
+        var result = SkillScanner.ExtractFrontmatter(content);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void Scan_does_not_abort_on_skill_with_degenerate_frontmatter()
+    {
+        // Regression: a SKILL.md whose frontmatter is an empty "---\n---" block previously
+        // threw ArgumentOutOfRangeException out of the unguarded parse call, aborting the
+        // entire discovery pass so that no skills loaded at all. Scan must instead skip the
+        // bad skill (recording an issue) and continue discovering healthy siblings.
+        WriteSkill("degenerate", "---\n---\n\n# Body\n");
+        WriteSkill("healthy", """
+            ---
+            name: healthy
+            description: A perfectly good skill.
+            ---
+
+            # Healthy
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Contains(result.AcceptedSkills, s => s.Name == "healthy");
+        Assert.Contains(result.Issues, i =>
+            i.Path.EndsWith(Path.Combine("degenerate", "SKILL.md"), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void SkillScanIssue_populates_skill_name_for_broken_frontmatter()
+    {
+        // When a SKILL.md has invalid frontmatter, the resulting SkillScanIssue
+        // should include the SkillName (derived from the parent directory name)
+        // so that issue reporting can identify the skill by name.
+        WriteSkill("broken-frontmatter", """
+            ---
+            name: broken-frontmatter
+            description: [invalid yaml {{{
+            ---
+
+            # Broken
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result.AcceptedSkills); // broken frontmatter => skill rejected
+        var issuesForSkill = result.Issues
+            .Where(i => i.Path.EndsWith(Path.Combine("broken-frontmatter", "SKILL.md"), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.NotEmpty(issuesForSkill);
+        Assert.All(issuesForSkill, i =>
+        {
+            Assert.NotNull(i.SkillName);
+            Assert.Equal("broken-frontmatter", i.SkillName);
+        });
+    }
+
+    [Fact]
+    public void SkillScanIssue_normalizes_skill_name_from_mixed_case_directory()
+    {
+        // Issue SkillNames must be the canonical (lowercased) skill name — the same
+        // representation accepted skills use — so that errored and accepted rows render
+        // consistently regardless of the on-disk directory casing.
+        WriteSkill("Mixed-Case", """
+            ---
+            name: Mixed-Case
+            description: [invalid yaml {{{
+            ---
+
+            # Broken
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        var issuesForSkill = result.Issues
+            .Where(i => i.Path.EndsWith(Path.Combine("Mixed-Case", "SKILL.md"), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.NotEmpty(issuesForSkill);
+        Assert.All(issuesForSkill, i => Assert.Equal("mixed-case", i.SkillName));
+    }
+
 }

@@ -33,6 +33,12 @@ public sealed class SubAgentSpawner
     private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
 
+    // The process-wide daily-stats sink, handed to each spawned SubAgentActor so its
+    // LLM calls are billed to `netclaw stats`. Nullable to match the rest of the stats
+    // wiring (a host without the daemon stats backend is a real runtime state); DI
+    // injects the registered singleton in production.
+    private readonly Telemetry.ISessionMetrics? _sessionMetrics;
+
     public SubAgentSpawner(
         IChatClientProvider chatClientProvider,
         ToolRegistry toolRegistry,
@@ -40,7 +46,8 @@ public sealed class SubAgentSpawner
         IToolApprovalService? approvalService,
         ISystemPromptProvider promptProvider,
         ILogger<SubAgentSpawner> logger,
-        SubAgentConfig? subAgentConfig = null)
+        SubAgentConfig? subAgentConfig = null,
+        Telemetry.ISessionMetrics? sessionMetrics = null)
     {
         _chatClientProvider = chatClientProvider;
         _toolRegistry = toolRegistry;
@@ -49,6 +56,7 @@ public sealed class SubAgentSpawner
         _promptProvider = promptProvider;
         _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger;
+        _sessionMetrics = sessionMetrics;
     }
 
     /// <summary>
@@ -139,7 +147,8 @@ public sealed class SubAgentSpawner
             chatClient,
             _toolAccessPolicy,
             _approvalService,
-            SubAgentMaxToolIterations);
+            SubAgentMaxToolIterations,
+            _sessionMetrics);
         var actorName = $"subagent-{definition.Name}-{runId}";
         IActorRef subAgent;
         try

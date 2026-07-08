@@ -25,7 +25,7 @@ namespace Netclaw.Daemon.IntegrationTests;
 [Trait("Category", "Integration")]
 public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
 {
-    private const string Image = "ghcr.io/netclaw-dev/skillserver:0.4.0-beta.1";
+    private const string Image = "ghcr.io/netclaw-dev/skillserver:0.4.0-beta.3";
     private const string ApiKey = "sk-test-native-sidecar-sync";
     private const int ContainerPort = 8080;
     private const int HostPort = 18080;

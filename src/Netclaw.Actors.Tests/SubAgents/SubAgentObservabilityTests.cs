@@ -107,4 +107,79 @@ public sealed class SubAgentObservabilityTests : TestKit
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
+
+    // Regression coverage for issue #1597: sub-agent LLM calls used to discard
+    // ChatResponse.Usage entirely — the actor had no ISessionMetrics and never read
+    // response.Usage — so every sub-agent's token consumption was invisible to
+    // `netclaw stats`. These tests pin the sub-agent to the shared daily-stats sink.
+
+    [Fact]
+    public async Task Records_token_usage_to_session_metrics_on_text_response()
+    {
+        var metrics = new RecordingSessionMetrics();
+        var fakeClient = new FakeChatClient
+        {
+            UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition(), fakeClient, sessionMetrics: metrics));
+
+        var result = await agent.Ask<SubAgentResult>(
+            NewRun("Say hello"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        // A single LLM call → exactly one usage record billed to the shared
+        // process-wide daily-stats sink (the same singleton the parent session uses).
+        var call = Assert.Single(metrics.TokenUsageCalls);
+        Assert.Equal((120L, 45L), call);
+    }
+
+    [Fact]
+    public async Task Records_token_usage_for_every_llm_call_across_the_turn_loop()
+    {
+        // A tool-call turn followed by a final-text turn = two LLM calls. Both must be
+        // billed. This is the crux of #1597: the sub-agent's INTERNAL calls (not just
+        // its single final output) have to reach `netclaw stats`, so the recorded total
+        // is the per-call usage summed — not one call's worth.
+        var metrics = new RecordingSessionMetrics();
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-1", "greet",
+                    new Dictionary<string, object?> { ["name"] = "World" })
+            ],
+            UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]), fakeClient, sessionMetrics: metrics));
+
+        var result = await agent.Ask<SubAgentResult>(
+            NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, fakeClient.CallCount);
+        Assert.Equal(2, metrics.TokenUsageCalls.Count);
+        Assert.Equal(240L, metrics.TotalInputTokens);
+        Assert.Equal(90L, metrics.TotalOutputTokens);
+    }
+
+    [Fact]
+    public async Task Completion_summary_reports_cumulative_token_totals()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient));
+
+        // The completion summary now carries token totals so sub-agent cost is visible
+        // in the logs (and Seq), not just tool/iteration/duration counts.
+        await EventFilter.Info(contains: "inputTokens=120, outputTokens=45").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Say hello"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
 }

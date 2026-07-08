@@ -146,7 +146,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             """,
             "application/json");
         handler.AddStringResponse(BaseUrl + "skills/feed-skill/1.0.0/SKILL.md", skillContent, "text/markdown");
-        handler.AddErrorResponse(BaseUrl + "manifest.json", HttpStatusCode.NotFound);
+        handler.AddErrorResponse(BaseUrl + "subagents/v1/index.json", HttpStatusCode.NotFound);
 
         var service = CreateService(handler);
         await service.SyncOnceAsync(CancellationToken.None);
@@ -412,72 +412,58 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         byte[] artifactContent,
         string expectedDigest)
     {
+        // Use absolute hrefs so the client resolves direct native index traversal correctly.
         handler.AddStringResponse(
-            BaseUrl + "manifest.json",
-            """
-            {
-              "$schema": "https://schemas.netclaw.dev/skillserver/native-manifest/v1.json",
-              "generatedAt": "2026-06-30T00:00:00Z",
-              "links": {
-                "self": { "href": "manifest.json" },
-                "rfcSkills": { "href": ".well-known/agent-skills/index.json" },
-                "skills": { "href": "manifest/skills/index.json" },
-                "subagents": { "href": "manifest/subagents/index.json" }
-              }
-            }
-            """,
-            "application/json");
-        handler.AddStringResponse(
-            BaseUrl + "manifest/subagents/index.json",
+            BaseUrl + "subagents/v1/index.json",
             """
             {
               "kind": "subagent-collection-index",
-              "links": { "self": { "href": "manifest/subagents/index.json" } },
+              "links": { "self": { "href": "/subagents/v1/index.json" } },
               "pages": [
-                { "range": "a-z", "href": "manifest/subagents/pages/a-z.json" }
+                { "range": "a-z", "href": "/subagents/v1/pages/a-z.json" }
               ]
             }
             """,
             "application/json");
         handler.AddStringResponse(
-            BaseUrl + "manifest/subagents/pages/a-z.json",
+            BaseUrl + "subagents/v1/pages/a-z.json",
             $$"""
             {
               "kind": "subagent-collection-page",
               "range": "a-z",
-              "links": { "self": { "href": "manifest/subagents/pages/a-z.json" } },
+              "links": { "self": { "href": "/subagents/v1/pages/a-z.json" } },
               "items": [
                 {
                   "name": "{{name}}",
                   "latestVersion": "{{version}}",
                   "versionRange": { "min": "{{version}}", "max": "{{version}}", "count": 1 },
-                  "href": "manifest/subagents/{{name}}/index.json"
+                  "href": "/subagents/v1/{{name}}/index.json"
                 }
               ]
             }
             """,
             "application/json");
         handler.AddStringResponse(
-            BaseUrl + $"manifest/subagents/{name}/index.json",
+            BaseUrl + $"subagents/v1/{name}/index.json",
             $$"""
             {
               "kind": "subagent-identity-index",
               "name": "{{name}}",
               "latestVersion": "{{version}}",
-              "links": { "self": { "href": "manifest/subagents/{{name}}/index.json" } },
+              "links": { "self": { "href": "/subagents/v1/{{name}}/index.json" } },
               "versions": [
                 {
                   "version": "{{version}}",
                   "publishedAt": "2026-06-30T00:00:00Z",
                   "digest": "sha256:{{expectedDigest}}",
-                  "href": "manifest/subagents/{{name}}/versions/{{version}}.json"
+                  "href": "/subagents/v1/{{name}}/versions/{{version}}.json"
                 }
               ]
             }
             """,
             "application/json");
         handler.AddStringResponse(
-            BaseUrl + $"manifest/subagents/{name}/versions/{version}.json",
+            BaseUrl + $"subagents/v1/{name}/versions/{version}.json",
             $$"""
             {
               "kind": "subagent-version-detail",
@@ -487,7 +473,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
               "description": "Test sub-agent",
               "url": "{{BaseUrl}}subagents/{{name}}/{{version}}/agent.md",
               "digest": "sha256:{{expectedDigest}}",
-              "links": { "self": { "href": "manifest/subagents/{{name}}/versions/{{version}}.json" } }
+              "links": { "self": { "href": "/subagents/v1/{{name}}/versions/{{version}}.json" } }
             }
             """,
             "application/json");
