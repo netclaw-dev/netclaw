@@ -19,6 +19,7 @@ using ApprovalOptionKeys = Netclaw.Actors.Protocol.ApprovalOptionKeys;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
+using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.SubAgents.SubAgentProtocol;
@@ -1175,7 +1176,7 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task LLM_failure_returns_failure()
     {
-        var throwingClient = new ThrowingChatClient();
+        var throwingClient = new FakeChatClient { Failure = new InvalidOperationException("LLM connection failed") };
         var definition = CreateDefinition();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, throwingClient));
 
@@ -1355,131 +1356,9 @@ public class SubAgentActorTests : TestKit
         Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
     }
 
-    /// <summary>
-    /// IChatClient that always throws on GetResponseAsync.
-    /// </summary>
-    private sealed class ThrowingChatClient : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("LLM connection failed");
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("LLM connection failed");
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-        public void Dispose() { }
-    }
-
     // Real PNG: the egress normalizer decodes every model-input image, so a
     // fake magic-byte stub would now be dropped. Small enough to pass through.
     private static readonly byte[] FakePngBytes = TestImages.SmallPng();
-}
-
-/// <summary>
-/// Fake IChatClient for SubAgentActor tests (and other test files that need it).
-/// Copied from LlmSessionIntegrationTests — kept internal for cross-file reuse.
-/// </summary>
-internal sealed class FakeChatClient : IChatClient
-{
-    private int _callCount;
-
-    public int CallCount => _callCount;
-
-    /// <summary>
-    /// Snapshot of the messages passed to the most recent call. Replaced on every call.
-    /// </summary>
-    public IReadOnlyList<ChatMessage>? LastReceivedMessages { get; private set; }
-
-    public TimeSpan Delay { get; set; } = TimeSpan.Zero;
-
-    /// <summary>
-    /// When set, the first response returns these tool calls instead of text.
-    /// Subsequent calls return normal text (simulating the LLM completing after tool results).
-    /// When <see cref="AlwaysReturnToolCalls"/> is true, every call returns tool calls
-    /// as long as tools are available in options.
-    /// </summary>
-    public List<FunctionCallContent>? ToolCallsOnFirstCall { get; set; }
-
-    /// <summary>
-    /// When true, every call returns tool calls as long as options.Tools is non-empty.
-    /// </summary>
-    public bool AlwaysReturnToolCalls { get; set; }
-
-    public string? ResponseText { get; set; }
-
-    public IReadOnlyList<string>? ResponseTextsByCall { get; set; }
-
-    /// <summary>
-    /// When set, every returned response carries these token counts as
-    /// <see cref="ChatResponse.Usage"/>. The streaming reader coalesces that back into
-    /// <c>response.Usage</c>, so a test can prove the sub-agent bills each LLM call's
-    /// tokens to <see cref="Netclaw.Actors.Telemetry.ISessionMetrics"/>.
-    /// </summary>
-    public UsageDetails? UsageOverride { get; set; }
-
-    public async Task<ChatResponse> GetResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        Interlocked.Increment(ref _callCount);
-        LastReceivedMessages = messages.ToList();
-
-        if (Delay > TimeSpan.Zero)
-            await Task.Delay(Delay, cancellationToken);
-
-        if (ToolCallsOnFirstCall is not null)
-        {
-            var returnToolCalls = AlwaysReturnToolCalls
-                ? options?.Tools?.Count > 0
-                : _callCount == 1;
-
-            if (returnToolCalls)
-            {
-                var toolCallContents = new List<AIContent>(ToolCallsOnFirstCall);
-                var toolCallMessage = new ChatMessage(
-                    ChatRole.Assistant, toolCallContents);
-                return new ChatResponse(toolCallMessage) { Usage = UsageOverride };
-            }
-        }
-
-        var responseText = ResponseTextsByCall is { Count: > 0 } responses && _callCount <= responses.Count
-            ? responses[_callCount - 1]
-            : ResponseText ?? $"[fake] Response #{_callCount}";
-
-        var responseMessage = new ChatMessage(
-            ChatRole.Assistant,
-            [new TextContent(responseText)]);
-        return new ChatResponse(responseMessage) { Usage = UsageOverride };
-    }
-
-    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-        => CreateStreamingUpdatesAsync(messages, options, cancellationToken);
-
-    private async IAsyncEnumerable<ChatResponseUpdate> CreateStreamingUpdatesAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var response = await GetResponseAsync(messages, options, cancellationToken);
-        foreach (var update in response.ToChatResponseUpdates())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            yield return update;
-        }
-    }
-
-    public object? GetService(Type serviceType, object? serviceKey = null) => null;
-    public void Dispose() { }
 }
 
 /// <summary>

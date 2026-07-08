@@ -13,6 +13,7 @@ using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.SubAgents.SubAgentProtocol;
@@ -35,7 +36,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
 
         var spawner = new SubAgentSpawner(
-            new SingleClientProvider(new NoOpChatClient()),
+            new SingleClientProvider(new FakeChatClient()),
             toolRegistry,
             new ToolAccessPolicy(
                 new ToolConfig(),
@@ -96,7 +97,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
 
         var spawner = new SubAgentSpawner(
-            new SingleClientProvider(new NoOpChatClient()),
+            new SingleClientProvider(new FakeChatClient()),
             toolRegistry,
             new ToolAccessPolicy(
                 new ToolConfig(),
@@ -211,29 +212,5 @@ public sealed class SubAgentSpawnerTests : TestKit
         // One text-only LLM call → exactly one usage record, carrying the fake's tokens.
         var call = Assert.Single(metrics.TokenUsageCalls);
         Assert.Equal((175L, 60L), call);
-    }
-
-    private sealed class NoOpChatClient : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "noop")));
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
     }
 }

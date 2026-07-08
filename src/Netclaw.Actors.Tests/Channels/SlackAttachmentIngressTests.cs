@@ -19,6 +19,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Sessions;
+using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -49,7 +50,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     private static readonly byte[] FakePlainTextBytes =
         "meeting notes\n- discuss Q2 roadmap\n- assign OKRs\n"u8.ToArray();
 
-    private readonly RecordingChatClient _chatClient = new();
+    private readonly FakeChatClient _chatClient = new() { ResponseText = "ok" };
     private readonly RecordingReplyClient _replyClient = new();
     private readonly ConfigurableFakeSlackFileHandler _httpHandler = new();
     private readonly NetclawPaths _paths = new(Path.Combine(
@@ -60,6 +61,17 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     {
         _paths.EnsureDirectoriesExist();
     }
+
+    /// <summary>
+    /// Contents of every USER-role message across all LLM calls so far, in
+    /// call order — mirrors the old <c>RecordingChatClient.ReceivedMessages</c>
+    /// accumulator that this test suite asserted against.
+    /// </summary>
+    private IReadOnlyList<IList<AIContent>> ReceivedUserMessageContents =>
+        _chatClient.ReceivedMessagesByCall
+            .SelectMany(call => call.Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.User))
+            .Select(m => m.Contents)
+            .ToList();
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
@@ -191,13 +203,13 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Contains(_chatClient.ReceivedMessages,
+            Assert.Contains(ReceivedUserMessageContents,
                 contents => contents.Any(c => c is TextContent t
                     && t.Text.Contains("[attachment]", StringComparison.Ordinal)
                     && t.Text.Contains("report.pdf", StringComparison.Ordinal)));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var announcement = _chatClient.ReceivedMessages
+        var announcement = ReceivedUserMessageContents
             .SelectMany(m => m)
             .OfType<TextContent>()
             .First(t => t.Text.Contains("[attachment]", StringComparison.Ordinal)
@@ -209,7 +221,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         // PDFs are never handed to the LLM as DataContent — otherwise they'd
         // reach OpenAiCompatibleChatClient and be wrapped as a broken image_url.
-        var pdfDataContents = _chatClient.ReceivedMessages
+        var pdfDataContents = ReceivedUserMessageContents
             .SelectMany(m => m)
             .OfType<DataContent>()
             .Where(d => d.MediaType == "application/pdf");
@@ -254,13 +266,13 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Contains(_chatClient.ReceivedMessages,
+            Assert.Contains(ReceivedUserMessageContents,
                 contents => contents.Any(c => c is TextContent t
                     && t.Text.Contains("[attachment]", StringComparison.Ordinal)
                     && t.Text.Contains("notes.docx", StringComparison.Ordinal)));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var announcement = _chatClient.ReceivedMessages
+        var announcement = ReceivedUserMessageContents
             .SelectMany(m => m)
             .OfType<TextContent>()
             .First(t => t.Text.Contains("[attachment]", StringComparison.Ordinal)
@@ -270,7 +282,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         // Docx is not inlineable — no DataContent for it should have been
         // forwarded to the LLM.
-        var docxDataContents = _chatClient.ReceivedMessages
+        var docxDataContents = ReceivedUserMessageContents
             .SelectMany(m => m)
             .OfType<DataContent>()
             .Where(d => d.MediaType?.Contains("wordprocessingml", StringComparison.Ordinal) == true);
@@ -402,7 +414,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         // Text content "batch upload" should still have reached the LLM.
         await AwaitAssertAsync(() =>
         {
-            Assert.Contains(_chatClient.ReceivedMessages,
+            Assert.Contains(ReceivedUserMessageContents,
                 contents => contents.Any(c => c is TextContent t
                     && t.Text.Contains("batch upload", StringComparison.Ordinal)));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -509,7 +521,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Contains(_chatClient.ReceivedMessages,
+            Assert.Contains(ReceivedUserMessageContents,
                 contents => contents.Any(c => c is TextContent t
                     && t.Text.Contains("[attachment]", StringComparison.Ordinal)
                     && t.Text.Contains("notes.txt", StringComparison.Ordinal)
@@ -555,7 +567,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Contains(_chatClient.ReceivedMessages,
+            Assert.Contains(ReceivedUserMessageContents,
                 contents => contents.Any(c => c is TextContent t
                     && t.Text.Contains("mime=\"image/png\"", StringComparison.Ordinal))
                 && contents.Any(c => c is DataContent d && d.MediaType == "image/png"));
@@ -761,53 +773,6 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             string filePath,
             string? fileName = null,
             CancellationToken cancellationToken = default) => Task.CompletedTask;
-    }
-
-    private sealed class RecordingChatClient : IChatClient
-    {
-        private readonly object _gate = new();
-        private readonly List<IList<AIContent>> _messages = [];
-
-        public IReadOnlyList<IList<AIContent>> ReceivedMessages
-        {
-            get
-            {
-                lock (_gate)
-                    return _messages.ToList();
-            }
-        }
-
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            lock (_gate)
-            {
-                foreach (var msg in messages)
-                {
-                    if (msg.Role == Microsoft.Extensions.AI.ChatRole.User)
-                        _messages.Add(msg.Contents);
-                }
-            }
-
-            return Task.FromResult(new ChatResponse([
-                new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, "ok")
-            ]));
-        }
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await GetResponseAsync(messages, options, cancellationToken);
-            yield return new ChatResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, "ok");
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose() { }
     }
 
     private sealed class AlwaysBlockContentScanner(string message) : IContentScanner

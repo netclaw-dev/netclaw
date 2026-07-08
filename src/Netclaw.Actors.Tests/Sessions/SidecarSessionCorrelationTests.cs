@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.CompilerServices;
 using Akka.Event;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -13,8 +12,6 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using Xunit;
-using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
-using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -39,7 +36,7 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     public async Task TitleGenerator_carries_session_scoped_options()
     {
         var sessionId = new SessionId("ch/title-thread");
-        var captor = new OptionsCapturingChatClient();
+        var captor = new FakeChatClient();
 
         await SessionTitleGenerator.GenerateAsync(
             captor, sessionId, history: [], self: CreateTestProbe().Ref,
@@ -52,7 +49,7 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     public async Task CompactionObserver_carries_session_scoped_options()
     {
         var sessionId = new SessionId("ch/compaction-thread");
-        var captor = new OptionsCapturingChatClient();
+        var captor = new FakeChatClient();
         var history = new List<SerializableChatMessage>
         {
             new() { Role = Netclaw.Actors.Protocol.ChatRole.User, Content = "hello" },
@@ -71,7 +68,7 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     public async Task MemoryExtraction_carries_session_scoped_options()
     {
         var sessionId = new SessionId("ch/memory-extraction-thread");
-        var captor = new OptionsCapturingChatClient();
+        var captor = new FakeChatClient();
 
         await LlmSessionActor.InvokeMemoryExtractionCoreAsync(
             captor, sessionId, history: [], self: CreateTestProbe().Ref, timeout: TimeSpan.FromSeconds(5));
@@ -83,7 +80,7 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     public async Task MemoryDistillation_carries_session_scoped_options()
     {
         var sessionId = new SessionId("ch/distillation-thread");
-        var captor = new OptionsCapturingChatClient();
+        var captor = new FakeChatClient();
 
         await SessionMemoryObserverActor.RunDistillationAsync(
             client: captor, sessionId: sessionId, turnCount: 5,
@@ -98,7 +95,7 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     public async Task MemoryCuration_carries_session_scoped_options()
     {
         var sessionId = new SessionId("ch/curation-thread");
-        var captor = new OptionsCapturingChatClient();
+        var captor = new FakeChatClient();
         var operation = new SQLiteMemoryCurationOperation(
             Kind: "document",
             MemoryClass: "durable_fact",
@@ -126,48 +123,12 @@ public sealed class SidecarSessionCorrelationTests : TestKit
         AssertScopedTo(sessionId, captor);
     }
 
-    private static void AssertScopedTo(SessionId sessionId, OptionsCapturingChatClient captor)
+    private static void AssertScopedTo(SessionId sessionId, FakeChatClient captor)
     {
-        var scoped = Assert.IsType<SessionScopedChatOptions>(captor.CapturedOptions);
+        // FakeChatClient here is the Sessions-namespace fake (it is purpose-built for
+        // these pipeline paths); it records the options of every call, so the last entry
+        // is the most recent invocation the decorators scoped.
+        var scoped = Assert.IsType<SessionScopedChatOptions>(captor.ReceivedOptions[^1]);
         Assert.Equal(sessionId.Value, scoped.SessionId);
-    }
-
-    /// <summary>
-    /// IChatClient stub that records the <see cref="ChatOptions"/> it is invoked with — the
-    /// object the chat-client decorators read the session id from to open the routing scope.
-    /// </summary>
-    private sealed class OptionsCapturingChatClient : IChatClient
-    {
-        public ChatOptions? CapturedOptions { get; private set; }
-
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            CapturedOptions = options;
-            return Task.FromResult(new ChatResponse(new AiChatMessage(
-                AiChatRole.Assistant, (IList<AIContent>)[new TextContent("captured")])));
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            CapturedOptions = options;
-            return StreamAsync(cancellationToken);
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            yield return new ChatResponseUpdate(AiChatRole.Assistant, "captured");
-            await Task.CompletedTask;
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose() { }
     }
 }

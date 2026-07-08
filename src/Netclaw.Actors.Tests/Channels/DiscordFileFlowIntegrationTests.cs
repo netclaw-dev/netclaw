@@ -19,6 +19,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Sessions;
+using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -36,7 +37,7 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
 
-    private readonly ImageCapturingChatClient _chatClient = new();
+    private readonly FakeChatClient _chatClient = new();
     private readonly RecordingDiscordReplyClient _replyClient = new();
     private readonly FakeDiscordFileHandler _httpHandler = new();
     private readonly NetclawPaths _paths = new(Path.Combine(
@@ -136,7 +137,9 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
         Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
         Assert.Contains("cdn.discordapp.com", _httpHandler.LastRequestUri?.Host ?? "");
 
-        Assert.True(_chatClient.ReceivedImageContent,
+        Assert.True(
+            _chatClient.LastReceivedMessages is not null
+                && _chatClient.LastReceivedMessages.SelectMany(m => m.Contents).OfType<DataContent>().Any(),
             "Expected LLM to receive DataContent (image) in chat messages");
 
         var sessionId = new SessionId("ch-1/msg-1000");
@@ -191,7 +194,9 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
-        Assert.True(_chatClient.ReceivedImageContent,
+        Assert.True(
+            _chatClient.LastReceivedMessages is not null
+                && _chatClient.LastReceivedMessages.SelectMany(m => m.Contents).OfType<DataContent>().Any(),
             "Expected LLM to receive image content from attachment-only message");
     }
 
@@ -233,7 +238,9 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
                 "Expected at least one Discord reply to be posted");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.False(_chatClient.ReceivedImageContent,
+        Assert.False(
+            _chatClient.LastReceivedMessages is not null
+                && _chatClient.LastReceivedMessages.SelectMany(m => m.Contents).OfType<DataContent>().Any(),
             "Expected LLM not to receive image when scanner fails");
 
         Assert.Contains(_replyClient.Posts,
@@ -284,7 +291,9 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
                 "Expected at least one Discord reply to be posted");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(_chatClient.ReceivedImageContent,
+        Assert.True(
+            _chatClient.LastReceivedMessages is not null
+                && _chatClient.LastReceivedMessages.SelectMany(m => m.Contents).OfType<DataContent>().Any(),
             "Expected LLM to receive DataContent (image) via real MagicByteContentScanner");
     }
 
@@ -347,58 +356,6 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             response.Content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
             return Task.FromResult(response);
         }
-    }
-
-    private sealed class ImageCapturingChatClient : IChatClient
-    {
-        private int _callCount;
-        public int CallCount => _callCount;
-        public volatile bool ReceivedImageContent;
-
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _callCount);
-
-            foreach (var msg in messages)
-            {
-                if (msg.Contents.OfType<DataContent>().Any())
-                    ReceivedImageContent = true;
-            }
-
-            var contents = new List<AIContent>
-            {
-                new TextContent($"[fake] I see your image (call #{_callCount})")
-            };
-            var response = new ChatResponse(new ChatMessage(
-                Microsoft.Extensions.AI.ChatRole.Assistant,
-                contents));
-            return Task.FromResult(response);
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => CreateStreamingAsync(messages, options, cancellationToken);
-
-        private async IAsyncEnumerable<ChatResponseUpdate> CreateStreamingAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            var response = await GetResponseAsync(messages, options, cancellationToken);
-            foreach (var update in response.ToChatResponseUpdates())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-            }
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-        public void Dispose() { }
     }
 
     private sealed class ImageCapabilityResolver : IModelCapabilityResolver

@@ -1114,32 +1114,8 @@ public class SkillToolTests : IDisposable
 
     private sealed class NoOpChatClientProvider : IChatClientProvider
     {
-        private readonly IChatClient _client = new NoOpChatClient();
+        private readonly IChatClient _client = new FakeChatClient();
 
         public IChatClient GetClient(ModelRole role) => _client;
-    }
-
-    private sealed class NoOpChatClient : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "noop")));
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
     }
 }

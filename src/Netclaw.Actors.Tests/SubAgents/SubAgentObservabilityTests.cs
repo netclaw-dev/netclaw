@@ -10,6 +10,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.SubAgents.SubAgentProtocol;

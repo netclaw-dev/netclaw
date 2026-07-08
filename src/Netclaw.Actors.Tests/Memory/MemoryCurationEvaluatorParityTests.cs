@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.CompilerServices;
 using Akka.Event;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -11,9 +10,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
-using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
-using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Actors.Tests.Memory;
 
@@ -222,7 +220,7 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             freshnessAtMs: 2000);
 
         var evaluator = new MemoryCurationEvaluator(
-            _store, (ILoggingAdapter)NoLogger.Instance, new ScriptedCurationChatClient("SKIP"));
+            _store, (ILoggingAdapter)NoLogger.Instance, new FakeChatClient { ResponseText = "SKIP" });
 
         var decision = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
 
@@ -249,11 +247,15 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             "Netclaw GitHub repository at https://github.com/netclaw-dev/netclaw, private repo",
             freshnessAtMs: 2000);
 
-        // Empty stream (no yields) reproduces a provider that returns nothing parseable —
-        // TryLlmEvaluationAsync must surface curation_llm_no_decision and fall through to
-        // the same deterministic auto-resolve path the no-LLM matrix case exercises.
+        // ResponseText = null makes FakeChatClient emit its default marker text
+        // ("[fake] Response #1") rather than a truly empty response, but the marker
+        // still isn't a recognized SKIP/CREATE/UPDATE/CONSOLIDATE keyword, so
+        // CurationPromptBuilder.ParseResponse still returns no decision and
+        // TryLlmEvaluationAsync still surfaces curation_llm_no_decision and falls
+        // through to the same deterministic auto-resolve path the no-LLM matrix case
+        // exercises.
         var evaluator = new MemoryCurationEvaluator(
-            _store, (ILoggingAdapter)NoLogger.Instance, new ScriptedCurationChatClient(responseText: null));
+            _store, (ILoggingAdapter)NoLogger.Instance, new FakeChatClient { ResponseText = null });
 
         var decision = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
 
@@ -338,35 +340,5 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             Assert.Null(actual.ConsolidationTargetIds);
         else
             Assert.Equal(expected.ConsolidationTargetIds, actual.ConsolidationTargetIds);
-    }
-
-    /// <summary>
-    /// Minimal scripted <see cref="IChatClient"/>: streams <paramref name="responseText"/>
-    /// as a single update, or nothing at all when null (reproducing an empty/garbled
-    /// provider response so the deterministic fallback path can be exercised).
-    /// </summary>
-    private sealed class ScriptedCurationChatClient(string? responseText) : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => Task.FromResult(new ChatResponse(new AiChatMessage(AiChatRole.Assistant, responseText ?? string.Empty)));
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => StreamAsync(cancellationToken);
-
-        private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync([EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            if (responseText is not null)
-                yield return new ChatResponseUpdate(AiChatRole.Assistant, responseText);
-
-            await Task.CompletedTask;
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
     }
 }

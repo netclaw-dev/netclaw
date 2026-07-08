@@ -22,6 +22,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Sessions;
+using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -40,7 +41,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
 
-    private readonly ContextCapturingChatClient _chatClient = new();
+    private readonly FakeChatClient _chatClient = new();
     private readonly RecordingReplyClient _replyClient = new();
     private readonly FakeSlackFileHandler _httpHandler = new();
     private readonly NetclawPaths _paths = new(Path.Combine(
@@ -164,7 +165,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         // Verify: LLM received one user turn containing history prelude + live mention.
-        var messages = _chatClient.LastMessages!;
+        var messages = _chatClient.LastReceivedMessages!;
         var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
         Assert.Single(userMessages);
 
@@ -390,7 +391,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var messages = _chatClient.LastMessages!;
+        var messages = _chatClient.LastReceivedMessages!;
         var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
         Assert.Single(userMessages);
 
@@ -515,7 +516,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var messages = _chatClient.LastMessages!;
+        var messages = _chatClient.LastReceivedMessages!;
         var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
         Assert.Single(userMessages);
 
@@ -626,7 +627,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var messages = _chatClient.LastMessages!;
+        var messages = _chatClient.LastReceivedMessages!;
         var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
         Assert.Single(userMessages);
 
@@ -757,7 +758,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var messages = _chatClient.LastMessages!;
+        var messages = _chatClient.LastReceivedMessages!;
         var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
         Assert.Single(userMessages);
 
@@ -970,7 +971,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         // rejection note lives under the public-channel attachment policy).
         // Under the post-fix design the backfill is its own LLM call; the
         // subsequent live inbound is a plain message without adopted context.
-        var backfillCall = _chatClient.Calls
+        var backfillCall = _chatClient.ReceivedMessagesByCall
             .Select((messages, idx) => (messages, idx))
             .FirstOrDefault(c =>
             {
@@ -1119,54 +1120,6 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             SlackChannelId channelId, SlackThreadTs threadTs, string filePath,
             string? filename = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Chat client that captures the full message list sent to the LLM.
-    /// </summary>
-    private sealed class ContextCapturingChatClient : IChatClient
-    {
-        private int _callCount;
-        public int CallCount => _callCount;
-        public List<ChatMessage>? LastMessages { get; private set; }
-        public List<List<ChatMessage>> Calls { get; } = [];
-
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _callCount);
-            LastMessages = [.. messages];
-            Calls.Add(LastMessages);
-
-            var response = new ChatResponse(new ChatMessage(
-                AiChatRole.Assistant,
-                (IList<AIContent>)[new TextContent($"[fake response #{_callCount}]")]));
-            return Task.FromResult(response);
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => StreamAsync(messages, options, cancellationToken);
-
-        private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            var response = await GetResponseAsync(messages, options, cancellationToken);
-            foreach (var update in response.ToChatResponseUpdates())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-            }
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-        public void Dispose() { }
     }
 
     private sealed class ImageCapabilityResolver : IModelCapabilityResolver
