@@ -17,6 +17,59 @@ namespace Netclaw.Cli.Config;
 internal static class ModelEntryWriter
 {
     /// <summary>
+    /// Write a role's model entry into <paramref name="modelsSection"/>
+    /// non-destructively. When the role already points at the SAME
+    /// <c>(provider, modelId)</c>, operator-set attributes the caller did not supply are
+    /// preserved instead of dropped — chiefly the modalities, which have no CLI input
+    /// and can only be hand-edited, so rebuilding the entry from scratch is exactly how
+    /// a re-set or a context-window tweak silently deleted a hand-set
+    /// <c>InputModalities</c> (#1127). Switching a role to a <em>different</em> model
+    /// does not carry the old model's attributes over — they belonged to that model.
+    /// </summary>
+    internal static void WriteRole(
+        Dictionary<string, object> modelsSection,
+        string roleKey,
+        string provider,
+        string? modelId,
+        ModelDiscoverySource? provenance,
+        int? contextWindow,
+        ModelModality? inputModalities,
+        ModelModality? outputModalities)
+    {
+        var existing = ReadSameModelEntry(modelsSection, roleKey, provider, modelId);
+        if (existing is not null)
+        {
+            contextWindow ??= existing.ContextWindow;
+            inputModalities ??= existing.InputModalities;
+            outputModalities ??= existing.OutputModalities;
+        }
+
+        modelsSection[roleKey] = BuildModelEntry(
+            provider, modelId, provenance, contextWindow, inputModalities, outputModalities);
+    }
+
+    /// <summary>
+    /// The role's current entry, but only when it already references the same
+    /// <c>(provider, modelId)</c>; null when the role is unset or points at a different
+    /// model (whose attributes must not carry over to the newly-set one).
+    /// </summary>
+    private static ModelReference? ReadSameModelEntry(
+        Dictionary<string, object> modelsSection, string roleKey, string provider, string? modelId)
+    {
+        if (!modelsSection.TryGetValue(roleKey, out var raw) || raw is null)
+            return null;
+
+        var existing = ConfigFileHelper.DeserializeSection<ModelReference>(raw);
+        if (existing is null)
+            return null;
+
+        return string.Equals(existing.Provider, provider, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(existing.ModelId, modelId, StringComparison.OrdinalIgnoreCase)
+            ? existing
+            : null;
+    }
+
+    /// <summary>
     /// Builds the dictionary written under <c>Models[role]</c>.
     /// </summary>
     /// <remarks>

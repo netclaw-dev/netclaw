@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Xunit;
@@ -56,5 +57,42 @@ public class ModelEntryWriterTests
         Assert.True(entry.ContainsKey("Provider"));
         Assert.False(entry.ContainsKey("ModelId"));
         Assert.False(entry.ContainsKey("Provenance"));
+    }
+
+    [Fact]
+    public void WriteRole_SameModelWithoutModalities_PreservesHandSetModalities()
+    {
+        // On-disk shape: an operator hand-edited InputModalities (the only way to set it).
+        var models = JsonSerializer.Deserialize<Dictionary<string, object>>(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "ContextWindow": 262144, "InputModalities": "Text, Image" } }
+            """)!;
+
+        // Re-set the same model with only a context-window change; no modalities supplied.
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
+            contextWindow: 131072, inputModalities: null, outputModalities: null);
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.Equal("Text, Image", entry["InputModalities"]); // preserved (#1127)
+        Assert.Equal(131072, entry["ContextWindow"]);          // explicit override applied
+    }
+
+    [Fact]
+    public void WriteRole_DifferentModel_DropsPreviousModelModalities()
+    {
+        var models = JsonSerializer.Deserialize<Dictionary<string, object>>(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "InputModalities": "Text, Image" } }
+            """)!;
+
+        // Switching to a DIFFERENT model must not carry the old model's modalities over.
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "other-model", ModelDiscoverySource.Manual,
+            contextWindow: null, inputModalities: null, outputModalities: null);
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.Equal("other-model", entry["ModelId"]);
+        Assert.False(entry.ContainsKey("InputModalities"));
     }
 }

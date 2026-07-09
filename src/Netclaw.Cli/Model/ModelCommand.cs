@@ -170,15 +170,17 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        var modelEntry = ModelEntryWriter.BuildModelEntry(
+        // Non-destructive: re-setting the same model (or only its context window) keeps
+        // hand-set modalities, which cannot be supplied on the command line (#1127).
+        ModelEntryWriter.WriteRole(
+            modelsSection,
+            roleKey,
             providerName,
             modelId,
             provenance,
             contextWindow ?? discoveredModel?.ContextWindowTokens,
             discoveredModel?.InputModalities,
             discoveredModel?.OutputModalities);
-
-        modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");

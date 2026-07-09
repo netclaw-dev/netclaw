@@ -186,7 +186,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        modelsSection[roleKey] = ModelEntryWriter.BuildModelEntry(
+        // Non-destructive: re-assigning the same model preserves hand-set modalities,
+        // which the picker cannot supply (#1127).
+        ModelEntryWriter.WriteRole(
+            modelsSection,
+            roleKey,
             SelectedProvider,
             SelectedModelId,
             provenance,
