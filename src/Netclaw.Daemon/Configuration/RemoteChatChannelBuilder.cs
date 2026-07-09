@@ -184,6 +184,17 @@ public sealed class RemoteChatChannelBuilder<TChannel, TOptions>
         return this;
     }
 
+    /// <summary>Registers the channel's reminder target resolver.</summary>
+    public RemoteChatChannelBuilder<TChannel, TOptions> WithReminderResolver<TResolver>(
+        Func<IServiceProvider, TOptions, TResolver> factory)
+        where TResolver : class, IReminderTargetResolver
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        if (_options.Enabled)
+            _services.AddSingleton<IReminderTargetResolver>(sp => factory(sp, _options));
+        return this;
+    }
+
     /// <summary>
     /// Registers the channel's thread history fetcher, keyed by the channel
     /// key. Keying is load-bearing: an unkeyed registration would make every

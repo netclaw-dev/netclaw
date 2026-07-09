@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
+using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
@@ -810,7 +811,7 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
-    public async Task Resolves_user_target_to_dm_notify_instructions()
+    public async Task Resolves_user_target_to_direct_message_delivery_target()
     {
         var probe = CreateTestProbe();
         var resolver = new TestResolver
@@ -839,6 +840,10 @@ public class SetReminderToolTests : TestKit
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
         Assert.Equal("U0456XYZ", cmd.Definition.Delivery.Address);
+        Assert.NotNull(cmd.Definition.Delivery.Target);
+        Assert.Equal("slack", cmd.Definition.Delivery.Target!.ChannelKey);
+        Assert.Equal("direct_message", cmd.Definition.Delivery.Target.DestinationKind);
+        Assert.Equal("U0456XYZ", cmd.Definition.Delivery.Target.DestinationId);
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
@@ -851,7 +856,7 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
-    public async Task Rejects_discord_user_target_with_discord_transport()
+    public async Task Resolves_discord_user_target_to_direct_message_delivery_target()
     {
         var probe = CreateTestProbe();
         var resolver = new TestResolver
@@ -863,22 +868,94 @@ public class SetReminderToolTests : TestKit
         };
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
+        var execution = Task.Run(async () =>
+        {
+            return await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "discord-user-target",
+                ["Name"] = "discord-user-target",
+                ["Prompt"] = "Send results",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "15m",
+                ["DeliveryKind"] = "channel",
+                ["DeliveryTransport"] = "discord",
+                ["DeliveryAddress"] = "<@129847561203948576>"
+            }, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
+        Assert.Equal("discord", cmd.Definition.Delivery.Transport);
+        Assert.Equal("129847561203948576", cmd.Definition.Delivery.Address);
+        Assert.NotNull(cmd.Definition.Delivery.Target);
+        Assert.Equal("discord", cmd.Definition.Delivery.Target!.ChannelKey);
+        Assert.Equal("direct_message", cmd.Definition.Delivery.Target.DestinationKind);
+        Assert.Equal("129847561203948576", cmd.Definition.Delivery.Target.DestinationId);
+        Assert.Equal("129847561203948576", cmd.Definition.Delivery.Target.DestinationDisplayName);
+        Assert.Equal(1, resolver.CallCount);
+
+        probe.Reply(new ReminderSavedResponse(
+            cmd.Definition.Id,
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
+
+        var result = await execution;
+        Assert.StartsWith("Reminder 'discord-user-target' scheduled.", result);
+    }
+
+    [Fact]
+    public async Task Rejects_discord_direct_message_reminder_when_direct_messages_are_disabled()
+    {
+        var probe = CreateTestProbe();
+        var resolver = new DiscordReminderTargetResolver(new DiscordChannelOptions
+        {
+            AllowDirectMessages = false
+        });
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
+
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
-            ["Id"] = "discord-user-target",
-            ["Name"] = "discord-user-target",
+            ["Id"] = "discord-dm-disabled",
+            ["Name"] = "discord-dm-disabled",
             ["Prompt"] = "Send results",
             ["ScheduleType"] = "once",
             ["Schedule"] = "15m",
             ["DeliveryKind"] = "channel",
             ["DeliveryTransport"] = "discord",
-            ["DeliveryAddress"] = "<@129847561203948576>"
+            ["DeliveryAddress"] = "dm:129847561203948576"
         }, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Error:", result);
-        Assert.Contains("guild text-channel targets only", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("channel:<channelId>", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, resolver.CallCount);
+        Assert.StartsWith("Error: Could not resolve delivery_address", result);
+        Assert.Contains("direct messages are disabled", result, StringComparison.OrdinalIgnoreCase);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Rejects_discord_direct_message_reminder_when_user_is_not_allowlisted()
+    {
+        var probe = CreateTestProbe();
+        var resolver = new DiscordReminderTargetResolver(new DiscordChannelOptions
+        {
+            AllowDirectMessages = true,
+            AllowedUserIds = ["130111223344556677"]
+        });
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "discord-dm-disallowed",
+            ["Name"] = "discord-dm-disallowed",
+            ["Prompt"] = "Send results",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "15m",
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "discord",
+            ["DeliveryAddress"] = "dm:129847561203948576"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("Error: Could not resolve delivery_address", result);
+        Assert.Contains("allowed users", result, StringComparison.OrdinalIgnoreCase);
         await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
