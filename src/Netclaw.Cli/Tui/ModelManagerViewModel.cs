@@ -186,17 +186,20 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Non-destructive: re-assigning the same model preserves hand-set modalities,
-        // which the picker cannot supply (#1127).
+        // Non-destructive: re-assigning the same model preserves an existing context-window
+        // clamp and modality overrides, none of which the picker can supply (#1127, #1610). The
+        // picker has no manual-override inputs, so it passes no explicit context window and Unset
+        // modality intent — the probe result seeds a first-time set only; existing values win.
         ModelEntryWriter.WriteRole(
             modelsSection,
             roleKey,
             SelectedProvider,
             SelectedModelId,
             provenance,
-            discoveredModel?.ContextWindowTokens,
-            discoveredModel?.InputModalities,
-            discoveredModel?.OutputModalities);
+            contextWindow: null,
+            ModalityOverride.Unset,
+            ModalityOverride.Unset,
+            discoveredModel);
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();

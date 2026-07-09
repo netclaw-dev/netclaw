@@ -401,6 +401,95 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal("qwen3:8b", fallback.GetProperty("ModelId").GetString());
     }
 
+    [Fact]
+    public async Task Set_InputModalities_WritesOverrideWithoutProbing()
+    {
+        WriteConfig(ProvidersOnly());
+
+        // A non-OAuth provider never probes; --input-modalities is the manual override channel.
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities", "Text, Image"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
+    }
+
+    [Fact]
+    public async Task Set_ClearModalities_RemovesExistingOverride()
+    {
+        WriteConfig(WithMainModalities("Text, Image"));
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--clear-modalities"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.False(main.TryGetProperty("InputModalities", out _)); // cleared → runtime detection
+    }
+
+    [Fact]
+    public async Task Set_InvalidModalities_ReturnsErrorWithoutWriting()
+    {
+        WriteConfig(ProvidersOnly());
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities", "Vision"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("invalid modalities", _output.ToString());
+        // Parsing fails before any config load/write, so no Models section is created.
+        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task Set_SameModelReSetWithContextWindow_PreservesExistingModalities()
+    {
+        WriteConfig(WithMainModalities("Text, Image"));
+
+        // End-to-end: a --context-window-only re-set of the same model must keep the operator's
+        // modality override (#1127 / #5) — discovery/rebuild no longer wipes it.
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--context-window", "65536"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
+        Assert.Equal(65536, main.GetProperty("ContextWindow").GetInt32());
+    }
+
+    private static Dictionary<string, object> ProvidersOnly() => new()
+    {
+        ["configVersion"] = 1,
+        ["Providers"] = new Dictionary<string, object>
+        {
+            ["my-ollama"] = new Dictionary<string, object>
+            {
+                ["Type"] = "ollama",
+                ["Endpoint"] = "http://localhost:11434"
+            }
+        }
+    };
+
+    private static Dictionary<string, object> WithMainModalities(string inputModalities)
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Main"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b",
+                ["InputModalities"] = inputModalities
+            }
+        };
+        return config;
+    }
+
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,

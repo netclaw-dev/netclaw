@@ -73,10 +73,13 @@ internal static class ModelCommand
     private static async Task<int> RunSetAsync(
         string[] args, NetclawPaths paths, IProviderProbe? probe, TextWriter writer)
     {
-        // Parse: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]
+        // Parse: netclaw model set <role> <provider> <model-id>
+        //        [--context-window <tokens>] [--input-modalities <list>]
+        //        [--output-modalities <list>] [--clear-modalities]
         if (args.Length < 5)
         {
             writer.WriteLine("Usage: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]");
+            writer.WriteLine("                       [--input-modalities <list>] [--output-modalities <list>] [--clear-modalities]");
             writer.WriteLine();
             writer.WriteLine("Roles: main, fallback, compaction");
             return 1;
@@ -86,20 +89,55 @@ internal static class ModelCommand
         var providerName = args[3];
         var modelId = args[4];
         int? contextWindow = null;
+        ModelModality? inputModalitySet = null;
+        ModelModality? outputModalitySet = null;
+        var clearModalities = false;
 
         for (var i = 5; i < args.Length; i++)
         {
-            if (args[i] is "--context-window" && i + 1 < args.Length)
+            switch (args[i])
             {
-                if (!int.TryParse(args[++i], out var cw) || cw <= 0)
-                {
-                    writer.WriteLine("Error: --context-window must be a positive integer.");
-                    return 1;
-                }
+                case "--context-window" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out var cw) || cw <= 0)
+                    {
+                        writer.WriteLine("Error: --context-window must be a positive integer.");
+                        return 1;
+                    }
 
-                contextWindow = cw;
+                    contextWindow = cw;
+                    break;
+                case "--input-modalities" when i + 1 < args.Length:
+                    if (!TryParseModalities(args[++i], out var input, out var inputError))
+                    {
+                        writer.WriteLine(inputError);
+                        return 1;
+                    }
+
+                    inputModalitySet = input;
+                    break;
+                case "--output-modalities" when i + 1 < args.Length:
+                    if (!TryParseModalities(args[++i], out var outputModality, out var outputError))
+                    {
+                        writer.WriteLine(outputError);
+                        return 1;
+                    }
+
+                    outputModalitySet = outputModality;
+                    break;
+                case "--clear-modalities":
+                    clearModalities = true;
+                    break;
             }
         }
+
+        // An explicit --input/--output-modalities set wins over --clear-modalities (regardless of
+        // arg order); --clear-modalities applies to whichever side was not explicitly set.
+        var inputOverride = inputModalitySet is { } iv
+            ? ModalityOverride.Set(iv)
+            : clearModalities ? ModalityOverride.Clear : ModalityOverride.Unset;
+        var outputOverride = outputModalitySet is { } ov
+            ? ModalityOverride.Set(ov)
+            : clearModalities ? ModalityOverride.Clear : ModalityOverride.Unset;
 
         // Validate role
         var roleKey = role switch
@@ -139,9 +177,14 @@ internal static class ModelCommand
             }
         }
 
+        // Explicitly-supplied metadata (a context window or any modality intent) means the
+        // operator is configuring manually, so skip the probe — mirroring how --context-window
+        // has always short-circuited it. The supplied values win over discovery anyway.
+        var manualMetadataSupplied = contextWindow.HasValue || inputOverride.Supplied || outputOverride.Supplied;
+
         DiscoveredModel? discoveredModel = null;
         var provenance = ModelDiscoverySource.Manual;
-        if (contextWindow is null && ShouldProbeForMetadata(providerEntry))
+        if (!manualMetadataSupplied && ShouldProbeForMetadata(providerEntry))
         {
             probe ??= ProviderCommand.CreateDefaultRegistry();
             ProviderProbeResult probeResult;
@@ -170,17 +213,20 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Non-destructive: re-setting the same model (or only its context window) keeps
-        // hand-set modalities, which cannot be supplied on the command line (#1127).
+        // Non-destructive: stored ContextWindow and modalities are operator-owned overrides that
+        // discovery never clobbers on a same-model re-set (#1127, #1610). Explicit operator input
+        // (--context-window / --input-modalities / --clear-modalities) wins; the probe result only
+        // seeds a first-time set or a model switch.
         ModelEntryWriter.WriteRole(
             modelsSection,
             roleKey,
             providerName,
             modelId,
             provenance,
-            contextWindow ?? discoveredModel?.ContextWindowTokens,
-            discoveredModel?.InputModalities,
-            discoveredModel?.OutputModalities);
+            contextWindow,
+            inputOverride,
+            outputOverride,
+            discoveredModel);
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
@@ -190,6 +236,31 @@ internal static class ModelCommand
     private static bool ShouldProbeForMetadata(ProviderEntry entry)
         => string.Equals(entry.Type, "openai", StringComparison.OrdinalIgnoreCase)
            && entry.AuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce;
+
+    /// <summary>
+    /// Parses a <c>--input/output-modalities</c> value: a comma-separated list of
+    /// <see cref="ModelModality"/> flags (e.g. <c>Text</c>, <c>"Text, Image"</c>). Rejects
+    /// <c>None</c> and any unknown flag so only schema-valid overrides reach config — a model
+    /// with no modalities is meaningless, and <c>--clear-modalities</c> is the way to remove one.
+    /// </summary>
+    private static bool TryParseModalities(string value, out ModelModality modalities, out string error)
+    {
+        const ModelModality all = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video;
+        modalities = default;
+
+        if (Enum.TryParse(value, ignoreCase: true, out ModelModality parsed)
+            && parsed != ModelModality.None
+            && (parsed & ~all) == 0)
+        {
+            modalities = parsed;
+            error = string.Empty;
+            return true;
+        }
+
+        error = $"Error: invalid modalities '{value}'. Use a comma-separated list of: Text, Image, Audio, Video "
+                + "(or --clear-modalities to remove the override).";
+        return false;
+    }
 
     /// <summary>
     /// The endpoint the probe will actually hit, for display. When a provider has no
@@ -351,11 +422,19 @@ internal static class ModelCommand
         writer.WriteLine();
         writer.WriteLine("Options for 'set':");
         writer.WriteLine("  --context-window <tokens>    Override context window size");
+        writer.WriteLine("  --input-modalities <list>    Override input modalities, e.g. \"Text, Image\"");
+        writer.WriteLine("  --output-modalities <list>   Override output modalities, e.g. \"Text\"");
+        writer.WriteLine("  --clear-modalities           Remove modality overrides (fall back to runtime detection)");
+        writer.WriteLine();
+        writer.WriteLine("  Modality and context-window overrides are preserved when you re-set the same model;");
+        writer.WriteLine("  provider discovery never overwrites them. Use these flags (or --clear-modalities) to change them.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw model list");
         writer.WriteLine("  netclaw model discover my-ollama");
         writer.WriteLine("  netclaw model set main my-ollama qwen3:30b --context-window 32768");
+        writer.WriteLine("  netclaw model set main my-vllm qwen-vl --input-modalities \"Text, Image\"");
+        writer.WriteLine("  netclaw model set main my-ollama qwen3:30b --clear-modalities");
         writer.WriteLine("  netclaw model clear fallback");
         return 0;
     }
