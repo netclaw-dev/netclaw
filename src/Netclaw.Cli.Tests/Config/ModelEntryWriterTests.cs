@@ -7,6 +7,8 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Xunit;
+using ModalityOverride = Netclaw.Cli.Config.ValueOverride<Netclaw.Configuration.ModelModality>;
+using ContextWindowOverride = Netclaw.Cli.Config.ValueOverride<int>;
 
 namespace Netclaw.Cli.Tests.Config;
 
@@ -14,7 +16,8 @@ namespace Netclaw.Cli.Tests.Config;
 /// Guards the single persist path shared by `model set`, the init wizard, and the TUI
 /// model manager. The rule under test: modalities are written only when the discovery
 /// source genuinely reported them, so an unknown is never frozen into config as a
-/// permanent "Text" override (#1290).
+/// permanent "Text" override (#1290), and operator-owned overrides survive re-selection
+/// (#1127 / #1610).
 /// </summary>
 public class ModelEntryWriterTests
 {
@@ -71,7 +74,7 @@ public class ModelEntryWriterTests
         // Re-set the same model with only a context-window change; no modality intent supplied.
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
-            contextWindow: 131072, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
+            ContextWindowOverride.Set(131072), ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("Text, Image", entry["InputModalities"]); // preserved (#1127)
@@ -92,7 +95,7 @@ public class ModelEntryWriterTests
         // is documented to take precedence over provider-reported detection.
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
             Discovered(contextWindow: 128000));
 
         var entry = (Dictionary<string, object>)models["Main"];
@@ -107,11 +110,31 @@ public class ModelEntryWriterTests
 
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
             Discovered(contextWindow: 128000));
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal(128000, entry["ContextWindow"]);
+    }
+
+    [Fact]
+    public void WriteRole_ClearContextWindow_DropsStoredClampAndDiscoveredWindow()
+    {
+        // Operator clamped the window; now --clear-context-window removes the clamp so runtime
+        // detection resolves it. Clear wins over BOTH the stored value and a probe that reports
+        // a window (#1610) — mirroring --clear-modalities.
+        var models = Models(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "ContextWindow": 32000 } }
+            """);
+
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
+            ContextWindowOverride.Clear, ModalityOverride.Unset, ModalityOverride.Unset,
+            Discovered(contextWindow: 128000));
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.False(entry.ContainsKey("ContextWindow")); // clamp removed → runtime detection
     }
 
     [Fact]
@@ -127,11 +150,32 @@ public class ModelEntryWriterTests
         // the same rule as ContextWindow: the field is documented to bypass automated detection.
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
             Discovered(input: ModelModality.Text, output: ModelModality.Text));
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("Text, Image", entry["InputModalities"]);
+    }
+
+    [Fact]
+    public void WriteRole_SameModelEntryClearedModality_DiscoveryDoesNotResurrect()
+    {
+        // The entry exists for this model but carries NO modality — the on-disk shape left behind
+        // by a prior --clear-modalities. A later same-model re-set that carries a probe result must
+        // NOT re-add the discovered modality, or it would silently undo the operator's clear and
+        // re-demote a multimodal-misreporting model on next boot (#1610).
+        var models = Models(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl" } }
+            """);
+
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
+            Discovered(input: ModelModality.Text | ModelModality.Image));
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.False(entry.ContainsKey("InputModalities")); // stays cleared, not resurrected
     }
 
     [Fact]
@@ -146,7 +190,7 @@ public class ModelEntryWriterTests
         // stored override so the operator can actually change a value discovery no longer touches.
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
-            contextWindow: null,
+            ContextWindowOverride.Unset,
             ModalityOverride.Set(ModelModality.Text), ModalityOverride.Unset, discovered: null);
 
         var entry = (Dictionary<string, object>)models["Main"];
@@ -165,7 +209,7 @@ public class ModelEntryWriterTests
         // wins over BOTH the stored value and a probe that still reports modalities (#1610 / #4).
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
-            contextWindow: null, ModalityOverride.Clear, ModalityOverride.Clear,
+            ContextWindowOverride.Unset, ModalityOverride.Clear, ModalityOverride.Clear,
             Discovered(input: ModelModality.Text | ModelModality.Image));
 
         var entry = (Dictionary<string, object>)models["Main"];
@@ -186,7 +230,7 @@ public class ModelEntryWriterTests
 
         ModelEntryWriter.WriteRole(
             models, "Main", "local-ollama", "qwen3:30b", ModelDiscoverySource.Manual,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("qwen3:30b", entry["ModelId"]);
@@ -205,11 +249,30 @@ public class ModelEntryWriterTests
 
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
-            contextWindow: 131072, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
+            ContextWindowOverride.Set(131072), ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("Live", entry["Provenance"]); // origin preserved, not downgraded to Manual
         Assert.Equal(131072, entry["ContextWindow"]);
+    }
+
+    [Fact]
+    public void WriteRole_SameModelProbeFailedDefaults_PreservesLiveProvenance()
+    {
+        // The ID was originally resolved Live. A same-model re-pick whose probe FAILED passes
+        // Defaults (not Manual). That is still "did not freshly resolve the ID", so it must not
+        // downgrade the stored Live origin — only a fresh Live discovery re-stamps it (#1610).
+        var models = Models(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "Provenance": "Live" } }
+            """);
+
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Defaults,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.Equal("Live", entry["Provenance"]);
     }
 
     [Fact]
@@ -224,7 +287,7 @@ public class ModelEntryWriterTests
 
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
             Discovered(contextWindow: 128000));
 
         var entry = (Dictionary<string, object>)models["Main"];
@@ -244,14 +307,55 @@ public class ModelEntryWriterTests
 
         var ex = Record.Exception(() => ModelEntryWriter.WriteRole(
             models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
             Discovered(contextWindow: 128000)));
 
         Assert.Null(ex);
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("qwen-vl", entry["ModelId"]);
-        Assert.Equal(128000, entry["ContextWindow"]);          // clean rewrite, nothing preserved
+        Assert.Equal(128000, entry["ContextWindow"]);          // no stored window, so discovery seeds it
         Assert.False(entry.ContainsKey("InputModalities"));    // corrupt value dropped, not frozen
+    }
+
+    [Fact]
+    public void WriteRole_CorruptModalityButValidWindow_PreservesWindow()
+    {
+        // A hand-edited entry with a VALID ContextWindow clamp but an unparseable InputModalities
+        // string. Discarding the whole entry (the old catch behavior) would silently clobber the
+        // operator's still-valid window; the field-tolerant read must preserve it (#1610).
+        var models = Models(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "ContextWindow": 32768, "InputModalities": "text_and_image" } }
+            """);
+
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
+            Discovered(contextWindow: 128000));
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.Equal(32768, entry["ContextWindow"]);         // operator clamp preserved, not clobbered
+        Assert.False(entry.ContainsKey("InputModalities"));  // unparseable override dropped
+    }
+
+    [Fact]
+    public void WriteRole_CorruptEntryForDifferentModel_DoesNotLeakWindow()
+    {
+        // A corrupt entry that names a DIFFERENT model must not have its ContextWindow carried
+        // onto the model being set — the resilient read only preserves a same-model entry.
+        var models = Models(
+            """
+            { "Main": { "Provider": "spark", "ModelId": "other-model", "ContextWindow": 32768, "InputModalities": "Vision" } }
+            """);
+
+        ModelEntryWriter.WriteRole(
+            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
+            Discovered(contextWindow: 128000));
+
+        var entry = (Dictionary<string, object>)models["Main"];
+        Assert.Equal("qwen-vl", entry["ModelId"]);
+        Assert.Equal(128000, entry["ContextWindow"]);  // discovered window, not the other model's 32768
     }
 
     [Fact]
@@ -265,7 +369,7 @@ public class ModelEntryWriterTests
         // Switching to a DIFFERENT model must not carry the old model's modalities over.
         ModelEntryWriter.WriteRole(
             models, "Main", "spark", "other-model", ModelDiscoverySource.Manual,
-            contextWindow: null, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
+            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
 
         var entry = (Dictionary<string, object>)models["Main"];
         Assert.Equal("other-model", entry["ModelId"]);

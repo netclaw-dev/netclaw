@@ -196,9 +196,9 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             SelectedProvider,
             SelectedModelId,
             provenance,
-            contextWindow: null,
-            ModalityOverride.Unset,
-            ModalityOverride.Unset,
+            ValueOverride<int>.Unset,
+            ValueOverride<ModelModality>.Unset,
+            ValueOverride<ModelModality>.Unset,
             discoveredModel);
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 

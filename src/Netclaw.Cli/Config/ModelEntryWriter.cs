@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Config;
@@ -32,13 +33,14 @@ internal static class ModelEntryWriter
     /// </description></item>
     /// </list>
     /// Because the stored value now wins, the operator needs a way to *change* it: an explicit
-    /// <see cref="ModalityOverride.Set"/> replaces it and <see cref="ModalityOverride.Clear"/>
+    /// <see cref="ValueOverride{T}.Set"/> replaces it and <see cref="ValueOverride{T}.Clear"/>
     /// removes it (falling back to runtime detection). Switching a role to a <em>different</em>
     /// model does not carry the old model's attributes over — they belonged to that model.
     /// </summary>
     /// <param name="contextWindow">
-    /// The explicit operator override (<c>--context-window</c>). When supplied it wins over
-    /// everything; the picker, which has no such input, passes null.
+    /// Operator intent for the context window (set / clear / unset). <c>--context-window</c> sets
+    /// it (wins over everything), <c>--clear-context-window</c> removes the clamp so detection
+    /// resolves it, and the picker — which has no such input — passes <see cref="ValueOverride{T}.Unset"/>.
     /// </param>
     /// <param name="inputModalities">Operator intent for input modalities (set / clear / unset).</param>
     /// <param name="outputModalities">Operator intent for output modalities (set / clear / unset).</param>
@@ -52,42 +54,63 @@ internal static class ModelEntryWriter
         string provider,
         string? modelId,
         ModelDiscoverySource? provenance,
-        int? contextWindow,
-        ModalityOverride inputModalities,
-        ModalityOverride outputModalities,
+        ValueOverride<int> contextWindow,
+        ValueOverride<ModelModality> inputModalities,
+        ValueOverride<ModelModality> outputModalities,
         DiscoveredModel? discovered)
     {
         var existing = ReadSameModelEntry(modelsSection, roleKey, provider, modelId);
 
-        // Provenance records how the model ID was resolved, not how the entry was last
-        // edited. A same-model re-set that did not itself resolve the ID (no probe → the
-        // caller passes Manual) must not downgrade a previously discovered origin
-        // (Live/Defaults) to Manual; only a fresh discovery updates it (#1610).
-        if (existing?.Provenance is { } priorProvenance && provenance == ModelDiscoverySource.Manual)
+        // Provenance records how the model ID was resolved, not how the entry was last edited. A
+        // same-model re-set that did not itself freshly resolve the ID — no probe (the caller
+        // passes Manual) or a probe that failed (Defaults) — must not downgrade a previously
+        // discovered origin. Only a fresh successful discovery (Live) re-stamps it (#1610).
+        if (existing?.Provenance is { } priorProvenance && provenance != ModelDiscoverySource.Live)
             provenance = priorProvenance;
 
         // Precedence for every operator-owned attribute: explicit input > existing stored value
         // > probe. Collapsing the explicit and discovered values in the caller defeated
         // preservation, because the probe/picker paths always pass a discovered value, so the
         // stored value was overwritten on every re-selection.
-        contextWindow ??= existing?.ContextWindow ?? discovered?.ContextWindowTokens;
-        var resolvedInput = ResolveModality(inputModalities, existing?.InputModalities, discovered?.InputModalities);
-        var resolvedOutput = ResolveModality(outputModalities, existing?.OutputModalities, discovered?.OutputModalities);
+        var sameModelEntry = existing is not null;
+        var resolvedWindow = ResolveContextWindow(contextWindow, existing?.ContextWindow, discovered?.ContextWindowTokens);
+        var resolvedInput = ResolveModality(inputModalities, sameModelEntry, existing?.InputModalities, discovered?.InputModalities);
+        var resolvedOutput = ResolveModality(outputModalities, sameModelEntry, existing?.OutputModalities, discovered?.OutputModalities);
 
         modelsSection[roleKey] = BuildModelEntry(
-            provider, modelId, provenance, contextWindow, resolvedInput, resolvedOutput);
+            provider, modelId, provenance, resolvedWindow, resolvedInput, resolvedOutput);
     }
 
     /// <summary>
-    /// Resolves the modality actually written: an explicit operator set or clear wins outright
-    /// (the operator is the authority on a manual override); otherwise an existing stored value
-    /// is preserved, and provider discovery only fills a genuine gap (first set / model switch).
+    /// Resolves the modality actually written. An explicit operator set or clear wins outright
+    /// (the operator is the authority on a manual override). Otherwise, when the same model already
+    /// has an entry on disk, that entry is honored verbatim — including a deliberately-cleared
+    /// (absent) modality, so a later probe cannot silently resurrect an override the operator
+    /// removed with <c>--clear-modalities</c> (#1610). Provider discovery only seeds a genuine gap:
+    /// a first-time set or a switch to a different model, where no entry exists yet.
     /// </summary>
     private static ModelModality? ResolveModality(
-        ModalityOverride @override, ModelModality? existing, ModelModality? discovered)
+        ValueOverride<ModelModality> @override, bool sameModelEntryExists,
+        ModelModality? existing, ModelModality? discovered)
         => @override.Supplied
-            ? @override.Value            // Set(value) → value; Clear → null (key omitted downstream)
-            : existing ?? discovered;    // preserve on-disk value; discovery only seeds a gap
+            ? @override.Value                 // Set(value) → value; Clear → null (key omitted downstream)
+            : sameModelEntryExists ? existing  // same model on disk: honor it, incl. a cleared (null) value
+                : discovered;                  // first set / model switch: seed from discovery
+
+    /// <summary>
+    /// Resolves the context window actually written. Mirrors <see cref="ResolveModality"/> for the
+    /// explicit cases: <c>--context-window</c> (Set) or <c>--clear-context-window</c> (Clear) wins,
+    /// otherwise the stored clamp is preserved and discovery only seeds a gap. Unlike modalities
+    /// this deliberately does NOT pin a same-model entry against discovery — a re-detected window
+    /// equals what runtime detection would produce anyway, so there is no misreporting-demotion
+    /// hazard (the reason a cleared modality must stay cleared), and letting a fresh probe fill an
+    /// absent window is safe and useful.
+    /// </summary>
+    private static int? ResolveContextWindow(
+        ValueOverride<int> @override, int? existing, int? discovered)
+        => @override.Supplied
+            ? @override.Value            // Set(n) → n; Clear → null (drop the clamp → runtime detects)
+            : existing ?? discovered;    // preserve the stored clamp; discovery seeds a first set / gap
 
     /// <summary>
     /// The role's current entry, but only when it already references the same
@@ -112,9 +135,7 @@ internal static class ModelEntryWriter
         // A legacy or hand-corrupted entry (e.g. an unrecognized modality enum string, or a
         // shape that predates a schema change) must not abort `model set`: we are about to
         // overwrite this role anyway, and before the non-destructive rewrite existed the
-        // command simply clobbered it. Degrade an unreadable existing entry to "nothing to
-        // preserve" so the operator can still repair it, rather than throwing JsonException
-        // out of a write they explicitly requested.
+        // command simply clobbered it.
         ModelReference? existing;
         try
         {
@@ -122,7 +143,11 @@ internal static class ModelEntryWriter
         }
         catch (JsonException)
         {
-            return null;
+            // Strict deserialization failed — in practice a stale/unknown modality or provenance
+            // enum string, which JsonStringEnumConverter rejects by throwing. Discarding the whole
+            // entry here would silently clobber a still-valid operator-owned ContextWindow (#1610),
+            // so recover the throw-proof fields and drop only the unparseable overrides.
+            return ReadResilient(raw, provider, modelId);
         }
 
         if (existing is null)
@@ -132,6 +157,75 @@ internal static class ModelEntryWriter
             && string.Equals(existing.ModelId, modelId, StringComparison.OrdinalIgnoreCase)
             ? existing
             : null;
+    }
+
+    /// <summary>
+    /// Recovers the preservation-worthy fields from an entry that failed strict deserialization.
+    /// Provider, ModelId and ContextWindow are plain strings/int that never throw, so they are read
+    /// directly; the modality/provenance overrides — the fields that failed to parse — are dropped
+    /// (left null) because a value we could not read must not be preserved. Returns null when the
+    /// recovered entry names a different model (its attributes must not carry over) or is not a
+    /// JSON object.
+    /// </summary>
+    private static ModelReference? ReadResilient(object raw, string provider, string? modelId)
+    {
+        var json = raw is JsonElement element
+            ? element.GetRawText()
+            : JsonSerializer.Serialize(raw, JsonDefaults.ConfigFile);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // Confirm the poisoned entry still names the model being set before preserving anything.
+        if (!TryGetString(root, nameof(ModelReference.Provider), out var storedProvider)
+            || !TryGetString(root, nameof(ModelReference.ModelId), out var storedModelId)
+            || !string.Equals(storedProvider, provider, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(storedModelId, modelId, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var recovered = new ModelReference { Provider = storedProvider, ModelId = storedModelId };
+        if (TryGetInt32(root, nameof(ModelReference.ContextWindow), out var window))
+            recovered.ContextWindow = window;
+
+        return recovered;
+    }
+
+    private static bool TryGetString(JsonElement root, string name, out string value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind == JsonValueKind.String)
+            {
+                value = property.Value.GetString()!;
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetInt32(JsonElement root, string name, out int value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Web-default reads coerce numeric strings, so accept both a JSON number and a
+            // stringified integer to match what the strict path would have parsed.
+            if (property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out value))
+                return true;
+            if (property.Value.ValueKind == JsonValueKind.String
+                && int.TryParse(property.Value.GetString(), out value))
+                return true;
+        }
+
+        value = 0;
+        return false;
     }
 
     /// <summary>
@@ -206,21 +300,23 @@ internal static class ModelEntryWriter
 }
 
 /// <summary>
-/// An operator's intent for a modality field on <c>model set</c>. A plain
-/// <see cref="ModelModality"/>? cannot express it, because two of the three states both
-/// resolve to null yet behave oppositely: "not supplied" must preserve any existing override,
-/// while "clear" must win over it. The tri-state is: <see cref="Unset"/> (leave it to the
-/// stored value / discovery), <see cref="Set"/> (replace with an explicit value), and
-/// <see cref="Clear"/> (remove the override so runtime detection resolves it).
+/// An operator's intent for an overridable, operator-owned model attribute on <c>model set</c> —
+/// a modality set (<see cref="ModelModality"/>) or the context window (<see cref="int"/>). A plain
+/// <c>T?</c> cannot express it, because two of the three states both resolve to null yet behave
+/// oppositely: "not supplied" must preserve any existing override, while "clear" must win over it.
+/// The tri-state is: <see cref="Unset"/> (leave it to the stored value / discovery),
+/// <see cref="Set"/> (replace with an explicit value), and <see cref="Clear"/> (remove the override
+/// so runtime detection resolves it).
 /// </summary>
-internal readonly record struct ModalityOverride(bool Supplied, ModelModality? Value)
+internal readonly record struct ValueOverride<T>(bool Supplied, T? Value)
+    where T : struct
 {
     /// <summary>Operator said nothing — preserve the stored value, else fall back to discovery.</summary>
-    internal static ModalityOverride Unset => default;
+    internal static ValueOverride<T> Unset => default;
 
     /// <summary>Operator asked to remove the override so runtime capability detection resolves it.</summary>
-    internal static ModalityOverride Clear => new(true, null);
+    internal static ValueOverride<T> Clear => new(true, null);
 
-    /// <summary>Operator supplied an explicit modality set that replaces whatever is stored.</summary>
-    internal static ModalityOverride Set(ModelModality value) => new(true, value);
+    /// <summary>Operator supplied an explicit value that replaces whatever is stored.</summary>
+    internal static ValueOverride<T> Set(T value) => new(true, value);
 }

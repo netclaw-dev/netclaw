@@ -78,6 +78,34 @@ When adding an OpenAI provider from the CLI, `netclaw provider add <name>
 openai` defaults to the ChatGPT OAuth device flow. Use `--auth api-key
 --api-key <key>` to force platform API-key auth instead.
 
+### Assigning models to roles and overriding metadata
+
+`netclaw model set <role> <provider> <model-id>` assigns a model to a role
+(`main`, `fallback`, `compaction`). Two attributes can be overridden by the
+operator and are **operator-owned**: the context window and the input/output
+modalities. Provider discovery seeds them on a first-time set or a model
+switch, but never clobbers a value already on disk when you re-set the **same**
+`(provider, model-id)` — so re-running `model set` (or re-picking in the TUI)
+preserves a hand-tuned clamp or modality override.
+
+- `--context-window <tokens>` clamps the session budget and takes precedence
+  over provider-reported detection. Supplying it configures the model manually
+  and skips the metadata probe.
+- `--input-modalities <list>` / `--output-modalities <list>` override detected
+  modalities with a comma-separated list of named flags (`Text`, `Image`,
+  `Audio`, `Video`). These do **not** skip the probe — the model is still
+  validated and its context window discovered; the override just wins over the
+  discovered modalities.
+- `--clear-context-window` and `--clear-modalities` remove the respective
+  override so runtime capability detection resolves it again (use these after a
+  provider enlarges a model's window or fixes mis-reported modalities).
+
+To change a preserved value you must pass the corresponding flag (a plain
+re-set will not touch it). A legacy or hand-edited entry with an unreadable
+value does not block a re-set — `model set` repairs it while keeping the fields
+it can still read; `model list` reports an unparseable config instead of
+crashing, and `netclaw doctor --fix` repairs it.
+
 ### Adding GitHub Copilot
 
 GitHub Copilot uses the OAuth device flow only — no API key. The operator

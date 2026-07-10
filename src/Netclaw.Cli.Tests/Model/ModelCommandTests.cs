@@ -462,6 +462,208 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal(65536, main.GetProperty("ContextWindow").GetInt32());
     }
 
+    [Fact]
+    public async Task Set_TrailingModalityFlagWithoutValue_ReturnsError()
+    {
+        WriteConfig(ProvidersOnly());
+
+        // --input-modalities is the final token: its value is missing. It must fail loudly rather
+        // than be silently dropped while the command still reports success (#1610).
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--input-modalities requires a value", _output.ToString());
+        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task Set_UnknownArgument_ReturnsError()
+    {
+        WriteConfig(ProvidersOnly());
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalites", "Text"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("unknown argument '--input-modalites'", _output.ToString());
+        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task Set_NumericModalities_ReturnsError()
+    {
+        WriteConfig(ProvidersOnly());
+
+        // A raw integer must not be coerced into flags: "3" would otherwise become Text|Image.
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities", "3"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("invalid modalities", _output.ToString());
+        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task Set_ClearContextWindow_RemovesStoredClamp()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Main"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b",
+                ["ContextWindow"] = 32768
+            }
+        };
+        WriteConfig(config);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--clear-context-window"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.False(main.TryGetProperty("ContextWindow", out _)); // clamp removed → runtime detection
+    }
+
+    [Fact]
+    public async Task Set_ContextWindowAndClearContextWindow_ReturnsError()
+    {
+        WriteConfig(ProvidersOnly());
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--context-window", "32768", "--clear-context-window"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("cannot be combined", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Set_OAuthModelWithModalityOverride_StillProbesAndValidates()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel
+            {
+                ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+                ContextWindowTokens = 512000,
+                InputModalities = ModelModality.Text | ModelModality.Image,
+                OutputModalities = ModelModality.Text,
+            }
+        ]);
+
+        // A modality override no longer short-circuits the probe: the probe must still run to
+        // validate the model and discover the context window, while the operator's modality wins.
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "openai-codex", "gpt-new-codex", "--input-modalities", "Text"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, _fakeProbe.ProbeCallCount);            // probe ran despite the modality flag
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Live", main.GetProperty("Provenance").GetString());     // resolved via probe
+        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());   // discovered window captured
+        Assert.Equal("Text", main.GetProperty("InputModalities").GetString());// operator override wins
+    }
+
+    [Fact]
+    public async Task Set_OAuthModelWithModalityOverride_WhenModelNotReturned_ReturnsError()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("gpt-other-codex") }
+        ]);
+
+        // The modality flag must not let an unvalidated model slip through: the probe reports a
+        // different model, so the set must fail rather than write an unverified entry (#1610).
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "openai-codex", "gpt-new-codex", "--input-modalities", "Text"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("was not returned", _output.ToString());
+        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task List_CorruptModalityConfig_ReturnsErrorWithoutCrashing()
+    {
+        // A config with an unparseable modality enum string must not crash `model list` with an
+        // unhandled JsonException, nor be silently reported as "no models configured" (#1610).
+        WriteConfig(WithMainEntry(new Dictionary<string, object>
+        {
+            ["Provider"] = "my-ollama",
+            ["ModelId"] = "qwen3:30b",
+            ["ContextWindow"] = 32768,
+            ["InputModalities"] = "text_and_image"
+        }));
+
+        var exitCode = await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not be parsed", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Set_CorruptModalityButValidWindow_PreservesWindowEndToEnd()
+    {
+        // End-to-end regression for the full `model set` path: a re-set over a corrupt entry that
+        // has a VALID ContextWindow must succeed and keep the window (repairing the bad modality),
+        // not crash in the downgrade-check load path before reaching the writer (#1610).
+        WriteConfig(WithMainEntry(new Dictionary<string, object>
+        {
+            ["Provider"] = "my-ollama",
+            ["ModelId"] = "qwen3:30b",
+            ["ContextWindow"] = 32768,
+            ["InputModalities"] = "text_and_image"
+        }));
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b"], _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal(32768, main.GetProperty("ContextWindow").GetInt32()); // valid clamp preserved
+        Assert.False(main.TryGetProperty("InputModalities", out _));        // corrupt override dropped
+    }
+
+    private static Dictionary<string, object> WithMainEntry(Dictionary<string, object> main)
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object> { ["Main"] = main };
+        return config;
+    }
+
     private static Dictionary<string, object> ProvidersOnly() => new()
     {
         ["configVersion"] = 1,
