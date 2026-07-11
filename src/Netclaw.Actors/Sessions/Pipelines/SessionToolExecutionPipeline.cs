@@ -270,7 +270,9 @@ internal static class SessionToolExecutionPipeline
             context.OneTimeApprovedToolName = tc.Name;
             context.SetOneTimeApprovedPatterns(oneTimeApprovalPreSeed);
         }
-        if (approvalChannel is not null && emitApprovalRequest is not null)
+        if (approvalChannel is not null
+            && emitApprovalRequest is not null
+            && CanRequestInteractiveApproval(source, turnContext))
         {
             context.ApprovalBridge = new ParentSessionApprovalBridge(
                 approvalChannel,

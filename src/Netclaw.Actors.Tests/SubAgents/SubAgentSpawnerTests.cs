@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
@@ -88,6 +89,68 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var result = await spawnTask;
         Assert.True(result.Success);
+    }
+
+    [Theory]
+    [InlineData(ChannelType.Headless)]
+    [InlineData(ChannelType.Reminder)]
+    [InlineData(ChannelType.Webhook)]
+    public async Task Spawn_async_does_not_bridge_approval_for_non_interactive_parent(ChannelType channelType)
+    {
+        var childProbe = CreateTestProbe($"non-interactive-{channelType}-child");
+        var spawner = CreateSpawner();
+        var context = new ToolExecutionContext("automation/subagent-parent", "/tmp/netclaw/sessions/parent")
+        {
+            Audience = TrustAudience.Personal,
+            ChannelType = channelType.ToWireValue(),
+            SupportsInteractiveApproval = false,
+            ApprovalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce),
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+        };
+
+        var spawnTask = spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context,
+            TestContext.Current.CancellationToken);
+
+        var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Null(run.ApprovalBridge);
+
+        childProbe.Reply(SuccessfulResult());
+        Assert.True((await spawnTask).Success);
+    }
+
+    [Fact]
+    public async Task Spawn_async_preserves_approval_bridge_for_interactive_parent()
+    {
+        var childProbe = CreateTestProbe("interactive-approval-child");
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var spawner = CreateSpawner();
+        var context = new ToolExecutionContext("interactive/subagent-parent", "/tmp/netclaw/sessions/parent")
+        {
+            Audience = TrustAudience.Personal,
+            ChannelType = ChannelType.Tui.ToWireValue(),
+            SupportsInteractiveApproval = true,
+            ApprovalBridge = approvalBridge,
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+        };
+
+        var spawnTask = spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context,
+            TestContext.Current.CancellationToken);
+
+        var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Same(approvalBridge, run.ApprovalBridge);
+
+        childProbe.Reply(SuccessfulResult());
+        Assert.True((await spawnTask).Success);
     }
 
     [Fact]
@@ -213,4 +276,41 @@ public sealed class SubAgentSpawnerTests : TestKit
         var call = Assert.Single(metrics.TokenUsageCalls);
         Assert.Equal((175L, 60L), call);
     }
+
+    private static SubAgentSpawner CreateSpawner()
+    {
+        var toolRegistry = new ToolRegistry();
+        toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
+
+        return new SubAgentSpawner(
+            new SingleClientProvider(new FakeChatClient()),
+            toolRegistry,
+            new ToolAccessPolicy(
+                new ToolConfig(),
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy()),
+            approvalService: null,
+            new StaticSystemPromptProvider("You are an inspector."),
+            NullLogger<SubAgentSpawner>.Instance);
+    }
+
+    private static SubAgentProfile CreateProfile() => new()
+    {
+        Name = "inspector",
+        Description = "Inspect the system",
+        SystemPrompt = "You are an inspector.",
+        ToolNames = ["inspect_context"],
+        Visibility = SubAgentVisibility.UserFacing
+    };
+
+    private static SubAgentResult SuccessfulResult() => new()
+    {
+        Success = true,
+        Output = "ok",
+        AgentName = new AgentName("inspector")
+    };
 }
