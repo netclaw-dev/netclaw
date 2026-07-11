@@ -83,7 +83,9 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
         var config = builder.BuildConfigDictionary();
 
         var models = (Dictionary<string, object>)config["Models"];
-        var main = (Dictionary<string, object>)models["Main"];
+        var roles = (Dictionary<string, object>)models["Roles"];
+        var definitions = (Dictionary<string, object>)models["Definitions"];
+        var main = (Dictionary<string, object>)definitions[(string)roles["Main"]];
         Assert.Equal("openai", main["Provider"]);
         Assert.Equal("gpt-4.1", main["ModelId"]);
     }

@@ -36,7 +36,7 @@ options instead of adding provider-specific properties to `ProviderEntry`.
 ### Degraded mode: No-Op chat client
 
 When Netclaw starts without an explicitly configured main model/provider
-(no `Models:Main`, incomplete `Models:Main`, no `Providers`, or `Models:Main`
+(no `Models.Roles.Main`, an unresolved definition, no `Providers`, or the selected definition
 points to a provider that is not configured), the daemon launches in
 **degraded mode** with a No-Op chat client. Bound defaults such as
 `local-ollama/qwen3:30b` do not count as operator configuration unless those
@@ -80,13 +80,13 @@ openai` defaults to the ChatGPT OAuth device flow. Use `--auth api-key
 
 ### Assigning models to roles and overriding metadata
 
-`netclaw model set <role> <provider> <model-id>` assigns a model to a role
-(`main`, `fallback`, `compaction`). Two attributes can be overridden by the
+`netclaw model set <role> <provider> <model-id>` creates or reuses a named model
+definition and assigns it to a role (`main`, `fallback`, `compaction`). Definitions
+own provider/model identity and metadata, while roles only reference definitions.
+Switching away from a model and back therefore preserves its overrides. Two attributes can be overridden by the
 operator and are **operator-owned**: the context window and the input/output
-modalities. Provider discovery seeds them on a first-time set or a model
-switch, but never clobbers a value already on disk when you re-set the **same**
-`(provider, model-id)` — so re-running `model set` (or re-picking in the TUI)
-preserves a hand-tuned clamp or modality override.
+modalities. Provider discovery seeds a new definition but never changes an existing
+definition, including adding a property the definition deliberately omits.
 
 - `--context-window <tokens>` clamps the session budget and takes precedence
   over provider-reported detection. Supplying it configures the model manually
@@ -102,7 +102,8 @@ preserves a hand-tuned clamp or modality override.
 
 To change a preserved value you must pass the corresponding flag (a plain
 re-set will not touch it). A legacy or hand-edited entry with an unreadable
-value does not block a re-set — `model set` repairs it while keeping the fields
+value does not block a re-set — `model set` migrates legacy inline roles to named
+definitions and repairs the selected entry while keeping the fields
 it can still read; `model list` reports an unparseable config instead of
 crashing, and `netclaw doctor --fix` repairs it.
 

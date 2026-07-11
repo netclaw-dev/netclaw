@@ -2001,8 +2001,7 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
 static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, DaemonApi daemonApi)
 {
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
+    var models = ModelConfigurationResolver.Resolve(configuration).Selection;
     var validation = ProviderRuntimeValidation.Evaluate(
         providers,
         models,

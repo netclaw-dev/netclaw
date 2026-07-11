@@ -43,8 +43,8 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
         if (root is null)
             return DoctorCheckResult.Pass("Context Window", "No config file to check.");
 
-        var models = root["Models"] as JsonObject;
-        var main = models?["Main"] as JsonObject;
+        var resolvedModels = ModelConfigurationResolver.Resolve(_configuration).Selection;
+        var main = resolvedModels.Main;
 
         var runtimeValidation = ValidateRuntimeConfiguration(root);
         if (runtimeValidation.Status != ProviderRuntimeStatus.Valid)
@@ -55,7 +55,7 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
                 BuildInferenceRemediation(runtimeValidation.AvailableProviders));
         }
 
-        if (main is null)
+        if (string.IsNullOrWhiteSpace(main.Provider) || string.IsNullOrWhiteSpace(main.ModelId))
         {
             return DoctorCheckResult.Warning(
                 "Context Window",
@@ -63,15 +63,12 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
                 "Run `netclaw init` to configure a provider and main model, or add Models.Main to netclaw.json.");
         }
 
-        var contextWindow = main["ContextWindow"];
-        if (contextWindow is null)
+        if (main.ContextWindow is null)
         {
-            var modelId = _configuration.GetSection("Models:Main:ModelId").Value ?? "unknown";
-            var providerName = _configuration.GetSection("Models:Main:Provider").Value ?? "unknown";
-            return await ResolveEffectiveContextWindowAsync(modelId, providerName, cancellationToken);
+            return await ResolveEffectiveContextWindowAsync(main.ModelId, main.Provider, cancellationToken);
         }
 
-        if (TryGetInt32(contextWindow, out var cw) && cw > 0)
+        if (main.ContextWindow is > 0 and var cw)
         {
             // Runtime (ContextWindowResolution.ResolveRuntimeAsync) prefers the
             // daemon's live context window over the pinned config when the daemon
@@ -100,8 +97,7 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
     private ProviderRuntimeValidation ValidateRuntimeConfiguration(JsonObject root)
     {
         var providers = ProviderConfigurationLoader.Load(_configuration.GetSection("Providers"));
-        var models = _configuration.GetSection("Models")
-            .Get<ModelSelection>() ?? new ModelSelection();
+        var models = ModelConfigurationResolver.Resolve(_configuration).Selection;
 
         return ProviderRuntimeValidation.Evaluate(
             providers,

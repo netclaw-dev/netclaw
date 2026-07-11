@@ -333,14 +333,40 @@
       "additionalProperties": true
     },
     "Models": {
-      "type": "object",
-      "description": "Model selection by role (Main, Fallback, Compaction).",
-      "properties": {
-        "Main": { "$ref": "#/$defs/ModelReference" },
-        "Fallback": { "$ref": "#/$defs/ModelReference" },
-        "Compaction": { "$ref": "#/$defs/ModelReference" }
-      },
-      "additionalProperties": false
+      "description": "Named model definitions and role assignments. The legacy inline role shape remains accepted for upgrades.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Main": { "$ref": "#/$defs/ModelReference" },
+            "Fallback": { "$ref": "#/$defs/ModelReference" },
+            "Compaction": { "$ref": "#/$defs/ModelReference" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["Definitions", "Roles"],
+          "properties": {
+            "Definitions": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": { "$ref": "#/$defs/ModelReference" }
+            },
+            "Roles": {
+              "type": "object",
+              "required": ["Main"],
+              "properties": {
+                "Main": { "type": "string", "minLength": 1 },
+                "Fallback": { "type": ["string", "null"] },
+                "Compaction": { "type": ["string", "null"] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "Memory": {
       "type": "object",

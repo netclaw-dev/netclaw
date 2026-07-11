@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Provider;
@@ -266,10 +267,9 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Non-destructive: stored ContextWindow and modalities are operator-owned overrides that
-        // discovery never clobbers on a same-model re-set (#1127, #1610). Explicit operator input
-        // (--context-window / --input-modalities / --clear-modalities) wins; the probe result only
-        // seeds a first-time set or a model switch.
+        // Definitions own model metadata, so role switches never destroy another model's
+        // operator-owned overrides. Discovery seeds only a new definition; explicit input edits
+        // an existing definition and absence remains runtime detection (#1127, #1610).
         ModelEntryWriter.WriteRole(
             modelsSection,
             roleKey,
@@ -459,13 +459,29 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
 
-        if (modelsSection is null || !modelsSection.ContainsKey(roleKey))
+        if (modelsSection is null)
         {
             writer.WriteLine($"Role '{role}' is not configured.");
             return 0;
         }
 
-        modelsSection.Remove(roleKey);
+        bool removed;
+        try
+        {
+            removed = ModelEntryWriter.ClearRole(modelsSection, roleKey);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            writer.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+
+        if (!removed)
+        {
+            writer.WriteLine($"Role '{role}' is not configured.");
+            return 0;
+        }
+
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Cleared {role} model role.");
@@ -498,14 +514,16 @@ internal static class ModelCommand
 
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
-            if (!doc.RootElement.TryGetProperty("Models", out var modelsElement))
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile(paths.NetclawConfigPath, optional: false, reloadOnChange: false)
+                .Build();
+            if (!configuration.GetSection("Models").Exists())
                 return true;
 
-            models = JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), JsonDefaults.EnumAware);
+            models = ModelConfigurationResolver.Resolve(configuration).Selection;
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return false;
         }
@@ -532,8 +550,8 @@ internal static class ModelCommand
         writer.WriteLine("  --output-modalities <list>   Override output modalities, e.g. \"Text\"");
         writer.WriteLine("  --clear-modalities           Remove modality overrides (fall back to runtime detection)");
         writer.WriteLine();
-        writer.WriteLine("  Modality and context-window overrides are preserved when you re-set the same model;");
-        writer.WriteLine("  provider discovery never overwrites them. Use these flags (or --clear-modalities) to change them.");
+        writer.WriteLine("  Overrides live on named model definitions and survive role switches;");
+        writer.WriteLine("  discovery never rewrites a definition. Use the set or matching clear flag to change it.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw model list");

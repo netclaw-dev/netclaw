@@ -18,6 +18,22 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 internal static class ModelEntryWriter
 {
+    internal static bool MigrateLegacy(Dictionary<string, object> modelsSection)
+    {
+        if (modelsSection.ContainsKey("Definitions") || modelsSection.ContainsKey("Roles"))
+            return false;
+        if (!modelsSection.Keys.Any(key => key is "Main" or "Fallback" or "Compaction"))
+            return false;
+        EnsureNamedShape(modelsSection);
+        return true;
+    }
+
+    internal static bool ClearRole(Dictionary<string, object> modelsSection, string roleKey)
+    {
+        var (_, roles) = EnsureNamedShape(modelsSection);
+        return roles.Remove(roleKey);
+    }
+
     /// <summary>
     /// Write a role's model entry into <paramref name="modelsSection"/> non-destructively.
     /// Two on-disk attributes are treated as operator-owned overrides that provider discovery
@@ -59,7 +75,10 @@ internal static class ModelEntryWriter
         ValueOverride<ModelModality> outputModalities,
         DiscoveredModel? discovered)
     {
-        var existing = ReadSameModelEntry(modelsSection, roleKey, provider, modelId);
+        var (definitions, roles) = EnsureNamedShape(modelsSection, roleKey);
+        var definitionName = FindDefinition(definitions, provider, modelId)
+                             ?? CreateDefinitionName(definitions, provider, modelId);
+        var existing = ReadSameModelEntry(definitions, definitionName, provider, modelId);
 
         // Provenance records how the model ID was resolved, not how the entry was last edited. A
         // same-model re-set that did not itself freshly resolve the ID — no probe (the caller
@@ -73,13 +92,170 @@ internal static class ModelEntryWriter
         // preservation, because the probe/picker paths always pass a discovered value, so the
         // stored value was overwritten on every re-selection.
         var sameModelEntry = existing is not null;
-        var resolvedWindow = ResolveContextWindow(contextWindow, existing?.ContextWindow, discovered?.ContextWindowTokens);
+        var resolvedWindow = ResolveContextWindow(
+            contextWindow, sameModelEntry, existing?.ContextWindow, discovered?.ContextWindowTokens);
         var resolvedInput = ResolveModality(inputModalities, sameModelEntry, existing?.InputModalities, discovered?.InputModalities);
         var resolvedOutput = ResolveModality(outputModalities, sameModelEntry, existing?.OutputModalities, discovered?.OutputModalities);
 
-        modelsSection[roleKey] = BuildModelEntry(
+        definitions[definitionName] = BuildModelEntry(
             provider, modelId, provenance, resolvedWindow, resolvedInput, resolvedOutput);
+        roles[roleKey] = definitionName;
     }
+
+    private static (Dictionary<string, object> Definitions, Dictionary<string, object> Roles)
+        EnsureNamedShape(Dictionary<string, object> modelsSection, string? overwrittenRole = null)
+    {
+        var hasNamed = modelsSection.ContainsKey("Definitions") || modelsSection.ContainsKey("Roles");
+        var hasLegacy = modelsSection.Keys.Any(key =>
+            key is "Main" or "Fallback" or "Compaction");
+
+        if (hasNamed && hasLegacy)
+            throw new InvalidOperationException("Models configuration mixes legacy roles with Definitions/Roles.");
+
+        if (hasNamed)
+        {
+            if (!modelsSection.ContainsKey("Definitions") || !modelsSection.ContainsKey("Roles"))
+                throw new InvalidOperationException("Named Models configuration requires Definitions and Roles.");
+
+            return (GetDictionary(modelsSection, "Definitions"), GetDictionary(modelsSection, "Roles"));
+        }
+
+        var definitions = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var roles = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var role in new[] { "Main", "Fallback", "Compaction" })
+        {
+            if (!modelsSection.TryGetValue(role, out var raw) || raw is null)
+                continue;
+
+            if (!RawContainsProperty(raw, nameof(ModelReference.Provider))
+                || !RawContainsProperty(raw, nameof(ModelReference.ModelId)))
+            {
+                if (string.Equals(role, overwrittenRole, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                throw new InvalidOperationException(
+                    $"Models:{role} must explicitly declare Provider and ModelId before migration.");
+            }
+
+            ModelReference model;
+            try
+            {
+                model = ConfigFileHelper.DeserializeSection<ModelReference>(raw)
+                        ?? throw new InvalidOperationException($"Models:{role} could not be parsed.");
+            }
+            catch (JsonException)
+            {
+                model = ReadLegacyIdentity(raw)
+                        ?? throw new InvalidOperationException($"Models:{role} could not be repaired.");
+            }
+            var existingName = FindDefinition(definitions, model.Provider, model.ModelId);
+            if (existingName is not null)
+            {
+                var existing = ConfigFileHelper.DeserializeSection<ModelReference>(definitions[existingName])!;
+                if (!Equivalent(existing, model))
+                {
+                    throw new InvalidOperationException(
+                        $"Legacy model roles conflict for {model.Provider}/{model.ModelId}; " +
+                        $"align their metadata before migration.");
+                }
+
+                roles[role] = existingName;
+                continue;
+            }
+
+            var name = CreateDefinitionName(definitions, model.Provider, model.ModelId);
+            definitions[name] = BuildModelEntry(
+                model.Provider, model.ModelId, model.Provenance, model.ContextWindow,
+                model.InputModalities, model.OutputModalities);
+            roles[role] = name;
+        }
+
+        modelsSection.Clear();
+        modelsSection["Definitions"] = definitions;
+        modelsSection["Roles"] = roles;
+        return (definitions, roles);
+    }
+
+    private static ModelReference? ReadLegacyIdentity(object raw)
+    {
+        var json = raw is JsonElement element
+            ? element.GetRawText()
+            : JsonSerializer.Serialize(raw, JsonDefaults.ConfigFile);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !TryGetString(root, nameof(ModelReference.Provider), out var provider)
+            || !TryGetString(root, nameof(ModelReference.ModelId), out var modelId))
+            return null;
+
+        var model = new ModelReference { Provider = provider, ModelId = modelId };
+        if (TryGetInt32(root, nameof(ModelReference.ContextWindow), out var contextWindow))
+            model.ContextWindow = contextWindow;
+        return model;
+    }
+
+    private static Dictionary<string, object> GetDictionary(Dictionary<string, object> parent, string key)
+    {
+        var raw = parent[key];
+        if (raw is Dictionary<string, object> dictionary)
+            return dictionary;
+        if (raw is JsonElement { ValueKind: JsonValueKind.Object } element)
+        {
+            dictionary = JsonSerializer.Deserialize<Dictionary<string, object>>(element.GetRawText()) ?? [];
+            parent[key] = dictionary;
+            return dictionary;
+        }
+
+        throw new InvalidOperationException($"Models:{key} must be an object.");
+    }
+
+    private static string? FindDefinition(
+        Dictionary<string, object> definitions, string provider, string? modelId)
+    {
+        foreach (var (name, raw) in definitions)
+        {
+            ModelReference? model;
+            try
+            {
+                model = ConfigFileHelper.DeserializeSection<ModelReference>(raw);
+            }
+            catch (JsonException)
+            {
+                model = ReadLegacyIdentity(raw);
+            }
+
+            if (model is not null
+                && string.Equals(model.Provider, provider, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(model.ModelId, modelId, StringComparison.OrdinalIgnoreCase))
+                return name;
+        }
+
+        return null;
+    }
+
+    private static string CreateDefinitionName(
+        Dictionary<string, object> definitions, string provider, string? modelId)
+    {
+        var raw = $"{provider}-{modelId}";
+        var stem = string.Join('-', raw.ToLowerInvariant()
+            .Split(['/', ':', '.', '_', ' '], StringSplitOptions.RemoveEmptyEntries))
+            .Trim('-');
+        if (string.IsNullOrWhiteSpace(stem))
+            stem = "model";
+
+        var candidate = stem;
+        for (var suffix = 2; definitions.ContainsKey(candidate); suffix++)
+            candidate = $"{stem}-{suffix}";
+        return candidate;
+    }
+
+    private static bool Equivalent(ModelReference left, ModelReference right)
+        => string.Equals(left.Provider, right.Provider, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(left.ModelId, right.ModelId, StringComparison.OrdinalIgnoreCase)
+           && left.ContextWindow == right.ContextWindow
+           && left.Provenance == right.Provenance
+           && left.InputModalities == right.InputModalities
+           && left.OutputModalities == right.OutputModalities;
 
     /// <summary>
     /// Resolves the modality actually written. An explicit operator set or clear wins outright
@@ -100,17 +276,15 @@ internal static class ModelEntryWriter
     /// <summary>
     /// Resolves the context window actually written. Mirrors <see cref="ResolveModality"/> for the
     /// explicit cases: <c>--context-window</c> (Set) or <c>--clear-context-window</c> (Clear) wins,
-    /// otherwise the stored clamp is preserved and discovery only seeds a gap. Unlike modalities
-    /// this deliberately does NOT pin a same-model entry against discovery — a re-detected window
-    /// equals what runtime detection would produce anyway, so there is no misreporting-demotion
-    /// hazard (the reason a cleared modality must stay cleared), and letting a fresh probe fill an
-    /// absent window is safe and useful.
+    /// otherwise an existing definition is honored verbatim, including absence. Discovery seeds
+    /// only a new definition. This keeps manual JSON edits and explicit clears stable without a
+    /// hidden tombstone representation.
     /// </summary>
     private static int? ResolveContextWindow(
-        ValueOverride<int> @override, int? existing, int? discovered)
+        ValueOverride<int> @override, bool sameModelEntryExists, int? existing, int? discovered)
         => @override.Supplied
             ? @override.Value            // Set(n) → n; Clear → null (drop the clamp → runtime detects)
-            : existing ?? discovered;    // preserve the stored clamp; discovery seeds a first set / gap
+            : sameModelEntryExists ? existing : discovered;
 
     /// <summary>
     /// The role's current entry, but only when it already references the same

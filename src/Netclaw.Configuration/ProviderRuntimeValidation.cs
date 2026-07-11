@@ -182,6 +182,18 @@ public sealed record ProviderRuntimeConfiguration(
         var models = configuration.GetSection("Models");
         var providers = configuration.GetSection("Providers");
 
+        if (models.GetSection(nameof(NamedModelConfiguration.Definitions)).Exists()
+            || models.GetSection(nameof(NamedModelConfiguration.Roles)).Exists())
+        {
+            var selection = ModelConfigurationResolver.Resolve(models).Selection;
+            return FromExplicitRoles(
+                ProviderConfigurationLoader.Load(providers),
+                main: !string.IsNullOrWhiteSpace(selection.Main.Provider)
+                      && !string.IsNullOrWhiteSpace(selection.Main.ModelId),
+                fallback: selection.Fallback is not null,
+                compaction: selection.Compaction is not null);
+        }
+
         return new ProviderRuntimeConfiguration(
             Main: ModelReferenceRuntimeConfiguration.FromConfiguration(models.GetSection("Main")),
             Fallback: ModelReferenceRuntimeConfiguration.FromConfiguration(models.GetSection("Fallback")),
@@ -196,6 +208,20 @@ public sealed record ProviderRuntimeConfiguration(
     {
         var models = root?["Models"] as JsonObject;
         var providers = root?["Providers"] as JsonObject;
+
+        if (models?["Roles"] is JsonObject roles)
+        {
+            return new ProviderRuntimeConfiguration(
+                Main: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Main")),
+                Fallback: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Fallback")),
+                Compaction: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Compaction")),
+                ProvidersWithExplicitType: providers is null
+                    ? []
+                    : providers
+                        .Where(provider => provider.Value is JsonObject obj && HasProperty(obj, nameof(ProviderEntry.Type)))
+                        .Select(provider => provider.Key)
+                        .ToList());
+        }
 
         return new ProviderRuntimeConfiguration(
             Main: ModelReferenceRuntimeConfiguration.FromJson(models?["Main"] as JsonObject),
@@ -227,6 +253,9 @@ public sealed record ProviderRuntimeConfiguration(
 
     internal static bool HasProperty(JsonObject obj, string propertyName) =>
         obj.Any(property => string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasNonEmptyString(JsonObject obj, string propertyName)
+        => obj[propertyName]?.GetValue<string>() is { Length: > 0 };
 }
 
 public sealed record ModelReferenceRuntimeConfiguration(

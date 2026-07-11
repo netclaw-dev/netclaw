@@ -88,7 +88,7 @@ public sealed class ModelCommandTests : IDisposable
 
         var config = ReadConfigFile(_paths.NetclawConfigPath);
         Assert.True(config.RootElement.TryGetProperty("Models", out var models));
-        Assert.True(models.TryGetProperty("Main", out var main));
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
         Assert.Equal("qwen3:30b", main.GetProperty("ModelId").GetString());
         Assert.Equal("Manual", main.GetProperty("Provenance").GetString());
@@ -127,7 +127,7 @@ public sealed class ModelCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var config = ReadConfigFile(_paths.NetclawConfigPath);
-        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
         Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
         Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
@@ -354,8 +354,9 @@ public sealed class ModelCommandTests : IDisposable
 
         var config = ReadConfigFile(_paths.NetclawConfigPath);
         Assert.True(config.RootElement.TryGetProperty("Models", out var models));
-        Assert.True(models.TryGetProperty("Main", out _)); // Main still exists
-        Assert.False(models.TryGetProperty("Fallback", out _)); // Fallback removed
+        var roles = models.GetProperty("Roles");
+        Assert.True(roles.TryGetProperty("Main", out _)); // Main still exists
+        Assert.False(roles.TryGetProperty("Fallback", out _)); // Fallback removed
     }
 
     [Fact]
@@ -396,8 +397,9 @@ public sealed class ModelCommandTests : IDisposable
 
         var config = ReadConfigFile(_paths.NetclawConfigPath);
         var models = config.RootElement.GetProperty("Models");
-        Assert.True(models.TryGetProperty("Main", out _)); // Main preserved
-        Assert.True(models.TryGetProperty("Fallback", out var fallback));
+        var roles = models.GetProperty("Roles");
+        Assert.True(roles.TryGetProperty("Main", out _)); // Main preserved
+        var fallback = ReadActiveModel(config, "Fallback");
         Assert.Equal("qwen3:8b", fallback.GetProperty("ModelId").GetString());
     }
 
@@ -412,7 +414,8 @@ public sealed class ModelCommandTests : IDisposable
             _paths, output: _output);
 
         Assert.Equal(0, exitCode);
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
     }
 
@@ -426,7 +429,8 @@ public sealed class ModelCommandTests : IDisposable
             _paths, output: _output);
 
         Assert.Equal(0, exitCode);
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
         Assert.False(main.TryGetProperty("InputModalities", out _)); // cleared → runtime detection
     }
 
@@ -457,7 +461,8 @@ public sealed class ModelCommandTests : IDisposable
             _paths, output: _output);
 
         Assert.Equal(0, exitCode);
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
         Assert.Equal(65536, main.GetProperty("ContextWindow").GetInt32());
     }
@@ -527,7 +532,8 @@ public sealed class ModelCommandTests : IDisposable
             _paths, output: _output);
 
         Assert.Equal(0, exitCode);
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var written = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(written, "Main");
         Assert.False(main.TryGetProperty("ContextWindow", out _)); // clamp removed → runtime detection
     }
 
@@ -578,7 +584,8 @@ public sealed class ModelCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal(1, _fakeProbe.ProbeCallCount);            // probe ran despite the modality flag
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());     // resolved via probe
         Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());   // discovered window captured
         Assert.Equal("Text", main.GetProperty("InputModalities").GetString());// operator override wins
@@ -652,7 +659,8 @@ public sealed class ModelCommandTests : IDisposable
             ["model", "set", "main", "my-ollama", "qwen3:30b"], _paths, output: _output);
 
         Assert.Equal(0, exitCode);
-        var main = ReadConfigFile(_paths.NetclawConfigPath).RootElement.GetProperty("Models").GetProperty("Main");
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal(32768, main.GetProperty("ContextWindow").GetInt32()); // valid clamp preserved
         Assert.False(main.TryGetProperty("InputModalities", out _));        // corrupt override dropped
     }
@@ -662,6 +670,13 @@ public sealed class ModelCommandTests : IDisposable
         var config = ProvidersOnly();
         config["Models"] = new Dictionary<string, object> { ["Main"] = main };
         return config;
+    }
+
+    private static JsonElement ReadActiveModel(JsonDocument config, string role)
+    {
+        var models = config.RootElement.GetProperty("Models");
+        var definitionName = models.GetProperty("Roles").GetProperty(role).GetString()!;
+        return models.GetProperty("Definitions").GetProperty(definitionName);
     }
 
     private static Dictionary<string, object> ProvidersOnly() => new()

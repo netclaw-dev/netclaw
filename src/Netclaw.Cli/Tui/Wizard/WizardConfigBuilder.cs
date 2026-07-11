@@ -135,13 +135,22 @@ public sealed class WizardConfigBuilder
         if (Model is not null)
         {
             var models = ConfigFileHelper.GetOrCreateSection(config, "Models");
-            models["Main"] = ModelEntryWriter.BuildModelEntry(
+            ModelEntryWriter.WriteRole(
+                models,
+                "Main",
                 Model.Provider,
                 Model.ModelId,
                 Model.Provenance,
-                Model.ContextWindow,
-                Model.InputModalities,
-                Model.OutputModalities);
+                Model.ContextWindow is { } contextWindow
+                    ? ValueOverride<int>.Set(contextWindow)
+                    : ValueOverride<int>.Unset,
+                Model.InputModalities is { } input
+                    ? ValueOverride<ModelModality>.Set(input)
+                    : ValueOverride<ModelModality>.Unset,
+                Model.OutputModalities is { } output
+                    ? ValueOverride<ModelModality>.Set(output)
+                    : ValueOverride<ModelModality>.Unset,
+                discovered: null);
         }
 
         // Slack section

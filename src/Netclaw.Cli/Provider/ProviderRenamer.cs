@@ -96,6 +96,27 @@ internal static class ProviderRenamer
         var models = ConfigFileHelper.GetSectionOrNull(config, "Models");
         if (models is null) return reassigned;
 
+        if (models.ContainsKey("Definitions"))
+        {
+            var definitions = ConfigFileHelper.GetSectionOrNull(models, "Definitions")
+                              ?? throw new InvalidOperationException("Models:Definitions must be an object.");
+            foreach (var definitionName in definitions.Keys.ToList())
+            {
+                var definition = ConfigFileHelper.GetSectionOrNull(definitions, definitionName);
+                if (definition is null || !definition.TryGetValue("Provider", out var providerValue))
+                    continue;
+                var current = providerValue is JsonElement element
+                    ? element.GetString()
+                    : providerValue as string;
+                if (!string.Equals(current, oldName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                definition["Provider"] = newName;
+                reassigned.Add(definitionName);
+            }
+
+            return reassigned;
+        }
+
         foreach (var roleName in ModelRoleNames)
         {
             var role = ConfigFileHelper.GetSectionOrNull(models, roleName);

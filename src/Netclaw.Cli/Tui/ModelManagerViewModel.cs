@@ -95,7 +95,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     public void Refresh()
     {
-        Models = Model.ModelCommand.LoadModelSelection(_paths);
+        if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models))
+        {
+            Models = null;
+            StatusMessage.Value = "Model configuration is invalid. Run `netclaw doctor` for details.";
+        }
+        else
+        {
+            Models = models;
+        }
         Providers.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
         foreach (var (name, entry) in loaded.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
@@ -230,7 +238,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection?.Remove(roleKey) == true)
+        if (modelsSection is not null && ModelEntryWriter.ClearRole(modelsSection, roleKey))
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();
