@@ -19,6 +19,7 @@
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
     <AspireHostingVersion>13.4.6</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.4.0</CommunityToolkitAspireVersion>
+    <ModelContextProtocolVersion>1.4.1</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
@@ -43,8 +44,8 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="$(MicrosoftExtensionsAIVersion)" />
-    <PackageVersion Include="ModelContextProtocol.Core" Version="1.4.0" />
-    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.4.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="$(ModelContextProtocolVersion)" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="$(ModelContextProtocolVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="$(MicrosoftAspNetCoreVersion)" />
