@@ -97,7 +97,7 @@
          trips NU1903 (GHSA-hv8m-jj95-wg3x, LZ4 decompression AccessViolation).
          Keep this on the patched 3.x line already used by dev until Aspire ships
          a non-vulnerable transitive dependency on its own. -->
-    <PackageVersion Include="MessagePack" Version="3.1.7" />
+    <PackageVersion Include="MessagePack" Version="3.1.8" />
   </ItemGroup>
   <!-- Image normalization (Netclaw.Media). SkiaSharp ships Windows/macOS native
        assets in the base package; Linux needs the explicit headless native asset
