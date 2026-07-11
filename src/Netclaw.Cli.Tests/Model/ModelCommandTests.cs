@@ -434,18 +434,24 @@ public sealed class ModelCommandTests : IDisposable
         Assert.False(main.TryGetProperty("InputModalities", out _)); // cleared → runtime detection
     }
 
-    [Fact]
-    public async Task Set_InvalidModalities_ReturnsErrorWithoutWriting()
+    [Theory]
+    [InlineData("invalid modalities", "--input-modalities", "Vision")]
+    [InlineData("--input-modalities requires a value", "--input-modalities")]
+    [InlineData("unknown argument '--input-modalites'", "--input-modalites", "Text")]
+    [InlineData("invalid modalities", "--input-modalities", "3")]
+    [InlineData("cannot be combined", "--context-window", "32768", "--clear-context-window")]
+    public async Task Set_InvalidOptions_ReturnErrorWithoutWriting(
+        string expectedError,
+        params string[] options)
     {
         WriteConfig(ProvidersOnly());
 
         var exitCode = await ModelCommand.RunAsync(
-            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities", "Vision"],
+            ["model", "set", "main", "my-ollama", "qwen3:30b", .. options],
             _paths, output: _output);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("invalid modalities", _output.ToString());
-        // Parsing fails before any config load/write, so no Models section is created.
+        Assert.Contains(expectedError, _output.ToString());
         Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
     }
 
@@ -465,51 +471,6 @@ public sealed class ModelCommandTests : IDisposable
         var main = ReadActiveModel(config, "Main");
         Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
         Assert.Equal(65536, main.GetProperty("ContextWindow").GetInt32());
-    }
-
-    [Fact]
-    public async Task Set_TrailingModalityFlagWithoutValue_ReturnsError()
-    {
-        WriteConfig(ProvidersOnly());
-
-        // --input-modalities is the final token: its value is missing. It must fail loudly rather
-        // than be silently dropped while the command still reports success (#1610).
-        var exitCode = await ModelCommand.RunAsync(
-            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities"],
-            _paths, output: _output);
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("--input-modalities requires a value", _output.ToString());
-        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
-    }
-
-    [Fact]
-    public async Task Set_UnknownArgument_ReturnsError()
-    {
-        WriteConfig(ProvidersOnly());
-
-        var exitCode = await ModelCommand.RunAsync(
-            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalites", "Text"],
-            _paths, output: _output);
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("unknown argument '--input-modalites'", _output.ToString());
-        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
-    }
-
-    [Fact]
-    public async Task Set_NumericModalities_ReturnsError()
-    {
-        WriteConfig(ProvidersOnly());
-
-        // A raw integer must not be coerced into flags: "3" would otherwise become Text|Image.
-        var exitCode = await ModelCommand.RunAsync(
-            ["model", "set", "main", "my-ollama", "qwen3:30b", "--input-modalities", "3"],
-            _paths, output: _output);
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("invalid modalities", _output.ToString());
-        Assert.False(ReadConfigFile(_paths.NetclawConfigPath).RootElement.TryGetProperty("Models", out _));
     }
 
     [Fact]
@@ -535,19 +496,6 @@ public sealed class ModelCommandTests : IDisposable
         using var written = ReadConfigFile(_paths.NetclawConfigPath);
         var main = ReadActiveModel(written, "Main");
         Assert.False(main.TryGetProperty("ContextWindow", out _)); // clamp removed → runtime detection
-    }
-
-    [Fact]
-    public async Task Set_ContextWindowAndClearContextWindow_ReturnsError()
-    {
-        WriteConfig(ProvidersOnly());
-
-        var exitCode = await ModelCommand.RunAsync(
-            ["model", "set", "main", "my-ollama", "qwen3:30b", "--context-window", "32768", "--clear-context-window"],
-            _paths, output: _output);
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("cannot be combined", _output.ToString());
     }
 
     [Fact]

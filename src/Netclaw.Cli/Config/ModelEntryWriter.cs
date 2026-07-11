@@ -18,6 +18,19 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 internal static class ModelEntryWriter
 {
+    private static readonly string[] LegacyEnvironmentPrefixes =
+    [
+        "NETCLAW_Models__Main__",
+        "NETCLAW_Models__Fallback__",
+        "NETCLAW_Models__Compaction__",
+    ];
+
+    internal static string? FindLegacyEnvironmentOverride()
+        => Environment.GetEnvironmentVariables().Keys
+            .OfType<string>()
+            .FirstOrDefault(key => LegacyEnvironmentPrefixes.Any(prefix =>
+                key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+
     internal static bool MigrateLegacy(Dictionary<string, object> modelsSection)
     {
         if (modelsSection.ContainsKey("Definitions") || modelsSection.ContainsKey("Roles"))

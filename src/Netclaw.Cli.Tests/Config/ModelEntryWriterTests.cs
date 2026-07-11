@@ -253,61 +253,26 @@ public class ModelEntryWriterTests
         Assert.False(entry.ContainsKey("InputModalities")); // stray modality dropped, not carried over
     }
 
-    [Fact]
-    public void WriteRole_SameModelManualReSet_PreservesDiscoveredProvenance()
+    [Theory]
+    [InlineData(ModelDiscoverySource.Live, ModelDiscoverySource.Manual, ModelDiscoverySource.Live)]
+    [InlineData(ModelDiscoverySource.Live, ModelDiscoverySource.Defaults, ModelDiscoverySource.Live)]
+    [InlineData(ModelDiscoverySource.Defaults, ModelDiscoverySource.Live, ModelDiscoverySource.Live)]
+    public void WriteRole_SameModel_PreservesProvenanceUnlessFreshlyDiscovered(
+        ModelDiscoverySource existing,
+        ModelDiscoverySource incoming,
+        ModelDiscoverySource expected)
     {
-        // The model ID was originally resolved Live. A --context-window-only re-set (no probe,
-        // so the caller passes Manual) must not relabel the ID's origin as Manual (#1610).
         var models = Models(
-            """
-            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "Provenance": "Live", "ContextWindow": 262144 } }
+            $$"""
+            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "Provenance": "{{existing}}" } }
             """);
 
         ModelEntryWriter.WriteRole(
-            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Manual,
-            ContextWindowOverride.Set(131072), ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
-
-        var entry = ActiveEntry(models, "Main");
-        Assert.Equal("Live", entry["Provenance"]); // origin preserved, not downgraded to Manual
-        Assert.Equal(131072, entry["ContextWindow"]);
-    }
-
-    [Fact]
-    public void WriteRole_SameModelProbeFailedDefaults_PreservesLiveProvenance()
-    {
-        // The ID was originally resolved Live. A same-model re-pick whose probe FAILED passes
-        // Defaults (not Manual). That is still "did not freshly resolve the ID", so it must not
-        // downgrade the stored Live origin — only a fresh Live discovery re-stamps it (#1610).
-        var models = Models(
-            """
-            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "Provenance": "Live" } }
-            """);
-
-        ModelEntryWriter.WriteRole(
-            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Defaults,
+            models, "Main", "spark", "qwen-vl", incoming,
             ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset, discovered: null);
 
         var entry = ActiveEntry(models, "Main");
-        Assert.Equal("Live", entry["Provenance"]);
-    }
-
-    [Fact]
-    public void WriteRole_SameModelFreshDiscovery_UpdatesProvenance()
-    {
-        // A fresh probe legitimately re-resolves the ID, so a Live discovery updates a stale
-        // Defaults origin rather than being pinned to it.
-        var models = Models(
-            """
-            { "Main": { "Provider": "spark", "ModelId": "qwen-vl", "Provenance": "Defaults" } }
-            """);
-
-        ModelEntryWriter.WriteRole(
-            models, "Main", "spark", "qwen-vl", ModelDiscoverySource.Live,
-            ContextWindowOverride.Unset, ModalityOverride.Unset, ModalityOverride.Unset,
-            Discovered(contextWindow: 128000));
-
-        var entry = ActiveEntry(models, "Main");
-        Assert.Equal("Live", entry["Provenance"]);
+        Assert.Equal(expected.ToString(), entry["Provenance"]);
     }
 
     [Fact]

@@ -211,10 +211,11 @@ public sealed record ProviderRuntimeConfiguration(
 
         if (models?["Roles"] is JsonObject roles)
         {
+            var definitions = models["Definitions"] as JsonObject;
             return new ProviderRuntimeConfiguration(
-                Main: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Main")),
-                Fallback: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Fallback")),
-                Compaction: ModelReferenceRuntimeConfiguration.FromCompleteRole(HasNonEmptyString(roles, "Compaction")),
+                Main: ModelReferenceRuntimeConfiguration.FromNamedRole(roles, definitions, "Main"),
+                Fallback: ModelReferenceRuntimeConfiguration.FromNamedRole(roles, definitions, "Fallback"),
+                Compaction: ModelReferenceRuntimeConfiguration.FromNamedRole(roles, definitions, "Compaction"),
                 ProvidersWithExplicitType: providers is null
                     ? []
                     : providers
@@ -254,8 +255,6 @@ public sealed record ProviderRuntimeConfiguration(
     internal static bool HasProperty(JsonObject obj, string propertyName) =>
         obj.Any(property => string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase));
 
-    private static bool HasNonEmptyString(JsonObject obj, string propertyName)
-        => obj[propertyName]?.GetValue<string>() is { Length: > 0 };
 }
 
 public sealed record ModelReferenceRuntimeConfiguration(
@@ -277,6 +276,33 @@ public sealed record ModelReferenceRuntimeConfiguration(
             RoleConfigured: obj is not null,
             ProviderConfigured: obj is not null && ProviderRuntimeConfiguration.HasProperty(obj, nameof(ModelReference.Provider)),
             ModelIdConfigured: obj is not null && ProviderRuntimeConfiguration.HasProperty(obj, nameof(ModelReference.ModelId)));
+    }
+
+    public static ModelReferenceRuntimeConfiguration FromNamedRole(
+        JsonObject roles, JsonObject? definitions, string roleName)
+    {
+        var role = roles.FirstOrDefault(property =>
+            string.Equals(property.Key, roleName, StringComparison.OrdinalIgnoreCase));
+        if (role.Value is not JsonValue roleValue
+            || !roleValue.TryGetValue<string>(out var definitionName)
+            || string.IsNullOrWhiteSpace(definitionName))
+        {
+            return FromCompleteRole(false);
+        }
+
+        var definition = definitions?
+            .FirstOrDefault(property => string.Equals(
+                property.Key, definitionName, StringComparison.OrdinalIgnoreCase))
+            .Value as JsonObject;
+
+        return new ModelReferenceRuntimeConfiguration(
+            RoleConfigured: true,
+            ProviderConfigured: definition is not null
+                                && ProviderRuntimeConfiguration.HasProperty(
+                                    definition, nameof(ModelReference.Provider)),
+            ModelIdConfigured: definition is not null
+                               && ProviderRuntimeConfiguration.HasProperty(
+                                   definition, nameof(ModelReference.ModelId)));
     }
 
     public static ModelReferenceRuntimeConfiguration FromCompleteRole(bool configured) =>
