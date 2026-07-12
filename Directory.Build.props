@@ -9,21 +9,13 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.25.0</VersionPrefix>
-    <VersionSuffix>beta.2</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.25.0-beta.1 — SkillServer native sub-agent sync, memory curation unification, systemd PATH fix
-
-**Features**
-
-* **SkillServer native sub-agent sync** — Optional native manifest sidecar sync for server-managed sub-agents. Local sub-agent files load before server-feed files so user-authored definitions always win. ([#1539](https://github.com/netclaw-dev/netclaw/pull/1539))
-
-**Bug Fixes**
-
-* **Systemd shell tool PATH** — Fixed: daemon now captures the operator's full PATH into the systemd EnvironmentFile instead of relying on a hardcoded list. ([#1565](https://github.com/netclaw-dev/netclaw/pull/1565))
-
-**Memory**
-
-* **Shared curation evaluator** — Unified curation logic across both memory write pipelines so they can never diverge again. ([#1575](https://github.com/netclaw-dev/netclaw/pull/1575))
-* **Memory audit quick wins** — July 2026 audit: revived curation LLM, balanced prompt, and recall precision re-tune. ([#1568](https://github.com/netclaw-dev/netclaw/pull/1568))</PackageReleaseNotes>
+    <VersionSuffix>beta.3</VersionSuffix>
+    <PackageReleaseNotes>- Discord DM reminder delivery — Reminders can now be delivered to Discord DMs via improved DiscordReminderTargetResolver (#1609)
+- Named model configuration &amp; provider runtime validation — New NamedModelConfiguration and ProviderRuntimeValidation types, config schema updates, and CLI wizard improvements for provider/model setup (#1610)
+- Model set/picker preserves hand-set modalities — Re-selecting the same model no longer wipes operator-set InputModalities/OutputModalities and ContextWindow. Added --input-modalities, --output-modalities, --clear-modalities, and --clear-context-window CLI flags (#1610)
+- Slack processing status serialization — Slack processing status updates are now serialized to prevent race conditions during concurrent sends (#1556)
+- Sub-agent token usage tracked in daily stats — Sub-agent LLM calls now record token usage, making them visible in netclaw stats (#1597)
+- Subagents fail closed for unattended approvals — When a subagent requires approval but the session is unattended, it now fails closed instead of proceeding or hanging (#1616)</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
