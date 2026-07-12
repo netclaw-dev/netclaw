@@ -1,5 +1,28 @@
 # NetClaw Release Notes
 
+## 0.25.0-alpha.onnx.5 (2026-07-12)
+
+> **Experimental feature build** (fifth in the memory-embeddings series). This build carries
+> **no changes to memory/embeddings behavior** versus `0.25.0-alpha.onnx.4` — it merges the
+> mainline `dev` branch to bring the experimental line current with recent fixes, most
+> importantly a fail-closed hardening of unattended sub-agent approvals. Same gating as before:
+> everything rides `Memory.Embeddings.Enabled`, off by default; install only by exact pin
+> (`NETCLAW_VERSION=0.25.0-alpha.onnx.5`). Upgrading from alpha.onnx.4 is a binary swap — no
+> config, data, or unit changes.
+
+### Security
+- **Fail-closed unattended sub-agent approvals** — a sub-agent spawned from a session whose transport cannot service interactive approval prompts no longer inherits an approval bridge from the parent context; bridge presence alone can never make an unattended child interactive. Prevents an approval-gated tool from becoming silently auto-approvable in headless, webhook, and reminder-driven turns ([#1616](https://github.com/netclaw-dev/netclaw/pull/1616))
+
+### Bug Fixes
+- **Discord DM reminders** — reminders now fire correctly in Discord direct-message channels ([#1609](https://github.com/netclaw-dev/netclaw/pull/1609))
+- **Slack processing-status updates serialized** — concurrent status updates on a Slack thread no longer race ([#1556](https://github.com/netclaw-dev/netclaw/pull/1556))
+- **CLI model picker preserves hand-set modalities** — re-setting a model via `netclaw model set` or the picker no longer discards manually-configured input modalities ([#1610](https://github.com/netclaw-dev/netclaw/pull/1610))
+
+### Dependency Updates
+- ModelContextProtocol versioning consolidated into the central props file ([#1614](https://github.com/netclaw-dev/netclaw/pull/1614))
+- MessagePack 3.1.7 → 3.1.8 ([#1605](https://github.com/netclaw-dev/netclaw/pull/1605))
+- .NET SDK 10.0.300 → 10.0.301 ([#1381](https://github.com/netclaw-dev/netclaw/pull/1381))
+
 ## 0.25.0-alpha.onnx.4 (2026-07-09)
 
 > **Experimental feature build** (fourth in the memory-embeddings series). Same gating:
