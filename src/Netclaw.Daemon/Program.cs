@@ -376,8 +376,7 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // No silent fallback to local-ollama: an empty Providers section yields
     // the NoProviderConfigured outcome and the host registers NoOpChatClientProvider.
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
+    var models = ModelConfigurationResolver.Resolve(configuration).Selection;
     var validation = ProviderRuntimeValidation.Evaluate(
         providers,
         models,
@@ -414,9 +413,15 @@ static void ConfigureDaemonServices(
     services.AddHostedService<ExposureModeValidationService>();
     services.AddHostedService<BootstrapCompletionMarkerService>();
 
+    var resolvedModels = ModelConfigurationResolver.Resolve(configuration).Selection;
     services
         .AddOptions<ModelSelection>()
-        .Bind(configuration.GetSection("Models"))
+        .Configure(options =>
+        {
+            options.Main = resolvedModels.Main;
+            options.Fallback = resolvedModels.Fallback;
+            options.Compaction = resolvedModels.Compaction;
+        })
         .ValidateOnStart();
     services.AddSingleton<IValidateOptions<ModelSelection>, ModelSelectionValidator>();
     services
@@ -440,8 +445,7 @@ static void ConfigureDaemonServices(
     });
 
     // Resolve models for session config
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
+    var models = resolvedModels;
     services.AddSingleton(models);
 
     // Auto-detect model capabilities via the runtime IModelCapabilityResolver

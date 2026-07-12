@@ -103,24 +103,28 @@ keys used by model references.
 
 ### Models
 
-Named model roles. Each role points to a provider and model ID.
+Named model definitions own provider/model identity and metadata. Roles reference definitions,
+so changing Main or Fallback does not destroy overrides belonging to the previous model.
 
 ```json
 {
   "Models": {
-    "Main": {
+    "Definitions": {
+      "qwen-main": {
       "Provider": "remote-gpu",
       "ModelId": "qwen3:30b",
       "ContextWindow": 32768
+      },
+      "qwen-small": {
+        "Provider": "remote-gpu",
+        "ModelId": "qwen3:8b",
+        "ContextWindow": 32768
+      }
     },
-    "Fallback": {
-      "Provider": "remote-gpu",
-      "ModelId": "qwen3:8b",
-      "ContextWindow": 32768
-    },
-    "Compaction": {
-      "Provider": "remote-gpu",
-      "ModelId": "qwen3:8b"
+    "Roles": {
+      "Main": "qwen-main",
+      "Fallback": "qwen-small",
+      "Compaction": "qwen-small"
     }
   }
 }
@@ -481,8 +485,9 @@ following the standard .NET convention.
 
 ```bash
 # Override the main model
-export NETCLAW_Models__Main__Provider="openrouter"
-export NETCLAW_Models__Main__ModelId="anthropic/claude-sonnet-4"
+export NETCLAW_Models__Definitions__claude__Provider="openrouter"
+export NETCLAW_Models__Definitions__claude__ModelId="anthropic/claude-sonnet-4"
+export NETCLAW_Models__Roles__Main="claude"
 
 # Set a provider API key
 export NETCLAW_Providers__openrouter__ApiKey="sk-or-v1-..."
@@ -520,14 +525,20 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="60"
     }
   },
   "Models": {
-    "Main": {
-      "Provider": "local",
-      "ModelId": "qwen3:30b",
-      "ContextWindow": 32768
+    "Definitions": {
+      "qwen-main": {
+        "Provider": "local",
+        "ModelId": "qwen3:30b",
+        "ContextWindow": 32768
+      },
+      "qwen-small": {
+        "Provider": "local",
+        "ModelId": "qwen3:8b"
+      }
     },
-    "Compaction": {
-      "Provider": "local",
-      "ModelId": "qwen3:8b"
+    "Roles": {
+      "Main": "qwen-main",
+      "Compaction": "qwen-small"
     }
   },
   "Session": {

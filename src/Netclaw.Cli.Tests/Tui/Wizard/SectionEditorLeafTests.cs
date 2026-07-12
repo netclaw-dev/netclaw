@@ -29,6 +29,8 @@ public sealed class ProviderSectionEditorTests : SectionEditorTestBase<ProviderS
         Assert.Equal(SectionSecretActionKind.Set, action.Action);
         Assert.NotNull(action.Value);
         Assert.Equal("sk-test", action.Value.Value);
+        Assert.DoesNotContain(contribution.FieldActionsOrEmpty, field =>
+            field.Path.StartsWith("Models", StringComparison.Ordinal));
     }
 
     [Fact]

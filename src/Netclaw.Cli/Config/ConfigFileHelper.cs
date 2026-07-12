@@ -159,7 +159,37 @@ internal static class ConfigFileHelper
     /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
     /// </summary>
     internal static void WriteConfigFile(string path, Dictionary<string, object> data)
-        => AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
+    {
+        PreserveLegacyModelsBackup(path, data);
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
+    }
+
+    private static void PreserveLegacyModelsBackup(string path, Dictionary<string, object> data)
+    {
+        if (!File.Exists(path)
+            || GetSectionOrNull(data, "Models") is not { } newModels
+            || !newModels.ContainsKey("Definitions"))
+            return;
+
+        using var existing = JsonDocument.Parse(File.ReadAllText(path));
+        if (!existing.RootElement.TryGetProperty("Models", out var oldModels)
+            || oldModels.ValueKind != JsonValueKind.Object
+            || !oldModels.TryGetProperty("Main", out _))
+            return;
+
+        var legacyEnvironmentOverride = ModelEntryWriter.FindLegacyEnvironmentOverride();
+        if (legacyEnvironmentOverride is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot migrate Models while legacy environment override '{legacyEnvironmentOverride}' is set. " +
+                "Move model overrides to NETCLAW_Models__Definitions__<name>__* and " +
+                "NETCLAW_Models__Roles__* first.");
+        }
+
+        var backupPath = path + ".legacy-models.bak";
+        if (!File.Exists(backupPath))
+            File.Copy(path, backupPath);
+    }
 
     /// <summary>
     /// Serialize and write secrets.json using hardened permissions and encryption-at-rest.

@@ -3,12 +3,46 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
 public sealed class ProviderRuntimeValidationTests
 {
+    [Theory]
+    [InlineData("vision", true, true, true)]
+    [InlineData("VISION", true, true, true)]
+    [InlineData("missing", true, false, false)]
+    [InlineData("provider-only", true, true, false)]
+    [InlineData(null, false, false, false)]
+    public void NamedRolePresence_ComesFromReferencedDefinition(
+        string? roleReference,
+        bool roleConfigured,
+        bool providerConfigured,
+        bool modelIdConfigured)
+    {
+        var models = JsonNode.Parse(
+            """
+            {
+              "Definitions": {
+                "vision": { "Provider": "vllm", "ModelId": "qwen-vl" },
+                "provider-only": { "Provider": "vllm" }
+              },
+              "Roles": {}
+            }
+            """)!.AsObject();
+        if (roleReference is not null)
+            models["Roles"]!["Main"] = roleReference;
+
+        var root = new JsonObject { ["Models"] = models };
+        var result = ProviderRuntimeConfiguration.FromJson(root).Main;
+
+        Assert.Equal(roleConfigured, result.RoleConfigured);
+        Assert.Equal(providerConfigured, result.ProviderConfigured);
+        Assert.Equal(modelIdConfigured, result.ModelIdConfigured);
+    }
+
     [Fact]
     public void MainModelAbsent_DefaultModelSelection_ReturnsNoProviderConfigured()
     {

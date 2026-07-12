@@ -559,14 +559,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         var providerType = vm.SelectedProviderType.ToLowerInvariant();
         var fieldActions = new List<SectionFieldAction>
         {
-            new("Providers", SectionFieldActionKind.Set, BuildProvidersDictionary(vm, providerType)),
-            new("Models.Main.Provider", SectionFieldActionKind.Set, providerType)
+            new("Providers", SectionFieldActionKind.Set, BuildProvidersDictionary(vm, providerType))
         };
-
-        if (string.IsNullOrWhiteSpace(vm.SelectedModelId))
-            fieldActions.Add(new SectionFieldAction("Models.Main.ModelId", SectionFieldActionKind.Delete));
-        else
-            fieldActions.Add(new SectionFieldAction("Models.Main.ModelId", SectionFieldActionKind.Set, vm.SelectedModelId));
 
         var secretPath = $"Providers.{providerType}";
         var secretActions = new List<SectionSecretAction>();

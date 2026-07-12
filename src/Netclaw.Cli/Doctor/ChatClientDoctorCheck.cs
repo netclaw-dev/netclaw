@@ -61,7 +61,7 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
         try
         {
             providers = ProviderConfigurationLoader.Load(_configuration.GetSection("Providers"));
-            models = _configuration.GetSection("Models").Get<ModelSelection>() ?? new ModelSelection();
+            models = ModelConfigurationResolver.Resolve(_configuration).Selection;
             // File present: read explicit provider types from the file (matches
             // historical behavior). Env-only: derive them from the bound
             // configuration, exactly like the daemon does at startup.

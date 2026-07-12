@@ -118,9 +118,20 @@ Discord channel target resolution accepts canonical channel forms:
 - `<#123...>` (channel mention)
 - `channel:123...` (explicit channel ID)
 
+Discord direct-message target resolution accepts explicit user forms:
+
+- `<@123...>` or `<@!123...>` (user mention)
+- `dm:123...` or `@123...` (explicit user ID)
+
+Bare Discord snowflakes are rejected because channel IDs and user IDs have the
+same shape. Use `channel:<channelId>` for channel delivery or `dm:<userId>` for
+direct-message delivery.
+
 Reminder channel delivery maps to the generic `send_channel_message` tool with
-`channel_key = "discord"` and a resolved destination object. Discord proactive
-DM output is not supported yet.
+`channel_key = "discord"` and a resolved destination object. Channel targets use
+`destination.kind = "destination"`; user targets use
+`destination.kind = "direct_message"` and are still gated by
+`AllowDirectMessages` and `AllowedUserIds` at send time.
 
 ## Runtime behavior and troubleshooting
 

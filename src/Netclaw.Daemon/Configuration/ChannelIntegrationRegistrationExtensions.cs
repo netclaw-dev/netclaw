@@ -174,7 +174,7 @@ public static class ChannelIntegrationRegistrationExtensions
                     paths,
                     logger);
             })
-            .WithReminderResolver<DiscordReminderTargetResolver>()
+            .WithReminderResolver((_, options) => new DiscordReminderTargetResolver(options))
             .WithResolver((sp, options) => new DiscordAddressResolver(
                 sp.GetRequiredService<IDiscordAddressLookupClient>(),
                 options,

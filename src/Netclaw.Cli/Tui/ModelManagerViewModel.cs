@@ -95,7 +95,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     public void Refresh()
     {
-        Models = Model.ModelCommand.LoadModelSelection(_paths);
+        if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models))
+        {
+            Models = null;
+            StatusMessage.Value = "Model configuration is invalid. Run `netclaw doctor` for details.";
+        }
+        else
+        {
+            Models = models;
+        }
         Providers.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
         foreach (var (name, entry) in loaded.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
@@ -186,13 +194,20 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        modelsSection[roleKey] = ModelEntryWriter.BuildModelEntry(
+        // Non-destructive: re-assigning the same model preserves an existing context-window
+        // clamp and modality overrides, none of which the picker can supply (#1127, #1610). The
+        // picker has no manual-override inputs, so it passes no explicit context window and Unset
+        // modality intent — the probe result seeds a first-time set only; existing values win.
+        ModelEntryWriter.WriteRole(
+            modelsSection,
+            roleKey,
             SelectedProvider,
             SelectedModelId,
             provenance,
-            discoveredModel?.ContextWindowTokens,
-            discoveredModel?.InputModalities,
-            discoveredModel?.OutputModalities);
+            ValueOverride<int>.Unset,
+            ValueOverride<ModelModality>.Unset,
+            ValueOverride<ModelModality>.Unset,
+            discoveredModel);
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();
@@ -223,7 +238,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection?.Remove(roleKey) == true)
+        if (modelsSection is not null && ModelEntryWriter.ClearRole(modelsSection, roleKey))
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();

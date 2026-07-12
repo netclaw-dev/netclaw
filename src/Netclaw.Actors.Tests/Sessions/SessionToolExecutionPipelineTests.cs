@@ -148,6 +148,54 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Empty(approvals);
     }
 
+    [Theory]
+    [InlineData(ChannelType.Headless)]
+    [InlineData(ChannelType.Reminder)]
+    [InlineData(ChannelType.Webhook)]
+    public async Task Non_interactive_turn_does_not_create_subagent_approval_bridge(ChannelType channelType)
+    {
+        var executor = new ContextCapturingExecutor();
+        var probe = CreateTestProbe($"non-interactive-{channelType}-context-probe");
+        var sessionId = new SessionId($"automation/{channelType}");
+        var source = new MessageSource
+        {
+            ChannelType = channelType,
+            SenderId = new SenderId("automation"),
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
+            ReceivedAt = DateTimeOffset.UnixEpoch
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-1", "inspect_context")],
+            sessionId,
+            source,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(1),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: new ApprovalChannel(),
+            emitApprovalRequest: _ => { },
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(executor.Context);
+        Assert.False(executor.Context.SupportsInteractiveApproval);
+        Assert.Null(executor.Context.ApprovalBridge);
+    }
+
     [Fact]
     public async Task Approve_once_does_not_reprompt_on_retry_execution()
     {
@@ -834,6 +882,26 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
+        }
+    }
+
+    private sealed class ContextCapturingExecutor : IToolExecutor
+    {
+        public ToolExecutionContext? Context { get; private set; }
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            Context = context;
+            return Task.FromResult("ok");
         }
     }
 

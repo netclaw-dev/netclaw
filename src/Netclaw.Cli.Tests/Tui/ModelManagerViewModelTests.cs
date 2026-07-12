@@ -159,7 +159,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
         // Verify config
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
         Assert.Equal("model-a", main.GetProperty("ModelId").GetString());
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
@@ -205,7 +205,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         vm.ConfirmAssignment();
 
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
         Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
         Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
@@ -391,8 +391,9 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var models = config.RootElement.GetProperty("Models");
-        Assert.True(models.TryGetProperty("Main", out _));
-        Assert.False(models.TryGetProperty("Fallback", out _));
+        var roles = models.GetProperty("Roles");
+        Assert.True(roles.TryGetProperty("Main", out _));
+        Assert.False(roles.TryGetProperty("Fallback", out _));
     }
 
     [Fact]
@@ -497,9 +498,43 @@ public sealed class ModelManagerViewModelTests : IDisposable
         Assert.Equal("ollama", vm.Providers[0].DisplayName);
     }
 
+    [Fact]
+    public void Refresh_MissingNamedDefinition_SurfacesInvalidConfiguration()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["known"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "my-ollama",
+                        ["ModelId"] = "qwen3:30b"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "missing" }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+
+        Assert.Null(vm.Models);
+        Assert.Contains("invalid", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
     private ModelManagerViewModel CreateViewModel()
     {
         return new ModelManagerViewModel(_paths, _fakeProbe);
+    }
+
+    private static JsonElement ReadActiveModel(JsonDocument config, string role)
+    {
+        var models = config.RootElement.GetProperty("Models");
+        var definitionName = models.GetProperty("Roles").GetProperty(role).GetString()!;
+        return models.GetProperty("Definitions").GetProperty(definitionName);
     }
 
     private void WriteConfig(Dictionary<string, object> data)

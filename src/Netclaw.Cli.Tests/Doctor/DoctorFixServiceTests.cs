@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
+using System.Text.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
@@ -18,6 +19,40 @@ public sealed class DoctorFixServiceTests
 
     // ── Config-file fixes (systemd PATH rehydration disabled so these stay hermetic
     //    on machines where netclaw is actually installed as a --user service) ──
+
+    [Fact]
+    public async Task MigratesLegacyModelsWithoutChangingEffectiveMetadata()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Main": {
+                  "Provider": "vllm",
+                  "ModelId": "qwen-vl",
+                  "ContextWindow": 32768,
+                  "InputModalities": "Text, Image"
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(
+            paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+        var models = document.RootElement.GetProperty("Models");
+        var name = models.GetProperty("Roles").GetProperty("Main").GetString()!;
+        var definition = models.GetProperty("Definitions").GetProperty(name);
+        Assert.Equal("qwen-vl", definition.GetProperty("ModelId").GetString());
+        Assert.Equal(32768, definition.GetProperty("ContextWindow").GetInt32());
+        Assert.Equal("Text, Image", definition.GetProperty("InputModalities").GetString());
+        Assert.True(File.Exists(paths.NetclawConfigPath + ".legacy-models.bak"));
+    }
 
     [Fact]
     public async Task PlansConfigVersionFix_WhenMissing()

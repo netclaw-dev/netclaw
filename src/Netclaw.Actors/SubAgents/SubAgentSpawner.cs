@@ -201,7 +201,12 @@ public sealed class SubAgentSpawner
                     ParentProjectDirectory = context.ProjectDirectory,
                     ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
-                    ApprovalBridge = context.ApprovalBridge,
+                    // A session owns an approval channel even when its transport cannot
+                    // service prompts. Preserve the channel capability as the authority:
+                    // bridge presence alone must never make an unattended child interactive.
+                    ApprovalBridge = context.SupportsInteractiveApproval == true
+                        ? context.ApprovalBridge
+                        : null,
                     // Null for non-streaming callers such as routed skills and the
                     // legacy ExecuteAsync path; the sub-agent surfaces its progress
                     // through its own session-correlated logs regardless. Streaming

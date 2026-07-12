@@ -33,6 +33,10 @@ Rules:
   conversational follow-ups in Slack/TUI/SignalR sessions.
 - `channel` requires both transport + address and resolves names/handles to
   canonical IDs at set time; unresolved targets fail loud.
+- Discord reminder targets must be explicit because channel IDs and user IDs are
+  both snowflakes: use `channel:<channelId>` or `<#channelId>` for channel posts,
+  and `dm:<userId>`, `@<userId>`, or `<@userId>` for DMs. Do not pass a bare
+  Discord ID.
 - `none` runs silently (history still records execution).
 - `expires_in` is not valid for `once` reminders; omit it for one-shot schedules.
 - For recurring reminders that are permanently complete (PR merged, deploy done,

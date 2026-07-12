@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using Json.Schema;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
@@ -63,6 +64,25 @@ public sealed class DoctorFixService
             return Task.FromResult(new DoctorFixPlan(fixes));
 
         var appliedFixes = new List<string>();
+
+        if (obj["Models"] is JsonObject modelsNode)
+        {
+            var legacyEnvironmentOverride = ModelEntryWriter.FindLegacyEnvironmentOverride();
+            if (legacyEnvironmentOverride is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot migrate Models while legacy environment override '{legacyEnvironmentOverride}' is set. " +
+                    "Move model overrides to NETCLAW_Models__Definitions__<name>__* and " +
+                    "NETCLAW_Models__Roles__* first.");
+            }
+
+            var models = JsonSerializer.Deserialize<Dictionary<string, object>>(modelsNode.ToJsonString())!;
+            if (ModelEntryWriter.MigrateLegacy(models))
+            {
+                obj["Models"] = JsonNode.Parse(JsonSerializer.Serialize(models, JsonDefaults.ConfigFile));
+                appliedFixes.Add("named model definitions");
+            }
+        }
 
         // --- Manual fixes (not derivable from schema alone) ---
 
@@ -256,7 +276,7 @@ public sealed class DoctorFixService
             UpdatedText: updated));
     }
 
-    public async Task ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
+    public Task ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
     {
         foreach (var fix in plan.Fixes)
         {
@@ -267,8 +287,19 @@ public sealed class DoctorFixService
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            await File.WriteAllTextAsync(fix.FilePath, fix.UpdatedText, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fix.Description.Contains("named model definitions", StringComparison.Ordinal)
+                && File.Exists(fix.FilePath))
+            {
+                var backupPath = fix.FilePath + ".legacy-models.bak";
+                if (!File.Exists(backupPath))
+                    File.Copy(fix.FilePath, backupPath);
+            }
+
+            AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText);
         }
+
+        return Task.CompletedTask;
     }
 
 }

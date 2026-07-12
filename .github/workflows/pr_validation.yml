@@ -1,6 +1,11 @@
 name: pr_validation
 
 on:
+  # Merge queues test a synthetic merge group rather than the pull request ref.
+  # Required checks must subscribe to this event or queued PRs will never merge.
+  merge_group:
+    types:
+      - checks_requested
   push:
     branches:
       - master
