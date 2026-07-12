@@ -62,6 +62,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
     private volatile bool _processingIndicatorActive;
+    private readonly object _processingIndicatorRenderLock = new();
+    private Task _processingIndicatorRenderTail = Task.CompletedTask;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -1168,7 +1170,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                         cleared => ApplyPendingApprovalPromptCleared(cleared));
                 }
                 _pendingApprovalRequests.Clear();
-
                 break;
         }
     }
@@ -1185,11 +1186,39 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelOutputEffectKind.ProcessingIndicator,
             requirement);
 
-        if (output.IsRequired)
-            return RenderProcessingStateRequestAsync(request, isRequired: true);
+        var renderTask = QueueProcessingStateRender(request, output.IsRequired);
+        return output.IsRequired ? renderTask : Task.CompletedTask;
+    }
 
-        _ = RenderProcessingStateRequestAsync(request, isRequired: false);
-        return Task.CompletedTask;
+    private Task QueueProcessingStateRender(ChannelOutputRenderRequest request, bool isRequired)
+    {
+        lock (_processingIndicatorRenderLock)
+        {
+            _processingIndicatorRenderTail = RenderAfterPreviousAsync(
+                _processingIndicatorRenderTail,
+                request,
+                isRequired);
+            return _processingIndicatorRenderTail;
+        }
+    }
+
+    private async Task RenderAfterPreviousAsync(
+        Task previous,
+        ChannelOutputRenderRequest request,
+        bool isRequired)
+    {
+        try
+        {
+            await previous.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // A failed required render is reported to its caller. It must not
+            // poison the queue and prevent newer state from reaching Slack.
+            _log.Warning(ex, "Previous required Slack processing indicator render failed; continuing with newer state");
+        }
+
+        await RenderProcessingStateRequestAsync(request, isRequired).ConfigureAwait(false);
     }
 
     private void QueueProcessingIndicatorClearIfActive()

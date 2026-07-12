@@ -228,6 +228,61 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Processing_state_renders_are_serialized_in_output_order()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-ordered");
+        var renderer = new OrderedProcessingRenderer();
+        var registry = TestChannelRegistries.SlackWithProcessingRenderer(renderer);
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new ProcessingStateOutput(false) { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        ]);
+
+        CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
+
+        await renderer.FirstStarted.WaitAsync(ct);
+        await AwaitAssertAsync(
+            () => Assert.NotEmpty(_replyClient.Posts),
+            cancellationToken: ct);
+        Assert.False(renderer.SecondStarted.IsCompleted);
+
+        renderer.ReleaseFirst();
+        await renderer.SecondStarted.WaitAsync(ct);
+
+        Assert.Collection(
+            renderer.States,
+            state => Assert.True(state),
+            state => Assert.False(state));
+    }
+
+    [Fact]
+    public async Task Turn_completion_does_not_clear_status_while_session_remains_processing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-slack-processing-buffered-turn");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new TextOutput("First turn completed; continuing with buffered input.") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        ]);
+
+        CreateActorCore(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.Posts, p => p.Text == "First turn completed; continuing with buffered input.");
+            Assert.NotEmpty(_replyClient.Statuses);
+            Assert.All(_replyClient.Statuses, status => Assert.Equal("is thinking...", status.Status));
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
     public async Task Inbound_message_refreshes_active_processing_status()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -577,6 +632,47 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             CancellationToken cancellationToken = default)
         {
             return new ValueTask(_blocked.Task);
+        }
+    }
+
+    private sealed class OrderedProcessingRenderer : IChannelOutputRenderer
+    {
+        private readonly object _lock = new();
+        private readonly TaskCompletionSource _firstStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<bool> _states = [];
+
+        public ChannelDescriptorKey Key => ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+        public Task FirstStarted => _firstStarted.Task;
+        public Task SecondStarted => _secondStarted.Task;
+        public IReadOnlyList<bool> States
+        {
+            get { lock (_lock) return _states.ToList(); }
+        }
+
+        public void ReleaseFirst() => _releaseFirst.TrySetResult();
+
+        public ValueTask RenderAsync(
+            ChannelOutputRenderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var state = Assert.IsType<ProcessingStateOutput>(request.Output).IsProcessing;
+            int invocation;
+            lock (_lock)
+            {
+                _states.Add(state);
+                invocation = _states.Count;
+            }
+
+            if (invocation == 1)
+            {
+                _firstStarted.TrySetResult();
+                return new ValueTask(_releaseFirst.Task);
+            }
+
+            _secondStarted.TrySetResult();
+            return ValueTask.CompletedTask;
         }
     }
 

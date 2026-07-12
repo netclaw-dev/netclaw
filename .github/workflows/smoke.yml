@@ -11,6 +11,11 @@ name: smoke
 # surface via GitHub's built-in Actions notifications.
 
 on:
+  # Merge queues test a synthetic merge group rather than the pull request ref.
+  # Required checks must subscribe to this event or queued PRs will never merge.
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
   schedule:
     # 07:00 UTC daily — catches external-dependency drift during quiet
