@@ -693,7 +693,16 @@ static void ConfigureDaemonServices(
         .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
     services.AddSingleton(skillFeedsConfig);
 
-    var serverFeeds = skillFeedsConfig.ResolveEnabledSources(paths);
+    var resolvedServerFeedSources = new List<ResolvedExternalSource>();
+    foreach (var feed in skillFeedsConfig.Feeds.Where(f => f.Enabled))
+    {
+        var feedDir = paths.ServerFeedDirectory(feed.Name);
+        if (Directory.Exists(feedDir))
+            resolvedServerFeedSources.Add(new ResolvedExternalSource(
+                $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
+    }
+    IReadOnlyList<ResolvedExternalSource> serverFeeds = resolvedServerFeedSources;
+    services.AddKeyedSingleton("server-feeds", serverFeeds);
 
     // Scan native skills first (highest precedence), then server feeds, then external sources
     var initialSkillScan = SkillScanner.ScanAndMerge(

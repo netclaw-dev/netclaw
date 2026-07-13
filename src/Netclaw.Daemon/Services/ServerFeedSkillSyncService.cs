@@ -804,7 +804,14 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
     private void RescanAndUpdateIndex()
     {
-        var resolvedServerFeeds = _feedsConfig.ResolveEnabledSources(_paths);
+        var resolvedServerFeeds = new List<ResolvedExternalSource>();
+        foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
+        {
+            var feedDir = _paths.ServerFeedDirectory(feed.Name);
+            if (Directory.Exists(feedDir))
+                resolvedServerFeeds.Add(new ResolvedExternalSource(
+                    $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
+        }
 
         var mergedResult = SkillScanner.ScanAndMerge(
             _paths.SkillsDirectory, resolvedServerFeeds, _externalSources);

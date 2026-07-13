@@ -24,6 +24,20 @@ public static class SkillRegistryUpdater
         SkillIndexContextLayer skillIndexLayer,
         MergedSkillScanResult mergedResult,
         string nativeSkillsRoot,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
+        => ApplyMergedScanResult(
+            skillRegistry,
+            skillIndexLayer,
+            mergedResult,
+            nativeSkillsRoot,
+            [],
+            externalSources);
+
+    public static void ApplyMergedScanResult(
+        SkillRegistry skillRegistry,
+        SkillIndexContextLayer skillIndexLayer,
+        MergedSkillScanResult mergedResult,
+        string nativeSkillsRoot,
         IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources)
     {

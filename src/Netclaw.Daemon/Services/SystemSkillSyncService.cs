@@ -27,11 +27,11 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly SkillSyncConfig _skillSyncConfig;
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
-    private readonly SkillFeedsConfig _skillFeedsConfig;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
     private readonly ISkillContentScanner _scanner;
+    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public SystemSkillSyncService(
@@ -40,14 +40,15 @@ internal sealed class SystemSkillSyncService : IHostedService
         SkillSyncConfig skillSyncConfig,
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
-        SkillFeedsConfig skillFeedsConfig,
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
+        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         IChatClientProvider? chatClientProvider = null)
         : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer,
-            timeProvider, scanner, logger, BuildInfo.Version, skillFeedsConfig, externalSources)
+            timeProvider, scanner, logger, BuildInfo.Version, serverFeedSources, externalSources)
     {
     }
 
@@ -62,7 +63,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
         string daemonVersion,
-        SkillFeedsConfig? skillFeedsConfig = null,
+        IReadOnlyList<ResolvedExternalSource>? serverFeedSources = null,
         IReadOnlyList<ResolvedExternalSource>? externalSources = null)
     {
         _httpClient = httpClient;
@@ -70,11 +71,11 @@ internal sealed class SystemSkillSyncService : IHostedService
         _skillSyncConfig = skillSyncConfig;
         _skillRegistry = skillRegistry;
         _skillIndexLayer = skillIndexLayer;
-        _skillFeedsConfig = skillFeedsConfig ?? new SkillFeedsConfig();
         _timeProvider = timeProvider;
         _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
+        _serverFeedSources = serverFeedSources ?? [];
         _externalSources = externalSources ?? [];
     }
 
@@ -335,11 +336,10 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void RescanAndUpdateIndex()
     {
-        var serverFeedSources = _skillFeedsConfig.ResolveEnabledSources(_paths);
         var mergedResult = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory, serverFeedSources, _externalSources);
+            _paths.SkillsDirectory, _serverFeedSources, _externalSources);
         SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, serverFeedSources, _externalSources);
+            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _serverFeedSources, _externalSources);
 
         if (mergedResult.Issues.Count > 0)
         {

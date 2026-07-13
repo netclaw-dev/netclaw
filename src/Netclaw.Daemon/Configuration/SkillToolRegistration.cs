@@ -32,7 +32,6 @@ internal static class SkillToolRegistration
         var toolConfig = services.GetRequiredService<ToolConfig>();
         var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
-        var skillFeedsConfig = services.GetRequiredService<SkillFeedsConfig>();
         var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
@@ -49,7 +48,6 @@ internal static class SkillToolRegistration
             skillIndexLayer,
             paths,
             scanner,
-            skillFeedsConfig,
             externalSources,
             metrics,
             subAgentRegistry,

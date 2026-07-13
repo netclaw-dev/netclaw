@@ -25,30 +25,6 @@ public sealed class SkillFeedsConfig
     /// and only sync at daemon startup.
     /// </summary>
     public int SyncIntervalMinutes { get; set; } = 60;
-
-    /// <summary>
-    /// Resolves enabled server-feed skill directories that currently exist on disk.
-    /// Feed sync can create these directories after daemon startup, so callers that
-    /// rescan skills should resolve from the live filesystem instead of caching this list.
-    /// </summary>
-    public IReadOnlyList<ResolvedExternalSource> ResolveEnabledSources(NetclawPaths paths)
-    {
-        var results = new List<ResolvedExternalSource>();
-
-        foreach (var feed in Feeds.Where(static f => f.Enabled))
-        {
-            var feedDir = paths.ServerFeedDirectory(feed.Name);
-            if (!Directory.Exists(feedDir))
-                continue;
-
-            results.Add(new ResolvedExternalSource(
-                $"server-feed:{feed.Name}",
-                [feedDir],
-                AllowSymlinks: false));
-        }
-
-        return results;
-    }
 }
 
 /// <summary>

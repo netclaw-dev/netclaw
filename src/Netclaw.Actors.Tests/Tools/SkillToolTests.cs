@@ -721,50 +721,6 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
-    public async Task SkillManage_Mutation_PreservesServerFeedSkillsInRegistryAndIndex()
-    {
-        const string feedName = "my-feed";
-        var feedsConfig = new SkillFeedsConfig
-        {
-            Feeds = [new SkillFeedSource { Name = feedName, Url = "https://skills.example.test" }]
-        };
-        var tool = CreateManageTool(skillFeedsConfig: feedsConfig);
-
-        WriteServerFeedSkill(feedName, "disk-cleanup", """
-            ---
-            name: disk-cleanup
-            description: Synced disk cleanup.
-            ---
-            # Disk Cleanup
-            """);
-        var serverFeedSources = feedsConfig.ResolveEnabledSources(_paths);
-        var initial = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory,
-            serverFeedSources,
-            Array.Empty<ResolvedExternalSource>());
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _registry,
-            _indexLayer,
-            initial,
-            _paths.SkillsDirectory,
-            serverFeedSources,
-            Array.Empty<ResolvedExternalSource>());
-
-        var result = await tool.ExecuteAsync(ToolInput.Create(
-                "Action", "create",
-                "Name", "local-skill",
-                "Content", "---\nname: local-skill\ndescription: Local skill.\n---\n# Local Skill"),
-            PersonalCtx,
-            TestContext.Current.CancellationToken);
-
-        Assert.Contains("created", result);
-        Assert.NotNull(_registry.GetByName("disk-cleanup"));
-        var index = _indexLayer.GetContextLayer(TrustAudience.Personal);
-        Assert.Contains($"server-feed:{feedName}={_paths.ServerFeedDirectory(feedName)}", index);
-        Assert.Contains("disk-cleanup: Synced disk cleanup.", index);
-    }
-
-    [Fact]
     public async Task SkillManage_Delete_RemovesSkillDirectory()
     {
         WriteSkill("delete-me", """
@@ -895,17 +851,8 @@ public class SkillToolTests : IDisposable
         Assert.Single(_registry.GetScanIssues());
     }
 
-    private SkillManageTool CreateManageTool(
-        ISkillContentScanner? scanner = null,
-        SkillFeedsConfig? skillFeedsConfig = null,
-        IReadOnlyList<ResolvedExternalSource>? externalSources = null)
-        => new(
-            _registry,
-            _indexLayer,
-            _paths,
-            scanner ?? new NoOpSkillContentScanner(),
-            skillFeedsConfig ?? new SkillFeedsConfig(),
-            externalSources ?? Array.Empty<ResolvedExternalSource>());
+    private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
+        => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
 
     private static SubAgentSpawner CreateSubAgentSpawner()
     {
