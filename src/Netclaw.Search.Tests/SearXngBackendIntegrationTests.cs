@@ -27,6 +27,12 @@ public class SearXngBackendIntegrationTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("SearXNG container integration tests are not supported on Windows.");
+            return;
+        }
+
         var settingsYml = LoadFixture("searxng-settings.yml");
         IContainer? container = null;
 
