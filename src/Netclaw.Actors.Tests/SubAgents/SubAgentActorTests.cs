@@ -1359,6 +1359,92 @@ public class SubAgentActorTests : TestKit
         Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
     }
 
+    [Fact]
+    public async Task Parent_working_context_is_injected_into_child_user_message()
+    {
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Continue the implementation.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = "/path/that/does/not/exist",
+                ParentRecentFiles = ["src/Netclaw.Actors/Sessions/WorkingContext.cs"]
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        var userMessage = fakeClient.LastReceivedMessages![1].Text;
+        Assert.Contains("[working-context]", userMessage);
+        Assert.Contains("project_dir: /path/that/does/not/exist", userMessage);
+        Assert.Contains("src/Netclaw.Actors/Sessions/WorkingContext.cs", userMessage);
+        Assert.DoesNotContain("[working-context]", fakeClient.LastReceivedMessages[0].Text);
+    }
+
+    [Fact]
+    public async Task Successful_first_party_edit_is_returned_as_confirmed_child_activity()
+    {
+        var editTool = new FakeNetclawTool("file_edit", "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-edit", "file_edit",
+                    new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([editTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Edit Calculator.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = "/path/that/does/not/exist"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.WorkingContext);
+        Assert.Equal(
+            "/path/that/does/not/exist/src/Calculator.cs",
+            Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
+        Assert.Empty(result.WorkingContext.ObservedChangedFiles);
+    }
+
+    [Fact]
+    public async Task Denied_first_party_edit_is_not_returned_as_confirmed_child_activity()
+    {
+        var editTool = new FakeNetclawTool("file_edit", "Error: Permission denied: src/Calculator.cs");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-edit", "file_edit",
+                    new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([editTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Edit Calculator.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = "/path/that/does/not/exist"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.WorkingContext);
+        Assert.Empty(result.WorkingContext.ConfirmedChangedFiles);
+    }
+
     // Real PNG: the egress normalizer decodes every model-input image, so a
     // fake magic-byte stub would now be dropped. Small enough to pass through.
     private static readonly byte[] FakePngBytes = TestImages.SmallPng();

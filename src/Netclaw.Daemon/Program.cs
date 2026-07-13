@@ -862,6 +862,7 @@ static void ConfigureDaemonServices(
 
     // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
     services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
+    services.AddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
 
     // Expose all context layers as IReadOnlyList for actor DI resolution
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>
@@ -970,6 +971,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<IChatClientProvider>(),
         sp.GetRequiredService<ISystemPromptProvider>(),
         sp.GetRequiredService<IReadOnlyList<IContextLayerProvider>>(),
+        sp.GetRequiredService<IWorkingContextSnapshotProvider>(),
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<NetclawPaths>()));
 

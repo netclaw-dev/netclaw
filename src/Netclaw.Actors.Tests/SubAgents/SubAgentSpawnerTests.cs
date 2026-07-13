@@ -10,6 +10,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -49,6 +50,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
@@ -172,6 +174,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var notifications = new List<SubAgentNotificationInfo>();
@@ -246,6 +249,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
 
@@ -295,6 +299,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are an inspector."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
     }
 

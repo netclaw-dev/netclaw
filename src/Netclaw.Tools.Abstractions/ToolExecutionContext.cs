@@ -19,6 +19,22 @@ public sealed record ModelInputFileInfo(string FilePath, string FileName, MimeTy
 public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeType MimeType);
 
 /// <summary>
+/// Machine-readable working-context handoff from an ephemeral subagent run.
+/// Confirmed changes have first-party tool provenance; observed changes are
+/// derived from shared worktree state and do not imply authorship.
+/// </summary>
+public sealed record SubAgentWorkingContextInfo
+{
+    public string? ProjectDirectory { get; init; }
+    public string? Worktree { get; init; }
+    public string? Branch { get; init; }
+    public string? Head { get; init; }
+    public IReadOnlyList<string> ReadFiles { get; init; } = [];
+    public IReadOnlyList<string> ConfirmedChangedFiles { get; init; } = [];
+    public IReadOnlyList<string> ObservedChangedFiles { get; init; } = [];
+}
+
+/// <summary>
 /// Lightweight subagent activity notification for the tools abstraction layer.
 /// Tools emit these via <see cref="ToolExecutionContext.OnSubAgentActivity"/>;
 /// the session actor converts them to output events.
@@ -34,6 +50,7 @@ public sealed record SubAgentNotificationInfo
     public SubAgentOutcomeReason? OutcomeReason { get; init; }
     public TimeSpan Duration { get; init; }
     public IReadOnlyList<SubAgentFinding> Findings { get; init; } = [];
+    public SubAgentWorkingContextInfo? WorkingContext { get; init; }
 }
 
 /// <summary>
@@ -240,6 +257,12 @@ public sealed class ToolExecutionContext
     /// <c>set_working_directory</c>.
     /// </summary>
     public string? ProjectDirectory { get; set; }
+
+    /// <summary>
+    /// Read-only snapshot of the parent session's recently used files. This is
+    /// grounding for delegated work and does not grant filesystem authority.
+    /// </summary>
+    public IReadOnlyList<string> RecentFiles { get; init; } = [];
 
     /// <summary>
     /// Resolves the working directory for a shell-style invocation. Returns

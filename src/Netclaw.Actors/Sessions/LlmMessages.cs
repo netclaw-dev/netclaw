@@ -109,6 +109,7 @@ internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
     public int FindingsCount { get; init; }
     public string? MemoryDecision { get; init; }
     public string? MemoryDecisionReason { get; init; }
+    public SubAgentWorkingContextInfo? WorkingContext { get; init; }
 }
 
 internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNeeded

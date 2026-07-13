@@ -92,6 +92,7 @@ internal static class SessionToolExecutionPipeline
         ILogger? logger = null,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
+        IReadOnlyList<string>? recentFiles = null,
         bool setWorkingDirectoryAvailable = false,
         bool streamToolResults = false,
         ModelModality modelInputModalities = ModelModality.Text,
@@ -128,6 +129,7 @@ internal static class SessionToolExecutionPipeline
                     logger,
                     backgroundJobManager,
                     projectDirectory,
+                    recentFiles,
                     setWorkingDirectoryAvailable,
                     modelInputModalities,
                     oneTimeApprovalPreSeed is not null
@@ -204,6 +206,7 @@ internal static class SessionToolExecutionPipeline
         ILogger? logger = null,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
+        IReadOnlyList<string>? recentFiles = null,
         bool setWorkingDirectoryAvailable = false,
         ModelModality modelInputModalities = ModelModality.Text,
         IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
@@ -252,6 +255,7 @@ internal static class SessionToolExecutionPipeline
             sessionDir,
             spawnChildActor,
             projectDirectory,
+            recentFiles,
             turnContext,
             modelInputModalities,
             maxInlineToolResultChars);
@@ -325,7 +329,8 @@ internal static class SessionToolExecutionPipeline
                     Duration = info.Duration,
                     FindingsCount = info.Findings.Count,
                     MemoryDecision = decision,
-                    MemoryDecisionReason = reason
+                    MemoryDecisionReason = reason,
+                    WorkingContext = info.WorkingContext
                 });
             }
 
@@ -1052,6 +1057,7 @@ internal static class SessionToolExecutionPipeline
         string sessionDir,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         string? projectDirectory,
+        IReadOnlyList<string>? recentFiles,
         TurnContext? turnContext,
         ModelModality modelInputModalities,
         int maxInlineToolResultChars)
@@ -1065,6 +1071,7 @@ internal static class SessionToolExecutionPipeline
             // The session content budget; DispatchingToolExecutor uses it (or a
             // tool's own override) to bound results and spill the overflow.
             MaxInlineToolResultChars = maxInlineToolResultChars,
+            RecentFiles = recentFiles ?? [],
         };
         context.Boundary = turnContext?.Boundary ?? source?.Boundary;
         context.ChannelType = turnContext?.ChannelType?.ToWireValue()

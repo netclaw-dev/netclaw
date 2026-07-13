@@ -47,6 +47,13 @@ default provider.
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
    handles files the daemon wrote as UID 0.
 
+The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
+home before startup. It auto-approves tools and grants read/write access for the
+Personal audience because headless sessions cannot answer approval prompts or
+edit an interactive trust policy. A companion `tool-approvals.json` trusts Git
+for shell-based coding cases. Tool exposure and command-deny rules still apply,
+and these policies are never copied into an operator's config.
+
 `--network host` is the default because operators often host their LLM on
 a Tailscale node — MagicDNS hostnames like `my-gpu-server.tailnet.ts.net` only
 resolve when the container shares the host's DNS resolver. macOS/Windows
@@ -69,6 +76,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
 | Subagents | 2 | Delegates through `spawn_agent`, completes ambiguous work, and gives specialized subagent guidance precedence over a conflicting deployment playbook |
+| Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Complex Task Execution | 5 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
 
@@ -156,20 +164,24 @@ NETCLAW_EVAL_PROVIDER_TYPE=ollama \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://127.0.0.1:11434 \
 NETCLAW_EVAL_MODEL_ID=qwen3:30b \
   ./evals/run-evals.sh
+
+# Run ten alternating linked-worktree/recent-file coherence trials
+NETCLAW_IMAGE=netclaw-eval:working-context-treatment \
+NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=https://your-provider.example/v1 \
+NETCLAW_EVAL_MODEL_ID=your-model \
+NETCLAW_EVAL_CASE=coding_context_worktree_handoff \
+NETCLAW_EVAL_RUNS=10 NETCLAW_EVAL_TIMEOUT=180 \
+  ./evals/run-evals.sh
 ```
 
 ## Results Database
 
-Results are stored in `$EVAL_HOME/evals/results.db` (SQLite) inside the
-per-run throwaway directory, NOT under `~/.netclaw/`. This means results
-don't persist across runs by default — on script exit, the database is
-deleted along with `$EVAL_HOME`.
-
-If you want to retain results for trend analysis, copy the database out
-of `$EVAL_HOME` before the EXIT trap fires (look for the "Results:
-..."  line at the bottom of the script output to get the path). A
-dedicated results-retention follow-up may add a `NETCLAW_EVAL_RESULTS_DB`
-override.
+Results are accumulated in `$EVAL_HOME/evals/results.db` during execution.
+On exit, the harness archives the database, run metadata, daemon log, and
+per-turn stdout under `evals/runs/<run-id>/` before deleting the throwaway
+home. These archives are gitignored and can be compared locally without
+touching the operator's `~/.netclaw/` state.
 
 Requires `sqlite3` CLI — if not available, the script still runs but
 skips persistence.

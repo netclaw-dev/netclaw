@@ -26,6 +26,7 @@ public sealed record ContextAssemblyInput(
     string SessionsBasePath,
     bool FileReadGranted,
     AutomaticRecallResult? ActiveRecall,
+    string WorkingContextBlock,
     TrustAudience Audience = TrustAudience.Personal,
     string? SkillHint = null,
     // Maps canonical tool names (the form persisted in history) back
@@ -219,8 +220,8 @@ public static class SessionMessageAssembler
 
         // Working context is suppressed for Public audience to avoid leaking
         // internal operational state (project paths, scratch notes, etc.).
-        if (!input.State.WorkingContext.IsEmpty && input.Audience != TrustAudience.Public)
-            parts.Add(input.State.WorkingContext.ToContextBlock());
+        if (!string.IsNullOrWhiteSpace(input.WorkingContextBlock) && input.Audience != TrustAudience.Public)
+            parts.Add(input.WorkingContextBlock);
 
         // Suppressed for Public audience, same as WorkingContext: the block
         // exposes internal operational state — commands, rationales, and the
