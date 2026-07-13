@@ -220,9 +220,9 @@ public sealed class SubAgentSpawnerTests : TestKit
     [Fact]
     public async Task Spawn_async_returns_only_unconfirmed_git_changes_as_observed()
     {
-        var projectDirectory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-spawner-context"));
-        var confirmedPath = Path.GetFullPath(Path.Combine(projectDirectory, "src", "Confirmed.cs"));
-        var observedPath = Path.GetFullPath(Path.Combine(projectDirectory, "src", "Observed.cs"));
+        var projectDirectory = Path.GetFullPath(Path.Join(Path.GetTempPath(), "netclaw-spawner-context"));
+        var confirmedPath = Path.GetFullPath(Path.Join(projectDirectory, "src", "Confirmed.cs"));
+        var observedPath = Path.GetFullPath(Path.Join(projectDirectory, "src", "Observed.cs"));
         var snapshots = new Queue<WorkingContextSnapshot>(
         [
             new WorkingContextSnapshot
@@ -361,7 +361,7 @@ public sealed class SubAgentSpawnerTests : TestKit
     private static GitWorkingContextSnapshot GitSnapshot(string worktree, params string[] changedFiles) => new()
     {
         Worktree = worktree,
-        CommonDirectory = Path.Combine(worktree, ".git"),
+        CommonDirectory = Path.Join(worktree, ".git"),
         ChangedFiles = [.. changedFiles]
     };
 
