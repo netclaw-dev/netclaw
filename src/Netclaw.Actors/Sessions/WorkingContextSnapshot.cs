@@ -187,12 +187,13 @@ public sealed class WorkingContextSnapshotProvider(ILogger<WorkingContextSnapsho
             }
             else if (line.StartsWith("1 ", StringComparison.Ordinal) || line.StartsWith("2 ", StringComparison.Ordinal))
             {
-                var fields = line.Split(' ', line[0] == '1' ? 9 : 10, StringSplitOptions.None);
+                var isRename = line[0] == '2';
+                var fields = line.Split(' ', isRename ? 10 : 9, StringSplitOptions.None);
                 if (fields.Length < 2 || fields[1].Length != 2)
                     throw new FormatException("git returned an invalid file-status response");
                 if (fields[1][0] != '.') staged++;
                 if (fields[1][1] != '.') modified++;
-                files.Add(fields[^1]);
+                files.Add(isRename ? fields[^1].Split('\t', 2)[0] : fields[^1]);
             }
             else if (line.StartsWith("u ", StringComparison.Ordinal))
             {
@@ -248,7 +249,12 @@ public sealed class WorkingContextSnapshotProvider(ILogger<WorkingContextSnapsho
                 return GitCommandResult.Failed("git inspection timed out");
             }
 
-            Task.WaitAll([stdout, stderr], GitTimeout);
+            if (!Task.WaitAll([stdout, stderr], GitTimeout))
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                return GitCommandResult.Failed("git output collection timed out");
+            }
             var standardOutput = Bound(stdout.Result);
             var standardError = Bound(stderr.Result);
             return process.ExitCode == 0

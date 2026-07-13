@@ -334,6 +334,7 @@ public class SubAgentActorTests : TestKit
                 Timeout = TimeSpan.FromSeconds(5),
                 ParentSessionDirectory = "/tmp/netclaw/sessions/abc",
                 ParentProjectDirectory = "/home/user/workspaces/netclaw",
+                ParentRecentFiles = ["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"],
                 Audience = TrustAudience.Personal,
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -342,6 +343,7 @@ public class SubAgentActorTests : TestKit
         Assert.NotNull(fakeTool.LastContext);
         Assert.Equal("/tmp/netclaw/sessions/abc", fakeTool.LastContext!.SessionDirectory);
         Assert.Equal("/home/user/workspaces/netclaw", fakeTool.LastContext.ProjectDirectory);
+        Assert.Equal(["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"], fakeTool.LastContext.RecentFiles);
     }
 
     [Fact]
@@ -1362,6 +1364,7 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Parent_working_context_is_injected_into_child_user_message()
     {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "netclaw-missing-project");
         var fakeClient = new FakeChatClient();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient));
 
@@ -1371,7 +1374,7 @@ public class SubAgentActorTests : TestKit
                 Task = "Continue the implementation.",
                 Timeout = TimeSpan.FromSeconds(5),
                 Audience = TrustAudience.Personal,
-                ParentProjectDirectory = "/path/that/does/not/exist",
+                ParentProjectDirectory = projectDirectory,
                 ParentRecentFiles = ["src/Netclaw.Actors/Sessions/WorkingContext.cs"]
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -1379,7 +1382,7 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         var userMessage = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains("[working-context]", userMessage);
-        Assert.Contains("project_dir: /path/that/does/not/exist", userMessage);
+        Assert.Contains($"project_dir: {projectDirectory}", userMessage);
         Assert.Contains("src/Netclaw.Actors/Sessions/WorkingContext.cs", userMessage);
         Assert.DoesNotContain("[working-context]", fakeClient.LastReceivedMessages[0].Text);
     }
@@ -1387,6 +1390,7 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Successful_first_party_edit_is_returned_as_confirmed_child_activity()
     {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "netclaw-missing-project");
         var editTool = new FakeNetclawTool("file_edit", "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)");
         var fakeClient = new FakeChatClient
         {
@@ -1404,14 +1408,14 @@ public class SubAgentActorTests : TestKit
                 Task = "Edit Calculator.",
                 Timeout = TimeSpan.FromSeconds(5),
                 Audience = TrustAudience.Personal,
-                ParentProjectDirectory = "/path/that/does/not/exist"
+                ParentProjectDirectory = projectDirectory
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.NotNull(result.WorkingContext);
         Assert.Equal(
-            "/path/that/does/not/exist/src/Calculator.cs",
+            Path.GetFullPath(Path.Combine(projectDirectory, "src", "Calculator.cs")),
             Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
         Assert.Empty(result.WorkingContext.ObservedChangedFiles);
     }
@@ -1419,6 +1423,7 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Denied_first_party_edit_is_not_returned_as_confirmed_child_activity()
     {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "netclaw-missing-project");
         var editTool = new FakeNetclawTool("file_edit", "Error: Permission denied: src/Calculator.cs");
         var fakeClient = new FakeChatClient
         {
@@ -1436,7 +1441,7 @@ public class SubAgentActorTests : TestKit
                 Task = "Edit Calculator.",
                 Timeout = TimeSpan.FromSeconds(5),
                 Audience = TrustAudience.Personal,
-                ParentProjectDirectory = "/path/that/does/not/exist"
+                ParentProjectDirectory = projectDirectory
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 

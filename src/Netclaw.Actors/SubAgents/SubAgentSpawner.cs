@@ -24,6 +24,9 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 public sealed class SubAgentSpawner
 {
+    private static readonly StringComparer FilePathComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private const int SubAgentMaxToolIterations = 30;
 
     private readonly IChatClientProvider _chatClientProvider;
@@ -313,16 +316,16 @@ public sealed class SubAgentSpawner
             ProjectDirectory = childContext.ProjectDirectory,
             RecentFiles = [.. childContext.ReadFiles
                 .Concat(childContext.ConfirmedChangedFiles)
-                .Distinct(StringComparer.Ordinal)
+                .Distinct(FilePathComparer)
                 .Take(WorkingContext.MaxRecentFiles)]
         };
         var finalSnapshot = _workingContextSnapshots.Create(finalContext, audience);
-        var initialChanged = initialSnapshot.Git?.ChangedFiles ?? [];
-        var observed = finalSnapshot.Git?.ChangedFiles
-            .Except(initialChanged, StringComparer.Ordinal)
-            .Except(childContext.ConfirmedChangedFiles, StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray() ?? [];
+        var initialChanged = CanonicalChangedFiles(initialSnapshot.Git);
+        var observed = CanonicalChangedFiles(finalSnapshot.Git)
+            .Except(initialChanged, FilePathComparer)
+            .Except(childContext.ConfirmedChangedFiles, FilePathComparer)
+            .Order(FilePathComparer)
+            .ToArray();
 
         return result with
         {
@@ -334,6 +337,15 @@ public sealed class SubAgentSpawner
                 ObservedChangedFiles = observed
             }
         };
+    }
+
+    private static IEnumerable<string> CanonicalChangedFiles(GitWorkingContextSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return [];
+
+        return snapshot.ChangedFiles.Select(path =>
+            Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(path, snapshot.Worktree));
     }
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolExecutionContext context)

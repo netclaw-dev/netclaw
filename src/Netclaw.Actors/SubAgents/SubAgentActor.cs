@@ -274,6 +274,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 Audience = subAgentAudience,
                 InheritedCwd = msg.ParentCwd,
+                RecentFiles = msg.ParentRecentFiles,
             };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
@@ -1365,6 +1366,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             RequestedDeliveryTarget = source.RequestedDeliveryTarget,
             ModelInputModalities = source.ModelInputModalities,
             ProjectDirectory = source.ProjectDirectory,
+            RecentFiles = source.RecentFiles,
             InheritedCwd = source.InheritedCwd,
             SupportsInteractiveApproval = source.SupportsInteractiveApproval,
             OnSubAgentActivity = source.OnSubAgentActivity,

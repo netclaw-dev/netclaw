@@ -39,6 +39,17 @@ public class WorkingContextSnapshotTests
     }
 
     [Fact]
+    public void ParseStatus_uses_rename_destination_as_changed_file()
+    {
+        var snapshot = WorkingContextSnapshotProvider.ParseStatus(
+            "/worktrees/feature",
+            "/repos/app/.git",
+            "2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 src/New Name.cs\tsrc/Old Name.cs");
+
+        Assert.Equal(["src/New Name.cs"], snapshot.ChangedFiles);
+    }
+
+    [Fact]
     public void Render_nests_git_under_working_context_without_remote_url()
     {
         var snapshot = new WorkingContextSnapshot
