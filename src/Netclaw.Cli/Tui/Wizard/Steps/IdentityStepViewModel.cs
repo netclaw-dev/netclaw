@@ -135,10 +135,9 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     }
 
     /// <summary>
-    /// Write SOUL.md and TOOLING.md identity files. Called during config finalization.
+    /// Write SOUL.md and TOOLING.md identity files and seed the deployment playbook.
     /// Reads templates from embedded resources and substitutes placeholders.
-    /// AGENTS.md is no longer written to disk — it is loaded from embedded resources
-    /// in <see cref="FileSystemPromptProvider"/> per audience at runtime.
+    /// Existing AGENTS.md content is operator-owned and is never overwritten.
     /// </summary>
     public void WriteIdentityFiles(NetclawPaths paths)
     {
@@ -180,6 +179,12 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
 
         File.WriteAllText(paths.ToolingPath, SubstitutePlaceholders(
             ReadEmbeddedTemplate("TOOLING.template.md"), substitutions));
+
+        if (!File.Exists(paths.AgentsPath))
+        {
+            File.WriteAllText(paths.AgentsPath, SubstitutePlaceholders(
+                ReadEmbeddedTemplate("AGENTS.template.md"), substitutions));
+        }
     }
 
     private static string ReadEmbeddedTemplate(string fileName)
@@ -210,16 +215,20 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
         var userName = string.IsNullOrWhiteSpace(UserName) ? "User" : UserName;
         var commStyle = CommunicationStyle ?? "Concise & casual";
         var soulPath = paths.SoulPath;
+        var agentsPath = paths.AgentsPath;
 
         return $"""
             I just finished setting up. My name is {userName} and I chose "{commStyle}" as my communication style.
 
-            This is our first conversation. I'd like you to get to know me so you can be more helpful. Please:
+            This is our first conversation. I'd like you to learn both who I am and what mission this deployment should perform. Please:
 
             1. Introduce yourself briefly
             2. Ask me what I'd primarily like to use you for
-            3. Ask if there's anything else you should know about me — my background, how I work, tools I use, preferences, etc.
-            4. After our conversation, update my profile in SOUL.md ({soulPath}) with what you've learned. Use file_read to check current content first, then file_write to update it. Keep the existing structure but enrich it with the details from our conversation.
+            3. Ask what successful work looks like, which workflows recur, which skills you should use, when you should delegate, and what mistakes or quality problems you must catch before delivering work
+            4. Ask what else you should know about me — my background, how I work, tools I use, and communication preferences
+            5. Keep operator and personality context in SOUL.md ({soulPath}). Keep the deployment mission, workflows, skill-selection rules, delegation practices, and review gates in AGENTS.md ({agentsPath}). Never put secrets or audience-private data in AGENTS.md.
+            6. When you understand the mission, summarize the playbook you propose and ask me to confirm it before writing either file.
+            7. After I confirm, use file_read on both files, preserve their existing structure and useful content, then use file_write to update them. Tell me the new playbook will apply on my next message.
 
             Keep it natural and conversational — don't ask everything at once.
             """;

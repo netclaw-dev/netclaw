@@ -133,4 +133,60 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains(_paths.SystemSkillsDirectory, prompt);
         Assert.Contains(_paths.IdentityDirectory, prompt);
     }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Every_audience_gets_deployment_playbook_after_embedded_core(TrustAudience audience)
+    {
+        File.WriteAllText(_paths.AgentsPath,
+            "Always review customer email before delivery. Identity: {{IDENTITY_DIR}}");
+
+        var prompt = _provider.GetSystemPrompt(audience);
+
+        var embeddedIndex = prompt.IndexOf("Operating Rules", StringComparison.Ordinal);
+        var headingIndex = prompt.IndexOf("Deployment Mission and Operating Playbook", StringComparison.Ordinal);
+        var playbookIndex = prompt.IndexOf("Always review customer email", StringComparison.Ordinal);
+        Assert.True(embeddedIndex >= 0);
+        Assert.True(headingIndex > embeddedIndex);
+        Assert.True(playbookIndex > headingIndex);
+        Assert.Contains(_paths.IdentityDirectory, prompt);
+        Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Operating_rules_include_deployment_playbook_for_every_audience(TrustAudience audience)
+    {
+        File.WriteAllText(_paths.AgentsPath, "Use the deployment review checklist.");
+
+        var rules = _provider.GetOperatingRules(audience);
+
+        Assert.NotNull(rules);
+        Assert.Contains("Operating Rules", rules);
+        Assert.Contains("Use the deployment review checklist.", rules);
+    }
+
+    [Fact]
+    public void Missing_deployment_playbook_uses_embedded_rules_only()
+    {
+        var rules = _provider.GetOperatingRules(TrustAudience.Team);
+
+        Assert.NotNull(rules);
+        Assert.Contains("Operating Rules", rules);
+        Assert.DoesNotContain("Deployment Mission and Operating Playbook", rules);
+    }
+
+    [Fact]
+    public void Unreadable_deployment_playbook_is_not_silently_skipped()
+    {
+        File.WriteAllText(_paths.AgentsPath, "Mission");
+        using var locked = new FileStream(
+            _paths.AgentsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        Assert.Throws<IOException>(() => _provider.GetSystemPrompt(TrustAudience.Team));
+    }
 }

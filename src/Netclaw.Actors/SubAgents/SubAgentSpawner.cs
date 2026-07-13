@@ -334,11 +334,9 @@ public sealed class SubAgentSpawner
 
     private string? ResolveOperatingRules(ToolExecutionContext context)
     {
-        // Sub-agents inherit the embedded AGENTS.md operating rules from the
-        // parent session's trust audience. This gives them the same safety,
-        // grounding, and policy constraints as main agents (Resource Hard Deny,
-        // search citation policy, grounding rules, "I don't know" policy, etc.)
-        // without exposing personal identity layers (SOUL.md, TOOLING.md).
+        // Sub-agents inherit the audience-appropriate embedded operating core and
+        // the deployment mission playbook. This keeps safety, grounding, and the
+        // operator's quality workflow aligned without exposing SOUL.md or TOOLING.md.
         return _promptProvider.GetOperatingRules(context.Audience);
     }
 }

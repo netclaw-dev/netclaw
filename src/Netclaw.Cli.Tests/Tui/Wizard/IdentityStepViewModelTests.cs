@@ -89,7 +89,7 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
-    public void WriteIdentityFiles_CreatesSoulAndTooling()
+    public void WriteIdentityFiles_CreatesSoulAgentsAndTooling()
     {
         using var step = new IdentityStepViewModel();
         step.AgentName = "TestBot";
@@ -105,10 +105,37 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Contains("Bob", soul);
         Assert.Contains("UTC", soul);
 
-        // AGENTS.md is no longer written to disk — it is loaded from embedded
-        // resources at runtime per audience. TOOLING.md is still written.
-        Assert.False(File.Exists(Context.Paths.AgentsPath));
+        Assert.True(File.Exists(Context.Paths.AgentsPath));
+        var agents = File.ReadAllText(Context.Paths.AgentsPath);
+        Assert.Contains("Deployment Mission and Operating Playbook", agents);
+        Assert.DoesNotContain("Search Decision Rules", agents);
         Assert.True(File.Exists(Context.Paths.ToolingPath));
+    }
+
+    [Fact]
+    public void WriteIdentityFiles_PreservesExistingAgentsPlaybook()
+    {
+        using var step = new IdentityStepViewModel();
+        const string existing = "# Mission\nNever skip the customer email review.";
+        File.WriteAllText(Context.Paths.AgentsPath, existing);
+
+        step.WriteIdentityFiles(Context.Paths);
+
+        Assert.Equal(existing, File.ReadAllText(Context.Paths.AgentsPath));
+    }
+
+    [Fact]
+    public void BuildOnboardingTrigger_SeparatesSoulFromMissionAndRequiresConfirmation()
+    {
+        using var step = new IdentityStepViewModel();
+
+        var trigger = step.BuildOnboardingTrigger(Context.Paths);
+
+        Assert.Contains(Context.Paths.SoulPath, trigger);
+        Assert.Contains(Context.Paths.AgentsPath, trigger);
+        Assert.Contains("skill-selection rules", trigger);
+        Assert.Contains("ask me to confirm", trigger);
+        Assert.Contains("next message", trigger);
     }
 
     [Fact]

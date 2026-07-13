@@ -187,6 +187,8 @@ public class SubAgentActorTests : TestKit
         Assert.NotNull(fakeClient.LastReceivedMessages);
         Assert.Equal(ChatRole.System, fakeClient.LastReceivedMessages[0].Role);
         Assert.Contains("headless, non-interactive worker", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("subagent role guidance and assigned task are more specific", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("safety, security, trust-boundary, approval, and tool-policy rules remain mandatory", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Do not ask the user clarifying questions", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Parent-mediated tool approval", fakeClient.LastReceivedMessages[0].Text);
     }
@@ -197,7 +199,7 @@ public class SubAgentActorTests : TestKit
         var fakeClient = new FakeChatClient();
         var definition = CreateDefinition() with
         {
-            OperatingRules = "Operating rules: never invent runtime facts.",
+            OperatingRules = "Operating rules: never invent runtime facts.\n\nDeployment playbook: review customer email.",
             ProjectInstructions = "Project rules: prefer C#.",
             SystemPrompt = "You are a test agent.\n\n[Skill Overlay]\nUse focused analysis."
         };
@@ -214,6 +216,7 @@ public class SubAgentActorTests : TestKit
         AssertPromptOrder(
             systemPrompt,
             "Operating rules: never invent runtime facts.",
+            "Deployment playbook: review customer email.",
             "Project rules: prefer C#.",
             "You are a test agent.",
             "[Skill Overlay]",

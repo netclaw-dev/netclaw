@@ -27,6 +27,7 @@ existing-install re-entry paths.
 - collect user name
 - collect timezone
 - regenerate `SOUL.md` and `TOOLING.md`
+- seed a minimal deployment `AGENTS.md` scaffold only when absent
 
 ### Step 3: Security Posture
 
@@ -60,6 +61,16 @@ bootstrap flow by default. Instead it presents:
 - remains init-owned
 - reuses the identity form with existing values prefilled
 - continues into the bot-assisted identity conversation
+- never overwrites an existing deployment `AGENTS.md`
+
+### Post-Init Conversation
+
+- discovers operator/personality context for `SOUL.md`
+- discovers mission, workflows, required skills, delegation, and review gates
+  for `AGENTS.md`
+- summarizes the proposed playbook and requires confirmation before writing
+- reads and preserves existing identity-file content
+- reports that confirmed changes apply on the next inbound message
 
 ### Start Over From Scratch
 

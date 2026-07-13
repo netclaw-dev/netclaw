@@ -86,42 +86,29 @@ the dynamic count.
 
 ### Requirement: Phase 2 conversational personality bootstrap
 
-The system SHALL trigger a conversational personality bootstrap on the first
-conversation if identity files (`SOUL.md`, `TOOLING.md`) do not already carry
-operator-enriched content. The bootstrap is delivered as an initial chat message
-injected by the init wizard's navigate callback when `LaunchChat()` fires. The
-bootstrap message SHALL ask the operator about communication preferences, tone,
-name preferences, and working style, then instruct the agent to update `SOUL.md`
-with what it learns. `AGENTS.md` is loaded from embedded resources at runtime
-and is NOT written to disk by the wizard.
+The system SHALL trigger conversational identity and mission bootstrap through the initial chat message injected by the init wizard's navigate callback when `LaunchChat()` fires. The message SHALL ask naturally about the operator's communication preferences and working style as well as the deployment mission, successful outcomes, recurring workflows, skill-selection expectations, delegation rules, and known quality failures. It SHALL direct the agent to separate operator/personality context into `SOUL.md` and durable mission/workflow guidance into `AGENTS.md`, propose a concise playbook, obtain operator confirmation, then read and update both files. `TOOLING.md` remains wizard-generated.
 
-#### Scenario: First conversation triggers bootstrap
+#### Scenario: First conversation triggers identity and mission discovery
 
 - **GIVEN** the operator completed the init wizard successfully
-- **WHEN** the health check step auto-launches chat via `LaunchChat()`
-- **THEN** the agent receives a pre-filled onboarding trigger message
-- **AND** the message instructs it to introduce itself, ask the operator about
-  their primary use case, ask about background and preferences, and then update
-  `SOUL.md` with the learned details
+- **WHEN** the health check step launches chat via `LaunchChat()`
+- **THEN** the agent receives a pre-filled onboarding trigger
+- **AND** the trigger asks about both operator context and the deployment's mission, workflows, and failure modes
 
-#### Scenario: Bootstrap writes soul files
+#### Scenario: Bootstrap writes canonical identity files
 
-- **GIVEN** the personality bootstrap conversation is complete
-- **WHEN** the operator has answered the agent's preference questions
-- **THEN** the agent updates `SOUL.md` in the config directory with what it
-  learned
-- **AND** `TOOLING.md` is already in place from the init wizard's
-  `WriteIdentityFiles` call
+- **GIVEN** the onboarding conversation is complete and the operator confirmed the proposed playbook
+- **WHEN** the agent persists the results
+- **THEN** it reads and updates `SOUL.md` with operator and personality context
+- **AND** reads and updates `AGENTS.md` with mission and operating workflow guidance
+- **AND** reports that the playbook applies on the next inbound turn
 
-#### Scenario: Bootstrap skipped when files exist
+#### Scenario: Wizard preserves an existing mission playbook
 
-- **GIVEN** `SOUL.md` already exists in the config directory with enriched
-  content
-- **WHEN** a new conversation starts
-- **THEN** no personality bootstrap trigger is injected
-- **AND** the existing `SOUL.md` is loaded normally
-
----
+- **GIVEN** `AGENTS.md` already contains an operator-authored playbook
+- **WHEN** the operator completes init or identity redo
+- **THEN** wizard file generation does not overwrite the playbook
+- **AND** the conversational trigger instructs the agent to read existing content before proposing changes
 
 ### Requirement: Environment discovery during onboarding
 

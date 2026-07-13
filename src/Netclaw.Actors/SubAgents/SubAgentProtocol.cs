@@ -43,7 +43,7 @@ public sealed record SubAgentDefinition
     public string? ProjectInstructions { get; init; }
 
     /// <summary>
-    /// Embedded AGENTS.md operating rules inherited from the parent session's trust audience.
+    /// Embedded operating core and deployment playbook inherited from the parent session's trust audience.
     /// Provides sub-agents with the same safety, grounding, and policy constraints as main agents.
     /// </summary>
     public string? OperatingRules { get; init; }
