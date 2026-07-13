@@ -20,7 +20,7 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly NetclawPaths _paths;
-    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
+    private readonly SkillFeedsConfig _skillFeedsConfig;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
     private readonly SkillRegistry _registry;
     private readonly SkillIndexContextLayer _indexLayer;
@@ -33,15 +33,14 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
 
     public SkillDirectoryWatcherService(
         NetclawPaths paths,
-        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
-        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+        SkillFeedsConfig skillFeedsConfig,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         SkillRegistry registry,
         SkillIndexContextLayer indexLayer,
         ILogger<SkillDirectoryWatcherService> logger)
     {
         _paths = paths;
-        _serverFeedSources = serverFeedSources;
+        _skillFeedsConfig = skillFeedsConfig;
         _externalSources = externalSources;
         _registry = registry;
         _indexLayer = indexLayer;
@@ -162,10 +161,11 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
         {
             _logger.LogDebug("Debounce timer fired, starting skill rescan");
 
+            var serverFeedSources = _skillFeedsConfig.ResolveEnabledSources(_paths);
             var result = SkillScanner.ScanAndMerge(
-                _paths.SkillsDirectory, _serverFeedSources, _externalSources);
+                _paths.SkillsDirectory, serverFeedSources, _externalSources);
             SkillRegistryUpdater.ApplyMergedScanResult(
-                _registry, _indexLayer, result, _paths.SkillsDirectory, _externalSources);
+                _registry, _indexLayer, result, _paths.SkillsDirectory, serverFeedSources, _externalSources);
 
             _logger.LogInformation(
                 "Skill directory rescan complete: {SkillCount} skills loaded, {IssueCount} issues",

@@ -69,6 +69,7 @@ public static class ToolRegistrationExtensions
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
         ISkillContentScanner scanner,
+        SkillFeedsConfig skillFeedsConfig,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
@@ -87,7 +88,7 @@ public static class ToolRegistrationExtensions
             skillLoadLogger,
             subAgentLoader));
         registry.Register(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
-        registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
+        registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, skillFeedsConfig, externalSources));
         return registry;
     }
 

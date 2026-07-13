@@ -119,6 +119,40 @@ public class SkillRegistryTests
     }
 
     [Fact]
+    public void ApplyMergedScanResult_includes_server_feed_roots_in_index()
+    {
+        var registry = new SkillRegistry();
+        var indexLayer = new SkillIndexContextLayer();
+        var mergedResult = new MergedSkillScanResult(
+            [MakeEntry("disk-cleanup", "Disk cleanup guidance")],
+            []);
+        var serverFeedSources = new[]
+        {
+            new ResolvedExternalSource(
+                "server-feed:team",
+                ["/home/user/.netclaw/skills/.server-feeds/team"],
+                AllowSymlinks: false)
+        };
+        var externalSources = new[]
+        {
+            new ResolvedExternalSource("claude-code", ["/home/user/.claude/skills"], AllowSymlinks: true)
+        };
+
+        SkillRegistryUpdater.ApplyMergedScanResult(
+            registry,
+            indexLayer,
+            mergedResult,
+            "/home/user/.netclaw/skills",
+            serverFeedSources,
+            externalSources);
+
+        var index = indexLayer.GetContextLayer(TrustAudience.Personal);
+        Assert.Contains("server-feed:team=/home/user/.netclaw/skills/.server-feeds/team", index);
+        Assert.Contains("claude-code=/home/user/.claude/skills", index);
+        Assert.Contains("disk-cleanup: Disk cleanup guidance", index);
+    }
+
+    [Fact]
     public void GenerateIndex_groups_by_category()
     {
         var registry = new SkillRegistry();

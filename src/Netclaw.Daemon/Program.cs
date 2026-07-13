@@ -693,16 +693,7 @@ static void ConfigureDaemonServices(
         .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
     services.AddSingleton(skillFeedsConfig);
 
-    var resolvedServerFeedSources = new List<ResolvedExternalSource>();
-    foreach (var feed in skillFeedsConfig.Feeds.Where(f => f.Enabled))
-    {
-        var feedDir = paths.ServerFeedDirectory(feed.Name);
-        if (Directory.Exists(feedDir))
-            resolvedServerFeedSources.Add(new ResolvedExternalSource(
-                $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
-    }
-    IReadOnlyList<ResolvedExternalSource> serverFeeds = resolvedServerFeedSources;
-    services.AddKeyedSingleton("server-feeds", serverFeeds);
+    var serverFeeds = skillFeedsConfig.ResolveEnabledSources(paths);
 
     // Scan native skills first (highest precedence), then server feeds, then external sources
     var initialSkillScan = SkillScanner.ScanAndMerge(
@@ -819,7 +810,13 @@ static void ConfigureDaemonServices(
 
     // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
     var skillIndexLayer = new SkillIndexContextLayer(skillSyncConfig);
-    skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory, resolvedExternalSources));
+    SkillRegistryUpdater.ApplyMergedScanResult(
+        skillRegistry,
+        skillIndexLayer,
+        initialSkillScan,
+        paths.SkillsDirectory,
+        serverFeeds,
+        resolvedExternalSources);
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 

@@ -24,9 +24,24 @@ public static class SkillRegistryUpdater
         SkillIndexContextLayer skillIndexLayer,
         MergedSkillScanResult mergedResult,
         string nativeSkillsRoot,
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         skillRegistry.ReplaceAll(mergedResult.AcceptedSkills, mergedResult.Issues);
-        skillIndexLayer.Update(skillRegistry.GenerateIndex(nativeSkillsRoot, externalSources));
+        skillIndexLayer.Update(skillRegistry.GenerateIndex(
+            nativeSkillsRoot,
+            CombineIndexSources(serverFeedSources, externalSources)));
+    }
+
+    public static IReadOnlyList<ResolvedExternalSource> CombineIndexSources(
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
+    {
+        if (serverFeedSources.Count == 0)
+            return externalSources;
+        if (externalSources.Count == 0)
+            return serverFeedSources;
+
+        return serverFeedSources.Concat(externalSources).ToArray();
     }
 }

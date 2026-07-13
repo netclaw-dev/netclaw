@@ -34,6 +34,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly NetclawPaths _paths;
     private readonly ISkillContentScanner _scanner;
+    private readonly SkillFeedsConfig _skillFeedsConfig;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public record Params(
@@ -59,12 +60,14 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
         ISkillContentScanner scanner,
+        SkillFeedsConfig skillFeedsConfig,
         IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         _skillRegistry = skillRegistry;
         _skillIndexLayer = skillIndexLayer;
         _paths = paths;
         _scanner = scanner;
+        _skillFeedsConfig = skillFeedsConfig;
         _externalSources = externalSources;
     }
 
@@ -475,9 +478,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()
     {
-        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
+        var serverFeedSources = _skillFeedsConfig.ResolveEnabledSources(_paths);
+        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, serverFeedSources, _externalSources);
         SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
+            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, serverFeedSources, _externalSources);
 
         // Return as SkillScanResult for AppendScanWarnings compatibility
         return new Netclaw.Actors.Skills.SkillScanResult(mergedResult.AcceptedSkills, mergedResult.Issues);
