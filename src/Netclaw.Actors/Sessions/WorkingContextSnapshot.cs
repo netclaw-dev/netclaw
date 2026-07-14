@@ -414,6 +414,7 @@ internal sealed class GitCommandRunner : IGitCommandRunner
         catch (InvalidOperationException)
         {
             // The process exited between the state check and Kill.
+            return;
         }
     }
 
