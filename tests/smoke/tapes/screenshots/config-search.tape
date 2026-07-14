@@ -29,21 +29,25 @@ Enter
 # before the screenshot fires, capturing the wrong row.
 Wait+Screen@10s /Choose the backend Netclaw uses for web search/
 Wait+Screen@5s /DuckDuckGo works without setup/
+Sleep 1s
 Screenshot "/tmp/shot-config-search-selection.png"
+Sleep 1s
 
 # ─── Frame 2: Brave entry state ────────────────────────────────────────────
-# SelectBackendForEditing("brave") is synchronous — Wait+Screen is sufficient.
+# Wait+Screen confirms the view state; the settle guard lets Termina finish repainting.
 Down
 Enter
 Wait+Screen@10s /Brave Search requires an API key/
+Sleep 1s
 Screenshot "/tmp/shot-config-search-brave-entry.png"
+Sleep 1s
 
 # ─── Frame 3: Saved state ──────────────────────────────────────────────────
 # SaveWithoutProbeOverride cascades multiple ReactiveProperty notifications
 # and a ReloadPersistedDraft disk read before the frame settles. A single
 # Wait+Screen on the success text is not enough — a second anchor on the
-# key-binding bar text guarantees both CurrentScreen==Saved and
-# ActiveDialog==None have committed to a stable rendered frame.
+# key-binding bar text confirms CurrentScreen==Saved and ActiveDialog==None; the
+# settle guard then lets the resulting full refresh finish before capture.
 # "[Enter] Settings Areas" is emitted by BuildKeyBindings only in that state
 # (SearchConfigEditorPage.cs line 212).
 Escape
@@ -57,6 +61,7 @@ Down 2
 Enter
 Wait+Screen@10s /validated and saved/
 Wait+Screen@5s /\[Enter\] Settings Areas/
+Sleep 1s
 Screenshot "/tmp/shot-config-search-saved.png"
 
 # Sleep 1s BEFORE Ctrl+Q: VHS's Screenshot is captured asynchronously on a
