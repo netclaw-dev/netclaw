@@ -193,6 +193,8 @@ manifest or installer feed.
   to the primitive defeats the purpose. Use `.Value` for explicit access and
   explicit casts where truly needed. If a value object can silently become a
   string, it provides no more safety than a raw string.
+- **Never use the `global::` namespace qualifier in C# source.** Resolve name
+  collisions with an ordinary `using` directive or type alias instead.
 - **Optional/nullable parameters are rare by default — make dependencies
   required.** A constructor or method parameter should be optional (nullable or
   defaulted) only when its absence is a genuine, intended runtime state the
