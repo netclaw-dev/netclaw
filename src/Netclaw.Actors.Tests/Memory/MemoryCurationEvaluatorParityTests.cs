@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Event;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -122,6 +123,42 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
         Assert.Equal(CurationDecisionKind.Consolidate, fromActor.Kind);
         Assert.NotNull(fromActor.ConsolidationTargetIds);
         Assert.Contains("doc-akka", fromActor.ConsolidationTargetIds!);
+        // The primary write target: ApplyDecisionAsync sets MemoryId from this so the
+        // store takes the explicit-target overwrite path (collapse), not dedup-append.
+        Assert.Equal("doc-akka", fromActor.TargetDocumentId);
+    }
+
+    // ── Consolidate end-to-end: existing document is REPLACED, not appended ──
+
+    [Fact]
+    public async Task ConsolidateDecision_appliedThroughStore_replacesExistingDocumentInsteadOfAppending()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+        await SeedDocumentAsync(
+            "akka-net-latest-release", "doc-akka", "Akka.NET latest release version is 1.5.62", freshnessAtMs: 1000, ct);
+
+        // One extra token ("now") keeps Jaccard overlap at 0.9 (> 0.8 threshold) while making
+        // the proposal body distinct from the seed, so replacement vs append is observable.
+        var operation = MakeOperation(
+            "akka-net-release", "Akka.NET latest release version is now 1.5.62", freshnessAtMs: 2000);
+
+        var evaluator = new MemoryCurationEvaluator(_store, (ILoggingAdapter)NoLogger.Instance);
+        var decision = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
+        Assert.Equal(CurationDecisionKind.Consolidate, decision.Kind);
+
+        var writeOp = await evaluator.ApplyDecisionAsync(operation, decision, ct);
+        Assert.NotNull(writeOp);
+        Assert.Equal("doc-akka", writeOp!.MemoryId);
+
+        await _store.ApplyInlineCurationBatchAsync([writeOp], ct);
+
+        var (body, updateSemantics) = await ReadDocumentBodyAndSemanticsAsync("doc-akka", ct);
+        // Collapse semantics: the near-duplicate body is replaced outright — no dated
+        // append marker, no doubled content.
+        Assert.Equal("Akka.NET latest release version is now 1.5.62", body);
+        Assert.DoesNotContain("_[merged", body);
+        Assert.Equal("merge-document", updateSemantics);
     }
 
     // ── gray zone (0.4-0.8), no LLM -> deterministic auto-resolve ───
@@ -328,6 +365,18 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             Confidence: 0.9,
             FreshnessAtMs: freshnessAtMs,
             ExpiresAtMs: null);
+
+    private async Task<(string Body, string UpdateSemantics)> ReadDocumentBodyAndSemanticsAsync(string documentId, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection($"Data Source={_dbPath}");
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT markdown_body, update_semantics FROM memory_documents WHERE document_id = $id";
+        cmd.Parameters.AddWithValue("$id", documentId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        Assert.True(await reader.ReadAsync(ct), $"Expected document row '{documentId}' to exist.");
+        return (reader.GetString(0), reader.GetString(1));
+    }
 
     private static void AssertSameDecision(CurationDecision expected, CurationDecision actual)
     {

@@ -164,6 +164,8 @@ public sealed class CurationRulesEvaluatorTests
         Assert.Equal(CurationDecisionKind.Consolidate, decision.Kind);
         Assert.NotNull(decision.ConsolidationTargetIds);
         Assert.Contains("doc-456", decision.ConsolidationTargetIds);
+        // Best match doubles as the primary write target for the collapse write.
+        Assert.Equal("doc-456", decision.TargetDocumentId);
     }
 
     // ── Fuzzy match + ambiguous overlap -> Ambiguous ────────────────

@@ -48,6 +48,8 @@ public sealed class CurationPromptBuilderTests
         Assert.Equal(2, decision.ConsolidationTargetIds.Count);
         Assert.Equal("doc-abc123", decision.ConsolidationTargetIds[0]);
         Assert.Equal("doc-def456", decision.ConsolidationTargetIds[1]);
+        // First listed id doubles as the primary write target for the collapse write.
+        Assert.Equal("doc-abc123", decision.TargetDocumentId);
     }
 
     [Fact]

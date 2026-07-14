@@ -165,9 +165,12 @@ public static class CurationPromptBuilder
                 .ToArray();
             if (ids.Length > 0)
             {
+                // First listed id is the primary write target (same role as
+                // EvaluateFuzzyMatch's best-match TargetDocumentId). No relevance scoring
+                // exists at this layer — the LLM's ordering is the only signal.
                 return new CurationDecision(
                     CurationDecisionKind.Consolidate,
-                    null,
+                    ids[0],
                     ids,
                     null,
                     $"LLM decision: CONSOLIDATE {string.Join(" ", ids)}");

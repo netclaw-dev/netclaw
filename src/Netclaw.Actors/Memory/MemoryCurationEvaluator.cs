@@ -361,9 +361,14 @@ public sealed class MemoryCurationEvaluator
                     decision.Reason);
 
                 await ExecuteConsolidationAsync(operation, decision, ct);
-                // After consolidation, write the new proposal under the canonical anchor
+                // After consolidation, write the proposal INTO the primary consolidated
+                // document (explicit target => the store's overwrite path, like Update):
+                // Consolidate means near-duplicate content, so the designed outcome is a
+                // collapse, not an append. A null TargetDocumentId (no construction site
+                // should produce one) flows through with MemoryId null and lands on the
+                // store's lossless dedup-append path, which logs curation_dedup_append.
                 var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
-                return operation with { AnchorCanonicalName = canonicalAnchor };
+                return operation with { AnchorCanonicalName = canonicalAnchor, MemoryId = decision.TargetDocumentId };
 
             case CurationDecisionKind.Create:
                 _log.Info(
