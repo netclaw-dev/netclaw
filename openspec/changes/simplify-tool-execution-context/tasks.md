@@ -6,7 +6,7 @@
 - [x] 1.4 Split mutable tool outputs into a per-invocation append-only sink and approval retry/match state into a pipeline-owned attempt object while sharing only immutable run authority across a batch.
 - [x] 1.5 Add focused tests proving invalid scope values fail before dispatch, missing authority has no dispatch path, and parallel calls cannot observe each other's mutable state.
 - [x] 1.6 Update affected engineering documentation; review the mapped `netclaw-operations` system skill and leave it unchanged because the internal refactor must not alter model-visible guidance.
-- [ ] 1.7 Run targeted tests, tool-related evals/full eval suite as required, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 1 through review, CI, merge, and post-merge `dev` verification.
+- [x] 1.7 Run targeted tests, tool-related evals/full eval suite as required, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 1 through review, CI, merge, and post-merge `dev` verification.
 
 ## 2. Stage 2 — Composed Session Pipeline
 
