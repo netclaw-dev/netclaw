@@ -57,8 +57,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
     private readonly IToolExecutor? _toolExecutor;
+    private readonly SessionToolExecutionPipeline? _toolExecutionPipeline;
     private readonly Tools.ToolRegistry? _toolRegistry;
-    private readonly IToolAuditLogger? _auditLogger;
     private readonly IToolApprovalService? _approvalService;
     private readonly ApprovalChannel _approvalChannel = new();
     private readonly IMemoryExtractor _memoryExtractor;
@@ -234,7 +234,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _subAgentLoader = tools?.SubAgentLoader;
         _toolExecutor = tools?.ToolExecutor;
         _toolRegistry = tools?.ToolRegistry;
-        _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
         _approvalService = tools?.ApprovalService;
         _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
@@ -249,6 +248,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Enrich logger with session context — all log messages automatically include SessionId
         _log = Context.GetLogger().WithContext(NetclawLogProperties.SessionId, _sessionId.Value);
+        _toolExecutionPipeline = tools is null
+            ? null
+            : new SessionToolExecutionPipeline(
+                tools.ToolExecutor,
+                tools.AuditLogger,
+                services.TimeProvider,
+                NoLogger.Instance);
 
         // Load all non-MCP tools for initial LLM calls.
         // MCP tools are loaded dynamically via search_tools and can be retained for a
@@ -1958,12 +1964,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 tc.Arguments is not null ? JsonSerializer.Serialize(tc.Arguments) : "{}");
         }
         var self = Self;
-        var executor = _toolExecutor!;
-        var sessionId = _sessionId;
-        var auditLogger = _auditLogger;
-        var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
-        var maxInlineToolResultChars = _config.Tuning.MaxInlineToolResultChars;
         // Per-call inactivity watchdogs in the tool-execution pipeline govern
         // tool liveness; the session ProcessingWatchdog covers only LLM calls
         // and compaction, so no batch tool-execution watchdog is armed here.
@@ -1988,10 +1989,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
-        IActorRef? bgJobManager = null;
         var registry = ActorRegistry.For(Context.System);
-        if (registry.TryGet<BackgroundJobManagerActorKey>(out var mgr))
-            bgJobManager = mgr;
+        var backgroundJobs = registry.TryGet<BackgroundJobManagerActorKey>(out var manager)
+            ? new BackgroundJobDispatch.Available(manager)
+            : (BackgroundJobDispatch)new BackgroundJobDispatch.Unavailable();
 
         // Pre-compute set_working_directory exposure once per dispatch so the
         // pipeline's deny-path hint logic can run without a policy lookup.
@@ -2002,21 +2003,40 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CancelAndDisposeToolExecutionCts();
         _activeToolExecutionCts = new CancellationTokenSource();
         var toolExecutionCt = _activeToolExecutionCts.Token;
+        var turnContext = _currentTurnContext
+            ?? throw new InvalidOperationException("Tool batch dispatch requires admitted turn authority.");
+        var runEnvironment = new SessionToolRunEnvironment
+        {
+            SessionDirectory = sessionDir,
+            InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
+            ModelInputModalities = _model.InputModalities,
+            SpawnChildActor = spawnChildActor,
+            ProjectDirectory = _state.WorkingContext.ProjectDirectory,
+            RecentFiles = _state.WorkingContext.RecentFiles
+        };
+        var pipeline = _toolExecutionPipeline
+            ?? throw new InvalidOperationException("Tool batch dispatch requires tool execution infrastructure.");
+        var batch = new SessionToolBatch(turnContext, runEnvironment)
+        {
+            ToolCalls = toolCalls,
+            DefaultTimeout = new ToolExecutionTimeout(toolExecutionTimeout),
+            ReplyTo = self,
+            EmitSubAgentOutput = emitSubAgentOutput,
+            ApprovalRequests = new ToolApprovalRequests(
+                _approvalChannel,
+                request => self.Tell(request),
+                new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
+            BackgroundJobs = backgroundJobs,
+            SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
+            StreamResults = true,
+            OneTimeApprovalPreSeed = oneTimeApprovalPreSeed
+                ?? new Dictionary<string, IReadOnlyList<string>>(),
+            DecisionOverrides = decisionOverride
+                ?? new Dictionary<string, ApprovalDecision>(),
+            CancellationToken = toolExecutionCt
+        };
 
-        _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
-            approvalChannel: _approvalChannel,
-            emitApprovalRequest: request => self.Tell(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            backgroundJobManager: bgJobManager,
-            projectDirectory: _state.WorkingContext.ProjectDirectory,
-            recentFiles: _state.WorkingContext.RecentFiles,
-            setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,
-            streamToolResults: true,
-            modelInputModalities: _model.InputModalities,
-            oneTimeApprovalPreSeed: oneTimeApprovalPreSeed,
-            decisionOverride: decisionOverride,
-            turnContext: _currentTurnContext,
-            ct: toolExecutionCt);
+        _ = pipeline.ExecuteAsync(batch);
     }
 
     private void HandleTextResponse(

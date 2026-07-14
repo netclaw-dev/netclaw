@@ -41,6 +41,21 @@ This enables:
 5. Actor emits typed `SessionOutput` events to subscribers.
 6. Actor checks compaction threshold.
 
+### Tool Execution Pipeline
+
+Tool-enabled sessions compose one `SessionToolExecutionPipeline` from required
+execution, audit, time, and logging services. Each admitted tool-call response
+is submitted as one `SessionToolBatch`; the batch derives its immutable tool
+authority from the admitted `TurnContext` and carries environment and
+per-batch capabilities separately. Callers cannot supply a second authority
+object that disagrees with the admitted turn.
+
+The pipeline executes calls concurrently with fresh invocation state per call.
+Unavailable background-job infrastructure is an explicit capability state and
+retains synchronous execution behavior. This internal composition does not
+change MCP schemas, persisted actor messages, approval outcomes, or model-facing
+tool results.
+
 ## Subscriber Model
 
 Subscribers join via `JoinSession` with an `OutputFilter` bitmask controlling

@@ -41,20 +41,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/timeout-only"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/timeout-only"), probe.Ref)
+            .WithBackgroundJobs(jobManagerProbe.Ref)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -88,20 +78,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background"),
-            source: TestMessageSource(),
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -139,20 +120,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background-timeout"),
-            source: TestMessageSource(),
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-timeout"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -185,20 +157,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background-notimer"),
-            source: TestMessageSource(),
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-notimer"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -228,20 +191,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background-logpath"),
-            source: TestMessageSource(),
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-logpath"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -272,20 +226,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background-dir"),
-            source: TestMessageSource(),
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-dir"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -314,20 +259,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/background-denied"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-denied"), probe.Ref)
+            .WithBackgroundJobs(jobManagerProbe.Ref)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -357,20 +292,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             })
         };
 
-        await SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor, toolCalls,
-            new SessionId("test/nonshell-bg"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref,
-            ct: TestContext.Current.CancellationToken);
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/nonshell-bg"), probe.Ref)
+            .WithBackgroundJobs(jobManagerProbe.Ref)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -382,6 +307,58 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         await jobManagerProbe.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(200),
             cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExplicitBackground_WithoutManager_ExecutesSynchronously()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-no-background-manager");
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-no-manager", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "echo fallback",
+                ["_background"] = true
+            })
+        };
+
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-no-manager"), probe.Ref)
+            .From(TestMessageSource())
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("echo:echo fallback", Assert.Single(completed.ToolResults).Content);
+    }
+
+    [Fact]
+    public async Task BackgroundManagerFailure_ReturnsSubmissionErrorWithoutSynchronousRetry()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-failing-background-manager");
+        var manager = Sys.ActorOf(Props.Create(() => new FailingJobManager()));
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-failure", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "long-running-command",
+                ["_background"] = true
+            })
+        };
+
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-failure"), probe.Ref)
+            .From(TestMessageSource())
+            .WithBackgroundJobs(manager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("Error submitting background job", Assert.Single(completed.ToolResults).Content);
     }
 
     // Background-job submission now requires a trust context — source cannot be null.
@@ -432,6 +409,15 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
                     new BackgroundJobId($"fake-{_counter:D4}"),
                     $"/tmp/jobs/fake-{_counter:D4}/output.log"));
             });
+        }
+    }
+
+    private sealed class FailingJobManager : ReceiveActor
+    {
+        public FailingJobManager()
+        {
+            Receive<StartBackgroundJob>(_ =>
+                Sender.Tell(new Status.Failure(new InvalidOperationException("dispatch failed"))));
         }
     }
 }

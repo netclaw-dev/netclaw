@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Runtime.CompilerServices;
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -15,6 +16,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -48,6 +50,47 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     };
 
     [Fact]
+    public void Batch_derives_tool_authority_from_admitted_turn()
+    {
+        var turnContext = InteractiveTurnContext(new SessionId("D1/admitted-session")) with
+        {
+            DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "signalr", "session", "default-target", "Default"),
+            RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "signalr", "session", "requested-target", "Requested")
+        };
+        var batch = new SessionToolBatch(
+            turnContext,
+            new SessionToolRunEnvironment
+            {
+                SessionDirectory = Path.GetTempPath(),
+                InlineOutputBudget = new InlineOutputBudget(4096),
+                SpawnChildActor = static (_, _, _) => Task.FromResult<object>(new object())
+            })
+        {
+            ToolCalls = [new FunctionCallContent("call-1", "inspect_context")],
+            DefaultTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(5)),
+            ReplyTo = ActorRefs.Nobody,
+            EmitSubAgentOutput = _ => { },
+            ApprovalRequests = new ToolApprovalRequests(
+                new ApprovalChannel(),
+                _ => { },
+                new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
+            BackgroundJobs = new BackgroundJobDispatch.Unavailable(),
+            CancellationToken = TestContext.Current.CancellationToken
+        };
+
+        var session = Assert.IsType<ToolSessionScope.Bound>(batch.RunScope.Session);
+        Assert.Equal(turnContext.SessionId.Value, session.SessionId);
+        Assert.Equal(turnContext.Audience, batch.RunScope.Audience);
+        Assert.Equal(turnContext.Boundary, batch.RunScope.Boundary);
+        Assert.Equal(turnContext.ChannelType?.ToWireValue(), batch.RunScope.ChannelType);
+        Assert.Equal(turnContext.SupportsInteractiveApproval, batch.RunScope.SupportsInteractiveApproval);
+        Assert.Equal(turnContext.DefaultDeliveryTarget, batch.RunScope.DefaultDeliveryTarget);
+        Assert.Equal(turnContext.RequestedDeliveryTarget, batch.RunScope.RequestedDeliveryTarget);
+    }
+
+    [Fact]
     public async Task Approval_wait_does_not_consume_tool_execution_timeout_budget()
     {
         var executor = new ApprovalThenSuccessExecutor();
@@ -64,24 +107,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             })
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            sessionId,
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            turnContext: InteractiveTurnContext(sessionId),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequestTcs.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -119,23 +152,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             })
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            new SessionId("D1/source-less-approval-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvals.Add(request.Request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("D1/source-less-approval-test"), probe.Ref)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .WithApprovals(
+                approvalChannel,
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -168,23 +192,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ReceivedAt = DateTimeOffset.UnixEpoch
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-1", "inspect_context")],
-            sessionId,
-            source,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: new ApprovalChannel(),
-            emitApprovalRequest: _ => { },
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-1", "inspect_context")],
+                sessionId,
+                probe.Ref)
+            .From(source)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -213,24 +228,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             })
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            sessionId,
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvals.Add(request.Request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            turnContext: InteractiveTurnContext(sessionId),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithApprovals(
+                approvalChannel,
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
         {
@@ -272,24 +276,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             })
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            sessionId,
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            turnContext: InteractiveTurnContext(sessionId),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequestTcs.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -322,24 +315,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             })
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            sessionId,
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
-            approvalTimeout: Timeout.InfiniteTimeSpan,
-            turnContext: InteractiveTurnContext(sessionId),
-            ct: executionCts.Token);
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequestTcs.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(executionCts.Token);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -367,20 +349,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             new("call-slow", "slow_tool", new Dictionary<string, object?>())
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            new SessionId("D1/parallel-watchdog-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("D1/parallel-watchdog-test"), probe.Ref)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Real-time: the slow tool's per-call budget token trips ~1s in (the 1s
         // wall-clock budget). The ceiling stays tight so a regression — a budget
@@ -407,20 +379,12 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ParallelStreamingExecutor();
         var probe = CreateTestProbe("no-completion-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-nc", "no_completion_tool", new Dictionary<string, object?>())],
-            new SessionId("D1/no-completion-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(5),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-nc", "no_completion_tool", new Dictionary<string, object?>())],
+                new SessionId("D1/no-completion-test"),
+                probe.Ref)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -441,20 +405,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ChattyOpaqueExecutor();
         var probe = CreateTestProbe("opaque-wall-clock-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-chatty", "chatty_tool", new Dictionary<string, object?>())],
-            new SessionId("D1/opaque-wall-clock-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: time,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-chatty", "chatty_tool", new Dictionary<string, object?>())],
+                new SessionId("D1/opaque-wall-clock-test"),
+                probe.Ref)
+            .WithTimeProvider(time)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await executor.ActivitySeen.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         time.Advance(TimeSpan.FromSeconds(2));
@@ -478,20 +436,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new SelfMonitoringStreamingExecutor();
         var probe = CreateTestProbe("self-monitoring-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
-            new SessionId("D1/self-monitoring-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
+                new SessionId("D1/self-monitoring-test"),
+                probe.Ref)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         // Nothing has completed it and there is no timer to trip, so it stays running.
@@ -519,20 +470,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var probe = CreateTestProbe("self-monitoring-cancel-probe");
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
-            new SessionId("D1/self-monitoring-cancel-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(1),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: cts.Token);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-self", "spawn_agent", new Dictionary<string, object?>())],
+                new SessionId("D1/self-monitoring-cancel-test"),
+                probe.Ref)
+            .WithTimeout(TimeSpan.FromSeconds(1))
+            .ExecuteAsync(cts.Token);
 
         await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.False(pipelineTask.IsCompleted); // never completes on its own
@@ -555,21 +499,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ModelInputFileExecutor(imagePath);
         var probe = CreateTestProbe("model-input-file-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
-            new SessionId("D1/model-input-file-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: dir.Path,
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(3),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            modelInputModalities: ModelModality.Text | ModelModality.Image,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+                new SessionId("D1/model-input-file-test"),
+                probe.Ref)
+            .InSessionDirectory(dir.Path)
+            .WithTimeout(TimeSpan.FromSeconds(3))
+            .AcceptingModelInput(ModelModality.Text | ModelModality.Image)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -591,22 +529,16 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ModelInputFileExecutor(imagePath);
         var probe = CreateTestProbe("streaming-model-input-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
-            new SessionId("D1/streaming-model-input-file-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: dir.Path,
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(3),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            streamToolResults: true,
-            modelInputModalities: ModelModality.Text | ModelModality.Image,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+                new SessionId("D1/streaming-model-input-file-test"),
+                probe.Ref)
+            .InSessionDirectory(dir.Path)
+            .WithTimeout(TimeSpan.FromSeconds(3))
+            .StreamingResults()
+            .AcceptingModelInput(ModelModality.Text | ModelModality.Image)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var single = await probe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
             TimeSpan.FromSeconds(3),
@@ -642,7 +574,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = SessionToolExecutionPipeline.MaterializeModelInputFiles(
             context,
             dir.Path,
-            logger: null,
+            NoLogger.Instance,
             batchBudget: budget);
 
         Assert.Equal(2, result.RequestedCount);
@@ -658,20 +590,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ModelInputFileExecutor(imagePath);
         var probe = CreateTestProbe("model-input-modality-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
-            new SessionId("D1/model-input-modality-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: dir.Path,
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(3),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+                new SessionId("D1/model-input-modality-test"),
+                probe.Ref)
+            .InSessionDirectory(dir.Path)
+            .WithTimeout(TimeSpan.FromSeconds(3))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -690,21 +616,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ModelInputFileExecutor(imagePath);
         var probe = CreateTestProbe("model-input-magic-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
-            new SessionId("D1/model-input-magic-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: dir.Path,
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(3),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            modelInputModalities: ModelModality.Text | ModelModality.Image,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+                new SessionId("D1/model-input-magic-test"),
+                probe.Ref)
+            .InSessionDirectory(dir.Path)
+            .WithTimeout(TimeSpan.FromSeconds(3))
+            .AcceptingModelInput(ModelModality.Text | ModelModality.Image)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -726,21 +646,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var executor = new ModelInputFileExecutor(imagePath);
         var probe = CreateTestProbe("model-input-size-probe");
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
-            new SessionId("D1/model-input-size-test"),
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: dir.Path,
-            maxInlineToolResultChars: 4096,
-            timeout: TimeSpan.FromSeconds(3),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            modelInputModalities: ModelModality.Text | ModelModality.Image,
-            ct: TestContext.Current.CancellationToken);
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+                new SessionId("D1/model-input-size-test"),
+                probe.Ref)
+            .InSessionDirectory(dir.Path)
+            .WithTimeout(TimeSpan.FromSeconds(3))
+            .AcceptingModelInput(ModelModality.Text | ModelModality.Image)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),

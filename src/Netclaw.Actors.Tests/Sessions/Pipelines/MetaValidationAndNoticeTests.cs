@@ -62,21 +62,11 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
             new("call-1", "shell_execute", args)
         };
 
-        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            sessionId,
-            source: null,
-            auditLogger: null,
-            timeProvider: TimeProvider.System,
-            sessionDir: Path.GetTempPath(),
-            maxInlineToolResultChars: 4096,
-            timeout: timeout ?? TimeSpan.FromSeconds(60),
-            self: probe.Ref,
-            emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            turnContext: InteractiveTurnContext(sessionId),
-            ct: TestContext.Current.CancellationToken);
+        var fixture = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithTimeout(timeout ?? TimeSpan.FromSeconds(60));
+
+        var pipelineTask = fixture.ExecuteAsync(TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -106,6 +96,13 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
             LastContext = context;
             return Task.FromResult(result);
         }
+    }
+
+    private sealed class RecordingAuditLogger : IToolAuditLogger
+    {
+        public List<ToolAuditEntry> Entries { get; } = [];
+
+        public void Log(ToolAuditEntry entry) => Entries.Add(entry);
     }
 
     // ── Timeout hint is honored exactly (no clamp, no floor) ──
@@ -218,6 +215,36 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         Assert.Contains("'_background'", content);
         Assert.Contains("boolean", content);
         Assert.Contains("NOT executed", content);
+    }
+
+    [Fact]
+    public async Task Malformed_metadata_is_audited_as_denied()
+    {
+        var executor = new EchoExecutor();
+        var audit = new RecordingAuditLogger();
+        var probe = CreateTestProbe("malformed-metadata-audit");
+        var sessionId = new SessionId("D1/malformed-metadata-audit");
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-invalid-background", "shell_execute", new Dictionary<string, object?>
+            {
+                ["Command"] = "echo hi",
+                ["_background"] = "yes"
+            })
+        };
+
+        await new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithAudit(audit)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var entry = Assert.Single(audit.Entries);
+        Assert.False(entry.Allowed);
+        Assert.Equal("invalid_meta_value", entry.DenyReason);
+        Assert.Equal(new ToolCallId("call-invalid-background"), entry.CallId);
     }
 
     [Fact]

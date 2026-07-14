@@ -125,7 +125,7 @@ working state with gated asynchronous Git enrichment.
 
 Done when:
 
-- [ ] Stage 1 lands required run scopes, per-call isolation, and non-null
+- [x] Stage 1 lands required run scopes, per-call isolation, and non-null
   security/authority dependencies without compatibility shims.
 - [ ] Stage 2 lands the composed pipeline without changing existing background,
   fallback, authorization, approval, MCP, or model-visible behavior.

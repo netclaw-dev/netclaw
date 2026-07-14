@@ -1403,7 +1403,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return SessionToolExecutionPipeline.MaterializeModelInputFiles(
             toolContext,
             toolContext.SessionDirectory,
-            logger: null,
+            NoLogger.Instance,
             modelInputBudget);
     }
 

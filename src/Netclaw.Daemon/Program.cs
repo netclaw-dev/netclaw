@@ -965,7 +965,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton(sp => new SessionToolServices(
         sp.GetRequiredService<IToolExecutor>(),
-        sp.GetService<IToolAuditLogger>(),
+        sp.GetService<IToolAuditLogger>() ?? NullToolAuditLogger.Instance,
         sp.GetRequiredService<ToolRegistry>(),
         sp.GetService<ToolAccessPolicy>(),
         sp.GetService<TrustContextDeriver>(),

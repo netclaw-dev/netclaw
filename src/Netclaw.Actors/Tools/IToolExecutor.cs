@@ -142,3 +142,21 @@ public interface IToolAuditLogger
 {
     void Log(ToolAuditEntry entry);
 }
+
+/// <summary>
+/// Explicit audit sink for deployments that do not configure durable tool auditing.
+/// Keeps the execution pipeline's audit dependency required without manufacturing
+/// nullable branches at every allow and deny path.
+/// </summary>
+public sealed class NullToolAuditLogger : IToolAuditLogger
+{
+    public static NullToolAuditLogger Instance { get; } = new();
+
+    private NullToolAuditLogger()
+    {
+    }
+
+    public void Log(ToolAuditEntry entry)
+    {
+    }
+}
