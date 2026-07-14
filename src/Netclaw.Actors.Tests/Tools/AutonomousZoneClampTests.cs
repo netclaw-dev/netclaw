@@ -41,7 +41,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
 
     public void Dispose() => _dir.Dispose();
 
-    private ToolExecutionContext Ctx(TrustAudience audience, bool autonomous, bool withProject = true)
+    private ToolInvocationContext Ctx(TrustAudience audience, bool autonomous, bool withProject = true)
         => TestToolExecutionContext.CreateBound(
             autonomous ? "reminder/s1" : "signalr/s1",
             _sessionDir,
@@ -52,7 +52,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
                 SupportsInteractiveApproval = !autonomous,
                 ProjectDirectory = withProject ? _projectDir : null,
                 ChannelType = autonomous ? "reminder" : "signalr"
-            });
+            }).Invocation;
 
     [Fact]
     public void Autonomous_personal_write_outside_zone_is_denied()
@@ -115,7 +115,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
                 ProjectDirectory = _projectDir,
             });
 
-        Assert.True(policy.TryResolveWritePath(Path.Combine(_outsideDir, "legacy.txt"), ctx, out _, out var error), error);
+        Assert.True(policy.TryResolveWritePath(Path.Combine(_outsideDir, "legacy.txt"), ctx.Invocation, out _, out var error), error);
     }
 
     [Fact]
@@ -183,6 +183,6 @@ public sealed class AutonomousZoneClampTests : IDisposable
             SupportsInteractiveApproval = false
         });
 
-        Assert.False(policy.TryResolveWritePath(Path.Combine(_outsideDir, "x.txt"), ctx, out _, out _));
+        Assert.False(policy.TryResolveWritePath(Path.Combine(_outsideDir, "x.txt"), ctx.Invocation, out _, out _));
     }
 }

@@ -23,9 +23,9 @@ public sealed class ToolOutputSpillTests : IDisposable
             Directory.Delete(_sessionDir, recursive: true);
     }
 
-    private ToolExecutionContext Context() =>
+    private ToolInvocationContext Context() =>
         TestToolExecutionContext.CreateBound("session/thread", _sessionDir, new TestToolExecutionContextOptions
-        { Audience = TrustAudience.Personal });
+        { Audience = TrustAudience.Personal }).Invocation;
 
     private string ToolCallsDir => Path.Combine(_sessionDir, "tool-calls");
 
@@ -78,7 +78,7 @@ public sealed class ToolOutputSpillTests : IDisposable
         var ctx = TestToolExecutionContext.CreateBound("session/thread", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-        });
+        }).Invocation;
         var input = new string('H', 200) + new string('T', 200);
 
         var result = await ToolOutputSpill.BoundAndSpillAsync(

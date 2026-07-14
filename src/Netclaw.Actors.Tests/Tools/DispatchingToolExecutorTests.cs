@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DispatchingToolExecutorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -78,7 +78,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent("call-spill", "shell_execute",
                 ToolInput.Create("Command", $"echo {new string('x', 3000)}"));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
             });
 
@@ -108,7 +108,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent("call-redact", "shell_execute",
                 ToolInput.Create("Command", $"echo API_KEY=supersecret123 {new string('x', 3000)}"));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
             });
 
@@ -159,7 +159,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent("call-secret", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
             });
 
@@ -209,7 +209,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent("call-spill-secret", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = new InlineOutputBudget(500),
             });
@@ -248,7 +248,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent("call-content", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
             });
 
@@ -425,7 +425,7 @@ public class DispatchingToolExecutorTests
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Public,
                 Boundary = TrustBoundary.Public,
                 ChannelType = "slack"
@@ -456,7 +456,7 @@ public class DispatchingToolExecutorTests
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Team,
                 Boundary = TrustBoundary.Team,
                 ChannelType = "slack"
@@ -487,7 +487,7 @@ public class DispatchingToolExecutorTests
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr"
@@ -544,17 +544,17 @@ public class DispatchingToolExecutorTests
             ChannelType = "slack"
         });
 
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_write")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_edit")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("set_working_directory")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("web_fetch")!, teamContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, teamContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("set_webhook")!, teamContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("list_webhooks")!, teamContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("delete_webhook")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_write")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_edit")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("set_working_directory")!, TrustAudience.Team));
+        Assert.True(policy.IsToolExposed(registry.GetByName("web_fetch")!, TrustAudience.Team));
+        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, TrustAudience.Team));
+        Assert.False(policy.IsToolExposed(registry.GetByName("set_webhook")!, TrustAudience.Team));
+        Assert.False(policy.IsToolExposed(registry.GetByName("list_webhooks")!, TrustAudience.Team));
+        Assert.False(policy.IsToolExposed(registry.GetByName("delete_webhook")!, TrustAudience.Team));
     }
 
     [Fact]
@@ -583,14 +583,14 @@ public class DispatchingToolExecutorTests
             ChannelType = "slack"
         });
 
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, publicContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, publicContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, publicContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, publicContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("file_edit")!, publicContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, publicContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("set_working_directory")!, publicContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("web_fetch")!, publicContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Public));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Public));
+        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, TrustAudience.Public));
+        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, TrustAudience.Public));
+        Assert.False(policy.IsToolExposed(registry.GetByName("file_edit")!, TrustAudience.Public));
+        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, TrustAudience.Public));
+        Assert.False(policy.IsToolExposed(registry.GetByName("set_working_directory")!, TrustAudience.Public));
+        Assert.False(policy.IsToolExposed(registry.GetByName("web_fetch")!, TrustAudience.Public));
     }
 
     [Fact]
@@ -626,7 +626,7 @@ public class DispatchingToolExecutorTests
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", ex.DenyReason);
     }
 
-[Fact]
+    [Fact]
     public async Task One_time_approval_allows_immediate_retry_only()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
@@ -666,7 +666,7 @@ public class DispatchingToolExecutorTests
                 ToolInput.Create("Command", "git status"));
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -784,7 +784,7 @@ public class DispatchingToolExecutorTests
                 ToolInput.Create("Path", targetPath, "Content", "approved once"));
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -854,7 +854,7 @@ public class DispatchingToolExecutorTests
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-filtered", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -936,7 +936,7 @@ public class DispatchingToolExecutorTests
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-audit", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -1000,7 +1000,7 @@ public class DispatchingToolExecutorTests
                 ToolInput.Create("Command", "git status"));
 
             var firstContext = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -1008,7 +1008,7 @@ public class DispatchingToolExecutorTests
             });
 
             var secondContext = TestToolExecutionContext.CreateBound("signalr/thread-2", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
@@ -1108,7 +1108,7 @@ public class DispatchingToolExecutorTests
                 ToolInput.Empty());
 
             var context = TestToolExecutionContext.CreateBound("slack/D0/1779", null, new TestToolExecutionContextOptions
-        {
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "slack",

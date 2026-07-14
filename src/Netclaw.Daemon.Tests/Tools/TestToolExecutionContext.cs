@@ -10,12 +10,12 @@ namespace Netclaw.Tools;
 internal static class TestToolExecutionContext
 {
     public static ToolExecutionContext CreateUnbound()
-        => Create(new ToolSessionScope.Unbound(), TrustAudience.Public);
+        => Create(new ToolSessionScope.Sessionless(), TrustAudience.Public);
 
     public static ToolExecutionContext CreateUnbound(
         TrustAudience audience,
         string? channelType = null)
-        => Create(new ToolSessionScope.Unbound(), audience, channelType);
+        => Create(new ToolSessionScope.Sessionless(), audience, channelType);
 
     public static ToolExecutionContext CreateBound(
         string sessionId,

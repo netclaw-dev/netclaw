@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolAudienceProfileResolver.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -74,11 +74,14 @@ internal sealed class ToolAudienceProfileResolver
     public string? ResolveWorkspacesDirectory() => _paths?.WorkspacesDirectory;
 
     public bool IsToolAllowed(ToolName toolName, ToolInvocationContext context)
+        => IsToolAllowed(toolName, context.Audience);
+
+    public bool IsToolAllowed(ToolName toolName, TrustAudience audience)
     {
         if (!IsProfileManagedTool(toolName))
             return true;
 
-        var profile = ResolveProfile(context);
+        var profile = ResolveProfile(audience);
 
         if (profile.ToolsMode == ToolProfileMode.All)
             return true;

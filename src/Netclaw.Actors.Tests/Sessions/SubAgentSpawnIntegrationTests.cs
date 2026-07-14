@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentSpawnIntegrationTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -838,7 +838,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         public AITool ToAITool() => AIFunctionFactory.Create(() => result, name: Name, description: Description);
 
         public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-            => ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), ct);
+            => ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound().Invocation, ct);
 
         public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
         {

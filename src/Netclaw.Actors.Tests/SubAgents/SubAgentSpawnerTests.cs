@@ -74,7 +74,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             profile,
             "Summarize the repo.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
@@ -116,7 +116,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             CreateProfile(),
             "Inspect the system.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
@@ -148,7 +148,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             CreateProfile(),
             "Inspect the system.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
@@ -203,7 +203,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             profile,
             "Summarize the repo.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
@@ -253,7 +253,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             CreateProfile(),
             "Update the project.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
@@ -327,7 +327,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             profile,
             "Summarize the repo.",
             runtimeContext: null,
-            context,
+            context.Invocation,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, $"Expected success but got: {result.Output}");

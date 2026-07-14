@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SetWorkingDirectoryAudienceTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -26,7 +26,7 @@ public sealed class SetWorkingDirectoryAudienceTests
         var policy = new ToolAccessPolicy(config, Defaults);
         var tool = CreateFakeTool();
 
-        Assert.False(policy.IsToolExposed(tool, CreateContext(TrustAudience.Public)));
+        Assert.False(policy.IsToolExposed(tool, TrustAudience.Public));
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public sealed class SetWorkingDirectoryAudienceTests
         var policy = new ToolAccessPolicy(config, Defaults);
         var tool = CreateFakeTool();
 
-        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
+        Assert.True(policy.IsToolExposed(tool, TrustAudience.Team));
     }
 
     [Fact]
@@ -46,17 +46,10 @@ public sealed class SetWorkingDirectoryAudienceTests
         var policy = new ToolAccessPolicy(config, Defaults);
         var tool = CreateFakeTool();
 
-        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Personal)));
+        Assert.True(policy.IsToolExposed(tool, TrustAudience.Personal));
     }
 
     private static FakeNetclawTool CreateFakeTool()
         => new("set_working_directory", "ok", "file");
 
-    private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
-        {
-            Audience = audience,
-            Boundary = TrustBoundary.TrustedInstance,
-            ChannelType = "slack"
-        });
 }

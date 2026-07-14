@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolExecutionIntegrationTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -378,7 +378,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         result = Netclaw.Security.SecretOutputRedactor.Redact(result);
         var budget = context.MaxInlineToolResultChars;
         return await Netclaw.Actors.Tools.ToolOutputSpill.BoundAndSpillAsync(
-            result, toolCall.CallId, budget, context, ct);
+            result, toolCall.CallId, budget, context.Invocation, ct);
     }
 }
 

@@ -40,13 +40,13 @@ public sealed class ToolExecutionValueObjectTests
     {
         var missingBudget = new ToolRunScope
         {
-            Session = new ToolSessionScope.Unbound(),
+            Session = new ToolSessionScope.Sessionless(),
             Audience = TrustAudience.Public,
             InlineOutputBudget = null!,
         };
         var validScope = new ToolRunScope
         {
-            Session = new ToolSessionScope.Unbound(),
+            Session = new ToolSessionScope.Sessionless(),
             Audience = TrustAudience.Public,
             InlineOutputBudget = InlineOutputBudget.Default,
         };
@@ -63,7 +63,7 @@ public sealed class ToolExecutionValueObjectTests
         var recentFiles = new List<string> { "/repo/one.cs" };
         var runScope = new ToolRunScope
         {
-            Session = new ToolSessionScope.Unbound(),
+            Session = new ToolSessionScope.Sessionless(),
             Audience = TrustAudience.Personal,
             InlineOutputBudget = InlineOutputBudget.Default,
             RecentFiles = recentFiles,
@@ -116,5 +116,14 @@ public sealed class ToolExecutionValueObjectTests
         Assert.NotSame(first.Approval, second.Approval);
         Assert.Empty(second.Outputs.FileAttachments);
         Assert.Null(second.Approval.AppliedDecision);
+    }
+
+    [Fact]
+    public void Pipeline_execution_state_is_not_a_tool_invocation_context()
+    {
+        var execution = TestToolExecutionContext.CreateUnbound();
+
+        Assert.False(typeof(ToolInvocationContext).IsAssignableFrom(typeof(ToolExecutionContext)));
+        Assert.NotSame(execution, execution.Invocation);
     }
 }

@@ -58,7 +58,7 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
         var context = TestToolExecutionContext.CreateBound(SessionId, null, TrustAudience.Personal);
 
         var result = await spawner.SpawnAsync(
-            Profile("summarizer"), "do the work", null, context, TestContext.Current.CancellationToken);
+            Profile("summarizer"), "do the work", null, context.Invocation, TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         // The spawn attempt and its failure are both logged under the session's id, so the

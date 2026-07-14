@@ -73,7 +73,7 @@ public sealed class ToolAccessPolicy
     public bool IsToolExposed(INetclawTool tool, ToolInvocationContext context)
         => IsToolExposed(tool, ResolveAudience(context));
 
-    private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
+    internal bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
         // Feature-disabled tools are hidden for ALL audiences
         if (IsFeatureDisabledTool(tool.Name))
@@ -83,7 +83,7 @@ public sealed class ToolAccessPolicy
             return _profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), audience)
                 && _profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), audience);
 
-        if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), CreateContext(audience)))
+        if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), audience))
             return false;
 
         if (IsShellCoupledTool(tool))
@@ -102,10 +102,10 @@ public sealed class ToolAccessPolicy
     {
         if (tool is McpToolAdapter mcp)
         {
-            if (!_profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), context))
+            if (!_profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), context.Invocation))
                 return ToolAccessDecision.Deny("mcp_server_not_allowed_for_audience_profile");
 
-            if (!_profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), context))
+            if (!_profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), context.Invocation))
                 return ToolAccessDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
 
             var mcpToolName = new ToolName(tool.Name);
@@ -114,7 +114,7 @@ public sealed class ToolAccessPolicy
 
         var toolName = new ToolName(tool.Name);
 
-        if (!_profileResolver.IsToolAllowed(toolName, context))
+        if (!_profileResolver.IsToolAllowed(toolName, context.Invocation))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellCoupledTool(tool))
@@ -127,7 +127,7 @@ public sealed class ToolAccessPolicy
         if (shellMode == ShellExecutionMode.SandboxOnly)
             return ToolAccessDecision.Deny("shell_requires_sandbox_backend");
 
-        var shellAudience = ResolveAudience(context);
+        var shellAudience = ResolveAudience(context.Invocation);
         if (shellAudience != TrustAudience.Personal)
             return ToolAccessDecision.Deny("shell_requires_personal_context");
 
@@ -186,7 +186,7 @@ public sealed class ToolAccessPolicy
             if (expandedWorkingDirectory is null)
                 return ToolAccessDecision.Deny("shell_invalid_working_directory");
 
-            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expandedWorkingDirectory, context))
+            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expandedWorkingDirectory, context.Invocation))
                 return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
@@ -200,7 +200,7 @@ public sealed class ToolAccessPolicy
             if (expanded is null)
                 continue;
 
-            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expanded, context))
+            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expanded, context.Invocation))
                 return ToolAccessDecision.Deny("shell_path_outside_trust_zone");
         }
 
@@ -270,7 +270,7 @@ public sealed class ToolAccessPolicy
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher)
     {
-        var audience = ResolveAudience(context);
+        var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
         var approvalPolicy = profile.ApprovalPolicy;
         var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
@@ -336,7 +336,7 @@ public sealed class ToolAccessPolicy
             && isShell
             && !isMessy
             && candidateVerbs.Count > 0
-            && _safeVerbPolicy.AllShortCircuit(candidateVerbs, context.Approval.Cwd, context))
+            && _safeVerbPolicy.AllShortCircuit(candidateVerbs, context.Approval.Cwd, context.Invocation))
         {
             return ToolAccessDecision.Allow();
         }
@@ -539,15 +539,6 @@ public sealed class ToolAccessPolicy
 
     private static TrustAudience ResolveAudience(ToolInvocationContext context)
         => context.Audience;
-
-    private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => new(new ToolRunScope
-        {
-            Session = new ToolSessionScope.Unbound(),
-            Audience = audience,
-            InlineOutputBudget = InlineOutputBudget.Default,
-            SupportsInteractiveApproval = false,
-        }, ToolExecutionTimeout.Default);
 
     private static bool IsShellTool(ToolRegistration registration)
         => registration.GrantCategory == "shell" || IsShellTool(registration.Tool);

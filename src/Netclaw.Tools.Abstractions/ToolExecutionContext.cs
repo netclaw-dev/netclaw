@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Frozen;
 using Netclaw.Configuration;
 using Netclaw.Media;
 
@@ -107,8 +108,9 @@ public sealed record InlineOutputBudget
 }
 
 /// <summary>
-/// Explicit session binding for a tool run. Unbound execution is a deliberate
-/// state used by operator-owned routes, never an accidental null session id.
+/// Explicit session binding for a tool run. Sessionless execution is a deliberate
+/// state used by operator-owned routes, never an accidental null session id or
+/// an indication that authorization constraints are absent.
 /// </summary>
 public abstract record ToolSessionScope
 {
@@ -116,7 +118,7 @@ public abstract record ToolSessionScope
     {
     }
 
-    public sealed record Unbound : ToolSessionScope;
+    public sealed record Sessionless : ToolSessionScope;
 
     public sealed record Bound : ToolSessionScope
     {
@@ -218,8 +220,8 @@ public sealed class ToolExecutionOutputs
 public sealed class ToolApprovalAttempt
 {
     private static readonly IReadOnlySet<string> EmptyPatterns =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-    private HashSet<string>? _oneTimeApprovedPatterns;
+        Array.Empty<string>().ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlySet<string>? _oneTimeApprovedPatterns;
 
     public string? Cwd { get; private set; }
     public string? OneTimeApprovedToolName { get; private set; }
@@ -232,7 +234,7 @@ public sealed class ToolApprovalAttempt
     public void SeedOneTimeApproval(string toolName, IEnumerable<string> patterns)
     {
         OneTimeApprovedToolName = toolName;
-        _oneTimeApprovedPatterns = new HashSet<string>(patterns, StringComparer.OrdinalIgnoreCase);
+        _oneTimeApprovedPatterns = patterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     }
 
     public void ClearOneTimeApproval()
@@ -257,7 +259,7 @@ public sealed class ToolApprovalAttempt
 /// <summary>
 /// Immutable per-call context visible to tool implementations.
 /// </summary>
-public class ToolInvocationContext
+public sealed class ToolInvocationContext
 {
     public ToolInvocationContext(
         ToolRunScope runScope,
@@ -476,26 +478,54 @@ public class ToolInvocationContext
 
 /// <summary>
 /// Pipeline-owned execution state. Tool implementations receive only the
-/// immutable <see cref="ToolInvocationContext"/> base contract.
+/// separate immutable <see cref="Invocation"/> object.
 /// </summary>
-public sealed class ToolExecutionContext : ToolInvocationContext
+public sealed class ToolExecutionContext
 {
     public ToolExecutionContext(ToolRunScope runScope, ToolExecutionTimeout executionTimeout)
-        : base(runScope, executionTimeout)
+        : this(new ToolInvocationContext(runScope, executionTimeout))
     {
-        Approval = new ToolApprovalAttempt();
     }
 
     public ToolExecutionContext(
         ToolRunScope runScope,
         ToolExecutionTimeout executionTimeout,
         ToolExecutionOutputs outputs)
-        : base(runScope, executionTimeout, outputs)
+        : this(new ToolInvocationContext(runScope, executionTimeout, outputs))
     {
+    }
+
+    private ToolExecutionContext(ToolInvocationContext invocation)
+    {
+        Invocation = invocation;
         Approval = new ToolApprovalAttempt();
     }
 
+    public ToolInvocationContext Invocation { get; }
     public ToolApprovalAttempt Approval { get; }
+
+    public ToolRunScope RunScope => Invocation.RunScope;
+    public ToolExecutionOutputs Outputs => Invocation.Outputs;
+    public IReadOnlyList<ModelInputFileInfo> ModelInputFiles => Outputs.ModelInputFiles;
+    public ToolExecutionTimeout ExecutionTimeout => Invocation.ExecutionTimeout;
+    public TrustAudience Audience => Invocation.Audience;
+    public TrustBoundary? Boundary => Invocation.Boundary;
+    public string? ChannelType => Invocation.ChannelType;
+    public bool? SupportsInteractiveApproval => Invocation.SupportsInteractiveApproval;
+    public string? SessionId => Invocation.SessionId;
+    public string? SessionDirectory => Invocation.SessionDirectory;
+    public int MaxInlineToolResultChars => Invocation.MaxInlineToolResultChars;
+    public string? ProjectDirectory => Invocation.ProjectDirectory;
+    public ModelModality ModelInputModalities => Invocation.ModelInputModalities;
+    public IParentApprovalBridge? ApprovalBridge => Invocation.ApprovalBridge;
+
+    internal IReadOnlyList<FileAttachmentInfo> FileAttachments => Invocation.FileAttachments;
+
+    internal void AddModelInputFile(string filePath, string fileName, string mimeType)
+        => Invocation.AddModelInputFile(filePath, fileName, mimeType);
+
+    public string? ResolveShellCwd(string? explicitArg)
+        => Invocation.ResolveShellCwd(explicitArg);
 
     internal string? OneTimeApprovedToolName
     {

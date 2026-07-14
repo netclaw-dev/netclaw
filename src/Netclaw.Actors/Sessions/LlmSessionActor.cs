@@ -3074,7 +3074,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 profile,
                 task,
                 runtimeContext: null,
-                context,
+                context.Invocation,
                 CancellationToken.None,
                 systemPromptOverlay: skillBody);
 

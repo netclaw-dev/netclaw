@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="PublicAudienceFileAccessPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -128,13 +128,13 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
         Assert.DoesNotContain(_paths.BasePath, error);
     }
 
-    private ToolExecutionContext CreateContext(TrustAudience audience)
+    private ToolInvocationContext CreateContext(TrustAudience audience)
         => TestToolExecutionContext.CreateBound("test/session-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
             ChannelType = audience == TrustAudience.Personal ? "signalr" : "slack"
-        });
+        }).Invocation;
 
     private static string Normalize(string path)
         => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

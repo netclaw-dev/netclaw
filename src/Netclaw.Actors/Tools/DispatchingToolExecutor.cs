@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DispatchingToolExecutor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -173,7 +173,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            var result = await tool.ExecuteAsync(toolCall.Arguments, context, ct);
+            var result = await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
 
             var redacted = SecretOutputRedactor.Redact(result);
 
@@ -189,7 +189,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             // to a session file and steer the model to read a slice. Tools only
             // bound their own capture for memory safety; they do not window or spill.
             result = await ToolOutputSpill.BoundAndSpillAsync(
-                modelFacing, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
+                modelFacing, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, ct);
 
             sw.Stop();
             _logger.LogInformation(
@@ -249,7 +249,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // those exactly as it does for the non-streaming path.
         var tool = await AuthorizeCoreAsync(toolCall, context, ct);
         var sw = Stopwatch.StartNew();
-        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, context, ct))
+        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct))
         {
             switch (update)
             {
@@ -258,7 +258,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
                     var modelResult = tool.SuppressOutputRedaction ? completed.Result : redacted;
                     modelResult = await ToolOutputSpill.BoundAndSpillAsync(
-                        modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
+                        modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, ct);
                     _logger.LogInformation(
                         "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
                         toolCall.Name, sw.ElapsedMilliseconds, modelResult.Length);

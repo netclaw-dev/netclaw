@@ -16,7 +16,7 @@ internal static class TestToolExecutionContext
         });
 
     public static ToolExecutionContext CreateUnbound(TestToolExecutionContextOptions options)
-        => Create(new ToolSessionScope.Unbound(), options);
+        => Create(new ToolSessionScope.Sessionless(), options);
 
     public static ToolExecutionContext CreateBound(
         string sessionId,

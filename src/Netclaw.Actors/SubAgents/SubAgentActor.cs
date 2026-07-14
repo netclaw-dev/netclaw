@@ -797,7 +797,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         var tools = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
         return _toolAccessPolicy
-            .FilterDiscoverableTools(tools, ToolExecutionContext)
+            .FilterDiscoverableTools(tools, ToolExecutionContext.Invocation)
             .Select(tool => tool.ToAITool())
             .ToList();
     }
