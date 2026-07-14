@@ -9,13 +9,13 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.25.0</VersionPrefix>
-    <VersionSuffix>beta.3</VersionSuffix>
-    <PackageReleaseNotes>- Discord DM reminder delivery — Reminders can now be delivered to Discord DMs via improved DiscordReminderTargetResolver (#1609)
-- Named model configuration &amp; provider runtime validation — New NamedModelConfiguration and ProviderRuntimeValidation types, config schema updates, and CLI wizard improvements for provider/model setup (#1610)
-- Model set/picker preserves hand-set modalities — Re-selecting the same model no longer wipes operator-set InputModalities/OutputModalities and ContextWindow. Added --input-modalities, --output-modalities, --clear-modalities, and --clear-context-window CLI flags (#1610)
-- Slack processing status serialization — Slack processing status updates are now serialized to prevent race conditions during concurrent sends (#1556)
-- Sub-agent token usage tracked in daily stats — Sub-agent LLM calls now record token usage, making them visible in netclaw stats (#1597)
-- Subagents fail closed for unattended approvals — When a subagent requires approval but the session is unattended, it now fails closed instead of proceeding or hanging (#1616)</PackageReleaseNotes>
+    <VersionSuffix>beta.4</VersionSuffix>
+    <PackageReleaseNotes>- Preserve Git working context across sessions and subagents — A bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context (#1630)
+- User-written AGENTS.md for application-specific agent guidance — Operators can author ~/.netclaw/identity/AGENTS.md, layered after Netclaw's embedded operating core and inherited by sub-agents (#1622)
+- Memory curation no longer overwrites existing documents on collision — Create-decision collisions now append new content instead of silently overwriting the existing document (#1637)
+- STDIO MCP server arguments no longer rewritten — The daemon now preserves configured STDIO MCP server arguments, and uses one daemon-owned client per configured MCP server (#1636)
+- Logical skill access and authoritative inventory refresh — Skill loading now resolves through logical skill_load/skill_read_resource access with native &gt; managed-feed &gt; external precedence (#1634)
+- Bump SkillServer to stable — Netclaw.SkillClient 0.4.0-beta.4 → 0.4.0 (#1638)</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
