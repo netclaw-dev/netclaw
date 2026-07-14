@@ -10,11 +10,37 @@ namespace Netclaw.Tools;
 internal static class TestToolExecutionContext
 {
     public static ToolExecutionContext CreateUnbound()
+        => Create(new ToolSessionScope.Unbound(), TrustAudience.Public);
+
+    public static ToolExecutionContext CreateUnbound(
+        TrustAudience audience,
+        string? channelType = null)
+        => Create(new ToolSessionScope.Unbound(), audience, channelType);
+
+    public static ToolExecutionContext CreateBound(
+        string sessionId,
+        string? sessionDirectory,
+        TrustAudience audience,
+        string? channelType = null,
+        ChannelDeliveryTargetInfo? requestedDeliveryTarget = null)
+        => Create(
+            new ToolSessionScope.Bound(sessionId, sessionDirectory),
+            audience,
+            channelType,
+            requestedDeliveryTarget);
+
+    private static ToolExecutionContext Create(
+        ToolSessionScope session,
+        TrustAudience audience,
+        string? channelType = null,
+        ChannelDeliveryTargetInfo? requestedDeliveryTarget = null)
         => new(new ToolRunScope
         {
-            Session = new ToolSessionScope.Unbound(),
-            Audience = TrustAudience.Public,
+            Session = session,
+            Audience = audience,
             InlineOutputBudget = InlineOutputBudget.Default,
+            ChannelType = channelType,
+            RequestedDeliveryTarget = requestedDeliveryTarget,
             SupportsInteractiveApproval = true,
         }, ToolExecutionTimeout.Default);
 }

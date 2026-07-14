@@ -184,12 +184,12 @@ public sealed class ChannelSendToolTests
     }
 
     private static ToolExecutionContext TriggerContext(ChannelDeliveryTargetInfo? requestedTarget)
-        => new("reminder/test", null)
-        {
-            Audience = TrustAudience.Team,
-            ChannelType = ChannelType.Reminder.ToWireValue(),
-            RequestedDeliveryTarget = requestedTarget
-        };
+        => TestToolExecutionContext.CreateBound(
+            "reminder/test",
+            null,
+            TrustAudience.Team,
+            ChannelType.Reminder.ToWireValue(),
+            requestedTarget);
 
     private static string[] ReadChannelKeyEnum(JsonElement schema)
     {

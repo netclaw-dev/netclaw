@@ -116,11 +116,8 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
     private SetReminderTool CreateTool(IActorRef reminderManager, IReminderTargetResolver resolver)
         => new(reminderManager, _timeProvider, new SchedulingConfig(), [resolver]);
 
-    private static ToolExecutionContext BuildManualToolContext() => new(sessionId: null, sessionDirectory: null)
-    {
-        Audience = TrustAudience.Personal,
-        ChannelType = "manual"
-    };
+    private static ToolExecutionContext BuildManualToolContext()
+        => TestToolExecutionContext.CreateUnbound(TrustAudience.Personal, "manual");
 
     private sealed class StubReminderTargetResolver(Func<string, ReminderTargetResolution> resolve) : IReminderTargetResolver
     {
