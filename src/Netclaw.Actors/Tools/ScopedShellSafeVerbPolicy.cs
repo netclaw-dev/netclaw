@@ -110,10 +110,6 @@ internal sealed class ScopedShellSafeVerbPolicy
     /// </summary>
     private static IReadOnlyList<string> ResolveSafeSpaceRoots(ToolInvocationContext context)
     {
-        if (context is null)
-            return [];
-
-        var audience = ResolveAudience(context);
         var roots = new List<string>(2);
 
         if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
@@ -124,7 +120,7 @@ internal sealed class ScopedShellSafeVerbPolicy
         // ScopedFileAccessPolicy. Even a Public session that has somehow
         // populated WorkingContext.ProjectDirectory does not get to use it
         // as a shell safe-space root.
-        if (audience != TrustAudience.Public
+        if (context.Audience != TrustAudience.Public
             && !string.IsNullOrWhiteSpace(context.ProjectDirectory))
         {
             roots.Add(PathUtility.Normalize(context.ProjectDirectory));
@@ -132,7 +128,4 @@ internal sealed class ScopedShellSafeVerbPolicy
 
         return roots;
     }
-
-    private static TrustAudience ResolveAudience(ToolInvocationContext context)
-        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context.Audience, context.SessionId);
 }

@@ -46,7 +46,7 @@ internal sealed class ScopedFileAccessPolicy
     {
         var profile = _profileResolver.ResolveProfile(context);
         var access = GetAccessProfile(profile, accessKind);
-        return ResolveAndMergeRoots(access, context, ResolveAudience(context), accessKind);
+        return ResolveAndMergeRoots(access, context, context.Audience, accessKind);
     }
 
     private bool TryResolvePath(
@@ -86,7 +86,7 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        var audience = ResolveAudience(context);
+        var audience = context.Audience;
         var label = GetAudienceLabel(audience);
 
         if (access.Mode == ToolFilesystemMode.None)
@@ -231,9 +231,6 @@ internal sealed class ScopedFileAccessPolicy
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
-
-    private static TrustAudience ResolveAudience(ToolInvocationContext context)
-        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context.Audience, context.SessionId);
 
     private static string GetAudienceLabel(TrustAudience audience) => audience switch
     {

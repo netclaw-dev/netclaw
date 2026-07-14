@@ -308,8 +308,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             }
             else
             {
-                var audience = SecurityPolicyDefaults.ResolveAudienceWithFallback(
-                    context.Audience, context.SessionId);
+                var audience = context.Audience;
 
                 // Pure side-effect candidates (echo "X" with no path/redirect,
                 // bash :, true/false) are not persisted on Always-here clicks
