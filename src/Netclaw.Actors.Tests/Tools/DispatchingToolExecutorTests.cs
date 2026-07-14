@@ -77,10 +77,10 @@ public class DispatchingToolExecutorTests
             // shell_execute declares the small verbose budget (2000); echo > 2000 chars.
             var toolCall = new FunctionCallContent("call-spill", "shell_execute",
                 ToolInput.Create("Command", $"echo {new string('x', 3000)}"));
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
-            };
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -107,10 +107,10 @@ public class DispatchingToolExecutorTests
             // Secret + padding so it both redacts and exceeds the shell budget → spills.
             var toolCall = new FunctionCallContent("call-redact", "shell_execute",
                 ToolInput.Create("Command", $"echo API_KEY=supersecret123 {new string('x', 3000)}"));
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
-            };
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
             var onDisk = await File.ReadAllTextAsync(
@@ -131,10 +131,10 @@ public class DispatchingToolExecutorTests
         // Redaction happens centrally for every result, spill or not.
         var toolCall = new FunctionCallContent("call-r", "shell_execute",
             ToolInput.Create("Command", "echo API_KEY=secret123"));
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-        };
+        });
 
         var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -158,10 +158,10 @@ public class DispatchingToolExecutorTests
                 CancellationToken.None);
             var toolCall = new FunctionCallContent("call-secret", "file_read",
                 ToolInput.Create("Path", file));
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
-            };
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -180,10 +180,10 @@ public class DispatchingToolExecutorTests
         // Shell output continues to be redacted — only file tools suppress it.
         var toolCall = new FunctionCallContent("call-shell-secret", "shell_execute",
             ToolInput.Create("Command", "echo API_KEY=secret123"));
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-        };
+        });
 
         var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -208,11 +208,11 @@ public class DispatchingToolExecutorTests
 
             var toolCall = new FunctionCallContent("call-spill-secret", "file_read",
                 ToolInput.Create("Path", file));
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
-                MaxInlineToolResultChars = 500,
-            };
+                InlineOutputBudget = new InlineOutputBudget(500),
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -247,10 +247,10 @@ public class DispatchingToolExecutorTests
             await File.WriteAllTextAsync(file, "hello content", CancellationToken.None);
             var toolCall = new FunctionCallContent("call-content", "file_read",
                 ToolInput.Create("Path", file));
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
-            };
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
@@ -271,12 +271,12 @@ public class DispatchingToolExecutorTests
             "call-1", "shell_execute",
             ToolInput.Create("Command", "echo routed"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
@@ -291,12 +291,12 @@ public class DispatchingToolExecutorTests
             "call-2", "file_read",
             ToolInput.Create("Path", "/nonexistent/file.txt"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", Path.GetTempPath())
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
@@ -310,12 +310,12 @@ public class DispatchingToolExecutorTests
             "call-deny", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_requires_personal_context", ex.DenyReason);
@@ -345,12 +345,12 @@ public class DispatchingToolExecutorTests
             "call-shell-profile-deny", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("tool_not_allowed_for_audience_profile", ex.DenyReason);
@@ -380,12 +380,12 @@ public class DispatchingToolExecutorTests
             "call-shell-off", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_disabled", ex.DenyReason);
@@ -398,12 +398,12 @@ public class DispatchingToolExecutorTests
             "call-allow", "shell_execute",
             ToolInput.Create("Command", "echo allowed"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
         Assert.Contains("allowed", result);
@@ -424,12 +424,12 @@ public class DispatchingToolExecutorTests
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
 
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Public,
                 Boundary = TrustBoundary.Public,
                 ChannelType = "slack"
-            };
+            });
 
             var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Public trust context", result);
@@ -455,12 +455,12 @@ public class DispatchingToolExecutorTests
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-team-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
 
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Team,
                 Boundary = TrustBoundary.Team,
                 ChannelType = "slack"
-            };
+            });
 
             var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Team trust context", result);
@@ -486,12 +486,12 @@ public class DispatchingToolExecutorTests
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
 
-            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", sessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr"
-            };
+            });
 
             var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
@@ -537,12 +537,12 @@ public class DispatchingToolExecutorTests
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
-        var teamContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
+        var teamContext = TestToolExecutionContext.CreateBound("slack/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.Team,
             ChannelType = "slack"
-        };
+        });
 
         Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, teamContext));
@@ -576,12 +576,12 @@ public class DispatchingToolExecutorTests
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
-        var publicContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
+        var publicContext = TestToolExecutionContext.CreateBound("slack/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
-        };
+        });
 
         Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, publicContext));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, publicContext));
@@ -615,12 +615,12 @@ public class DispatchingToolExecutorTests
                     UsedStrictFallback: false)));
 
         var toolCall = new FunctionCallContent("call-mcp-deny", "memorizer/search_memories", ToolInput.Empty());
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.Team,
             ChannelType = "slack"
-        };
+        });
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", ex.DenyReason);
@@ -665,13 +665,13 @@ public class DispatchingToolExecutorTests
                 // approval flow this test exercises actually triggers.
                 ToolInput.Create("Command", "git status"));
 
-            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
@@ -726,13 +726,13 @@ public class DispatchingToolExecutorTests
             "shell_execute",
             ToolInput.Create("Command", "echo bypass"));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
             SupportsInteractiveApproval = true
-        };
+        });
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
@@ -783,13 +783,13 @@ public class DispatchingToolExecutorTests
                 "file_write",
                 ToolInput.Create("Path", targetPath, "Content", "approved once"));
 
-            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
@@ -853,13 +853,13 @@ public class DispatchingToolExecutorTests
                         UsedStrictFallback: false)),
                 approvalService);
 
-            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-filtered", null)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-filtered", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             await approvalService.RecordApprovalAsync(
                 "signalr/thread-filtered",
@@ -935,13 +935,13 @@ public class DispatchingToolExecutorTests
                         UsedStrictFallback: false)),
                 approvalService);
 
-            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-audit", null)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-audit", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             var call = new FunctionCallContent(
                 "call-audit",
@@ -999,21 +999,21 @@ public class DispatchingToolExecutorTests
                 // One_time_approval_allows_immediate_retry_only).
                 ToolInput.Create("Command", "git status"));
 
-            var firstContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
-            {
+            var firstContext = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
-            var secondContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-2", null)
-            {
+            var secondContext = TestToolExecutionContext.CreateBound("signalr/thread-2", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, firstContext, TestContext.Current.CancellationToken));
@@ -1107,13 +1107,13 @@ public class DispatchingToolExecutorTests
                 sanitizedAlias,
                 ToolInput.Empty());
 
-            var context = new Netclaw.Tools.ToolExecutionContext("slack/D0/1779", null)
-            {
+            var context = TestToolExecutionContext.CreateBound("slack/D0/1779", null, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "slack",
                 SupportsInteractiveApproval = true
-            };
+            });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));

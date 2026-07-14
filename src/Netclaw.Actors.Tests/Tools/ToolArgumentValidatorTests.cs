@@ -48,12 +48,12 @@ public class ToolArgumentValidatorTests
     }
 
     private static ToolExecutionContext PersonalContext(string sessionDir)
-        => new("signalr/thread-1", sessionDir)
+        => TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
     private async Task<string> ExecuteShellAsync(IDictionary<string, object?> args)
     {

@@ -147,26 +147,26 @@ public sealed class FileListToolTests : IDisposable
     }
 
     private ToolExecutionContext CreateTeamContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.Team,
             ChannelType = "slack"
-        };
+        });
 
     private ToolExecutionContext CreatePublicContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
-        };
+        });
 
     private ToolExecutionContext CreatePersonalContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 }

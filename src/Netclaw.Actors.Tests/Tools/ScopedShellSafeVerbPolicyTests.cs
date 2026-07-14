@@ -60,18 +60,18 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         => SafeVerbList.FromVerbs(verbs);
 
     private ToolExecutionContext PersonalContext(string? projectDir = null, string? sessionDir = null)
-        => new("session-1", sessionDir ?? _sessionDir)
+        => TestToolExecutionContext.CreateBound("session-1", sessionDir ?? _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = projectDir
-        };
+        });
 
     private ToolExecutionContext PublicContext(string? projectDir = null)
-        => new("session-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("session-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             ProjectDirectory = projectDir
-        };
+        });
 
     [Fact]
     public void Safe_verb_in_project_directory_short_circuits()

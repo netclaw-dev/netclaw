@@ -92,10 +92,10 @@ public sealed class ScopedFileAccessPolicyHomeExpansionTests : IDisposable
     }
 
     private ToolExecutionContext CreateContext(TrustAudience audience)
-        => new("personal/test-session", _sessionDir)
+        => TestToolExecutionContext.CreateBound("personal/test-session", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
             ChannelType = "signalr"
-        };
+        });
 }

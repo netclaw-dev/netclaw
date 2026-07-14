@@ -19,11 +19,11 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
 {
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
 
-    private ToolExecutionContext MakeContext(string sessionId = "test/thread") => new(sessionId, "/tmp")
-    {
+    private ToolExecutionContext MakeContext(string sessionId = "test/thread") => TestToolExecutionContext.CreateBound(sessionId, "/tmp", new TestToolExecutionContextOptions
+        {
         Audience = TrustAudience.Personal,
         Boundary = TrustBoundary.Personal
-    };
+    });
 
     [Fact]
     public async Task StatusQuery_ReturnsCorrectState()

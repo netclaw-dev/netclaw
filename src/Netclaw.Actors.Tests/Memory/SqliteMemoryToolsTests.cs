@@ -537,6 +537,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
     }
 
     private static ToolExecutionContext PersonalContext()
-        => new("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal };
+        => TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal });
 
 }

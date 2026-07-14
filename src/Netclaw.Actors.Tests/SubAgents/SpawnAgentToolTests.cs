@@ -14,7 +14,8 @@ namespace Netclaw.Actors.Tests.SubAgents;
 public sealed class SpawnAgentToolTests : IDisposable
 {
     private static readonly ToolExecutionContext PersonalCtx =
-        new(null, null) { Audience = TrustAudience.Personal };
+        TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal });
 
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;

@@ -31,7 +31,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     private static ToolExecutionContext Context(TrustAudience audience)
-        => new(sessionId: null, sessionDirectory: null) { Audience = audience };
+        => TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions { Audience = audience });
 
     private async Task<string> CreateRouteAsync(string routeName, TrustAudience creator, string? requestedAudience)
     {

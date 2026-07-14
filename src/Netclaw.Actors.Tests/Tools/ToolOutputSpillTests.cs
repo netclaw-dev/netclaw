@@ -24,7 +24,8 @@ public sealed class ToolOutputSpillTests : IDisposable
     }
 
     private ToolExecutionContext Context() =>
-        new("session/thread", _sessionDir) { Audience = TrustAudience.Personal };
+        TestToolExecutionContext.CreateBound("session/thread", _sessionDir, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal });
 
     private string ToolCallsDir => Path.Combine(_sessionDir, "tool-calls");
 

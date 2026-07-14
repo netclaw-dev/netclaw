@@ -42,14 +42,17 @@ public sealed class AutonomousZoneClampTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     private ToolExecutionContext Ctx(TrustAudience audience, bool autonomous, bool withProject = true)
-        => new(autonomous ? "reminder/s1" : "signalr/s1", _sessionDir)
+        => TestToolExecutionContext.CreateBound(
+            autonomous ? "reminder/s1" : "signalr/s1",
+            _sessionDir,
+            new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
             SupportsInteractiveApproval = !autonomous,
             ProjectDirectory = withProject ? _projectDir : null,
             ChannelType = autonomous ? "reminder" : "signalr"
-        };
+        });
 
     [Fact]
     public void Autonomous_personal_write_outside_zone_is_denied()

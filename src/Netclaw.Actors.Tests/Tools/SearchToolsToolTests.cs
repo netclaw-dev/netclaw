@@ -211,12 +211,12 @@ public class SearchToolsToolTests
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false)));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "memories"),
@@ -246,12 +246,12 @@ public class SearchToolsToolTests
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false)));
 
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "servers"),

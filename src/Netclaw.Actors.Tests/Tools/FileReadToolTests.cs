@@ -465,37 +465,37 @@ public class FileReadToolTests : IDisposable
     }
 
     private ToolExecutionContext CreatePersonalContext()
-        => new("signalr/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("signalr/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
     private ToolExecutionContext CreateImageCapablePersonalContext()
-        => new("signalr/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("signalr/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
             ModelInputModalities = ModelModality.Text | ModelModality.Image,
-        };
+        });
 
     private ToolExecutionContext CreateTeamContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.Team,
             ChannelType = "slack"
-        };
+        });
 
     private ToolExecutionContext CreatePublicContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
-        };
+        });
 
     private static readonly byte[] FakePngBytes =
     [

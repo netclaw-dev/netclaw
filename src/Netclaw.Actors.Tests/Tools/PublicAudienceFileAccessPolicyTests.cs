@@ -129,12 +129,12 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
     }
 
     private ToolExecutionContext CreateContext(TrustAudience audience)
-        => new("test/session-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("test/session-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
             ChannelType = audience == TrustAudience.Personal ? "signalr" : "slack"
-        };
+        });
 
     private static string Normalize(string path)
         => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

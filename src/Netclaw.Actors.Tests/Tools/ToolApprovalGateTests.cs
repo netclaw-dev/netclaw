@@ -37,7 +37,8 @@ public sealed class ToolApprovalGateTests
     }
 
     private static ToolExecutionContext PersonalContext(bool supportsApproval = true, string sessionId = "signalr/thread-1") =>
-        new(sessionId, null) { Audience = TrustAudience.Personal, SupportsInteractiveApproval = supportsApproval };
+        TestToolExecutionContext.CreateBound(sessionId, null, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal, SupportsInteractiveApproval = supportsApproval });
 
     private static INetclawTool ShellTool()
     {

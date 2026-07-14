@@ -458,19 +458,6 @@ public class ToolInvocationContext
 /// </summary>
 public sealed class ToolExecutionContext : ToolInvocationContext
 {
-    internal ToolExecutionContext(string? sessionId, string? sessionDirectory)
-        : this(new ToolRunScope
-        {
-            Session = string.IsNullOrWhiteSpace(sessionId)
-                ? new ToolSessionScope.Unbound()
-                : new ToolSessionScope.Bound(sessionId, sessionDirectory),
-            Audience = TrustAudience.Public,
-            InlineOutputBudget = InlineOutputBudget.Default,
-            SupportsInteractiveApproval = true,
-        }, ToolExecutionTimeout.Default)
-    {
-    }
-
     public ToolExecutionContext(ToolRunScope runScope, ToolExecutionTimeout executionTimeout)
         : base(runScope, executionTimeout)
     {

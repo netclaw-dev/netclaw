@@ -30,7 +30,8 @@ public class SkillToolTests : IDisposable
     /// Personal audience context for tests — skill tools require non-Public audience.
     /// </summary>
     private static readonly Netclaw.Tools.ToolExecutionContext PersonalCtx =
-        new(null, null) { Audience = TrustAudience.Personal };
+        TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal });
 
     public SkillToolTests()
     {
@@ -62,7 +63,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var publicCtx = new Netclaw.Tools.ToolExecutionContext(null, null) { Audience = TrustAudience.Public };
+        var publicCtx = TestToolExecutionContext.CreateUnbound();
         var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "secret-skill"), publicCtx, TestContext.Current.CancellationToken);
@@ -109,7 +110,7 @@ public class SkillToolTests : IDisposable
         ScanSkills();
 
         // Audience is non-nullable; Public is the minimum-privilege audience, equivalent to the old null/unset default.
-        var badCtx = new Netclaw.Tools.ToolExecutionContext(null, null) { Audience = TrustAudience.Public };
+        var badCtx = TestToolExecutionContext.CreateUnbound();
         var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "guarded-skill"), badCtx, TestContext.Current.CancellationToken);

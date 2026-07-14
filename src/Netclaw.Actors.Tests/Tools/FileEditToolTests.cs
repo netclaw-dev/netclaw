@@ -253,18 +253,18 @@ public class FileEditToolTests : IDisposable
     }
 
     private ToolExecutionContext CreatePersonalContext()
-        => new("signalr/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("signalr/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
     private ToolExecutionContext CreatePublicContext()
-        => new("slack/thread-1", _sessionDir)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
-        };
+        });
 }
