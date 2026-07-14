@@ -186,6 +186,69 @@ public class WorkingContextSnapshotTests
     }
 
     [Fact]
+    public async Task Git_inspection_reports_missing_git_without_status_command()
+    {
+        var time = new FakeTimeProvider();
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Failed(
+                "The system cannot find the file specified"))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
+        Assert.Equal("The system cannot find the file specified", unavailable.Reason);
+        Assert.Single(runner.Timeouts);
+    }
+
+    [Fact]
+    public async Task Git_inspection_reports_malformed_root_response_without_status_command()
+    {
+        var time = new FakeTimeProvider();
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Succeeded("/repo\n", string.Empty))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
+        Assert.Equal("git returned an unexpected repository-root response", unavailable.Reason);
+        Assert.Single(runner.Timeouts);
+    }
+
+    [Fact]
+    public async Task Git_inspection_reports_malformed_status_response()
+    {
+        var time = new FakeTimeProvider();
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Succeeded(
+                "/repo\n/repo/.git\n",
+                string.Empty)),
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Succeeded(
+                "# branch.ab malformed\n",
+                string.Empty))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
+        Assert.Equal("git returned an invalid ahead/behind response", unavailable.Reason);
+        Assert.Equal(2, runner.Timeouts.Count);
+    }
+
+    [Fact]
     public void Git_command_output_is_bounded()
     {
         var oversized = new string('x', 300_000);
@@ -212,6 +275,29 @@ public class WorkingContextSnapshotTests
         var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(snapshot.Git);
         Assert.Equal(200, unavailable.Reason.Length);
         Assert.DoesNotContain("credential-bearing", unavailable.Reason);
+    }
+
+    [Theory]
+    [InlineData(41, 42, true)]
+    [InlineData(42, 42, false)]
+    public void Stale_or_cancelled_working_context_continuation_is_rejected(
+        long snapshotGeneration,
+        long activeGeneration,
+        bool hasActiveLlmCall)
+    {
+        Assert.False(LlmSessionActor.ShouldApplyWorkingContextSnapshot(
+            snapshotGeneration,
+            activeGeneration,
+            hasActiveLlmCall));
+    }
+
+    [Fact]
+    public void Current_working_context_continuation_is_accepted()
+    {
+        Assert.True(LlmSessionActor.ShouldApplyWorkingContextSnapshot(
+            snapshotGeneration: 42,
+            activeGeneration: 42,
+            hasActiveLlmCall: true));
     }
 
     private sealed class RecordingGitInspector : IGitWorkingContextInspector

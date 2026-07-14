@@ -56,6 +56,24 @@ retains synchronous execution behavior. This internal composition does not
 change MCP schemas, persisted actor messages, approval outcomes, or model-facing
 tool results.
 
+### Working Context and Child Runs
+
+For Team and Personal turns with a declared project directory, the session
+captures Git working context asynchronously before invoking the model. Git
+inspection has one aggregate deadline and produces an explicit available,
+not-repository, or unavailable result. Public turns and turns without a project
+directory do not launch Git. Continuations carry a generation number so a late
+inspection from a cancelled or superseded call cannot mutate the active turn.
+
+Each admitted subagent receives a `ChildRunScope`: a fork of immutable tool
+authority plus the parent's working-context snapshot. The child owns fresh
+activity tracking and mutable tool-call state; neither is shared with the
+parent or sibling runs. Terminal results use typed completion variants.
+Completed and partial runs carry a `WorkingContextDelta`; failed and cancelled
+runs cannot carry one. The parent merges only files the child confirms it
+changed through first-party tools. Git-observed dirty files remain diagnostic
+context and are never attributed to the child.
+
 ## Subscriber Model
 
 Subscribers join via `JoinSession` with an `OutputFilter` bitmask controlling

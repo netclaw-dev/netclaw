@@ -800,7 +800,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var workingContextResult = BuildWorkingContextResult(success);
         _replyTo.Tell(new SubAgentResult
         {
-            Completion = CreateCompletion(resolvedOutcome, outcomeReason, workingContextResult),
+            Completion = ChildRunCompletion.FromReportedOutcome(resolvedOutcome, outcomeReason, workingContextResult),
             Output = output,
             AgentName = _definition.Name,
             Findings = findings,
@@ -809,22 +809,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         Context.Stop(Self);
     }
-
-    private static ChildRunCompletion CreateCompletion(
-        SubAgentRunOutcome outcome,
-        SubAgentOutcomeReason? reason,
-        WorkingContextDelta? delta) => outcome switch
-        {
-            SubAgentRunOutcome.Completed when delta is not null => new ChildRunCompletion.Completed(delta),
-            SubAgentRunOutcome.Partial when delta is not null && reason is { } partialReason =>
-                new ChildRunCompletion.Partial(partialReason, delta),
-            SubAgentRunOutcome.Failed when reason == SubAgentOutcomeReason.CancelledByParent =>
-                new ChildRunCompletion.Cancelled(reason.Value),
-            SubAgentRunOutcome.Failed when reason is { } failureReason =>
-                new ChildRunCompletion.Failed(failureReason),
-            _ => throw new InvalidOperationException(
-                $"Invalid child completion: outcome={outcome}, reason={reason?.Value ?? "none"}, hasDelta={delta is not null}.")
-        };
 
     /// <summary>
     /// Arm the watchdog for a fresh LLM streaming call: the generous prefill

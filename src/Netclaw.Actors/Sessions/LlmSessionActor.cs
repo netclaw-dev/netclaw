@@ -873,7 +873,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var run in msg.CompletedSubAgentRuns)
         {
-            MergeSuccessfulSubAgentWorkingContext(run.Success, run.WorkingContext);
+            MergeSuccessfulSubAgentWorkingContext(run.Completion);
             if (!emittedRunIds.Add(run.RunId))
                 continue;
 
@@ -2831,7 +2831,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleWorkingContextSnapshotReady(WorkingContextSnapshotReady message)
     {
-        if (message.Generation != _workingContextGeneration || _activeLlmCts is null)
+        if (!ShouldApplyWorkingContextSnapshot(
+                message.Generation,
+                _workingContextGeneration,
+                _activeLlmCts is not null))
         {
             TurnLog().Debug(
                 "working_context_inspection_stale generation={Generation} activeGeneration={ActiveGeneration}",
@@ -2859,6 +2862,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         ContinueFireLlmCall(message.ForceNoTools);
     }
+
+    internal static bool ShouldApplyWorkingContextSnapshot(
+        long snapshotGeneration,
+        long activeGeneration,
+        bool hasActiveLlmCall) => hasActiveLlmCall && snapshotGeneration == activeGeneration;
 
 
     private TrustAudience CurrentTurnAudience()
@@ -3182,7 +3190,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        MergeSuccessfulSubAgentWorkingContext(msg.Result.Success, msg.Result.WorkingContext);
+        MergeSuccessfulSubAgentWorkingContext(msg.Result.Completion);
 
         var userMsg = _state.FindLastUserMessage();
         var turnEvent = new TurnRecorded
@@ -3240,23 +3248,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
-    private void MergeSuccessfulSubAgentWorkingContext(
-        bool success,
-        WorkingContextDelta? workingContext)
+    private void MergeSuccessfulSubAgentWorkingContext(ChildRunCompletion completion)
     {
-        var updated = MergeSuccessfulSubAgentWorkingContext(_state.WorkingContext, success, workingContext);
+        var updated = MergeSuccessfulSubAgentWorkingContext(_state.WorkingContext, completion);
         if (!ReferenceEquals(updated, _state.WorkingContext))
             _state = _state with { WorkingContext = updated };
     }
 
     internal static WorkingContext MergeSuccessfulSubAgentWorkingContext(
         WorkingContext current,
-        bool success,
-        WorkingContextDelta? child)
-    {
-        if (!success || child is null)
-            return current;
+        ChildRunCompletion completion) => completion switch
+        {
+            ChildRunCompletion.Completed completed => MergeConfirmedChanges(current, completed.WorkingContext),
+            ChildRunCompletion.Partial partial => MergeConfirmedChanges(current, partial.WorkingContext),
+            ChildRunCompletion.Failed or ChildRunCompletion.Cancelled => current,
+            _ => throw new ArgumentOutOfRangeException(nameof(completion))
+        };
 
+    private static WorkingContext MergeConfirmedChanges(WorkingContext current, WorkingContextDelta child)
+    {
         var updated = current;
         foreach (var path in child.ConfirmedChangedFiles)
             updated = updated.AddRecentFile(path);
@@ -4507,7 +4517,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var run in result.CompletedSubAgentRuns)
         {
-            MergeSuccessfulSubAgentWorkingContext(run.Success, run.WorkingContext);
+            MergeSuccessfulSubAgentWorkingContext(run.Completion);
             if (!emittedRunIds.Add(run.RunId))
                 continue;
 

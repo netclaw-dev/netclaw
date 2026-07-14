@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.27.0"
+  version: "2.28.0"
 ---
 
 # Netclaw Operations
@@ -47,8 +47,11 @@ For Team and Personal sessions, `[working-context]` is refreshed at the start
 of each new turn. In a Git project it includes the active worktree, branch,
 HEAD, upstream divergence, and dirty counts. Treat this as turn-start
 grounding: a checkout or commit performed during the current tool loop appears
-in the next turn's snapshot. Subagents receive a read-only project/recent-file
-snapshot and return confirmed file edits to the parent when they complete.
+in the next turn's snapshot. If Git is unavailable, the turn continues with an
+explicit unavailable status rather than invented repository state. Subagents
+receive a read-only project/recent-file snapshot. Successful and partial runs
+return only file edits confirmed through their own tools; failed or cancelled
+runs contribute no parent working-context changes.
 
 ## Scheduling & Background Jobs
 

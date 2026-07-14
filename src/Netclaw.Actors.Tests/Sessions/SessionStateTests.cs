@@ -642,7 +642,8 @@ public class SessionStateTests
         };
 
         var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
-            WorkingContext.Empty, true, child);
+            WorkingContext.Empty,
+            new ChildRunCompletion.Completed(child));
 
         Assert.Equal(["src/Changed.cs"], merged.RecentFiles);
     }
@@ -656,7 +657,21 @@ public class SessionStateTests
             ConfirmedChangedFiles = ["src/Denied.cs"]
         };
 
-        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(current, false, child);
+        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
+            current,
+            new ChildRunCompletion.Failed(SubAgentOutcomeReason.ToolExecutionFailed));
+
+        Assert.Same(current, merged);
+    }
+
+    [Fact]
+    public void Cancelled_subagent_cannot_supply_parent_working_context_changes()
+    {
+        var current = WorkingContext.Empty.AddRecentFile("src/Existing.cs");
+
+        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
+            current,
+            new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent));
 
         Assert.Same(current, merged);
     }

@@ -48,6 +48,22 @@ public abstract record ChildRunCompletion
     public abstract SubAgentOutcomeReason? Reason { get; }
     public abstract WorkingContextDelta? Delta { get; }
 
+    public static ChildRunCompletion FromReportedOutcome(
+        SubAgentRunOutcome outcome,
+        SubAgentOutcomeReason? reason,
+        WorkingContextDelta? delta) => outcome switch
+        {
+            SubAgentRunOutcome.Completed when delta is not null => new Completed(delta),
+            SubAgentRunOutcome.Partial when delta is not null && reason is { } partialReason =>
+                new Partial(partialReason, delta),
+            SubAgentRunOutcome.Failed when reason == SubAgentOutcomeReason.CancelledByParent =>
+                new Cancelled(reason.Value),
+            SubAgentRunOutcome.Failed when reason is { } failureReason => new Failed(failureReason),
+            _ => throw new ArgumentException(
+                $"Invalid child completion: outcome={outcome}, reason={reason?.Value ?? "none"}, hasDelta={delta is not null}.",
+                nameof(outcome))
+        };
+
     public sealed record Completed(WorkingContextDelta WorkingContext) : ChildRunCompletion
     {
         public override bool Success => true;
