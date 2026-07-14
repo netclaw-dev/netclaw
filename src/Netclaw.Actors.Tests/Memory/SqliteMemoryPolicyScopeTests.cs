@@ -77,11 +77,11 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
             CancellationToken.None);
 
         var tool = new SqliteGetMemoriesTool(_store, logger: NullLogger<SqliteGetMemoriesTool>.Instance);
-        var context = new ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.TrustedInstance
-        };
+        });
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Ids"] = "doc:doc-public,doc:doc-team" },
@@ -97,11 +97,11 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
     {
         var sink = new CapturingCheckpointSink();
         var tool = new SqliteStoreMemoryTool(sink, NullLogger<SqliteStoreMemoryTool>.Instance);
-        var context = new ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal
-        };
+        });
 
         await tool.ExecuteAsync(
             new Dictionary<string, object?>

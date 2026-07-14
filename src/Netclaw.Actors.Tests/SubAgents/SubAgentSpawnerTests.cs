@@ -54,12 +54,12 @@ public sealed class SubAgentSpawnerTests : TestKit
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
-        var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = "/home/user/repos/foo",
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
-        };
+        });
 
         var profile = new SubAgentProfile
         {
@@ -183,11 +183,11 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var notifications = new List<SubAgentNotificationInfo>();
         var childProbe = CreateTestProbe("subagent-tool-metadata-child");
-        var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
-        };
+        });
         context.Outputs.SubAgentActivitySink = notifications.Add;
 
         var profile = new SubAgentProfile
@@ -242,12 +242,12 @@ public sealed class SubAgentSpawnerTests : TestKit
         ]);
         var spawner = CreateSpawner(new SequenceWorkingContextSnapshotProvider(snapshots));
         var childProbe = CreateTestProbe("working-context-child");
-        var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = projectDirectory,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
-        };
+        });
 
         var spawnTask = spawner.SpawnAsync(
             CreateProfile(),
@@ -308,11 +308,11 @@ public sealed class SubAgentSpawnerTests : TestKit
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
 
-        var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
-        };
+        });
 
         var profile = new SubAgentProfile
         {

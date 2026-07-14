@@ -96,13 +96,13 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             "shell_execute",
             ToolInput.Create("Command", "for i in 1 2 3; do echo $i; done"));
 
-        var context = new ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
             SupportsInteractiveApproval = true
-        };
+        });
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));

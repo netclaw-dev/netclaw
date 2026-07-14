@@ -193,11 +193,11 @@ public class BackgroundJobIntegrationTests : TestKit
             ["JobId"] = started.JobId.Value,
             ["Cancel"] = true
         };
-        var context = new ToolExecutionContext("C0123ABC/1712000000.000001", "/tmp")
+        var context = TestToolExecutionContext.CreateBound("C0123ABC/1712000000.000001", "/tmp", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal
-        };
+        });
 
         var cancelResult = await tool.ExecuteAsync(cancelArgs, context, TestContext.Current.CancellationToken);
         Assert.Contains("Cancellation request sent", cancelResult);

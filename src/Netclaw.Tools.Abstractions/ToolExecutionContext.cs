@@ -466,9 +466,6 @@ public sealed class ToolExecutionContext : ToolInvocationContext
                 : new ToolSessionScope.Bound(sessionId, sessionDirectory),
             Audience = TrustAudience.Public,
             InlineOutputBudget = InlineOutputBudget.Default,
-            // The legacy context-free test path had an unspecified interactive
-            // capability, which bypassed the autonomous-zone clamp. Preserve
-            // that test-fixture behavior without exposing a production sentinel.
             SupportsInteractiveApproval = true,
         }, ToolExecutionTimeout.Default)
     {

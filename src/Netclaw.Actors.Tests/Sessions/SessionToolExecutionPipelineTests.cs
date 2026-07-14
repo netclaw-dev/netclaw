@@ -630,11 +630,11 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var secondImagePath = Path.Combine(dir.Path, "second.png");
         await File.WriteAllBytesAsync(firstImagePath, FakePngBytes, TestContext.Current.CancellationToken);
         await File.WriteAllBytesAsync(secondImagePath, FakePngBytes, TestContext.Current.CancellationToken);
-        var context = new ToolExecutionContext("D1/model-input-budget-test", dir.Path)
+        var context = TestToolExecutionContext.CreateBound("D1/model-input-budget-test", dir.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ModelInputModalities = ModelModality.Text | ModelModality.Image
-        };
+        });
         context.AddModelInputFile(firstImagePath, "first.png", "image/png");
         context.AddModelInputFile(secondImagePath, "second.png", "image/png");
         var budget = new ModelInputBatchBudget(FakePngBytes.Length);

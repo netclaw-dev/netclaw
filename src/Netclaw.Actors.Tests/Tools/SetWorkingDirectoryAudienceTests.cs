@@ -53,10 +53,10 @@ public sealed class SetWorkingDirectoryAudienceTests
         => new("set_working_directory", "ok", "file");
 
     private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => new ToolExecutionContext("slack/thread-1", null)
+        => TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 }

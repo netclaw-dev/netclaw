@@ -21,12 +21,12 @@ public class ToolExecutionContextResolveShellCwdTests
     [Fact]
     public void Explicit_arg_wins_over_all_other_sources()
     {
-        var context = new ToolExecutionContext("sess", "/tmp/sess")
+        var context = TestToolExecutionContext.CreateBound("sess", "/tmp/sess", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = "/home/user/repos/foo",
             InheritedCwd = "/home/user/repos/inherited",
-        };
+        });
 
         Assert.Equal("/explicit/arg", context.ResolveShellCwd("/explicit/arg"));
     }
@@ -34,12 +34,12 @@ public class ToolExecutionContextResolveShellCwdTests
     [Fact]
     public void ProjectDirectory_wins_over_session_directory_and_inherited_cwd()
     {
-        var context = new ToolExecutionContext("sess", "/tmp/sess")
+        var context = TestToolExecutionContext.CreateBound("sess", "/tmp/sess", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = "/home/user/repos/foo",
             InheritedCwd = "/home/user/repos/inherited",
-        };
+        });
 
         Assert.Equal("/home/user/repos/foo", context.ResolveShellCwd(null));
     }
@@ -47,11 +47,11 @@ public class ToolExecutionContextResolveShellCwdTests
     [Fact]
     public void SessionDirectory_wins_over_inherited_cwd()
     {
-        var context = new ToolExecutionContext("sess", "/tmp/sess")
+        var context = TestToolExecutionContext.CreateBound("sess", "/tmp/sess", new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             InheritedCwd = "/home/user/repos/inherited",
-        };
+        });
 
         Assert.Equal("/tmp/sess", context.ResolveShellCwd(null));
     }
@@ -59,11 +59,11 @@ public class ToolExecutionContextResolveShellCwdTests
     [Fact]
     public void Inherited_cwd_is_last_resort_fallback_before_null()
     {
-        var context = new ToolExecutionContext("sess", sessionDirectory: null)
+        var context = TestToolExecutionContext.CreateBound("sess", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             InheritedCwd = "/home/user/repos/inherited",
-        };
+        });
 
         Assert.Equal("/home/user/repos/inherited", context.ResolveShellCwd(null));
     }
@@ -74,11 +74,11 @@ public class ToolExecutionContextResolveShellCwdTests
         // Cwd is the per-call resolved output the approval gate writes; it
         // must not feed back into ResolveShellCwd or a stale value could
         // shadow a later ProjectDirectory/SessionDirectory change.
-        var context = new ToolExecutionContext("sess", sessionDirectory: null)
+        var context = TestToolExecutionContext.CreateBound("sess", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Cwd = "/stale/cwd",
-        };
+        });
 
         Assert.Null(context.ResolveShellCwd(null));
     }
@@ -86,10 +86,10 @@ public class ToolExecutionContextResolveShellCwdTests
     [Fact]
     public void Returns_null_when_no_source_is_available()
     {
-        var context = new ToolExecutionContext("sess", sessionDirectory: null)
+        var context = TestToolExecutionContext.CreateBound("sess", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-        };
+        });
 
         Assert.Null(context.ResolveShellCwd(null));
     }

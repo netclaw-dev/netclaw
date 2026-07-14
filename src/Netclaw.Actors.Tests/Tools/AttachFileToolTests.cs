@@ -217,12 +217,12 @@ public class AttachFileToolTests : IDisposable
         var sourcePath = Path.Combine(siblingSessionDir, "report.png");
         await File.WriteAllBytesAsync(sourcePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", currentSessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
         var args = ToolInput.Create("Path", sourcePath, "DisplayName", "Copied Report.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -246,12 +246,12 @@ public class AttachFileToolTests : IDisposable
         var sessionDir = Path.Combine(_dir.Path, "session");
         Directory.CreateDirectory(sessionDir);
 
-        var context = new ToolExecutionContext("slack/thread-1", sessionDir)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
-        };
+        });
 
         var args = ToolInput.Create("Path", outsidePath);
 
@@ -278,12 +278,12 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsidePath);
 
-            var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
-            {
+            var context = TestToolExecutionContext.CreateBound("signalr/thread-1", currentSessionDir, new TestToolExecutionContextOptions
+        {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr"
-            };
+            });
             var args = ToolInput.Create("Path", symlinkPath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);

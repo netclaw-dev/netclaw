@@ -212,12 +212,12 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
+        var context = TestToolExecutionContext.CreateBound("C0123ABC/1234567890.123456", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -258,12 +258,12 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
+        var context = TestToolExecutionContext.CreateBound("129847561203948576/130111223344556677", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "discord"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -300,11 +300,11 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("webhook/delivery-1", null)
+        var context = TestToolExecutionContext.CreateBound("webhook/delivery-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ChannelType = "webhook"
-        };
+        });
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -421,11 +421,11 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ChannelType = "slack"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -460,12 +460,12 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("signalr/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -522,11 +522,11 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             ChannelType = "slack"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -566,11 +566,11 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("slack/thread-1", null)
+        var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             ChannelType = "slack"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -608,11 +608,11 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
+        var context = TestToolExecutionContext.CreateBound("129847561203948576/130111223344556677", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Public,
             ChannelType = "discord"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {
@@ -775,11 +775,11 @@ public class SetReminderToolTests : TestKit
             ResultFor = (_) => throw new InvalidOperationException("resolver must not be invoked for Mode B session re-entry")
         };
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
-        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
+        var context = TestToolExecutionContext.CreateBound("C0123ABC/1234567890.123456", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             ChannelType = "slack"
-        };
+        });
 
         var execution = Task.Run(async () =>
         {

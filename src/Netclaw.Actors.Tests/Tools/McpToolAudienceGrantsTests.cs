@@ -394,12 +394,12 @@ public sealed class McpToolAudienceGrantsTests
 
     private static ToolExecutionContext CreateExecutionContext(TrustAudience audience)
     {
-        return new ToolExecutionContext("slack/thread-1", null)
+        return TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = audience,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
-        };
+        });
     }
 
     private static ToolExecutionContext TeamContext() => CreateExecutionContext(TrustAudience.Team);

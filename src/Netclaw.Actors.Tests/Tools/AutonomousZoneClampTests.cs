@@ -157,11 +157,11 @@ public sealed class AutonomousZoneClampTests : IDisposable
     public void Autonomous_personal_with_empty_zone_fails_closed()
     {
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
-        var ctx = new ToolExecutionContext("reminder/none", sessionDirectory: null)
+        var ctx = TestToolExecutionContext.CreateBound("reminder/none", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SupportsInteractiveApproval = false
-        };
+        });
 
         Assert.False(policy.TryResolveWritePath(Path.Combine(_outsideDir, "x.txt"), ctx, out _, out _));
     }

@@ -83,11 +83,11 @@ public class SpawnAgentStreamingTests : TestKit
         var executor = new DispatchingToolExecutor(
             registry, toolAccessPolicy, approvalService: null, NullLogger<DispatchingToolExecutor>.Instance);
 
-        var ctx = new ToolExecutionContext("console/streaming-test", dir.Path)
+        var ctx = TestToolExecutionContext.CreateBound("console/streaming-test", dir.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
-        };
+        });
 
         var spawnCall = new FunctionCallContent(
             "call-1",
@@ -173,11 +173,11 @@ public class SpawnAgentStreamingTests : TestKit
         var executor = new DispatchingToolExecutor(
             registry, toolAccessPolicy, approvalService: null, NullLogger<DispatchingToolExecutor>.Instance);
 
-        var ctx = new ToolExecutionContext("console/self-monitoring-test", dir.Path)
+        var ctx = TestToolExecutionContext.CreateBound("console/self-monitoring-test", dir.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
-        };
+        });
 
         var spawnCall = new FunctionCallContent(
             "call-1",

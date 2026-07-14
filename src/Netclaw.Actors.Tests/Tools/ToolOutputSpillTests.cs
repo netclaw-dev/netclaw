@@ -74,10 +74,10 @@ public sealed class ToolOutputSpillTests : IDisposable
     [Fact]
     public async Task No_session_directory_degrades_to_inline_only()
     {
-        var ctx = new ToolExecutionContext("session/thread", sessionDirectory: null)
+        var ctx = TestToolExecutionContext.CreateBound("session/thread", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-        };
+        });
         var input = new string('H', 200) + new string('T', 200);
 
         var result = await ToolOutputSpill.BoundAndSpillAsync(

@@ -50,11 +50,11 @@ public class ShellToolTests
     {
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var args = ToolInput.Create("Command", "sleep 100");
-        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(1))
-        };
+        });
 
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -66,11 +66,11 @@ public class ShellToolTests
     {
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
         var args = ToolInput.Create("Command", "sleep 1");
-        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(5))
-        };
+        });
 
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -92,11 +92,11 @@ public class ShellToolTests
             ? "ping 127.0.0.1 -n 120 > nul"
             : "sleep 120 & wait";
         var args = ToolInput.Create("Command", command);
-        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(100))
-        };
+        });
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
         var result = await tool.ExecuteAsync(args, context, cts.Token);
@@ -158,7 +158,8 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = projectDir };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal, ProjectDirectory = projectDir });
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -230,7 +231,8 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = projectDir };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal, ProjectDirectory = projectDir });
             var args = ToolInput.Create(
                 "Command", OperatingSystem.IsWindows() ? "cd" : "pwd",
                 "WorkingDirectory", explicitDir);
@@ -334,7 +336,8 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = missingProjectDir };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, new TestToolExecutionContextOptions
+        { Audience = TrustAudience.Personal, ProjectDirectory = missingProjectDir });
             var args = ToolInput.Create("Command", "echo hi");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
