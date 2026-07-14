@@ -131,7 +131,6 @@ public sealed record ChildRunScope
 {
     public required SubAgentScopeId ScopeId { get; init; }
     public required ToolRunScope Authority { get; init; }
-    public required WorkingContext ParentWorkingContext { get; init; }
     public required WorkingContextSnapshot InitialWorkingSnapshot { get; init; }
 }
 

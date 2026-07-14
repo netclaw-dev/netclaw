@@ -177,7 +177,6 @@ public sealed class SubAgentSpawner
                 RecentFiles = context.RecentFiles,
                 SupportsInteractiveApproval = approvalBridge is not null
             },
-            ParentWorkingContext = parentWorkingContext,
             InitialWorkingSnapshot = initialWorkingSnapshot
         };
 

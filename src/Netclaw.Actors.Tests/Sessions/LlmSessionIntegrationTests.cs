@@ -35,6 +35,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private readonly FakeToolExecutor _fakeToolExecutor = new();
     private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.Parse("2026-03-21T12:00:00Z"));
     private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
+    private readonly ControllableWorkingContextSnapshotProvider _workingContextSnapshots = new();
 
     protected override bool VerifySerialization => true;
 
@@ -82,6 +83,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
+        services.AddSingleton<IWorkingContextSnapshotProvider>(_workingContextSnapshots);
         services.AddSingleton<ISessionPipeline>(new UnusedSessionPipeline());
     }
 
@@ -1271,6 +1273,87 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Working_context_provider_failure_is_nonfatal_and_starts_the_llm_call()
+    {
+        _workingContextSnapshots.Failure = new IOException("credential-bearing provider failure");
+        var sessionId = new SessionId("console/working-context-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("working-context-failure-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Continue despite context inspection failure"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var prompt = string.Join('\n', _fakeChatClient.ReceivedMessages.Single().Select(message => message.Text));
+        Assert.Contains("status: unavailable", prompt);
+        Assert.Contains("working context inspection failed", prompt);
+        Assert.DoesNotContain("credential-bearing", prompt);
+    }
+
+    [Fact]
+    public async Task Cancelled_turn_discards_stale_working_context_continuation()
+    {
+        _workingContextSnapshots.Pending = new TaskCompletionSource<WorkingContextSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("test-channel/stale-working-context");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("stale-working-context-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Start a turn whose context inspection is delayed"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await _workingContextSnapshots.InvocationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        child.Tell(new ToolExecutionFailed { Cause = new IOException("cancel the pending turn") });
+
+        await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        child.Tell(new WorkingContextSnapshotReady(
+            Generation: 1,
+            ForceNoTools: false,
+            TurnRestartNotice: null,
+            Snapshot: new WorkingContextSnapshot
+            {
+                WorkingContext = WorkingContext.Empty.WithProjectDirectory("/stale/project"),
+                Git = new GitWorkingContextInspection.NotRepository()
+            }), TestActor);
+        child.Tell(new JoinSession(TestActor)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.None
+        }, TestActor);
+        await ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(_fakeChatClient.ReceivedMessages);
+        _workingContextSnapshots.Pending.TrySetCanceled(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Subscriber_survives_session_actor_passivation_via_piggyback_rejoin()
     {
         var sessionId = new SessionId("test-channel/passivation-rejoin");
@@ -2003,6 +2086,31 @@ internal sealed class FakeRecallCoordinator : IMemoryRecallCoordinator
 
     public Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
         => Task.FromResult(Result);
+}
+
+internal sealed class ControllableWorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
+{
+    public Exception? Failure { get; set; }
+    public TaskCompletionSource<WorkingContextSnapshot>? Pending { get; set; }
+    public TaskCompletionSource InvocationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<WorkingContextSnapshot> CreateAsync(
+        WorkingContext context,
+        TrustAudience audience,
+        CancellationToken cancellationToken)
+    {
+        InvocationStarted.TrySetResult();
+        if (Failure is { } failure)
+            return Task.FromException<WorkingContextSnapshot>(failure);
+        if (Pending is { } pending)
+            return pending.Task;
+
+        return Task.FromResult(new WorkingContextSnapshot
+        {
+            WorkingContext = context,
+            Git = new GitWorkingContextInspection.Skipped()
+        });
+    }
 }
 
 internal sealed class RecordingSessionLifecycleObserver : ISessionLifecycleObserver

@@ -48,15 +48,6 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 {
-    private sealed record WorkingContextSnapshotReady(
-        long Generation,
-        bool ForceNoTools,
-        string? TurnRestartNotice,
-        WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
-
-    private sealed record WorkingContextSnapshotCancelled(long Generation)
-        : INoSerializationVerificationNeeded;
-
     private readonly SessionId _sessionId;
     private readonly IChatClient _chatClient;
     private readonly IChatClient _compactionClient;
@@ -2415,6 +2406,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (msg.Generation == _workingContextGeneration)
                 TurnLog().Debug("working_context_inspection_cancelled generation={Generation}", msg.Generation);
         });
+        Command<WorkingContextSnapshotFailed>(HandleWorkingContextSnapshotFailed);
 
         // Title generation result — can arrive in any behavior, always safe to apply
         Command<TitleGenerationCompleted>(msg =>
@@ -2830,6 +2822,38 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             return new WorkingContextSnapshotCancelled(generation);
         }
+        catch (Exception ex)
+        {
+            return new WorkingContextSnapshotFailed(
+                generation,
+                forceNoTools,
+                turnRestartNotice,
+                workingContext,
+                ex);
+        }
+    }
+
+    private void HandleWorkingContextSnapshotFailed(WorkingContextSnapshotFailed message)
+    {
+        if (!ShouldApplyWorkingContextSnapshot(
+                message.Generation,
+                _workingContextGeneration,
+                _activeLlmCts is not null))
+            return;
+
+        TurnLog().Warning(
+            message.Cause,
+            "working_context_inspection_failed generation={Generation}",
+            message.Generation);
+        HandleWorkingContextSnapshotReady(new WorkingContextSnapshotReady(
+            message.Generation,
+            message.ForceNoTools,
+            message.TurnRestartNotice,
+            new WorkingContextSnapshot
+            {
+                WorkingContext = message.WorkingContext,
+                Git = new GitWorkingContextInspection.Unavailable("working context inspection failed")
+            }));
     }
 
     private void HandleWorkingContextSnapshotReady(WorkingContextSnapshotReady message)
@@ -4344,6 +4368,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _inFlightDedup.CompleteReminder(_currentTurnSource?.ReminderId);
         _inFlightDedup.CompleteBackgroundJob(_currentTurnSource?.BackgroundJobId);
+        CancelAndDisposeLlmCts();
         CancelAndDisposeToolExecutionCts();
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();

@@ -346,6 +346,17 @@ public sealed class GitWorkingContextInspector : IGitWorkingContextInspector
 internal sealed class GitCommandRunner : IGitCommandRunner
 {
     private const int MaxOutputChars = 256 * 1024;
+    private readonly IGitProcessFactory _processFactory;
+
+    public GitCommandRunner()
+        : this(new GitProcessFactory())
+    {
+    }
+
+    internal GitCommandRunner(IGitProcessFactory processFactory)
+    {
+        _processFactory = processFactory;
+    }
 
     public async Task<GitCommandResult> RunAsync(
         string workingDirectory,
@@ -355,36 +366,29 @@ internal sealed class GitCommandRunner : IGitCommandRunner
     {
         try
         {
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "git",
-                    WorkingDirectory = workingDirectory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-            foreach (var argument in arguments)
-                process.StartInfo.ArgumentList.Add(argument);
-
-            process.Start();
-            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+            using var process = _processFactory.Start(workingDirectory, arguments);
             using var commandTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             commandTimeout.CancelAfter(timeout);
+            var stdout = process.ReadStandardOutputAsync(commandTimeout.Token);
+            var stderr = process.ReadStandardErrorAsync(commandTimeout.Token);
 
             try
             {
                 await process.WaitForExitAsync(commandTimeout.Token).ConfigureAwait(false);
                 await Task.WhenAll(stdout, stderr).WaitAsync(commandTimeout.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
-                TryKill(process);
-                return GitCommandResult.Failed("git inspection timed out");
+                var terminated = process.TryKillTree();
+                if (terminated)
+                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                await ObserveCancelledReadAsync(stdout).ConfigureAwait(false);
+                await ObserveCancelledReadAsync(stderr).ConfigureAwait(false);
+
+                cancellationToken.ThrowIfCancellationRequested();
+                return GitCommandResult.Failed(terminated
+                    ? "git inspection timed out"
+                    : "git inspection timed out and process termination failed");
             }
 
             var standardOutput = Bound(await stdout.ConfigureAwait(false));
@@ -404,20 +408,102 @@ internal sealed class GitCommandRunner : IGitCommandRunner
         }
     }
 
-    private static void TryKill(Process process)
+    private static async Task ObserveCancelledReadAsync(Task<string> read)
     {
         try
         {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
+            await read.ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
+        catch (OperationCanceledException)
         {
-            // The process exited between the state check and Kill.
             return;
         }
     }
 
     internal static string Bound(string value) => value.Length <= MaxOutputChars ? value : value[..MaxOutputChars];
 
+}
+
+internal interface IGitProcessFactory
+{
+    IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments);
+}
+
+internal interface IRunningGitProcess : IDisposable
+{
+    int ExitCode { get; }
+
+    Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken);
+
+    Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken);
+
+    Task WaitForExitAsync(CancellationToken cancellationToken);
+
+    bool TryKillTree();
+}
+
+internal sealed class GitProcessFactory : IGitProcessFactory
+{
+    public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+        foreach (var argument in arguments)
+            process.StartInfo.ArgumentList.Add(argument);
+
+        try
+        {
+            process.Start();
+            return new RunningGitProcess(process);
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
+        }
+    }
+}
+
+internal sealed class RunningGitProcess(Process process) : IRunningGitProcess
+{
+    public int ExitCode => process.ExitCode;
+
+    public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) =>
+        process.StandardOutput.ReadToEndAsync(cancellationToken);
+
+    public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) =>
+        process.StandardError.ReadToEndAsync(cancellationToken);
+
+    public Task WaitForExitAsync(CancellationToken cancellationToken) =>
+        process.WaitForExitAsync(cancellationToken);
+
+    public bool TryKillTree()
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    public void Dispose() => process.Dispose();
 }

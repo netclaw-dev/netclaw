@@ -98,6 +98,22 @@ internal sealed record JobReapResolved(long Epoch, int ReapedCount, Exception? E
 
 internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
 
+internal sealed record WorkingContextSnapshotReady(
+    long Generation,
+    bool ForceNoTools,
+    string? TurnRestartNotice,
+    WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
+
+internal sealed record WorkingContextSnapshotCancelled(long Generation)
+    : INoSerializationVerificationNeeded;
+
+internal sealed record WorkingContextSnapshotFailed(
+    long Generation,
+    bool ForceNoTools,
+    string? TurnRestartNotice,
+    WorkingContext WorkingContext,
+    Exception Cause) : INoSerializationVerificationNeeded;
+
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
     public required SubAgentRunId RunId { get; init; }

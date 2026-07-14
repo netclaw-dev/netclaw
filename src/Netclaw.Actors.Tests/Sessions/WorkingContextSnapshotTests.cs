@@ -259,6 +259,47 @@ public class WorkingContextSnapshotTests
     }
 
     [Fact]
+    public async Task Git_command_cancellation_terminates_and_awaits_process()
+    {
+        var process = new ControlledGitProcess();
+        var runner = new GitCommandRunner(new FixedGitProcessFactory(process));
+        using var cancellation = new CancellationTokenSource();
+
+        var run = runner.RunAsync(
+            "/repo",
+            ["status"],
+            Timeout.InfiniteTimeSpan,
+            cancellation.Token);
+        await process.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.True(process.KillTreeCalled);
+        Assert.True(process.WaitedAfterTermination);
+        Assert.True(process.Disposed);
+    }
+
+    [Fact]
+    public async Task Git_command_deadline_terminates_and_awaits_process()
+    {
+        var process = new ControlledGitProcess();
+        var runner = new GitCommandRunner(new FixedGitProcessFactory(process));
+
+        var result = await runner.RunAsync(
+            "/repo",
+            ["status"],
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal("git inspection timed out", result.Error);
+        Assert.True(process.KillTreeCalled);
+        Assert.True(process.WaitedAfterTermination);
+        Assert.True(process.Disposed);
+    }
+
+    [Fact]
     public async Task Unavailable_reason_is_single_line_and_bounded_before_rendering()
     {
         var reason = new string('x', 300) + "\ncredential-bearing second line";
@@ -349,6 +390,51 @@ public class WorkingContextSnapshotTests
             var next = _results.Dequeue();
             _timeProvider.Advance(next.Elapsed);
             return Task.FromResult(next.Result);
+        }
+    }
+
+    private sealed class FixedGitProcessFactory(IRunningGitProcess process) : IGitProcessFactory
+    {
+        public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments) => process;
+    }
+
+    private sealed class ControlledGitProcess : IRunningGitProcess
+    {
+        private readonly TaskCompletionSource _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource WaitStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool KillTreeCalled { get; private set; }
+        public bool WaitedAfterTermination { get; private set; }
+        public bool Disposed { get; private set; }
+        public int ExitCode => 0;
+
+        public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) =>
+            ReadUntilExitAsync(cancellationToken);
+
+        public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) =>
+            ReadUntilExitAsync(cancellationToken);
+
+        public async Task WaitForExitAsync(CancellationToken cancellationToken)
+        {
+            WaitStarted.TrySetResult();
+            if (!cancellationToken.CanBeCanceled)
+                WaitedAfterTermination = true;
+            await _exit.Task.WaitAsync(cancellationToken);
+        }
+
+        public bool TryKillTree()
+        {
+            KillTreeCalled = true;
+            _exit.TrySetResult();
+            return true;
+        }
+
+        public void Dispose() => Disposed = true;
+
+        private async Task<string> ReadUntilExitAsync(CancellationToken cancellationToken)
+        {
+            await _exit.Task.WaitAsync(cancellationToken);
+            return string.Empty;
         }
     }
 }

@@ -43,7 +43,6 @@ internal static class SubAgentTestScope
                 RecentFiles = recentFiles ?? [],
                 SupportsInteractiveApproval = approvalBridge is not null
             },
-            ParentWorkingContext = workingContext,
             InitialWorkingSnapshot = new WorkingContextSnapshot
             {
                 WorkingContext = audience == TrustAudience.Public ? WorkingContext.Empty : workingContext,

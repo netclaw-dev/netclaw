@@ -249,7 +249,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionContext = new ToolExecutionContext(
                 msg.Scope.Authority,
                 ToolExecutionTimeout.Default);
-            _fileActivity = new ChildFileActivityTracker(msg.Scope.ParentWorkingContext);
+            _fileActivity = new ChildFileActivityTracker(msg.Scope.InitialWorkingSnapshot.WorkingContext);
             _aiTools = ResolveExposedAiTools();
             _executionCts = new CancellationTokenSource();
             _externalCts = new CancellationTokenSource();
