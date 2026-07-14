@@ -3,7 +3,7 @@
 # connects to it and indexes its tools.
 #
 # The deterministic test server (Netclaw.SmokeMcpServer) exposes
-# add/echo/record-tasks over stdio. This scenario hard-verifies netclaw's
+# add/echo/record-tasks/process-info over stdio. This scenario hard-verifies netclaw's
 # MCP integration:
 # `mcp add` records the server in config, and on daemon startup the daemon
 # spawns the stdio server, completes the MCP handshake, and registers its
@@ -87,12 +87,12 @@ else
   die "daemon log: no 'MCP server ${MCP_SERVER_NAME} connected' line — stdio handshake failed"
 fi
 
-# The test server exposes exactly three tools (add, echo, record-tasks) —
+# The test server exposes exactly four tools (add, echo, record-tasks, process-info) —
 # confirm the daemon registered all of them.
-if [[ "$connect_line" == *"(3 tools)"* ]]; then
-  pass "daemon log: MCP server registered 3 tools (add, echo, record-tasks)"
+if [[ "$connect_line" == *"(4 tools)"* ]]; then
+  pass "daemon log: MCP server registered 4 tools (add, echo, record-tasks, process-info)"
 else
-  die "daemon log: expected '(3 tools)' in the connection line, got: $connect_line"
+  die "daemon log: expected '(4 tools)' in the connection line, got: $connect_line"
 fi
 
 summarize

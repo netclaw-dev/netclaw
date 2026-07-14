@@ -14,6 +14,19 @@ search_tools(query: "email")                    # keyword search
 
 After discovery, matched tools become callable for the session.
 
+### MCP server state and concurrent callers
+
+One configured MCP server is one daemon-owned client connection. Local STDIO
+servers therefore run as one process shared by every session authorized to use
+that server; a Slack thread or subagent does not receive a private MCP process.
+State held by the server is shared too.
+
+For Playwright, inspect the existing tabs before acting, create a new tab for
+your work, and close only tabs you created. Tabs help callers coordinate, but
+they are not security boundaries: cookies, local storage, permissions, and
+other browser-context state may be shared. Do not assume another authorized
+session's browser activity is private from yours.
+
 Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.

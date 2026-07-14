@@ -14,11 +14,12 @@ using ModelContextProtocol.Server;
 //
 // Two modes:
 //   stdio (default)
-//     Exposes three fully-deterministic tools whose output is a pure
+//     Exposes deterministic tools whose output is a pure
 //     function of their input:
 //       add(a, b)                -> a + b
 //       echo(text)               -> text
 //       record-tasks(tasks, ref) -> a summary of the structured arguments
+//       process-info()           -> process ID and command-line arguments
 //
 //     Determinism is the whole point: add(2, 2) is always 4, so a smoke
 //     scenario can hard-assert on the tool RESULT even though the
@@ -86,6 +87,15 @@ internal sealed class Program
         return $"reference={reference} count={tasks.Length} kinds=[{kinds}]";
     }
 
+    [McpServerTool(Name = "process-info")]
+    [Description("Returns this server process ID and command-line arguments for lifecycle tests.")]
+    public static string ProcessInfo()
+        => JsonSerializer.Serialize(new
+        {
+            processId = Environment.ProcessId,
+            arguments = Environment.GetCommandLineArgs().Skip(1).ToArray(),
+        });
+
     /// <summary>
     /// HTTP-mode-only tool: returns the Authorization header attached to
     /// the most recent request the server received. Returns the literal
@@ -139,6 +149,7 @@ internal sealed class Program
             McpServerTool.Create(Add, new McpServerToolCreateOptions { Name = "add" }),
             McpServerTool.Create(Echo, new McpServerToolCreateOptions { Name = "echo" }),
             McpServerTool.Create(RecordTasks, new McpServerToolCreateOptions { Name = "record-tasks" }),
+            McpServerTool.Create(ProcessInfo, new McpServerToolCreateOptions { Name = "process-info" }),
         };
 
         var options = new McpServerOptions

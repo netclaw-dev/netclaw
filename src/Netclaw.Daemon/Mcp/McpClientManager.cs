@@ -17,8 +17,6 @@ namespace Netclaw.Daemon.Mcp;
 
 internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker, IMcpReconnectable
 {
-    private const string PlaywrightServerName = "browser_playwright";
-
     private readonly Dictionary<string, McpServerEntry> _serverEntries;
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolConfig _toolConfig;
@@ -34,16 +32,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly ConcurrentDictionary<McpServerName, Dictionary<string, AIFunction>> _sharedToolFunctions = new();
 
     private readonly ConcurrentDictionary<McpServerName, McpServerStatus> _statuses = new();
-
-    private readonly ConcurrentDictionary<McpServerName, bool> _sessionScopedServers = new();
-
-    private readonly ConcurrentDictionary<string, Lazy<Task<ScopedClientHandle>>> _scopedClients =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly SemaphoreSlim _scopedCleanupGate = new(1, 1);
-    private readonly TimeSpan _scopedClientIdleTimeout = TimeSpan.FromMinutes(10);
-    private readonly TimeSpan _scopedCleanupInterval = TimeSpan.FromMinutes(1);
-    private long _nextScopedCleanupAtMs;
 
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
@@ -74,7 +62,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             if (!entry.Enabled)
             {
                 _statuses[serverName] = new McpServerStatus(serverName, McpConnectionState.Disabled, 0, null);
-                _sessionScopedServers.TryRemove(serverName, out _);
                 _logger.LogInformation("MCP server '{Name}' is disabled, skipping", name);
                 continue;
             }
@@ -100,9 +87,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         _clients.Clear();
         _sharedToolFunctions.Clear();
-        _sessionScopedServers.Clear();
-
-        await DisposeAllScopedClientsAsync();
     }
 
     public McpClient? GetClient(McpServerName serverName)
@@ -135,7 +119,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
 
         _sharedToolFunctions.TryRemove(serverName, out _);
-        await DisposeScopedClientsForServerAsync(serverName);
 
         return await ConnectAsync(serverName, entry, ct);
     }
@@ -149,9 +132,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         var server = new McpServerName(serverName);
         var tool = new ToolName(toolName);
-
-        if (UsesSessionScopedClient(server))
-            return await InvokeScopedAsync(server, tool, arguments, context, ct);
 
         return await InvokeSharedAsync(server, tool, arguments, ct);
     }
@@ -194,38 +174,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    private async Task<string> InvokeScopedAsync(
-        McpServerName serverName,
-        ToolName toolName,
-        IDictionary<string, object?>? arguments,
-        ToolExecutionContext? context,
-        CancellationToken ct)
-    {
-        var scopeId = ResolveScopeId(context);
-        var handle = await GetOrCreateScopedClientHandleAsync(serverName, scopeId, ct);
-
-        await CleanupIdleScopedClientsIfDueAsync(ct);
-        await handle.ExecutionGate.WaitAsync(ct);
-
-        try
-        {
-            handle.Touch(_timeProvider.GetUtcNow());
-
-            if (!handle.Tools.TryGetValue(toolName.Value, out var function))
-            {
-                throw new InvalidOperationException(
-                    $"MCP tool '{toolName.Value}' is not available on server '{serverName.Value}'.");
-            }
-
-            return await InvokeFunctionAsync(function, $"{serverName.Value}/{toolName.Value}", arguments, ct);
-        }
-        finally
-        {
-            handle.Touch(_timeProvider.GetUtcNow());
-            handle.ExecutionGate.Release();
-        }
-    }
-
     // qualifiedToolName is the server-qualified "server/tool" name (not the bare
     // function.Name, which omits the server) so MCP error attribution matches the
     // bound-tool path (McpToolAdapter.Name) — otherwise the same error renders
@@ -256,160 +204,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return serverTools.TryGetValue(toolName, out function);
     }
 
-    private bool UsesSessionScopedClient(McpServerName serverName)
-    {
-        return _sessionScopedServers.TryGetValue(serverName, out var enabled) && enabled;
-    }
-
-    private async Task<ScopedClientHandle> GetOrCreateScopedClientHandleAsync(
-        McpServerName serverName,
-        string scopeId,
-        CancellationToken ct)
-    {
-        var key = BuildScopedClientKey(serverName.Value, scopeId);
-
-        while (true)
-        {
-            var lazy = _scopedClients.GetOrAdd(key, _ =>
-                new Lazy<Task<ScopedClientHandle>>(
-                    () => CreateScopedClientHandleAsync(serverName),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
-
-            try
-            {
-                var handle = await lazy.Value.WaitAsync(ct);
-                handle.Touch(_timeProvider.GetUtcNow());
-                return handle;
-            }
-            catch
-            {
-                _scopedClients.TryRemove(new KeyValuePair<string, Lazy<Task<ScopedClientHandle>>>(key, lazy));
-                await DisposeLazyScopedHandleAsync(lazy);
-                throw;
-            }
-        }
-    }
-
-    private async Task<ScopedClientHandle> CreateScopedClientHandleAsync(McpServerName serverName)
-    {
-        if (!_serverEntries.TryGetValue(serverName.Value, out var entry))
-        {
-            throw new InvalidOperationException($"MCP server '{serverName.Value}' is not configured.");
-        }
-
-        var client = await CreateClientAsync(serverName, entry, CancellationToken.None, updateStatusOnAuthFailure: false);
-        if (client is null)
-            throw new InvalidOperationException($"MCP server '{serverName.Value}' requires OAuth authorization.");
-
-        var tools = await client.ListToolsAsync(cancellationToken: CancellationToken.None);
-        var toolMap = CreateFunctionMap(tools);
-
-        _logger.LogInformation(
-            "Created scoped MCP client for server '{ServerName}' (tools={ToolCount})",
-            serverName.Value,
-            tools.Count);
-
-        return new ScopedClientHandle(client, toolMap, _timeProvider.GetUtcNow());
-    }
-
-    private async Task DisposeScopedClientsForServerAsync(McpServerName serverName)
-    {
-        var prefix = serverName.Value + "::";
-
-        foreach (var (key, _) in _scopedClients.ToArray())
-        {
-            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (_scopedClients.TryRemove(key, out var lazy))
-                await DisposeLazyScopedHandleAsync(lazy);
-        }
-    }
-
-    private async Task DisposeAllScopedClientsAsync()
-    {
-        foreach (var (key, _) in _scopedClients.ToArray())
-        {
-            if (_scopedClients.TryRemove(key, out var lazy))
-                await DisposeLazyScopedHandleAsync(lazy);
-        }
-    }
-
-    private async Task DisposeLazyScopedHandleAsync(Lazy<Task<ScopedClientHandle>> lazy)
-    {
-        if (!lazy.IsValueCreated)
-            return;
-
-        try
-        {
-            var handle = await lazy.Value;
-            await handle.DisposeAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Error disposing scoped MCP client handle");
-        }
-    }
-
-    private async Task CleanupIdleScopedClientsIfDueAsync(CancellationToken ct)
-    {
-        if (_scopedClients.IsEmpty)
-            return;
-
-        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-        if (nowMs < Volatile.Read(ref _nextScopedCleanupAtMs))
-            return;
-
-        if (!await _scopedCleanupGate.WaitAsync(0, ct))
-            return;
-
-        try
-        {
-            nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            if (nowMs < Volatile.Read(ref _nextScopedCleanupAtMs))
-                return;
-
-            Volatile.Write(
-                ref _nextScopedCleanupAtMs,
-                nowMs + (long)_scopedCleanupInterval.TotalMilliseconds);
-
-            var idleBeforeMs = nowMs - (long)_scopedClientIdleTimeout.TotalMilliseconds;
-
-            foreach (var (key, lazy) in _scopedClients.ToArray())
-            {
-                if (!lazy.IsValueCreated)
-                    continue;
-
-                Task<ScopedClientHandle> handleTask;
-                try
-                {
-                    handleTask = lazy.Value;
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (!handleTask.IsCompletedSuccessfully)
-                    continue;
-
-                var handle = handleTask.Result;
-                if (handle.LastUsedAtMs > idleBeforeMs)
-                    continue;
-
-                if (handle.ExecutionGate.CurrentCount == 0)
-                    continue;
-
-                if (_scopedClients.TryRemove(new KeyValuePair<string, Lazy<Task<ScopedClientHandle>>>(key, lazy)))
-                    await handle.DisposeAsync();
-            }
-        }
-        finally
-        {
-            _scopedCleanupGate.Release();
-        }
-    }
-
     private async Task<bool> ConnectAsync(McpServerName name, McpServerEntry entry, CancellationToken ct)
     {
         // Holds the client until ownership passes to _clients. If the connect
@@ -425,15 +219,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             var tools = await client.ListToolsAsync(cancellationToken: ct);
             var sharedFunctions = CreateFunctionMap(tools);
-            var requiresSessionScopedClient = RequiresSessionScopedClient(name, entry);
-
             LogToolDrift(name, tools);
 
             _toolRegistry.WithMcpTools(name.Value, tools, entry.GrantCategory, this,
                 _maxToolDescriptionChars, _maxToolSchemaWarnChars, _logger);
 
             _sharedToolFunctions[name] = sharedFunctions;
-            _sessionScopedServers[name] = requiresSessionScopedClient;
             _clients[name] = client;
             client = null;
             _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
@@ -457,7 +248,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             }
 
             _sharedToolFunctions.TryRemove(name, out _);
-            _sessionScopedServers.TryRemove(name, out _);
 
             var hasCachedTokens = _oauthService.GetTokenSet(name) is not null;
             var hasOAuthRuntimeHints = HasOAuthRuntimeHints(name, entry);
@@ -557,12 +347,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         if (entry.Transport is "stdio")
         {
-            var args = BuildStdioArguments(serverName, entry);
-
             return new StdioClientTransport(new StdioClientTransportOptions
             {
                 Command = entry.Command!,
-                Arguments = args,
+                Arguments = entry.Arguments ?? [],
                 EnvironmentVariables = entry.EnvironmentVariables.ToRawNullableValues(StringComparer.OrdinalIgnoreCase),
                 Name = serverName.Value,
                 ShutdownTimeout = TimeSpan.FromSeconds(10),
@@ -742,21 +530,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return null;
     }
 
-    private static string[] BuildStdioArguments(McpServerName serverName, McpServerEntry entry)
-    {
-        var args = entry.Arguments is { Length: > 0 }
-            ? entry.Arguments.ToList()
-            : [];
-
-        if (IsPlaywrightServer(serverName, entry)
-            && !args.Contains("--isolated", StringComparer.OrdinalIgnoreCase))
-        {
-            args.Add("--isolated");
-        }
-
-        return [.. args];
-    }
-
     private static Dictionary<string, AIFunction> CreateFunctionMap(IList<McpClientTool> tools)
     {
         var map = new Dictionary<string, AIFunction>(StringComparer.OrdinalIgnoreCase);
@@ -766,47 +539,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         return map;
     }
-
-    private static bool RequiresSessionScopedClient(McpServerName serverName, McpServerEntry entry)
-        => IsPlaywrightServer(serverName, entry);
-
-    private static bool IsPlaywrightServer(McpServerName serverName, McpServerEntry entry)
-    {
-        if (serverName.Value.Equals(PlaywrightServerName, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (!string.IsNullOrWhiteSpace(entry.Command)
-            && entry.Command.Contains("playwright", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (entry.Arguments is not { Length: > 0 })
-            return false;
-
-        foreach (var arg in entry.Arguments)
-        {
-            if (arg.Contains("@playwright/mcp", StringComparison.OrdinalIgnoreCase)
-                || arg.Contains("playwright/mcp", StringComparison.OrdinalIgnoreCase)
-                || arg.Contains("playwright-mcp", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private string ResolveScopeId(ToolExecutionContext? context)
-    {
-        if (!string.IsNullOrWhiteSpace(context?.SessionId))
-            return context.SessionId!;
-
-        return $"sessionless/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}";
-    }
-
-    private static string BuildScopedClientKey(string serverName, string scopeId)
-        => $"{serverName}::{scopeId}";
 
     /// <summary>
     /// Compares discovered tools against <see cref="ToolAudienceProfile.McpServerToolGrants"/>
@@ -865,75 +597,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             catch (Exception ex) { _logger.LogDebug(ex, "Error disposing MCP client during shutdown"); }
         }
 
-        foreach (var lazy in _scopedClients.Values)
-        {
-            if (!lazy.IsValueCreated)
-                continue;
-
-            try
-            {
-                var task = lazy.Value;
-                if (!task.IsCompletedSuccessfully)
-                    continue;
-
-                task.Result.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Error disposing scoped MCP client during shutdown");
-            }
-        }
-
         _clients.Clear();
         _sharedToolFunctions.Clear();
-        _scopedClients.Clear();
-        _sessionScopedServers.Clear();
-    }
-
-    private sealed class ScopedClientHandle : IAsyncDisposable, IDisposable
-    {
-        private int _disposed;
-
-        public ScopedClientHandle(
-            McpClient client,
-            Dictionary<string, AIFunction> tools,
-            DateTimeOffset createdAt)
-        {
-            Client = client;
-            Tools = tools;
-            Touch(createdAt);
-        }
-
-        public McpClient Client { get; }
-        public Dictionary<string, AIFunction> Tools { get; }
-        public SemaphoreSlim ExecutionGate { get; } = new(1, 1);
-
-        private long _lastUsedAtMs;
-
-        public long LastUsedAtMs => Volatile.Read(ref _lastUsedAtMs);
-
-        public void Touch(DateTimeOffset now)
-        {
-            Volatile.Write(ref _lastUsedAtMs, now.ToUnixTimeMilliseconds());
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 1)
-                return;
-
-            ExecutionGate.Dispose();
-            await Client.DisposeAsync();
-        }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 1)
-                return;
-
-            ExecutionGate.Dispose();
-            (Client as IDisposable)?.Dispose();
-        }
     }
 }
 

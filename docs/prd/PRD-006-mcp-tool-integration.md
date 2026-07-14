@@ -94,6 +94,13 @@ Runtime SHALL degrade gracefully when MCP server is unavailable:
 - Reconnection is attempted on next tool call
 - Diagnostics flag the outage
 
+### MCP-009 Daemon-Bound Server Ownership
+
+Each configured MCP server SHALL have at most one live client connection per
+Netclaw daemon. A local STDIO server process and its internal state are shared
+by all sessions authorized to use that server; Netclaw session identity SHALL
+not launch or select a separate MCP process.
+
 ## Non-Goals (MVP)
 
 - Dynamic marketplace discovery of MCP servers
@@ -110,6 +117,8 @@ Runtime SHALL degrade gracefully when MCP server is unavailable:
 5. MCP tools appear in session tool definitions when server is enabled and
    granted.
 6. Unavailable MCP server does not crash the session.
+7. Calls from different authorized sessions to one local STDIO profile use the
+   same daemon-owned client and child process.
 
 ## Cross-References
 
