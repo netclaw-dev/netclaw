@@ -15,7 +15,7 @@
 - [x] 2.3 Preserve existing `_background` behavior for shell, non-shell, missing-manager, and dispatch-failure paths while removing redundant parameter plumbing.
 - [x] 2.4 Add characterization tests for audit/logging/approval/background infrastructure, malformed metadata, ACL and approval denial, supported background routing, missing-manager fallback, dispatch failure, and non-shell fallback.
 - [x] 2.5 Verify MCP request/response schemas and persisted actor contracts remain compatible; update affected engineering docs and specs, and review the versioned `netclaw-operations` system skill without changing model-visible guidance for an internal behavior-preserving refactor.
-- [ ] 2.6 Run targeted tests, the tool-definition eval suite, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 2 through review, CI, merge, and post-merge `dev` verification.
+- [x] 2.6 Run targeted tests, the tool-definition eval suite, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 2 through review, CI, merge, and post-merge `dev` verification.
 
 ## 3. Stage 3 — Child Context and Async Git
 
@@ -33,3 +33,4 @@
 - [ ] 4.1 Verify all three merged stages against the OpenSpec scenarios and PRD traceability from current `dev`, including serialization/recovery and MCP compatibility evidence.
 - [ ] 4.2 Sync the delta specs to main specs with `/opsx-sync`, run `/opsx-verify`, and archive the completed change with `/opsx-archive`.
 - [ ] 4.3 Run the RALPH adversarial output review, diagnostics, and after-action workflow; capture durable follow-ups without leaving undocumented behavior drift.
+- [ ] 4.4 Decide whether `IToolAuditLogger` should adapt structured tool events into the canonical `SessionLogActor` transcript or be removed; Stage 2 deliberately retained the existing disabled production diagnostics and null audit sink to avoid behavior drift.
