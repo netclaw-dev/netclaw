@@ -39,11 +39,13 @@ The migration order is abstraction contract, dispatcher/policies, production roo
 
 ### Required immutable run scope and fresh call context
 
-`ToolRunScope` will be an immutable value assembled only after audience admission. It groups the required `TurnContext`, session identity, workspace/project roots, model identity, and typed execution limits. Semantic scalar values such as timeouts and output budgets use validated value objects with explicit `.Value` access and no implicit primitive conversions.
+`ToolRunScope` is an immutable value assembled only after audience admission. It groups the resolved audience, explicit bound/unbound session identity, channel and delivery authority, workspace/project roots, model modalities, child-spawn capability, and typed output limits. Per-call timeout remains on the invocation because metadata can select a different clamped timeout for each call. Semantic scalar values use validated value objects with explicit `.Value` access and no implicit primitive conversions.
 
 `ToolInvocationContext` will be created afresh for each invocation from the run scope and normalized tool arguments. It is an immutable description of the call: run authority, call identity, validated timeout, resolved working directory, and tool-visible services. Context-free overloads and `ToolExecutionContext.Empty` will be removed; all production call sites migrate in the same staged series.
 
-Mutable data is not stored on the context. Tool-produced attachments, model inputs, and activity flow into a separate per-call append-only `ToolExecutionOutputs` sink. Approval grants, match results, and retry state remain owned by the pipeline in a dedicated `ToolApprovalAttempt`; they are passed to authorization rather than written onto the tool-visible context. Record/value semantics are used only for immutable values. The append-only sink and stateful attempt objects retain identity semantics and are not records, avoiding misleading shallow-copy behavior.
+Mutable data is not stored as replaceable context properties. Tool-produced attachments, model inputs, and activity flow into a separate per-call append-only `ToolExecutionOutputs` sink. Approval grants, match results, and retry state remain owned by the pipeline in a dedicated `ToolApprovalAttempt`; tools receive only the `ToolInvocationContext` base contract and cannot access approval state.
+
+`ToolInvocationContext` deliberately retains reference identity even though its data is construction-only. A record's generated `with` copy would shallow-copy the output sink and make two apparent invocation values share mutable products. Record/value semantics are therefore limited to immutable values such as `ToolRunScope`, `ToolSessionScope`, `ToolExecutionTimeout`, and `InlineOutputBudget`; the append-only sink, invocation wrapper, and stateful approval attempt remain classes.
 
 ### Composed session execution pipeline
 
