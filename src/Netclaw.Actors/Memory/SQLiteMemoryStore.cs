@@ -1767,6 +1767,34 @@ public sealed class SQLiteMemoryStore
     }
 
     /// <summary>
+    /// An existing document row found by the anchor-based dedup lookup in
+    /// <see cref="ApplyInlineCurationBatchAsync"/>/<see cref="ApplyCurationBatchAsync"/>.
+    /// Carries the values that must survive a dedup collision so ON CONFLICT DO UPDATE
+    /// cannot silently replace this row's identity/classification with an unrelated
+    /// proposal's raw values (title stays, boundary/audience/sensitivity stay — a widened
+    /// audience or loosened sensitivity here would be a silent visibility escalation).
+    /// </summary>
+    private sealed record DedupCollision(string Title, string MarkdownBody, string? Boundary, string? Audience, string Sensitivity);
+
+    /// <summary>
+    /// Builds the anchor-dedup append body for a proposal that collides with an existing
+    /// document under the same anchor. The rules tier can legitimately emit a Create
+    /// decision for "different topic, similar anchor name" (see
+    /// <see cref="CurationRulesEvaluator"/>'s fuzzy/low-overlap branch); when that proposal's
+    /// anchor happens to already hold a document, appending instead of overwriting is
+    /// unconditionally lossless — plain concatenation can never drop the prior content the
+    /// way the old ON CONFLICT DO UPDATE overwrite did (audit: 88 silent overwrites/14 days,
+    /// including a carefully LLM-merged memory). Matches the dated-separator convention used
+    /// by MemoryCurationEvaluator.BuildAppendedBody on feature/memory-embeddings so the two
+    /// branches stay convention-compatible when merged.
+    /// </summary>
+    private string BuildDedupAppendedBody(string existingBody, string proposalContent)
+    {
+        var isoDate = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return $"{existingBody}\n\n---\n_[merged {isoDate}]_\n{proposalContent}";
+    }
+
+    /// <summary>
     /// Write a batch of curation operations without an associated checkpoint.
     /// Used by the inline curation actor path where proposals are sent directly
     /// from the session actor rather than through the checkpoint queue.
@@ -1851,8 +1879,13 @@ public sealed class SQLiteMemoryStore
                 ? MemoryRecallMode.Never.ToWireValue()
                 : operation.RecallMode;
 
-            // Anchor-based dedup: same logic as ApplyCurationBatchAsync
+            // Anchor-based dedup: same logic as ApplyCurationBatchAsync. Reusing an existing
+            // document_id here (documentId set, collision left null) is safe: it means the
+            // operation already carries an explicit target (Update decision). Finding an
+            // existing row via the anchor lookup below (collision set) is a genuine Create
+            // collision — see DedupCollision's remarks — and must append, not overwrite.
             string documentId;
+            DedupCollision? collision = null;
             if (!string.IsNullOrWhiteSpace(operation.MemoryId))
             {
                 documentId = operation.MemoryId;
@@ -1862,19 +1895,68 @@ public sealed class SQLiteMemoryStore
                 await using var lookupCmd = conn.CreateCommand();
                 lookupCmd.Transaction = tx;
                 lookupCmd.CommandText = """
-                    SELECT document_id FROM memory_documents
+                    SELECT document_id, title, markdown_body, boundary, audience, sensitivity
+                    FROM memory_documents
                     WHERE anchor_id = $anchorId
                     ORDER BY updated_at DESC
                     LIMIT 1;
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
-                documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? MemoryTypedId.NewDocumentId().Value;
+                await using var lookupReader = await lookupCmd.ExecuteReaderAsync(ct);
+                if (await lookupReader.ReadAsync(ct))
+                {
+                    documentId = lookupReader.GetString(0);
+                    collision = new DedupCollision(
+                        lookupReader.GetString(1),
+                        lookupReader.GetString(2),
+                        lookupReader.IsDBNull(3) ? null : lookupReader.GetString(3),
+                        lookupReader.IsDBNull(4) ? null : lookupReader.GetString(4),
+                        lookupReader.GetString(5));
+                }
+                else
+                {
+                    documentId = MemoryTypedId.NewDocumentId().Value;
+                }
             }
             else
             {
                 documentId = MemoryTypedId.NewDocumentId().Value;
             }
+
+            if (collision is not null)
+            {
+                // Idempotency guard: a colliding proposal whose content the existing body
+                // already holds verbatim adds nothing — appending it would bloat the
+                // document on every repeat (the inverse failure of the overwrite bug this
+                // path fixes). Logged no-op: the document row stays byte-identical.
+                if (collision.MarkdownBody.Contains(operation.Content, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "curation_dedup_duplicate_skipped anchor={AnchorCanonicalName} targetDoc={DocumentId}",
+                        canonicalName,
+                        documentId);
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "curation_dedup_append anchor={AnchorCanonicalName} targetDoc={DocumentId}",
+                    canonicalName,
+                    documentId);
+            }
+
+            // Preserve the colliding row's identity/classification; only the body grows
+            // (appended) and update_semantics flips to append-document to record that this
+            // write did not overwrite. Non-collision path is the pre-existing behavior.
+            var effectiveTitle = collision is not null ? collision.Title : operation.Title;
+            var effectiveBody = collision is not null
+                ? BuildDedupAppendedBody(collision.MarkdownBody, operation.Content)
+                : operation.Content;
+            var effectiveBoundary = collision is not null ? collision.Boundary : resolvedBoundary;
+            var effectiveAudience = collision is not null ? collision.Audience : operation.Audience.ToWireValue();
+            var effectiveSensitivity = collision is not null ? collision.Sensitivity : operation.Sensitivity;
+            var effectiveSemantics = collision is not null
+                ? MemoryUpdateSemantics.AppendDocument.ToWireValue()
+                : operation.UpdateSemantics;
 
             await using var documentCmd = conn.CreateCommand();
             documentCmd.Transaction = tx;
@@ -1906,15 +1988,15 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$id", documentId);
             documentCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
             documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
-            documentCmd.Parameters.AddWithValue("$title", operation.Title);
-            documentCmd.Parameters.AddWithValue("$body", operation.Content);
+            documentCmd.Parameters.AddWithValue("$title", effectiveTitle);
+            documentCmd.Parameters.AddWithValue("$body", effectiveBody);
             documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
-            documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
-            documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
+            documentCmd.Parameters.AddWithValue("$semantics", effectiveSemantics);
+            documentCmd.Parameters.AddWithValue("$boundary", (object?)effectiveBoundary ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$audience", (object?)effectiveAudience ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$sensitivity", effectiveSensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
             documentCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
@@ -1925,7 +2007,7 @@ public sealed class SQLiteMemoryStore
             written.Add(new MemoryDocumentWriteResult(documentId, operation.Title, operation.Content));
 
             if (IsSearchableRecallMode(resolvedRecallMode))
-                await UpsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
+                await UpsertDocumentFtsAsync(conn, tx, documentId, effectiveTitle, effectiveBody, operation.AliasesJson, operation.FacetsJson, ct);
         }
 
         await tx.CommitAsync(ct);
@@ -2019,8 +2101,13 @@ public sealed class SQLiteMemoryStore
             // Anchor-based dedup: for merge-document semantics, find existing document
             // by anchor_id and reuse its ID so the ON CONFLICT UPDATE fires instead of
             // creating a duplicate. This catches same-anchor duplicates like 10 copies
-            // of "favorite color is blue" under the same anchor.
+            // of "favorite color is blue" under the same anchor. Reusing an existing
+            // document_id here (documentId set, collision left null) is safe when the
+            // operation already carries an explicit target (Update decision). Finding an
+            // existing row via the anchor lookup below (collision set) is a genuine Create
+            // collision — see DedupCollision's remarks — and must append, not overwrite.
             string documentId;
+            DedupCollision? collision = null;
             if (!string.IsNullOrWhiteSpace(operation.MemoryId))
             {
                 documentId = operation.MemoryId;
@@ -2030,19 +2117,68 @@ public sealed class SQLiteMemoryStore
                 await using var lookupCmd = conn.CreateCommand();
                 lookupCmd.Transaction = tx;
                 lookupCmd.CommandText = """
-                    SELECT document_id FROM memory_documents
+                    SELECT document_id, title, markdown_body, boundary, audience, sensitivity
+                    FROM memory_documents
                     WHERE anchor_id = $anchorId
                     ORDER BY updated_at DESC
                     LIMIT 1;
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
-                documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? MemoryTypedId.NewDocumentId().Value;
+                await using var lookupReader = await lookupCmd.ExecuteReaderAsync(ct);
+                if (await lookupReader.ReadAsync(ct))
+                {
+                    documentId = lookupReader.GetString(0);
+                    collision = new DedupCollision(
+                        lookupReader.GetString(1),
+                        lookupReader.GetString(2),
+                        lookupReader.IsDBNull(3) ? null : lookupReader.GetString(3),
+                        lookupReader.IsDBNull(4) ? null : lookupReader.GetString(4),
+                        lookupReader.GetString(5));
+                }
+                else
+                {
+                    documentId = MemoryTypedId.NewDocumentId().Value;
+                }
             }
             else
             {
                 documentId = MemoryTypedId.NewDocumentId().Value;
             }
+
+            if (collision is not null)
+            {
+                // Idempotency guard: a colliding proposal whose content the existing body
+                // already holds verbatim adds nothing — appending it would bloat the
+                // document on every repeat (the inverse failure of the overwrite bug this
+                // path fixes). Logged no-op: the document row stays byte-identical.
+                if (collision.MarkdownBody.Contains(operation.Content, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "curation_dedup_duplicate_skipped anchor={AnchorCanonicalName} targetDoc={DocumentId}",
+                        canonicalName,
+                        documentId);
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "curation_dedup_append anchor={AnchorCanonicalName} targetDoc={DocumentId}",
+                    canonicalName,
+                    documentId);
+            }
+
+            // Preserve the colliding row's identity/classification; only the body grows
+            // (appended) and update_semantics flips to append-document to record that this
+            // write did not overwrite. Non-collision path is the pre-existing behavior.
+            var effectiveTitle = collision is not null ? collision.Title : operation.Title;
+            var effectiveBody = collision is not null
+                ? BuildDedupAppendedBody(collision.MarkdownBody, operation.Content)
+                : operation.Content;
+            var effectiveBoundary = collision is not null ? collision.Boundary : resolvedBoundary;
+            var effectiveAudience = collision is not null ? collision.Audience : operation.Audience.ToWireValue();
+            var effectiveSensitivity = collision is not null ? collision.Sensitivity : operation.Sensitivity;
+            var effectiveSemantics = collision is not null
+                ? MemoryUpdateSemantics.AppendDocument.ToWireValue()
+                : operation.UpdateSemantics;
 
             await using var documentCmd = conn.CreateCommand();
             documentCmd.Transaction = tx;
@@ -2074,15 +2210,15 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$id", documentId);
             documentCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
             documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
-            documentCmd.Parameters.AddWithValue("$title", operation.Title);
-            documentCmd.Parameters.AddWithValue("$body", operation.Content);
+            documentCmd.Parameters.AddWithValue("$title", effectiveTitle);
+            documentCmd.Parameters.AddWithValue("$body", effectiveBody);
             documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
-            documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
-            documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
+            documentCmd.Parameters.AddWithValue("$semantics", effectiveSemantics);
+            documentCmd.Parameters.AddWithValue("$boundary", (object?)effectiveBoundary ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$audience", (object?)effectiveAudience ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$sensitivity", effectiveSensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
             documentCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
@@ -2093,7 +2229,7 @@ public sealed class SQLiteMemoryStore
             written.Add(new MemoryDocumentWriteResult(documentId, operation.Title, operation.Content));
 
             if (IsSearchableRecallMode(resolvedRecallMode))
-                await UpsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
+                await UpsertDocumentFtsAsync(conn, tx, documentId, effectiveTitle, effectiveBody, operation.AliasesJson, operation.FacetsJson, ct);
         }
 
         await using var markDone = conn.CreateCommand();

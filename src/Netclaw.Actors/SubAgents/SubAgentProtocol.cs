@@ -43,7 +43,7 @@ public sealed record SubAgentDefinition
     public string? ProjectInstructions { get; init; }
 
     /// <summary>
-    /// Embedded AGENTS.md operating rules inherited from the parent session's trust audience.
+    /// Embedded operating core and deployment playbook inherited from the parent session's trust audience.
     /// Provides sub-agents with the same safety, grounding, and policy constraints as main agents.
     /// </summary>
     public string? OperatingRules { get; init; }
@@ -147,6 +147,12 @@ public sealed record RunSubAgent : ISubAgentCommand
     /// </summary>
     public string? ParentProjectDirectory { get; init; }
 
+    /// <summary>Read-only parent recent-file snapshot used for child grounding.</summary>
+    public IReadOnlyList<string> ParentRecentFiles { get; init; } = [];
+
+    /// <summary>Pre-rendered, audience-filtered spawn-boundary working context.</summary>
+    public string? WorkingContextBlock { get; init; }
+
     /// <summary>
     /// Snapshot of the parent's <c>ToolExecutionContext.ResolveShellCwd(null)</c>
     /// at spawn time. Seeds the child's <c>InheritedCwd</c>. Null when the
@@ -206,5 +212,8 @@ public sealed record SubAgentResult : ISubAgentResponse
     /// Total number of structured findings returned before parent-session review.
     /// </summary>
     public int FindingsCount { get; init; }
+
+    /// <summary>Structured, run-scoped file and Git context returned to the parent.</summary>
+    public SubAgentWorkingContextInfo? WorkingContext { get; init; }
 }
 }

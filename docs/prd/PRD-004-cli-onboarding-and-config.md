@@ -61,7 +61,8 @@ Fresh-install flow:
 1. LLM provider configuration (endpoint URL, API key or OAuth device flow,
    model selection, connectivity test)
 2. Identity setup (workspaces directory, user name, timezone) with init-owned
-   regeneration of `SOUL.md` and `TOOLING.md`
+   regeneration of `SOUL.md` and `TOOLING.md` plus non-destructive seeding of
+   the deployment mission scaffold in `AGENTS.md`
 3. Security posture (`Personal`, `Team`, `Public`)
 4. Enabled Features for `Team` and `Public` only
 5. Final validation / health check / next steps
@@ -199,11 +200,17 @@ Onboarding captures all Phase 1 setup items in a stepwise flow.
 `netclaw init` SHALL support an interactive guided onboarding flow that:
 
 1. Captures LLM provider configuration (OpenRouter default, OAuth or API key)
-2. Captures init-owned identity settings and regenerates `SOUL.md` /
-   `TOOLING.md`
+2. Captures init-owned identity settings, regenerates `SOUL.md` / `TOOLING.md`,
+   and seeds `AGENTS.md` only when absent
 3. Selects security posture (`Personal`, `Team`, `Public`)
 4. Continues into Enabled Features when posture is `Team` or `Public`
 5. Runs final validation and prints next-step run commands
+
+After successful setup, the initial chat SHALL discover operator context and
+the deployment mission as separate concerns. Confirmed personality/operator
+context is persisted to `SOUL.md`; confirmed mission, recurring workflows,
+skill-selection rules, delegation practices, and review gates are persisted to
+`AGENTS.md` without overwriting an existing playbook during wizard setup.
 
 ### CLI-001B Post-Install Configuration
 

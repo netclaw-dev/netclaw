@@ -1,5 +1,38 @@
 # NetClaw Release Notes
 
+## 0.25.0-alpha.onnx.6 (2026-07-14)
+
+> Experimental ONNX local-embeddings build. Syncs `feature/memory-embeddings` with `dev`
+> through 0.25.0-beta.4. No changes to memory/embeddings behavior in this release — this is
+> a mainline sync only. Everything still rides `Memory.Embeddings.Enabled`, off by default;
+> install only by exact pin (`NETCLAW_VERSION=0.25.0-alpha.onnx.6`).
+
+### Features
+- **Preserve Git working context across sessions and subagents** — a bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context so parent sessions merge back only confirmed successful child edits ([#1630](https://github.com/netclaw-dev/netclaw/pull/1630))
+
+### Bug Fixes
+- **Curation dedup no longer overwrites existing memories** — a Create-decision anchor collision now appends below a dated separator instead of silently replacing the document; verbatim duplicates are skipped. ([#1637](https://github.com/netclaw-dev/netclaw/pull/1637))
+- **STDIO MCP server arguments no longer rewritten** — the daemon now preserves configured STDIO MCP server arguments, and uses one daemon-owned client per configured MCP server ([#1636](https://github.com/netclaw-dev/netclaw/pull/1636))
+
+### Improvements
+- **Logical skill access and authoritative inventory refresh** — skill loading now resolves through logical `skill_load`/`skill_read_resource` access with native > managed-feed > external precedence ([#1634](https://github.com/netclaw-dev/netclaw/pull/1634))
+
+## 0.25.0-beta.4 (2026-07-14)
+
+### Features
+- **Preserve Git working context across sessions and subagents** — A bounded, audience-aware Git working-context snapshot (branch, worktree, repository, upstream, changed files) now stays current in the system prompt, and coding subagents inherit recent-file/project context so parent sessions merge back only confirmed successful child edits. Measured 20% → 100% success rate on a linked-worktree coding eval ([#1630](https://github.com/netclaw-dev/netclaw/pull/1630))
+- **User-written `AGENTS.md` for application-specific agent guidance** — Operators can now author `~/.netclaw/identity/AGENTS.md`, layered after Netclaw's embedded operating core and inherited by sub-agents, to give the running agent deployment-specific mission and workflow guidance. Seeded with a minimal scaffold during init without overwriting existing guidance ([#1622](https://github.com/netclaw-dev/netclaw/pull/1622))
+
+### Bug Fixes
+- **Memory curation no longer overwrites existing documents on collision** — Fixed: when a curation Create decision targeted an anchor that already had a document, the write silently overwrote the existing title, body, and classification with no history — observed 88 times in 14 days in production, including one case that destroyed an LLM-merged document. Collisions now append the new content under a dated separator instead of overwriting; a verbatim duplicate is skipped as a no-op ([#1637](https://github.com/netclaw-dev/netclaw/pull/1637))
+- **STDIO MCP server arguments no longer rewritten** — Fixed: configured STDIO MCP server arguments were being rewritten by the daemon; the daemon now preserves them as configured. Also simplified to one daemon-owned client per configured MCP server, removing Playwright-specific session-scoped process handling ([#1636](https://github.com/netclaw-dev/netclaw/pull/1636))
+
+### Improvements
+- **Logical skill access and authoritative inventory refresh** — Skill loading now resolves through logical `skill_load`/`skill_read_resource` access instead of physical skill-root paths, with native > managed-feed > external precedence. Startup, sync, watcher, and `skill_manage` inventory rebuilds are now centralized through one live-source refresher publishing atomic registry snapshots ([#1634](https://github.com/netclaw-dev/netclaw/pull/1634))
+
+### Dependency Updates
+- **Bump SkillServer to stable** — `Netclaw.SkillClient` 0.4.0-beta.4 → 0.4.0 (stable release) ([#1638](https://github.com/netclaw-dev/netclaw/pull/1638))
+
 ## 0.25.0-alpha.onnx.5 (2026-07-12)
 
 > **Experimental feature build** (fifth in the memory-embeddings series). This build carries
@@ -22,6 +55,18 @@
 - ModelContextProtocol versioning consolidated into the central props file ([#1614](https://github.com/netclaw-dev/netclaw/pull/1614))
 - MessagePack 3.1.7 → 3.1.8 ([#1605](https://github.com/netclaw-dev/netclaw/pull/1605))
 - .NET SDK 10.0.300 → 10.0.301 ([#1381](https://github.com/netclaw-dev/netclaw/pull/1381))
+
+## 0.25.0-beta.3 (2026-07-12)
+
+### Features
+- **Discord DM reminder delivery** — Reminders can now be delivered to Discord DMs via improved `DiscordReminderTargetResolver` ([#1609](https://github.com/netclaw-dev/netclaw/pull/1609))
+- **Named model configuration & provider runtime validation** — New `NamedModelConfiguration` and `ProviderRuntimeValidation` types, config schema updates, and CLI wizard improvements for provider/model setup ([#1610](https://github.com/netclaw-dev/netclaw/pull/1610))
+
+### Bug Fixes
+- **Model set/picker preserves hand-set modalities** — Re-selecting the same model no longer wipes operator-set `InputModalities`/`OutputModalities` and `ContextWindow`. Added `--input-modalities`, `--output-modalities`, `--clear-modalities`, and `--clear-context-window` CLI flags ([#1610](https://github.com/netclaw-dev/netclaw/pull/1610))
+- **Slack processing status serialization** — Slack processing status updates are now serialized to prevent race conditions during concurrent sends ([#1556](https://github.com/netclaw-dev/netclaw/pull/1556))
+- **Sub-agent token usage tracked in daily stats** — Sub-agent LLM calls now record token usage, making them visible in `netclaw stats` ([#1597](https://github.com/netclaw-dev/netclaw/pull/1597))
+- **Subagents fail closed for unattended approvals** — When a subagent requires approval but the session is unattended, it now fails closed instead of proceeding or hanging ([#1616](https://github.com/netclaw-dev/netclaw/pull/1616))
 
 ## 0.25.0-alpha.onnx.4 (2026-07-09)
 

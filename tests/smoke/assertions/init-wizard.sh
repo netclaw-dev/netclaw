@@ -9,6 +9,7 @@
 #   3) Provider/model/posture fields in netclaw.json match what the
 #      tape typed
 #   4) Identity/SOUL.md contains the typed user name
+#   5) Identity/AGENTS.md contains the deployment playbook scaffold only
 
 set -euo pipefail
 
@@ -21,6 +22,18 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   echo "FAIL: ${CONFIG_PATH} does not exist after wizard run." >&2
   ls -la "$NETCLAW_HOME" 2>&1 >&2 || true
   exit 1
+fi
+
+agents_path="${NETCLAW_HOME}/identity/AGENTS.md"
+echo "init-wizard: checking deployment mission scaffold..."
+if ! grep -q 'Deployment Mission and Operating Playbook' "$agents_path" 2>/dev/null; then
+  echo "FAIL: ${agents_path} does not contain the deployment mission scaffold." >&2
+  assert_fail=1
+elif grep -q 'Search Decision Rules' "$agents_path" 2>/dev/null; then
+  echo "FAIL: ${agents_path} duplicated embedded Netclaw operating rules." >&2
+  assert_fail=1
+else
+  echo "  ok  identity/AGENTS.md contains only the deployment scaffold"
 fi
 
 config_json="$(read_config_json)"

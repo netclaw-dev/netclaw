@@ -9,21 +9,13 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.25.0</VersionPrefix>
-    <VersionSuffix>alpha.onnx.5</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.25.0-beta.1 — SkillServer native sub-agent sync, memory curation unification, systemd PATH fix
-
-**Features**
-
-* **SkillServer native sub-agent sync** — Optional native manifest sidecar sync for server-managed sub-agents. Local sub-agent files load before server-feed files so user-authored definitions always win. ([#1539](https://github.com/netclaw-dev/netclaw/pull/1539))
-
-**Bug Fixes**
-
-* **Systemd shell tool PATH** — Fixed: daemon now captures the operator's full PATH into the systemd EnvironmentFile instead of relying on a hardcoded list. ([#1565](https://github.com/netclaw-dev/netclaw/pull/1565))
-
-**Memory**
-
-* **Shared curation evaluator** — Unified curation logic across both memory write pipelines so they can never diverge again. ([#1575](https://github.com/netclaw-dev/netclaw/pull/1575))
-* **Memory audit quick wins** — July 2026 audit: revived curation LLM, balanced prompt, and recall precision re-tune. ([#1568](https://github.com/netclaw-dev/netclaw/pull/1568))</PackageReleaseNotes>
+    <VersionSuffix>alpha.onnx.6</VersionSuffix>
+    <PackageReleaseNotes>- Preserve Git working context across sessions and subagents — A bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context (#1630)
+- User-written AGENTS.md for application-specific agent guidance — Operators can author ~/.netclaw/identity/AGENTS.md, layered after Netclaw's embedded operating core and inherited by sub-agents (#1622)
+- Memory curation no longer overwrites existing documents on collision — Create-decision collisions now append new content instead of silently overwriting the existing document (#1637)
+- STDIO MCP server arguments no longer rewritten — The daemon now preserves configured STDIO MCP server arguments, and uses one daemon-owned client per configured MCP server (#1636)
+- Logical skill access and authoritative inventory refresh — Skill loading now resolves through logical skill_load/skill_read_resource access with native &gt; managed-feed &gt; external precedence (#1634)
+- Bump SkillServer to stable — Netclaw.SkillClient 0.4.0-beta.4 → 0.4.0 (#1638)</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

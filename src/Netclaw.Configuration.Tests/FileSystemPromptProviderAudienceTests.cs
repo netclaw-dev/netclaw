@@ -117,20 +117,75 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     }
 
     [Fact]
-    public void Placeholder_substitution_replaces_path_tokens_for_team()
+    public void Placeholder_substitution_replaces_identity_tokens_without_exposing_skill_root()
     {
         var prompt = _provider.GetSystemPrompt(TrustAudience.Team);
 
-        // Full AGENTS.md contains placeholders like {{SYSTEM_SKILLS_DIR}} that
-        // should be resolved to actual paths from NetclawPaths
+        // Identity paths remain explicit because file tools edit them directly.
+        // Skill access is logical, so the physical system-skill root stays absent.
         Assert.DoesNotContain("{{SYSTEM_SKILLS_DIR}}", prompt);
         Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
         Assert.DoesNotContain("{{SOUL_PATH}}", prompt);
         Assert.DoesNotContain("{{AGENTS_PATH}}", prompt);
         Assert.DoesNotContain("{{TOOLING_PATH}}", prompt);
 
-        // Verify the actual paths appear in the substituted output
-        Assert.Contains(_paths.SystemSkillsDirectory, prompt);
         Assert.Contains(_paths.IdentityDirectory, prompt);
+        Assert.DoesNotContain(_paths.SystemSkillsDirectory, prompt);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Every_audience_gets_deployment_playbook_after_embedded_core(TrustAudience audience)
+    {
+        File.WriteAllText(_paths.AgentsPath,
+            "Always review customer email before delivery. Identity: {{IDENTITY_DIR}}");
+
+        var prompt = _provider.GetSystemPrompt(audience);
+
+        var embeddedIndex = prompt.IndexOf("Operating Rules", StringComparison.Ordinal);
+        var headingIndex = prompt.IndexOf("Deployment Mission and Operating Playbook", StringComparison.Ordinal);
+        var playbookIndex = prompt.IndexOf("Always review customer email", StringComparison.Ordinal);
+        Assert.True(embeddedIndex >= 0);
+        Assert.True(headingIndex > embeddedIndex);
+        Assert.True(playbookIndex > headingIndex);
+        Assert.Contains(_paths.IdentityDirectory, prompt);
+        Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Operating_rules_include_deployment_playbook_for_every_audience(TrustAudience audience)
+    {
+        File.WriteAllText(_paths.AgentsPath, "Use the deployment review checklist.");
+
+        var rules = _provider.GetOperatingRules(audience);
+
+        Assert.NotNull(rules);
+        Assert.Contains("Operating Rules", rules);
+        Assert.Contains("Use the deployment review checklist.", rules);
+    }
+
+    [Fact]
+    public void Missing_deployment_playbook_uses_embedded_rules_only()
+    {
+        var rules = _provider.GetOperatingRules(TrustAudience.Team);
+
+        Assert.NotNull(rules);
+        Assert.Contains("Operating Rules", rules);
+        Assert.DoesNotContain("Deployment Mission and Operating Playbook", rules);
+    }
+
+    [Fact]
+    public void Unreadable_deployment_playbook_is_not_silently_skipped()
+    {
+        File.WriteAllText(_paths.AgentsPath, "Mission");
+        using var locked = new FileStream(
+            _paths.AgentsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        Assert.Throws<IOException>(() => _provider.GetSystemPrompt(TrustAudience.Team));
     }
 }

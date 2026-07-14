@@ -20,10 +20,9 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly NetclawPaths _paths;
-    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
+    private readonly SkillFeedsConfig _feedsConfig;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
-    private readonly SkillRegistry _registry;
-    private readonly SkillIndexContextLayer _indexLayer;
+    private readonly SkillInventoryRefresher _inventoryRefresher;
     private readonly ILogger<SkillDirectoryWatcherService> _logger;
 
     private readonly List<FileSystemWatcher> _watchers = [];
@@ -33,18 +32,15 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
 
     public SkillDirectoryWatcherService(
         NetclawPaths paths,
-        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
-        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+        SkillFeedsConfig feedsConfig,
         IReadOnlyList<ResolvedExternalSource> externalSources,
-        SkillRegistry registry,
-        SkillIndexContextLayer indexLayer,
+        SkillInventoryRefresher inventoryRefresher,
         ILogger<SkillDirectoryWatcherService> logger)
     {
         _paths = paths;
-        _serverFeedSources = serverFeedSources;
+        _feedsConfig = feedsConfig;
         _externalSources = externalSources;
-        _registry = registry;
-        _indexLayer = indexLayer;
+        _inventoryRefresher = inventoryRefresher;
         _logger = logger;
     }
 
@@ -54,6 +50,9 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
 
         // Watch the native skills directory
         TryCreateWatcher(_paths.SkillsDirectory, "native");
+
+        foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
+            TryCreateWatcher(_paths.ServerFeedDirectory(feed.Name), $"server-feed:{feed.Name}");
 
         // Watch each external source directory. A single source may cover multiple
         // paths (e.g. claude-code = ~/.claude/skills + ~/.claude/commands + one
@@ -162,10 +161,7 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
         {
             _logger.LogDebug("Debounce timer fired, starting skill rescan");
 
-            var result = SkillScanner.ScanAndMerge(
-                _paths.SkillsDirectory, _serverFeedSources, _externalSources);
-            SkillRegistryUpdater.ApplyMergedScanResult(
-                _registry, _indexLayer, result, _paths.SkillsDirectory, _externalSources);
+            var result = _inventoryRefresher.Refresh();
 
             _logger.LogInformation(
                 "Skill directory rescan complete: {SkillCount} skills loaded, {IssueCount} issues",

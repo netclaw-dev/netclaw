@@ -9,7 +9,7 @@
 
 ## Goal
 
-Define the agent soul (personality, instructions, user preferences), local
+Define the agent identity (personality, deployment mission, operator context), local
 memory system (project registry, environment inventory), capability
 self-discovery, self-configuration, and first-party tool access. This is the
 "brain" of Netclaw — everything that makes it a persistent, context-aware
@@ -25,18 +25,19 @@ agent rather than a stateless chat endpoint.
 
 ## Agent Soul Architecture
 
-### File-Based Personality (Soul Files)
+### File-Based Identity
 
-Agent identity is stored as data (markdown files), not code. The agent
-reconstructs its personality from files on every session start. This makes
-identity hot-swappable and version-controllable without code changes.
+Agent identity is stored as data (markdown files), not code. Netclaw supplies
+an embedded operating core that explains the machinery. Operator-authored files
+augment it and are re-read before each inbound turn, making deployment behavior
+hot-swappable and version-controllable without code changes.
 
 ```
 ~/.netclaw/
-  soul/
-    PERSONALITY.md     # Agent character, tone, values, boundaries
-    INSTRUCTIONS.md    # Operating rules, behavioral guidelines
-    USER.md            # Owner preferences, timezone, how to address them
+  identity/
+    SOUL.md             # Agent personality, tone, and operator context
+    AGENTS.md           # Deployment mission, workflows, skills, and quality gates
+    TOOLING.md          # Available environment capabilities
   projects/
     registry.json      # Registered project configurations
   environment/
@@ -50,14 +51,19 @@ identity hot-swappable and version-controllable without code changes.
 
 ### Layered System Prompt Assembly
 
-Session context is assembled from layers (later layers augment earlier):
+Session context is assembled from layers:
 
-1. **PERSONALITY.md** — who the agent is (values, tone, boundaries)
-2. **INSTRUCTIONS.md** — how the agent operates (rules, workflows)
-3. **USER.md** — who it serves (owner name, preferences, timezone)
-4. **Project AGENTS.md** — context overlay when working on a registered project
-5. **Environment summary** — condensed capability inventory
-6. **Session context** — conversation history, tool results, memory
+1. **SOUL.md** — who the agent is and who it serves
+2. **Embedded operating core** — how Netclaw machinery operates for the audience
+3. **Deployment AGENTS.md** — how this deployment accomplishes its mission
+4. **TOOLING.md** — what capabilities are available
+5. **Project AGENTS.md** — scoped context for the active project
+6. **Dynamic and session context** — tools, skills, memory, history, and results
+
+The same deployment playbook applies to Personal, Team, and Public audiences
+and is inherited by sub-agents. It contains durable workflow guidance only,
+never secrets or audience-private data. Embedded prompt precedence is guidance;
+runtime ACL and tool policy remain the authoritative security boundary.
 
 ### Conversational Personality Bootstrap
 
@@ -65,10 +71,12 @@ On first interaction (or when personality files don't exist), the agent runs
 a personality bootstrap conversation:
 
 1. Introduce itself and explain the setup process
-2. Learn the owner's name, preferences, communication style
-3. Scan environment for installed tools and capabilities
-4. Write initial PERSONALITY.md, INSTRUCTIONS.md, USER.md
-5. Confirm readiness
+2. Learn the owner's name, preferences, and communication style
+3. Learn the deployment mission, successful outcomes, recurring workflows,
+   skill-selection expectations, delegation rules, and known failure modes
+4. Propose a concise mission playbook and obtain confirmation
+5. Update `SOUL.md` and `AGENTS.md` with their canonical content
+6. Confirm that the playbook applies on the next message
 
 This can be re-triggered via `netclaw personality reset` (PRD-004).
 

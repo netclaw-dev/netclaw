@@ -5,47 +5,43 @@
 Define the compressed skill index format for the skill discovery system.
 The index is injected into the LLM system prompt and points directly at
 skill files on disk for retrieval-led reasoning (no tool invocation needed).
-
 ## Requirements
-
 ### Requirement: Compressed pipe-delimited index format
 
-The system SHALL generate a compressed skill index using pipe-delimited format
-grouped by category. The index SHALL include the skills root path so the agent
-can construct file paths for direct reads.
+The system SHALL generate a compressed skill index using a pipe-delimited format grouped by category. The index SHALL advertise logical skill access through `skill_load` and `skill_read_resource` and SHALL NOT include physical native, system, server-feed, or external skill roots.
 
 #### Scenario: Index generated from registered skills
 
-- **GIVEN** skills are registered across categories `.system` and root
+- **GIVEN** skills are registered across native, system, server-feed, and external sources
 - **WHEN** the index is generated
-- **THEN** the output uses pipe-delimited format with category groupings
-- **AND** each category line lists skill file paths (e.g., `name/SKILL.md`)
-- **AND** the header includes the skills root directory path
+- **THEN** the output uses a pipe-delimited format with category groupings
+- **AND** each skill is identified by logical name and description
+- **AND** no physical skill root or `SKILL.md` path is included
 
-#### Scenario: Index includes retrieval-led reasoning directive
+#### Scenario: Index includes logical retrieval directive
 
 - **WHEN** the compressed index is generated
-- **THEN** the index includes a directive to prefer retrieval-led reasoning
-  over pre-training-led reasoning
+- **THEN** the index instructs the model to access or activate skills through `skill_load`
+- **AND** the index instructs the model to read listed resources through `skill_read_resource`
+- **AND** the index does not instruct the model to use `file_read` for normal skill loading
 
 #### Scenario: Skills grouped by category
 
-- **GIVEN** skills in `.system/` category and root-level skills
+- **GIVEN** skills in `.system` and root-level categories
 - **WHEN** the index is generated
 - **THEN** skills are grouped by their `Category` property
 - **AND** root-level skills appear under the `user` category
-- **AND** each category line uses brace-delimited file lists
 
 ### Requirement: All skills visible in index
 
-The system SHALL include all registered skills in the index regardless of
-origin. The only exclusion is skills with `disable-model-invocation: true`.
+The system SHALL include all registered skills in the index regardless of physical origin. The only exclusion is skills with `disable-model-invocation: true`.
 
-#### Scenario: All skills visible
+#### Scenario: All logical skills visible without origins
 
-- **GIVEN** skills from `.system/` and root-level directories
+- **GIVEN** accepted skills from system, native, server-feed, and external sources
 - **WHEN** the index is generated
-- **THEN** all skills appear in the index
+- **THEN** every model-invocable skill appears by logical name
+- **AND** source names and physical paths are not required to use the skill
 
 #### Scenario: Skill without allowed-tools is always visible
 

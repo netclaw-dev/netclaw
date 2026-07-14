@@ -187,6 +187,8 @@ public class SubAgentActorTests : TestKit
         Assert.NotNull(fakeClient.LastReceivedMessages);
         Assert.Equal(ChatRole.System, fakeClient.LastReceivedMessages[0].Role);
         Assert.Contains("headless, non-interactive worker", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("subagent role guidance and assigned task are more specific", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("safety, security, trust-boundary, approval, and tool-policy rules remain mandatory", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Do not ask the user clarifying questions", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Parent-mediated tool approval", fakeClient.LastReceivedMessages[0].Text);
     }
@@ -197,7 +199,7 @@ public class SubAgentActorTests : TestKit
         var fakeClient = new FakeChatClient();
         var definition = CreateDefinition() with
         {
-            OperatingRules = "Operating rules: never invent runtime facts.",
+            OperatingRules = "Operating rules: never invent runtime facts.\n\nDeployment playbook: review customer email.",
             ProjectInstructions = "Project rules: prefer C#.",
             SystemPrompt = "You are a test agent.\n\n[Skill Overlay]\nUse focused analysis."
         };
@@ -214,6 +216,7 @@ public class SubAgentActorTests : TestKit
         AssertPromptOrder(
             systemPrompt,
             "Operating rules: never invent runtime facts.",
+            "Deployment playbook: review customer email.",
             "Project rules: prefer C#.",
             "You are a test agent.",
             "[Skill Overlay]",
@@ -331,6 +334,7 @@ public class SubAgentActorTests : TestKit
                 Timeout = TimeSpan.FromSeconds(5),
                 ParentSessionDirectory = "/tmp/netclaw/sessions/abc",
                 ParentProjectDirectory = "/home/user/workspaces/netclaw",
+                ParentRecentFiles = ["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"],
                 Audience = TrustAudience.Personal,
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -339,6 +343,7 @@ public class SubAgentActorTests : TestKit
         Assert.NotNull(fakeTool.LastContext);
         Assert.Equal("/tmp/netclaw/sessions/abc", fakeTool.LastContext!.SessionDirectory);
         Assert.Equal("/home/user/workspaces/netclaw", fakeTool.LastContext.ProjectDirectory);
+        Assert.Equal(["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"], fakeTool.LastContext.RecentFiles);
     }
 
     [Fact]
@@ -1355,6 +1360,95 @@ public class SubAgentActorTests : TestKit
         Assert.Equal("Do the thing.", fakeClient.LastReceivedMessages[1].Text);
         Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
     }
+
+    [Fact]
+    public async Task Parent_working_context_is_injected_into_child_user_message()
+    {
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Continue the implementation.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = MissingProjectDirectory,
+                ParentRecentFiles = ["src/Netclaw.Actors/Sessions/WorkingContext.cs"]
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        var userMessage = fakeClient.LastReceivedMessages![1].Text;
+        Assert.Contains("[working-context]", userMessage);
+        Assert.Contains($"project_dir: {MissingProjectDirectory}", userMessage);
+        Assert.Contains("src/Netclaw.Actors/Sessions/WorkingContext.cs", userMessage);
+        Assert.DoesNotContain("[working-context]", fakeClient.LastReceivedMessages[0].Text);
+    }
+
+    [Fact]
+    public async Task Successful_first_party_edit_is_returned_as_confirmed_child_activity()
+    {
+        var editTool = new FakeNetclawTool("file_edit", "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-edit", "file_edit",
+                    new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([editTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Edit Calculator.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = MissingProjectDirectory
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.WorkingContext);
+        Assert.Equal(
+            Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Calculator.cs")),
+            Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
+        Assert.Empty(result.WorkingContext.ObservedChangedFiles);
+    }
+
+    [Fact]
+    public async Task Denied_first_party_edit_is_not_returned_as_confirmed_child_activity()
+    {
+        var editTool = new FakeNetclawTool("file_edit", "Error: Permission denied: src/Calculator.cs");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-edit", "file_edit",
+                    new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([editTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Edit Calculator.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentProjectDirectory = MissingProjectDirectory
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.WorkingContext);
+        Assert.Empty(result.WorkingContext.ConfirmedChangedFiles);
+    }
+
+    private static readonly string MissingProjectDirectory =
+        Path.Join(Path.GetTempPath(), "netclaw-missing-project");
 
     // Real PNG: the egress normalizer decodes every model-input image, so a
     // fake magic-byte stub would now be dropped. Small enough to pass through.

@@ -189,13 +189,17 @@ public static class CurationRulesEvaluator
 
         var overlap = AnchorNameMatcher.ComputeContentOverlap(proposal.Content, best.Content);
 
-        // High content overlap with fuzzy anchor match -> consolidation (auto-merge)
+        // High content overlap with fuzzy anchor match -> consolidation (auto-merge).
+        // TargetDocumentId names the primary document the collapsed content is written
+        // INTO (explicit-target overwrite, like Update): without it the store's anchor
+        // dedup treats the write as a Create collision and appends, doubling the
+        // near-duplicate body instead of collapsing it.
         if (overlap > HighOverlapThreshold)
         {
             var targetIds = fuzzyMatches.Select(c => c.DocumentId).ToArray();
             return new CurationDecision(
                 CurationDecisionKind.Consolidate,
-                null,
+                best.DocumentId,
                 targetIds,
                 best.AnchorCanonicalName,
                 $"fuzzy anchor match + high content overlap ({overlap:P0})");

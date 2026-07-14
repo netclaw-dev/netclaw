@@ -9,29 +9,21 @@ using Netclaw.Configuration;
 namespace Netclaw.Actors.Skills;
 
 /// <summary>
-/// Mutable registry holding discovered <see cref="SkillEntry"/> items.
-/// Follows the same pattern as <see cref="Tools.ToolRegistry"/>.
+/// Registry holding discovered <see cref="SkillEntry"/> items. Inventory replacements
+/// are published atomically so readers observe either the old or new complete snapshot.
 /// </summary>
 public sealed class SkillRegistry
 {
-    private readonly List<SkillEntry> _skills = [];
-    private volatile IReadOnlyList<SkillScanIssue> _scanIssues = [];
-
-    /// <summary>
-    /// Slash-command dispatch map: skill name → entry, for skills where
-    /// <see cref="SkillEntry.UserInvocable"/> is true.
-    /// </summary>
-    private readonly Dictionary<string, SkillEntry> _slashCommands = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, SkillEntry> _skillFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, SkillEntry> _skillsByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _writeLock = new();
+    private volatile Snapshot _snapshot = Snapshot.Empty;
 
     public void Register(SkillEntry skill)
     {
-        _skills.Add(skill);
-        _skillsByName[skill.Name] = skill;
-        _skillFiles[Path.GetFullPath(skill.FilePath)] = skill;
-        if (skill.UserInvocable)
-            _slashCommands[skill.Name] = skill;
+        lock (_writeLock)
+        {
+            var current = _snapshot;
+            _snapshot = Snapshot.Create(current.Skills.Append(skill), current.ScanIssues);
+        }
     }
 
     /// <summary>
@@ -40,30 +32,24 @@ public sealed class SkillRegistry
     /// </summary>
     public void Clear()
     {
-        _skills.Clear();
-        _slashCommands.Clear();
-        _skillFiles.Clear();
-        _skillsByName.Clear();
-        _scanIssues = [];
+        lock (_writeLock)
+            _snapshot = Snapshot.Empty;
     }
 
     public void ReplaceAll(IEnumerable<SkillEntry> skills, IReadOnlyList<SkillScanIssue>? issues = null)
     {
-        Clear();
-        foreach (var skill in skills)
-            Register(skill);
-
-        _scanIssues = issues ?? [];
+        lock (_writeLock)
+            _snapshot = Snapshot.Create(skills, issues ?? []);
     }
 
-    public IReadOnlyList<SkillEntry> GetAll() => _skills;
+    public IReadOnlyList<SkillEntry> GetAll() => _snapshot.Skills;
 
     public SkillEntry? GetByName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
             return null;
 
-        return _skillsByName.TryGetValue(name.Trim(), out var skill)
+        return _snapshot.SkillsByName.TryGetValue(name.Trim(), out var skill)
             ? skill
             : null;
     }
@@ -73,12 +59,12 @@ public sealed class SkillRegistry
         if (string.IsNullOrWhiteSpace(filePath))
             return null;
 
-        return _skillFiles.TryGetValue(Path.GetFullPath(filePath), out var skill)
+        return _snapshot.SkillFiles.TryGetValue(Path.GetFullPath(filePath), out var skill)
             ? skill
             : null;
     }
 
-    public IReadOnlyList<SkillScanIssue> GetScanIssues() => _scanIssues;
+    public IReadOnlyList<SkillScanIssue> GetScanIssues() => _snapshot.ScanIssues;
 
     /// <summary>
     /// Case-insensitive substring search against name, display name, and description.
@@ -90,7 +76,7 @@ public sealed class SkillRegistry
 
         var queryLower = query.Trim().ToLowerInvariant();
 
-        return _skills
+        return _snapshot.Skills
             .Where(s =>
                 s.Name.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
                 || s.DisplayName.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
@@ -105,33 +91,22 @@ public sealed class SkillRegistry
     /// Skills with <c>DisableModelInvocation</c> are excluded from the index
     /// (they remain invokable via slash commands).
     /// </summary>
-    public string GenerateIndex(string skillsRoot, IReadOnlyList<ResolvedExternalSource>? externalSources = null)
+    public string GenerateIndex()
     {
-        if (_skills.Count == 0)
+        var skills = _snapshot.Skills;
+        if (skills.Count == 0)
             return string.Empty;
 
-        var visible = _skills.Where(static s => !s.DisableModelInvocation).ToList();
+        var visible = skills.Where(static s => !s.DisableModelInvocation).ToList();
         if (visible.Count == 0)
             return string.Empty;
 
         var sb = new StringBuilder();
 
-        // Build roots header — single root for backward compat, multi-root when external sources exist.
-        // An external source may cover multiple paths; join them with ';' so the agent sees every root.
-        var hasExternal = externalSources is { Count: > 0 };
-        if (hasExternal)
-        {
-            sb.Append($"[skills]|roots: native={skillsRoot}");
-            foreach (var src in externalSources!)
-                sb.Append($",{src.Name}={string.Join(';', src.Paths)}");
-            sb.AppendLine("|invoke via /name");
-        }
-        else
-        {
-            sb.AppendLine($"[skills]|root: {skillsRoot}|invoke via /name");
-        }
-
-        sb.AppendLine("|Load skill via file_read BEFORE using related features.");
+        sb.AppendLine("[skills]|invoke via /name");
+        sb.AppendLine("|Load skill guidance with skill_load(name) BEFORE using related features.");
+        sb.AppendLine("|Read bundled resources with skill_read_resource(skillName, resourcePath).");
+        sb.AppendLine("|Skills routed to a subagent require a concrete task when loaded.");
 
         // Group by category, null category = root-level user skills
         var groups = visible
@@ -183,7 +158,7 @@ public sealed class SkillRegistry
         var commandName = spaceIndex >= 0 ? trimmed[..spaceIndex] : trimmed;
         remainder = spaceIndex >= 0 ? trimmed[(spaceIndex + 1)..].Trim() : string.Empty;
 
-        return _slashCommands.TryGetValue(commandName, out skill);
+        return _snapshot.SlashCommands.TryGetValue(commandName, out skill);
     }
 
     /// <summary>
@@ -191,10 +166,40 @@ public sealed class SkillRegistry
     /// </summary>
     public IReadOnlyList<(string Command, string? ArgumentHint)> GetAvailableSlashCommands()
     {
-        return _slashCommands.Values
+        return _snapshot.SlashCommands.Values
             .OrderBy(s => s.Name)
             .Select(s => ($"/{s.Name}", s.ArgumentHint))
             .ToList();
+    }
+
+    private sealed record Snapshot(
+        IReadOnlyList<SkillEntry> Skills,
+        IReadOnlyDictionary<string, SkillEntry> SkillsByName,
+        IReadOnlyDictionary<string, SkillEntry> SkillFiles,
+        IReadOnlyDictionary<string, SkillEntry> SlashCommands,
+        IReadOnlyList<SkillScanIssue> ScanIssues)
+    {
+        public static Snapshot Empty { get; } = Create([], []);
+
+        public static Snapshot Create(
+            IEnumerable<SkillEntry> skills,
+            IReadOnlyList<SkillScanIssue> issues)
+        {
+            var skillList = skills.ToArray();
+            var byName = new Dictionary<string, SkillEntry>(StringComparer.OrdinalIgnoreCase);
+            var byFile = new Dictionary<string, SkillEntry>(StringComparer.OrdinalIgnoreCase);
+            var slashCommands = new Dictionary<string, SkillEntry>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var skill in skillList)
+            {
+                byName[skill.Name] = skill;
+                byFile[Path.GetFullPath(skill.FilePath)] = skill;
+                if (skill.UserInvocable)
+                    slashCommands[skill.Name] = skill;
+            }
+
+            return new Snapshot(skillList, byName, byFile, slashCommands, issues.ToArray());
+        }
     }
 
 }

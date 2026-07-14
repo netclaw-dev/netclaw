@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackThreadBackfillIntegrationTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -18,7 +18,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Sessions;
@@ -77,18 +76,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             "You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new ImageCapabilityResolver());
         services.AddSingleton<SessionPipeline>();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
+        services.AddLlmSessionCompositeRecords();
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

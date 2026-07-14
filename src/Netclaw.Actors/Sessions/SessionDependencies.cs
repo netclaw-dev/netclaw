@@ -20,6 +20,7 @@ public sealed record SessionServices(
     IChatClientProvider ClientProvider,
     ISystemPromptProvider PromptProvider,
     IReadOnlyList<IContextLayerProvider> ContextLayers,
+    IWorkingContextSnapshotProvider WorkingContextSnapshots,
     TimeProvider TimeProvider,
     NetclawPaths Paths);
 
