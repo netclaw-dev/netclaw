@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.27.0"
+  version: "2.28.0"
 ---
 
 # Netclaw Operations
@@ -64,6 +64,12 @@ job lifecycle — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
 
 ## Tool argument validation
+
+Every tool call has isolated output and approval-attempt state, including calls
+executed in parallel. Do not assume that a sibling call's temporary approval,
+working-directory attempt, attachments, or model-input files carry into the
+current call; pass the required arguments and establish any durable session
+state explicitly.
 
 Prefer the canonical argument names exactly as a tool declares them, and the
 canonical meta keys `_rationale`, `_timeout_seconds`, `_background` (leading

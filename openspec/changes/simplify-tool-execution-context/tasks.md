@@ -2,10 +2,10 @@
 
 - [x] 1.1 Inventory the current tool execution call graph, nullable/default dependencies, mutable state owners, persisted message boundaries, and MCP schema consumers; record the migration map in the design or implementation notes.
 - [x] 1.2 Introduce validated semantic value objects for execution limits and the immutable admitted `ToolRunScope`, with no implicit primitive conversions.
-- [ ] 1.3 Replace production `ToolExecutionContext.Empty`, context-free overloads, and nullable authority/security dependencies with required immutable invocation APIs; keep any temporary friend-only test fixture out of production and remove it after test migration.
+- [x] 1.3 Replace production `ToolExecutionContext.Empty`, context-free overloads, and nullable authority/security dependencies with required immutable invocation APIs; keep any temporary friend-only test fixture out of production and remove it after test migration.
 - [x] 1.4 Split mutable tool outputs into a per-invocation append-only sink and approval retry/match state into a pipeline-owned attempt object while sharing only immutable run authority across a batch.
 - [x] 1.5 Add focused tests proving invalid scope values fail before dispatch, missing authority has no dispatch path, and parallel calls cannot observe each other's mutable state.
-- [ ] 1.6 Update affected engineering documentation and `netclaw-operations` system-skill guidance, bumping the skill version, for the changed internal tool execution contract.
+- [x] 1.6 Update affected engineering documentation and `netclaw-operations` system-skill guidance, bumping the skill version, for the changed internal tool execution contract.
 - [ ] 1.7 Run targeted tests, tool-related evals/full eval suite as required, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 1 through review, CI, merge, and post-merge `dev` verification.
 
 ## 2. Stage 2 — Composed Session Pipeline
