@@ -153,7 +153,7 @@ public class SkillToolTests : IDisposable
             # Managed Skill
             Use the bundled runbook.
             """);
-        var resourcePath = Path.Combine(
+        var resourcePath = Path.Join(
             _paths.ServerFeedDirectory("managed"), "feed-skill", "references", "runbook.md");
         Directory.CreateDirectory(Path.GetDirectoryName(resourcePath)!);
         File.WriteAllText(resourcePath, "managed-resource-marker");

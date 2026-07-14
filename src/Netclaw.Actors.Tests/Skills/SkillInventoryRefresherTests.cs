@@ -12,7 +12,7 @@ namespace Netclaw.Actors.Tests.Skills;
 
 public sealed class SkillInventoryRefresherTests : IDisposable
 {
-    private readonly string _home = Path.Combine(
+    private readonly string _home = Path.Join(
         Path.GetTempPath(), $"netclaw-inventory-test-{Guid.NewGuid():N}");
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _registry = new();
@@ -46,7 +46,7 @@ public sealed class SkillInventoryRefresherTests : IDisposable
     public void Refresh_preserves_all_sources_and_applies_canonical_precedence()
     {
         var feedRoot = _paths.ServerFeedDirectory("managed");
-        var externalRoot = Path.Combine(_home, "external");
+        var externalRoot = Path.Join(_home, "external");
         WriteSkill(_paths.SkillsDirectory, "shared", "native wins");
         WriteSkill(feedRoot, "shared", "feed loses");
         WriteSkill(feedRoot, "feed-only", "managed");
@@ -105,9 +105,9 @@ public sealed class SkillInventoryRefresherTests : IDisposable
 
     private static void WriteSkill(string root, string name, string description)
     {
-        var directory = Path.Combine(root, name);
+        var directory = Path.Join(root, name);
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "SKILL.md"), $$"""
+        File.WriteAllText(Path.Join(directory, "SKILL.md"), $$"""
             ---
             name: {{name}}
             description: {{description}}
