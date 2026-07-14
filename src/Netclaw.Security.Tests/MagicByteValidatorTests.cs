@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MagicByteValidatorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -143,6 +143,7 @@ public sealed class MagicByteValidatorTests
     [InlineData(nameof(PlainTextBytes), "text/plain", "notes.txt")]
     [InlineData(nameof(PlainTextBytes), "text/markdown", "readme.md")]
     [InlineData(nameof(PlainTextBytes), "text/csv", "data.csv")]
+    [InlineData(nameof(PlainTextBytes), "text/tab-separated-values", "data.tsv")]
     public void Validate_TextContentWithMatchingMime_Allowed(string headerField, string mime, string filename)
     {
         var header = ResolveHeader(headerField);
@@ -189,6 +190,7 @@ public sealed class MagicByteValidatorTests
     [InlineData("config.yaml")]
     [InlineData("config.yml")]
     [InlineData("data.csv")]
+    [InlineData("data.tsv")]
     [InlineData("doc.xml")]
     public void Validate_StructuredTextDeclaredAsTextPlain_NormalizesAndAllows(string filename)
     {
