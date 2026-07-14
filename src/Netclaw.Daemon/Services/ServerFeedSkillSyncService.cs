@@ -31,18 +31,34 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly NetclawPaths _paths;
-    private readonly SkillRegistry _skillRegistry;
-    private readonly SkillIndexContextLayer _skillIndexLayer;
+    private readonly SkillInventoryRefresher _inventoryRefresher;
     private readonly TimeProvider _timeProvider;
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
-    private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
     private readonly Func<SkillFeedSource, SkillServerClient> _clientFactory;
 
     // Random jitter (0–5 min) so multiple daemon instances don't all poll at once
     private readonly TimeSpan _initialJitter;
 
     public ServerFeedSkillSyncService(
+        SkillFeedsConfig feedsConfig,
+        NetclawPaths paths,
+        SkillInventoryRefresher inventoryRefresher,
+        TimeProvider timeProvider,
+        ISkillContentScanner scanner,
+        ILogger<ServerFeedSkillSyncService> logger)
+        : this(
+            feedsConfig,
+            paths,
+            inventoryRefresher,
+            timeProvider,
+            scanner,
+            logger,
+            CreateSkillServerClient)
+    {
+    }
+
+    internal ServerFeedSkillSyncService(
         SkillFeedsConfig feedsConfig,
         NetclawPaths paths,
         SkillRegistry skillRegistry,
@@ -74,15 +90,33 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         ILogger<ServerFeedSkillSyncService> logger,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         Func<SkillFeedSource, SkillServerClient> clientFactory)
+        : this(
+            feedsConfig,
+            paths,
+            new SkillInventoryRefresher(
+                paths, feedsConfig, externalSources, skillRegistry, skillIndexLayer),
+            timeProvider,
+            scanner,
+            logger,
+            clientFactory)
+    {
+    }
+
+    private ServerFeedSkillSyncService(
+        SkillFeedsConfig feedsConfig,
+        NetclawPaths paths,
+        SkillInventoryRefresher inventoryRefresher,
+        TimeProvider timeProvider,
+        ISkillContentScanner scanner,
+        ILogger<ServerFeedSkillSyncService> logger,
+        Func<SkillFeedSource, SkillServerClient> clientFactory)
     {
         _feedsConfig = feedsConfig;
         _paths = paths;
-        _skillRegistry = skillRegistry;
-        _skillIndexLayer = skillIndexLayer;
+        _inventoryRefresher = inventoryRefresher;
         _timeProvider = timeProvider;
         _scanner = scanner;
         _logger = logger;
-        _externalSources = externalSources;
         _clientFactory = clientFactory;
         _initialJitter = TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
     }
@@ -804,20 +838,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
     private void RescanAndUpdateIndex()
     {
-        var resolvedServerFeeds = new List<ResolvedExternalSource>();
-        foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
-        {
-            var feedDir = _paths.ServerFeedDirectory(feed.Name);
-            if (Directory.Exists(feedDir))
-                resolvedServerFeeds.Add(new ResolvedExternalSource(
-                    $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
-        }
-
-        var mergedResult = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory, resolvedServerFeeds, _externalSources);
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult,
-            _paths.SkillsDirectory, _externalSources);
+        var mergedResult = _inventoryRefresher.Refresh();
 
         if (mergedResult.Issues.Count > 0)
         {

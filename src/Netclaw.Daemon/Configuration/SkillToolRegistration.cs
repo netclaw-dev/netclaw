@@ -27,12 +27,11 @@ internal static class SkillToolRegistration
     {
         var registry = services.GetRequiredService<ToolRegistry>();
         var skillRegistry = services.GetRequiredService<SkillRegistry>();
-        var skillIndexLayer = services.GetRequiredService<SkillIndexContextLayer>();
         var paths = services.GetRequiredService<NetclawPaths>();
         var toolConfig = services.GetRequiredService<ToolConfig>();
         var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
-        var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
+        var inventoryRefresher = services.GetRequiredService<SkillInventoryRefresher>();
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
         var subAgentSpawner = services.GetService<SubAgentSpawner>();
@@ -45,10 +44,9 @@ internal static class SkillToolRegistration
 
         registry.WithSkillTools(
             skillRegistry,
-            skillIndexLayer,
             paths,
             scanner,
-            externalSources,
+            inventoryRefresher,
             metrics,
             subAgentRegistry,
             subAgentSpawner,

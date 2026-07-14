@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.7.2"
+  version: "1.8.0"
 ---
 
 # Skill Authoring
@@ -24,6 +24,17 @@ Skills are subject to two independent gates:
   the skill index context layer returns empty.
 
 Both gates must pass for skill features to be available.
+
+## Logical Skill Access
+
+Load skills by their canonical names with `skill_load`; do not derive or read
+their `SKILL.md` filesystem paths. The registry resolves native, managed-feed,
+and external skills behind the same logical interface. Read bundled detail with
+`skill_read_resource(name, path)`. Direct filesystem access is appropriate only
+when the user explicitly asks to inspect or repair the physical files.
+
+When a skill declares `metadata.subagent`, pass a concrete task to `skill_load`.
+Routed activation fails loudly when the task or target subagent is invalid.
 
 ## When to Create a Skill
 

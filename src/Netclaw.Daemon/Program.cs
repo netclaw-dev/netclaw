@@ -693,21 +693,6 @@ static void ConfigureDaemonServices(
         .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
     services.AddSingleton(skillFeedsConfig);
 
-    var resolvedServerFeedSources = new List<ResolvedExternalSource>();
-    foreach (var feed in skillFeedsConfig.Feeds.Where(f => f.Enabled))
-    {
-        var feedDir = paths.ServerFeedDirectory(feed.Name);
-        if (Directory.Exists(feedDir))
-            resolvedServerFeedSources.Add(new ResolvedExternalSource(
-                $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
-    }
-    IReadOnlyList<ResolvedExternalSource> serverFeeds = resolvedServerFeedSources;
-    services.AddKeyedSingleton("server-feeds", serverFeeds);
-
-    // Scan native skills first (highest precedence), then server feeds, then external sources
-    var initialSkillScan = SkillScanner.ScanAndMerge(
-        paths.SkillsDirectory, serverFeeds, resolvedExternalSources);
-    skillRegistry.ReplaceAll(initialSkillScan.AcceptedSkills, initialSkillScan.Issues);
     services.AddSingleton(skillRegistry);
 
     // Subagent definition registry and file loader
@@ -817,11 +802,14 @@ static void ConfigureDaemonServices(
     services.AddSingleton<ToolIndexContextLayer>();
     services.AddSingleton<IContextLayerProvider>(sp => sp.GetRequiredService<ToolIndexContextLayer>());
 
-    // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
+    // Skill index context layer — origin-free logical catalog rebuilt with the complete inventory.
     var skillIndexLayer = new SkillIndexContextLayer(skillSyncConfig);
-    skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory, resolvedExternalSources));
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
+    var skillInventoryRefresher = new SkillInventoryRefresher(
+        paths, skillFeedsConfig, resolvedExternalSources, skillRegistry, skillIndexLayer);
+    var initialSkillScan = skillInventoryRefresher.Refresh();
+    services.AddSingleton(skillInventoryRefresher);
 
     // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
     // See SkillToolRegistration call after app.Build().

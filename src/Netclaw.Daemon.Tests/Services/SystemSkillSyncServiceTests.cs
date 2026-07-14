@@ -110,8 +110,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             new HttpClient(handler),
             _paths,
             new SkillSyncConfig { DisableSystemSkillSync = true },
-            _skillRegistry,
-            _skillIndexLayer,
+            CreateInventoryRefresher(),
             TimeProvider.System,
             _scanner,
             _logger,
@@ -564,13 +563,19 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             httpClient,
             _paths,
             new SkillSyncConfig(),
-            _skillRegistry,
-            _skillIndexLayer,
+            CreateInventoryRefresher(),
             TimeProvider.System,
             scanner ?? _scanner,
             _logger,
             daemonVersion);
     }
+
+    private SkillInventoryRefresher CreateInventoryRefresher() => new(
+        _paths,
+        new SkillFeedsConfig(),
+        [],
+        _skillRegistry,
+        _skillIndexLayer);
 
     private SkillSyncState ReadSyncState()
     {

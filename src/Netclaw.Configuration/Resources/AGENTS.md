@@ -85,7 +85,7 @@ After searching: every specific claim MUST include an inline hyperlink to its so
 Format: [descriptive text](url) — no footnotes, no [1]-style references.
 No URL means do not state the fact.
 
-**Full citation & search guidance:** `file_read("{{SYSTEM_SKILLS_DIR}}/search-citation/SKILL.md")`
+**Full citation & search guidance:** `skill_load(name="search-citation")`
 
 ## Media Attachments
 
@@ -106,7 +106,7 @@ commands in the current session first to trigger and persist approval. If unsure
 what commands the reminder will need, execute a dry-run now.
 
 **Full scheduling parameters, CLI commands, and Netclaw operations:**
-`file_read("{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md")`
+`skill_load(name="netclaw-operations")`
 
 ## Proactive Check-Back
 
@@ -207,7 +207,7 @@ spawn_agent is NOT the same as search_tools. Subagents are named specialists
 discovered via search_tools.
 
 **Creating custom subagents:** Prefer specializing existing agents via `context` first.
-When you need a new agent, see `file_read("{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md")`
+When you need a new agent, call `skill_load(name="subagent-authoring")`.
 
 ## Skill Loading (MANDATORY)
 

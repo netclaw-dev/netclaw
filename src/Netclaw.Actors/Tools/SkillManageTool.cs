@@ -31,10 +31,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private const int MaxDescriptionLength = 1024;
 
     private readonly SkillRegistry _skillRegistry;
-    private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly NetclawPaths _paths;
     private readonly ISkillContentScanner _scanner;
-    private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
+    private readonly SkillInventoryRefresher _inventoryRefresher;
 
     public record Params(
         [property: Description("Action to perform: create, edit, patch, delete, write_file, remove_file")]
@@ -56,16 +55,14 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     public SkillManageTool(
         SkillRegistry skillRegistry,
-        SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
         ISkillContentScanner scanner,
-        IReadOnlyList<ResolvedExternalSource> externalSources)
+        SkillInventoryRefresher inventoryRefresher)
     {
         _skillRegistry = skillRegistry;
-        _skillIndexLayer = skillIndexLayer;
         _paths = paths;
         _scanner = scanner;
-        _externalSources = externalSources;
+        _inventoryRefresher = inventoryRefresher;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -475,9 +472,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()
     {
-        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
+        var mergedResult = _inventoryRefresher.Refresh();
 
         // Return as SkillScanResult for AppendScanWarnings compatibility
         return new Netclaw.Actors.Skills.SkillScanResult(mergedResult.AcceptedSkills, mergedResult.Issues);

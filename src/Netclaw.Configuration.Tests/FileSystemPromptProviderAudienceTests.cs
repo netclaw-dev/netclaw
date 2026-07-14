@@ -117,21 +117,20 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     }
 
     [Fact]
-    public void Placeholder_substitution_replaces_path_tokens_for_team()
+    public void Placeholder_substitution_replaces_identity_tokens_without_exposing_skill_root()
     {
         var prompt = _provider.GetSystemPrompt(TrustAudience.Team);
 
-        // Full AGENTS.md contains placeholders like {{SYSTEM_SKILLS_DIR}} that
-        // should be resolved to actual paths from NetclawPaths
+        // Identity paths remain explicit because file tools edit them directly.
+        // Skill access is logical, so the physical system-skill root stays absent.
         Assert.DoesNotContain("{{SYSTEM_SKILLS_DIR}}", prompt);
         Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
         Assert.DoesNotContain("{{SOUL_PATH}}", prompt);
         Assert.DoesNotContain("{{AGENTS_PATH}}", prompt);
         Assert.DoesNotContain("{{TOOLING_PATH}}", prompt);
 
-        // Verify the actual paths appear in the substituted output
-        Assert.Contains(_paths.SystemSkillsDirectory, prompt);
         Assert.Contains(_paths.IdentityDirectory, prompt);
+        Assert.DoesNotContain(_paths.SystemSkillsDirectory, prompt);
     }
 
     [Theory]

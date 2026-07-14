@@ -15,8 +15,8 @@ namespace Netclaw.Daemon.Services;
 
 /// <summary>
 /// Syncs system skills from the feed CDN at daemon startup and rebuilds the
-/// description menu context layer. The LLM discovers skills by reading the
-/// menu and loads them via <c>file_read</c> — no keyword matching needed.
+/// description menu context layer. The LLM discovers skills from the logical
+/// catalog and loads them with <c>skill_load</c>.
 /// Never blocks startup on network — if the feed is unreachable, the daemon
 /// starts with whatever skills are already on disk.
 /// </summary>
@@ -25,30 +25,23 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly HttpClient _httpClient;
     private readonly NetclawPaths _paths;
     private readonly SkillSyncConfig _skillSyncConfig;
-    private readonly SkillRegistry _skillRegistry;
-    private readonly SkillIndexContextLayer _skillIndexLayer;
+    private readonly SkillInventoryRefresher _inventoryRefresher;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
     private readonly ISkillContentScanner _scanner;
-    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
-    private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public SystemSkillSyncService(
         HttpClient httpClient,
         NetclawPaths paths,
         SkillSyncConfig skillSyncConfig,
-        SkillRegistry skillRegistry,
-        SkillIndexContextLayer skillIndexLayer,
+        SkillInventoryRefresher inventoryRefresher,
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
-        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
-        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
-        IReadOnlyList<ResolvedExternalSource> externalSources,
         IChatClientProvider? chatClientProvider = null)
-        : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer,
-            timeProvider, scanner, logger, BuildInfo.Version, serverFeedSources, externalSources)
+        : this(httpClient, paths, skillSyncConfig, inventoryRefresher,
+            timeProvider, scanner, logger, BuildInfo.Version)
     {
     }
 
@@ -57,26 +50,20 @@ internal sealed class SystemSkillSyncService : IHostedService
         HttpClient httpClient,
         NetclawPaths paths,
         SkillSyncConfig skillSyncConfig,
-        SkillRegistry skillRegistry,
-        SkillIndexContextLayer skillIndexLayer,
+        SkillInventoryRefresher inventoryRefresher,
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
-        string daemonVersion,
-        IReadOnlyList<ResolvedExternalSource>? serverFeedSources = null,
-        IReadOnlyList<ResolvedExternalSource>? externalSources = null)
+        string daemonVersion)
     {
         _httpClient = httpClient;
         _paths = paths;
         _skillSyncConfig = skillSyncConfig;
-        _skillRegistry = skillRegistry;
-        _skillIndexLayer = skillIndexLayer;
+        _inventoryRefresher = inventoryRefresher;
         _timeProvider = timeProvider;
         _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
-        _serverFeedSources = serverFeedSources ?? [];
-        _externalSources = externalSources ?? [];
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -336,10 +323,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void RescanAndUpdateIndex()
     {
-        var mergedResult = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory, _serverFeedSources, _externalSources);
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
+        var mergedResult = _inventoryRefresher.Refresh();
 
         if (mergedResult.Issues.Count > 0)
         {
