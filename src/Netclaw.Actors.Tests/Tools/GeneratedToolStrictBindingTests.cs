@@ -37,7 +37,7 @@ public class GeneratedToolStrictBindingTests
         {
             ["Path"] = "/tmp/does-not-matter.txt",
             ["Limit"] = "abc"
-        }, TestContext.Current.CancellationToken);
+        }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Error parsing arguments for tool 'file_read'", result);
         Assert.Contains("'Limit'", result);
@@ -54,7 +54,7 @@ public class GeneratedToolStrictBindingTests
         {
             ["Path"] = "/tmp/does-not-matter.txt",
             ["Limit"] = limit
-        }, TestContext.Current.CancellationToken);
+        }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Error parsing arguments", result);
         Assert.Contains("'Limit'", result);

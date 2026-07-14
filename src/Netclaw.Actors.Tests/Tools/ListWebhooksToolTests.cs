@@ -47,7 +47,7 @@ public sealed class ListWebhooksToolTests : IDisposable
     public async Task Active_filter_excludes_disabled_routes_and_echoes_filter()
     {
         var result = await _tool.ExecuteAsync(
-            ToolInput.Create("Filter", "active"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Filter", "active"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("enabled-route", result);
         Assert.DoesNotContain("disabled-route", result);
@@ -59,7 +59,7 @@ public sealed class ListWebhooksToolTests : IDisposable
     public async Task Absent_filter_defaults_to_active()
     {
         var result = await _tool.ExecuteAsync(
-            new Dictionary<string, object?>(), TestContext.Current.CancellationToken);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("enabled-route", result);
         Assert.DoesNotContain("disabled-route", result);
@@ -70,7 +70,7 @@ public sealed class ListWebhooksToolTests : IDisposable
     public async Task All_filter_includes_disabled_routes_with_enabled_state()
     {
         var result = await _tool.ExecuteAsync(
-            ToolInput.Create("Filter", "all"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Filter", "all"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("enabled-route", result);
         Assert.Contains("disabled-route", result);
@@ -84,7 +84,7 @@ public sealed class ListWebhooksToolTests : IDisposable
     public async Task Unknown_filter_value_rejects_naming_supported_values()
     {
         var result = await _tool.ExecuteAsync(
-            ToolInput.Create("Filter", "enabled"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Filter", "enabled"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("'Filter' value 'enabled' is not supported", result);
         Assert.Contains("active, all", result);

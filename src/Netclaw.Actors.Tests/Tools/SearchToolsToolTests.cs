@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SearchToolsToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -21,6 +21,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("memorizer__store", result);
@@ -38,6 +39,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "memories"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("memorizer__search_memories", result);
@@ -51,6 +53,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "nonexistent_xyz"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("No tools found", result);
@@ -64,6 +67,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store", "Server", "github"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         // "github" server has no "store" tool — only memorizer does
@@ -78,6 +82,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store", "Server", "default"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("memorizer__store", result);
@@ -93,6 +98,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "shell"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         // Without server filter, non-MCP tools are included in search results
@@ -121,6 +127,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "navigate"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("params: url", result);
@@ -139,6 +146,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "navgite pg"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("No exact tools found", result);
@@ -156,6 +164,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "servers"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);
@@ -171,6 +180,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "all", "Server", "memorizer"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Found 2 tool(s) in server 'memorizer'", result);
@@ -186,6 +196,7 @@ public class SearchToolsToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "all"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);

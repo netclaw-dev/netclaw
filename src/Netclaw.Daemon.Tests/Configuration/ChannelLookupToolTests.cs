@@ -300,7 +300,7 @@ public sealed class ChannelLookupToolTests
         if (query is not null)
             arguments["query"] = query;
 
-        return tool.ExecuteAsync(arguments, TestContext.Current.CancellationToken);
+        return tool.ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
     }
 
     private static string[] ReadChannelKeyEnum(JsonElement schema)

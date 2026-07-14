@@ -187,8 +187,8 @@ public sealed class SubAgentSpawnerTests : TestKit
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
+            SubAgentActivitySink = notifications.Add,
         });
-        context.Outputs.SubAgentActivitySink = notifications.Add;
 
         var profile = new SubAgentProfile
         {

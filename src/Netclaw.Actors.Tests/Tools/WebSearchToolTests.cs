@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebSearchToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -23,7 +23,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            ToolInput.Create("Query", "akka.net"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "akka.net"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Akka.NET", result);
         Assert.Contains("https://getakka.net", result);
@@ -38,7 +38,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            ToolInput.Create("Query", "test"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "test"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
         Assert.Contains("Bot detection triggered", result);
@@ -52,7 +52,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            ToolInput.Create("Query", "xyzzy"), TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "xyzzy"), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("No results found", result);
     }

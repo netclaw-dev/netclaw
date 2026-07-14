@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackProactiveThreadTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -169,7 +169,10 @@ public sealed class LookupSlackUserToolTests
         var users = CreateUsers();
         users.Add(new User
         {
-            Id = "UDEL", Name = "deleted", RealName = "Deleted Person", Deleted = true,
+            Id = "UDEL",
+            Name = "deleted",
+            RealName = "Deleted Person",
+            Deleted = true,
             Profile = new UserProfile { DisplayName = "deleted" }
         });
 
@@ -257,7 +260,9 @@ public sealed class LookupSlackUserToolTests
         var users = CreateUsers();
         users.Add(new User
         {
-            Id = "U3", Name = "alice2", RealName = "Alice Jones",
+            Id = "U3",
+            Name = "alice2",
+            RealName = "Alice Jones",
             Profile = new UserProfile { DisplayName = "alice_j", Email = "alice2@example.com" }
         });
         var tool = CreateTool(users);
@@ -276,7 +281,7 @@ public sealed class LookupSlackUserToolTests
     private static Task<string> ExecuteAsync(LookupSlackUserTool tool, string query)
     {
         var args = new Dictionary<string, object?> { ["Query"] = query };
-        return tool.ExecuteAsync(args, CancellationToken.None);
+        return tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
     }
 
     private static List<User> CreateUsers()

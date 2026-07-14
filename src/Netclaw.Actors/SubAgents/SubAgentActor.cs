@@ -1362,9 +1362,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var timeout = meta?.TimeoutHintSeconds is { } seconds
             ? new ToolExecutionTimeout(TimeSpan.FromSeconds(seconds))
             : source.ExecutionTimeout;
-        var context = new ToolExecutionContext(source.RunScope, timeout);
-        context.Outputs.SubAgentActivitySink = source.Outputs.SubAgentActivitySink;
-        return context;
+        return new ToolExecutionContext(source.RunScope, timeout, source.Outputs.Fork());
     }
 
     private static SubAgentToolCallResult BuildToolResult(

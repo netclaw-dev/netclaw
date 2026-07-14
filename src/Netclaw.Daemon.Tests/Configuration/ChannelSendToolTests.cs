@@ -179,7 +179,7 @@ public sealed class ChannelSendToolTests
         };
 
         return context is null
-            ? tool.ExecuteAsync(arguments, TestContext.Current.CancellationToken)
+            ? tool.ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken)
             : tool.ExecuteAsync(arguments, context, TestContext.Current.CancellationToken);
     }
 

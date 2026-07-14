@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderToolConfigGateTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -41,7 +41,7 @@ public class ReminderToolConfigGateTests : IDisposable
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
             ["DeliveryKind"] = "none"
-        }, TestContext.Current.CancellationToken);
+        }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Scheduling is disabled", result);
     }
@@ -53,7 +53,7 @@ public class ReminderToolConfigGateTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["ReminderId"] = "test-reminder" },
-            TestContext.Current.CancellationToken);
+            TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Scheduling is disabled", result);
     }
@@ -65,7 +65,7 @@ public class ReminderToolConfigGateTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Filter"] = "active" },
-            TestContext.Current.CancellationToken);
+            TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Scheduling is disabled", result);
     }
@@ -80,7 +80,7 @@ public class ReminderToolConfigGateTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["ReminderId"] = "test-reminder" },
-            TestContext.Current.CancellationToken);
+            TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("Scheduling is disabled", result);
     }

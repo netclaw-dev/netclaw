@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="FileReadToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -253,7 +253,7 @@ public class FileReadToolTests : IDisposable
     public async Task Missing_path_returns_error()
     {
         var args = ToolInput.Empty();
-        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
 
         Assert.Contains("Path", result);
         Assert.Contains("missing", result, StringComparison.OrdinalIgnoreCase);
@@ -262,7 +262,7 @@ public class FileReadToolTests : IDisposable
     [Fact]
     public async Task Null_arguments_returns_error()
     {
-        var result = await _tool.ExecuteAsync(null, CancellationToken.None);
+        var result = await _tool.ExecuteAsync(null, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
         Assert.Contains("No arguments provided", result);
     }
 

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebFetchToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -277,6 +277,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         // Should contain summary info
@@ -317,6 +318,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test", "Format", "text"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains(".txt", result);
@@ -348,6 +350,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/page"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.html");
@@ -371,6 +374,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://api.example.com/data.json"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -393,6 +397,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://api.example.com/data"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -413,6 +418,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/install.sh"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -432,6 +438,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "not-a-url"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Error", result);
@@ -445,6 +452,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://example.com/page"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("HTTPS is required", result);
@@ -461,6 +469,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://example.com/page"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -476,6 +485,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://localhost:8080/api"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -491,6 +501,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://127.0.0.1:3000/"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -506,6 +517,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://[::1]:5000/"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -520,6 +532,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://localhost:8080/"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("HTTPS is required", result);
@@ -535,6 +548,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://internal.corp/api"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -552,6 +566,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/photo.png"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -580,6 +595,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://arxiv.org/pdf/2603.25414"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Content-Type: application/pdf", result);
@@ -603,6 +619,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/animation.gif"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.gif");
@@ -620,6 +637,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/api/download"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.bin");
@@ -633,6 +651,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "ftp://files.example.com/doc.txt"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("Error", result);
@@ -701,6 +720,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test", "Format", "markdown"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("'Format' value 'markdown' is not supported", result);
@@ -722,6 +742,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/huge.txt"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.Contains("[content truncated at 5 MB", result);
@@ -736,6 +757,7 @@ public class WebFetchToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/small.txt"),
+            TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 
         Assert.DoesNotContain("content truncated", result);

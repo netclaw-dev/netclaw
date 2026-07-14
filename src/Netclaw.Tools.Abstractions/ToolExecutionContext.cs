@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolExecutionContext.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -75,7 +75,7 @@ public sealed record SubAgentFinding
 /// <summary>
 /// Validated wall-clock limit for one tool invocation.
 /// </summary>
-public readonly record struct ToolExecutionTimeout
+public sealed record ToolExecutionTimeout
 {
     public static ToolExecutionTimeout Default { get; } = new(TimeSpan.FromSeconds(90));
 
@@ -93,7 +93,7 @@ public readonly record struct ToolExecutionTimeout
 /// <summary>
 /// Validated character budget for model-visible inline tool output.
 /// </summary>
-public readonly record struct InlineOutputBudget
+public sealed record InlineOutputBudget
 {
     public static InlineOutputBudget Default { get; } = new(12_000);
 
@@ -140,6 +140,8 @@ public abstract record ToolSessionScope
 /// </summary>
 public sealed record ToolRunScope
 {
+    private IReadOnlyList<string> _recentFiles = [];
+
     public required ToolSessionScope Session { get; init; }
     public required TrustAudience Audience { get; init; }
     public required InlineOutputBudget InlineOutputBudget { get; init; }
@@ -147,13 +149,21 @@ public sealed record ToolRunScope
     public string? ChannelType { get; init; }
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
     public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
-    public bool SupportsInteractiveApproval { get; init; }
+    public bool? SupportsInteractiveApproval { get; init; }
     public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; init; }
     public IParentApprovalBridge? ApprovalBridge { get; init; }
     public string? ProjectDirectory { get; init; }
     public string? InheritedCwd { get; init; }
-    public IReadOnlyList<string> RecentFiles { get; init; } = [];
+    public IReadOnlyList<string> RecentFiles
+    {
+        get => _recentFiles;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _recentFiles = Array.AsReadOnly(value.ToArray());
+        }
+    }
 }
 
 /// <summary>
@@ -162,16 +172,25 @@ public sealed record ToolRunScope
 /// </summary>
 public sealed class ToolExecutionOutputs
 {
+    private readonly Action<SubAgentNotificationInfo>? _subAgentActivitySink;
     private List<FileAttachmentInfo>? _fileAttachments;
     private List<ModelInputFileInfo>? _modelInputFiles;
 
+    public ToolExecutionOutputs()
+    {
+    }
+
+    public ToolExecutionOutputs(Action<SubAgentNotificationInfo> subAgentActivitySink)
+    {
+        ArgumentNullException.ThrowIfNull(subAgentActivitySink);
+        _subAgentActivitySink = subAgentActivitySink;
+    }
+
     public IReadOnlyList<FileAttachmentInfo> FileAttachments
-        => _fileAttachments ?? (IReadOnlyList<FileAttachmentInfo>)[];
+        => _fileAttachments?.AsReadOnly() ?? (IReadOnlyList<FileAttachmentInfo>)[];
 
     public IReadOnlyList<ModelInputFileInfo> ModelInputFiles
-        => _modelInputFiles ?? (IReadOnlyList<ModelInputFileInfo>)[];
-
-    public Action<SubAgentNotificationInfo>? SubAgentActivitySink { get; set; }
+        => _modelInputFiles?.AsReadOnly() ?? (IReadOnlyList<ModelInputFileInfo>)[];
 
     public void AddFileAttachment(string filePath, string fileName, MimeType mimeType)
     {
@@ -186,7 +205,10 @@ public sealed class ToolExecutionOutputs
     }
 
     public void ReportSubAgentActivity(SubAgentNotificationInfo notification)
-        => SubAgentActivitySink?.Invoke(notification);
+        => _subAgentActivitySink?.Invoke(notification);
+
+    public ToolExecutionOutputs Fork()
+        => _subAgentActivitySink is null ? new ToolExecutionOutputs() : new ToolExecutionOutputs(_subAgentActivitySink);
 }
 
 /// <summary>
@@ -240,24 +262,24 @@ public class ToolInvocationContext
     public ToolInvocationContext(
         ToolRunScope runScope,
         ToolExecutionTimeout executionTimeout)
+        : this(runScope, executionTimeout, new ToolExecutionOutputs())
+    {
+    }
+
+    public ToolInvocationContext(
+        ToolRunScope runScope,
+        ToolExecutionTimeout executionTimeout,
+        ToolExecutionOutputs outputs)
     {
         ArgumentNullException.ThrowIfNull(runScope);
+        ArgumentNullException.ThrowIfNull(outputs);
 
         RunScope = runScope;
-        Outputs = new ToolExecutionOutputs();
-        Audience = runScope.Audience;
-        Boundary = runScope.Boundary;
-        ChannelType = runScope.ChannelType;
-        DefaultDeliveryTarget = runScope.DefaultDeliveryTarget;
-        RequestedDeliveryTarget = runScope.RequestedDeliveryTarget;
-        SupportsInteractiveApproval = runScope.SupportsInteractiveApproval;
-        ModelInputModalities = runScope.ModelInputModalities;
-        SpawnChildActor = runScope.SpawnChildActor;
-        ApprovalBridge = runScope.ApprovalBridge;
-        ProjectDirectory = runScope.ProjectDirectory;
-        InheritedCwd = runScope.InheritedCwd;
-        RecentFiles = runScope.RecentFiles;
-        MaxInlineToolResultChars = runScope.InlineOutputBudget.Value;
+        ArgumentNullException.ThrowIfNull(runScope.Session);
+        ArgumentNullException.ThrowIfNull(runScope.InlineOutputBudget);
+        ArgumentNullException.ThrowIfNull(executionTimeout);
+
+        Outputs = outputs;
         ExecutionTimeout = executionTimeout;
 
         if (runScope.Session is ToolSessionScope.Bound bound)
@@ -279,30 +301,30 @@ public class ToolInvocationContext
     /// tool gate reads it directly with no missing-audience fallback. The default
     /// is resolved once where the context is built.
     /// </summary>
-    public TrustAudience Audience { get; internal init; }
+    public TrustAudience Audience => RunScope.Audience;
 
-    public TrustBoundary? Boundary { get; internal init; }
+    public TrustBoundary? Boundary => RunScope.Boundary;
 
     /// <summary>
     /// Per-call timeout requested by the LLM after pipeline clamping.
     /// Tools that have their own internal timeout should honor this when set.
     /// </summary>
-    public ToolExecutionTimeout ExecutionTimeout { get; internal init; }
+    public ToolExecutionTimeout ExecutionTimeout { get; }
 
 
-    public string? ChannelType { get; internal init; }
+    public string? ChannelType => RunScope.ChannelType;
 
     /// <summary>
     /// Delivery target inherited from channel-originated input. Trigger sources
     /// must not rely on this because they are not output channels.
     /// </summary>
-    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; internal init; }
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget => RunScope.DefaultDeliveryTarget;
 
     /// <summary>
     /// Explicit delivery target selected by a trigger source such as a reminder
     /// or webhook route when it expects external output.
     /// </summary>
-    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; internal init; }
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget => RunScope.RequestedDeliveryTarget;
 
     public ChannelDeliveryTargetInfo? EffectiveDeliveryTarget
         => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
@@ -311,12 +333,12 @@ public class ToolInvocationContext
     /// Whether the originating channel supports interactive approval prompts.
     /// When false, approval-gated tools are automatically denied.
     /// </summary>
-    public bool SupportsInteractiveApproval { get; internal init; }
+    public bool? SupportsInteractiveApproval => RunScope.SupportsInteractiveApproval;
 
     /// <summary>
     /// Modalities accepted by the active model for this tool call.
     /// </summary>
-    public ModelModality ModelInputModalities { get; internal init; }
+    public ModelModality ModelInputModalities => RunScope.ModelInputModalities;
 
     /// <summary>
     /// Factory delegate for spawning subagent actors as children of the owning session.
@@ -330,13 +352,13 @@ public class ToolInvocationContext
     /// tools abstraction layer. The actual types are <c>Akka.Actor.Props</c> and
     /// <c>Akka.Actor.IActorRef</c>.
     /// </remarks>
-    public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; internal init; }
+    public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor => RunScope.SpawnChildActor;
 
     /// <summary>
     /// Parent session's approval bridge for sub-agent approval chaining. When set,
     /// the sub-agent can route approval requests back to the interactive user.
     /// </summary>
-    public IParentApprovalBridge? ApprovalBridge { get; }
+    public IParentApprovalBridge? ApprovalBridge => RunScope.ApprovalBridge;
 
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }
@@ -356,7 +378,7 @@ public class ToolInvocationContext
     /// tools), else this content budget. Zero when unset (the dispatcher falls back
     /// to its built-in content default).
     /// </summary>
-    public int MaxInlineToolResultChars { get; internal init; }
+    public int MaxInlineToolResultChars => RunScope.InlineOutputBudget.Value;
 
     /// <summary>
     /// Parent session's resolved cwd snapshot, captured at spawn time for
@@ -368,7 +390,7 @@ public class ToolInvocationContext
     /// <c>Cwd</c> is the per-call resolved <i>output</i> the approval gate
     /// writes; <c>InheritedCwd</c> is a one-shot snapshot <i>input</i>.
     /// </summary>
-    public string? InheritedCwd { get; internal init; }
+    public string? InheritedCwd => RunScope.InheritedCwd;
 
     /// <summary>
     /// Absolute path to the project directory the agent is currently working
@@ -378,13 +400,13 @@ public class ToolInvocationContext
     /// session actor. Null when no project root has been declared via
     /// <c>set_working_directory</c>.
     /// </summary>
-    public string? ProjectDirectory { get; internal init; }
+    public string? ProjectDirectory => RunScope.ProjectDirectory;
 
     /// <summary>
     /// Read-only snapshot of the parent session's recently used files. This is
     /// grounding for delegated work and does not grant filesystem authority.
     /// </summary>
-    public IReadOnlyList<string> RecentFiles { get; internal init; }
+    public IReadOnlyList<string> RecentFiles => RunScope.RecentFiles;
 
     /// <summary>
     /// Resolves the working directory for a shell-style invocation. Returns
@@ -460,6 +482,15 @@ public sealed class ToolExecutionContext : ToolInvocationContext
 {
     public ToolExecutionContext(ToolRunScope runScope, ToolExecutionTimeout executionTimeout)
         : base(runScope, executionTimeout)
+    {
+        Approval = new ToolApprovalAttempt();
+    }
+
+    public ToolExecutionContext(
+        ToolRunScope runScope,
+        ToolExecutionTimeout executionTimeout,
+        ToolExecutionOutputs outputs)
+        : base(runScope, executionTimeout, outputs)
     {
         Approval = new ToolApprovalAttempt();
     }

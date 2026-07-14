@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionToolExecutionPipeline.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -265,32 +265,9 @@ internal static class SessionToolExecutionPipeline
                 turnContext?.HasThirdPartyAdoptedContext ?? source?.HasThirdPartyAdoptedContext ?? false,
                 turnContext?.AdoptedSpeakerIds ?? source?.AdoptedSpeakerIds ?? []);
         }
-        var context = BuildToolExecutionContext(
-            sessionId,
-            source,
-            sessionDir,
-            spawnChildActor,
-            approvalBridge,
-            projectDirectory,
-            recentFiles,
-            turnContext,
-            modelInputModalities,
-            maxInlineToolResultChars,
-            timeout);
-
-        // Re-drive of an ApprovedOnce approval: the user already clicked
-        // "approve once" before the session passivated, but there is no
-        // persisted grant to satisfy the gate on the cold-recovered re-drive.
-        // Pre-seed the one-time approval bypass for exactly this call id so the
-        // gate passes once without emitting a duplicate approval prompt. The
-        // bypass is still tool-name- and pattern-matched inside the gate
-        // (DispatchingToolExecutor.IsOneTimeApprovalSatisfied) and the pipeline
-        // clears it after the attempt — it cannot leak to any other call.
-        if (oneTimeApprovalPreSeed is not null)
-            context.Approval.SeedOneTimeApproval(tc.Name, oneTimeApprovalPreSeed);
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
-        context.Outputs.SubAgentActivitySink = info =>
+        var outputs = new ToolExecutionOutputs(info =>
         {
             if (info.IsStarted)
             {
@@ -360,7 +337,31 @@ internal static class SessionToolExecutionPipeline
                     });
                 }
             }
-        };
+        });
+        var context = BuildToolExecutionContext(
+            sessionId,
+            source,
+            sessionDir,
+            spawnChildActor,
+            approvalBridge,
+            projectDirectory,
+            recentFiles,
+            turnContext,
+            modelInputModalities,
+            maxInlineToolResultChars,
+            timeout,
+            outputs);
+
+        // Re-drive of an ApprovedOnce approval: the user already clicked
+        // "approve once" before the session passivated, but there is no
+        // persisted grant to satisfy the gate on the cold-recovered re-drive.
+        // Pre-seed the one-time approval bypass for exactly this call id so the
+        // gate passes once without emitting a duplicate approval prompt. The
+        // bypass is still tool-name- and pattern-matched inside the gate
+        // (DispatchingToolExecutor.IsOneTimeApprovalSatisfied) and the pipeline
+        // clears it after the attempt — it cannot leak to any other call.
+        if (oneTimeApprovalPreSeed is not null)
+            context.Approval.SeedOneTimeApproval(tc.Name, oneTimeApprovalPreSeed);
         try
         {
             if (decisionOverride is ApprovalDecision.Denied or ApprovalDecision.TimedOut)
@@ -1057,7 +1058,8 @@ internal static class SessionToolExecutionPipeline
         TurnContext? turnContext,
         ModelModality modelInputModalities,
         int maxInlineToolResultChars,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        ToolExecutionOutputs outputs)
     {
         // This legacy fallback disappears when TurnContext becomes a required
         // batch member in Stage 2. Until then it is resolved once at the seam,
@@ -1073,15 +1075,14 @@ internal static class SessionToolExecutionPipeline
             DefaultDeliveryTarget = turnContext?.DefaultDeliveryTarget ?? source?.DefaultDeliveryTarget,
             RequestedDeliveryTarget = turnContext?.RequestedDeliveryTarget ?? source?.RequestedDeliveryTarget,
             SupportsInteractiveApproval = turnContext?.SupportsInteractiveApproval
-                                          ?? source?.ChannelType.SupportsInteractiveApproval()
-                                          ?? false,
+                                          ?? source?.ChannelType.SupportsInteractiveApproval(),
             ModelInputModalities = modelInputModalities,
             SpawnChildActor = spawnChildActor,
             ApprovalBridge = approvalBridge,
             ProjectDirectory = projectDirectory,
             RecentFiles = recentFiles ?? [],
         };
-        return new ToolExecutionContext(runScope, new ToolExecutionTimeout(timeout));
+        return new ToolExecutionContext(runScope, new ToolExecutionTimeout(timeout), outputs);
     }
 
     private static bool CanRequestInteractiveApproval(MessageSource? source, TurnContext? turnContext)
@@ -1098,16 +1099,16 @@ internal static class SessionToolExecutionPipeline
         TimeProvider timeProvider,
         TimeSpan duration,
         ToolCallMeta? meta) => new()
-    {
-        SessionId = sessionId,
-        ToolName = new ToolName(tc.Name),
-        CallId = new ToolCallId(tc.CallId),
-        Timestamp = timeProvider.GetUtcNow(),
-        Allowed = false,
-        Duration = duration,
-        Rationale = meta?.Rationale,
-        TimeoutHintSeconds = meta?.TimeoutHintSeconds
-    };
+        {
+            SessionId = sessionId,
+            ToolName = new ToolName(tc.Name),
+            CallId = new ToolCallId(tc.CallId),
+            Timestamp = timeProvider.GetUtcNow(),
+            Allowed = false,
+            Duration = duration,
+            Rationale = meta?.Rationale,
+            TimeoutHintSeconds = meta?.TimeoutHintSeconds
+        };
 
     /// <summary>
     /// Returns a one-line agent-facing hint pointing at <c>set_working_directory</c>

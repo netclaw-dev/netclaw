@@ -38,6 +38,9 @@ internal static class TestToolExecutionContext
 
     private static ToolExecutionContext Create(ToolSessionScope session, TestToolExecutionContextOptions options)
     {
+        var outputs = options.SubAgentActivitySink is null
+            ? new ToolExecutionOutputs()
+            : new ToolExecutionOutputs(options.SubAgentActivitySink);
         var context = new ToolExecutionContext(new ToolRunScope
         {
             Session = session,
@@ -54,7 +57,7 @@ internal static class TestToolExecutionContext
             ProjectDirectory = options.ProjectDirectory,
             InheritedCwd = options.InheritedCwd,
             RecentFiles = options.RecentFiles,
-        }, options.ExecutionTimeout);
+        }, options.ExecutionTimeout, outputs);
 
         if (options.Cwd is not null)
             context.Approval.SetCwd(options.Cwd);
@@ -71,7 +74,7 @@ internal sealed record TestToolExecutionContextOptions
     public string? ChannelType { get; init; }
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
     public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
-    public bool SupportsInteractiveApproval { get; init; } = true;
+    public bool? SupportsInteractiveApproval { get; init; } = true;
     public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; init; }
     public IParentApprovalBridge? ApprovalBridge { get; init; }
@@ -80,4 +83,5 @@ internal sealed record TestToolExecutionContextOptions
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
     public ToolExecutionTimeout ExecutionTimeout { get; init; } = ToolExecutionTimeout.Default;
     public string? Cwd { get; init; }
+    public Action<SubAgentNotificationInfo>? SubAgentActivitySink { get; init; }
 }

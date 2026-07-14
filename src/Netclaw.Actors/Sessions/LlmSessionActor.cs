@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="LlmSessionActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -1810,7 +1810,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     var (meta, cleaned) = toolExec.PrepareToolCall(tc);
                     return (meta, cleaned.Arguments);
                 }
-                : null);
+        : null);
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -2449,7 +2449,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 Title = _state.Title,
                 TurnCount = _state.TurnCount,
-                    RecentMessages = SessionRecentMessageExtractor.Extract(_state.History)
+                RecentMessages = SessionRecentMessageExtractor.Extract(_state.History)
             };
 
             // On re-join, only reply to the Sender (for Ask callers) — don't
@@ -2500,7 +2500,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Info("Snapshot saved (seqNr={SequenceNr})", msg.Metadata.SequenceNr);
 
             DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
-            DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr-1)); // delete all old snapshots
+            DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr - 1)); // delete all old snapshots
         });
 
         Command<SaveSnapshotFailure>(msg =>
@@ -3044,6 +3044,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     new SpawnChildActorRequest((Props)props, name),
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
+            var outputs = new ToolExecutionOutputs(info =>
+            {
+                self.Tell(new RoutedSkillSubAgentActivity(
+                    _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    new AgentName(info.AgentName),
+                    info.IsStarted ? SubAgentPhase.Started : SubAgentPhase.Completed,
+                    info.ToolCount,
+                    info.Success,
+                    info.Duration,
+                    info.Findings.Count));
+            });
             var context = new ToolExecutionContext(new ToolRunScope
             {
                 Session = new ToolSessionScope.Bound(_sessionId.Value, GetSessionDirectory()),
@@ -3057,19 +3068,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 RecentFiles = _state.WorkingContext.RecentFiles,
                 SupportsInteractiveApproval = false,
                 SpawnChildActor = spawnChildActor,
-            }, new ToolExecutionTimeout(_config.ToolExecutionTimeout));
-
-            context.Outputs.SubAgentActivitySink = info =>
-            {
-                self.Tell(new RoutedSkillSubAgentActivity(
-                    _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    new AgentName(info.AgentName),
-                    info.IsStarted ? SubAgentPhase.Started : SubAgentPhase.Completed,
-                    info.ToolCount,
-                    info.Success,
-                    info.Duration,
-                    info.Findings.Count));
-            };
+            }, new ToolExecutionTimeout(_config.ToolExecutionTimeout), outputs);
 
             var result = await _subAgentSpawner!.SpawnAsync(
                 profile,

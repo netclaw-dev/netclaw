@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="GetReminderHistoryToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -33,7 +33,7 @@ public class GetReminderHistoryToolTests : IDisposable
     public async Task Returns_empty_message_for_unknown_reminder_id()
     {
         var result = await _tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["ReminderId"] = "no-such-reminder" }, TestContext.Current.CancellationToken);
+            new Dictionary<string, object?> { ["ReminderId"] = "no-such-reminder" }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("No execution history found", result);
         Assert.Contains("no-such-reminder", result);
@@ -51,7 +51,7 @@ public class GetReminderHistoryToolTests : IDisposable
             ErrorMessage: null));
 
         var result = await _tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["ReminderId"] = "daily-summary" }, TestContext.Current.CancellationToken);
+            new Dictionary<string, object?> { ["ReminderId"] = "daily-summary" }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("daily-summary", result);
         Assert.Contains("True", result);
@@ -74,7 +74,7 @@ public class GetReminderHistoryToolTests : IDisposable
 
         // Request 200 — tool caps at 100
         var result = await _tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["ReminderId"] = "busy-job", ["Last"] = 200 }, TestContext.Current.CancellationToken);
+            new Dictionary<string, object?> { ["ReminderId"] = "busy-job", ["Last"] = 200 }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         // Verify by counting "fired_at:" occurrences
         var lineCount = result.Split("fired_at:").Length - 1;
@@ -93,7 +93,7 @@ public class GetReminderHistoryToolTests : IDisposable
             ErrorMessage: "Notification tool returned an unspecified error."));
 
         var result = await _tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["ReminderId"] = "failing-job" }, TestContext.Current.CancellationToken);
+            new Dictionary<string, object?> { ["ReminderId"] = "failing-job" }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
 
         Assert.Contains("False", result);
         Assert.Contains("Notification tool returned an unspecified error.", result);

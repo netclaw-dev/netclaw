@@ -36,6 +36,66 @@ public sealed class ToolExecutionValueObjectTests
         => Assert.Throws<ArgumentException>(() => new ToolSessionScope.Bound(" ", null));
 
     [Fact]
+    public void Context_rejects_missing_semantic_values()
+    {
+        var missingBudget = new ToolRunScope
+        {
+            Session = new ToolSessionScope.Unbound(),
+            Audience = TrustAudience.Public,
+            InlineOutputBudget = null!,
+        };
+        var validScope = new ToolRunScope
+        {
+            Session = new ToolSessionScope.Unbound(),
+            Audience = TrustAudience.Public,
+            InlineOutputBudget = InlineOutputBudget.Default,
+        };
+
+        Assert.Throws<ArgumentNullException>(
+            () => new ToolExecutionContext(missingBudget, ToolExecutionTimeout.Default));
+        Assert.Throws<ArgumentNullException>(
+            () => new ToolExecutionContext(validScope, null!));
+    }
+
+    [Fact]
+    public void Run_scope_snapshots_recent_files()
+    {
+        var recentFiles = new List<string> { "/repo/one.cs" };
+        var runScope = new ToolRunScope
+        {
+            Session = new ToolSessionScope.Unbound(),
+            Audience = TrustAudience.Personal,
+            InlineOutputBudget = InlineOutputBudget.Default,
+            RecentFiles = recentFiles,
+        };
+
+        recentFiles.Add("/repo/two.cs");
+
+        Assert.Equal(["/repo/one.cs"], runScope.RecentFiles);
+    }
+
+    [Fact]
+    public void Output_views_are_not_mutable_backing_lists_and_forks_share_only_the_callback()
+    {
+        var notifications = new List<SubAgentNotificationInfo>();
+        var outputs = new ToolExecutionOutputs(notifications.Add);
+        outputs.AddFileAttachment("/tmp/one.txt", "one.txt", new MimeType("text/plain"));
+        var fork = outputs.Fork();
+        var notification = new SubAgentNotificationInfo
+        {
+            RunId = new SubAgentRunId("run-1"),
+            AgentName = "reviewer",
+            IsStarted = true,
+        };
+
+        fork.ReportSubAgentActivity(notification);
+
+        Assert.IsNotType<List<FileAttachmentInfo>>(outputs.FileAttachments);
+        Assert.Empty(fork.FileAttachments);
+        Assert.Equal([notification], notifications);
+    }
+
+    [Fact]
     public void Calls_share_only_the_immutable_run_scope()
     {
         var runScope = new ToolRunScope

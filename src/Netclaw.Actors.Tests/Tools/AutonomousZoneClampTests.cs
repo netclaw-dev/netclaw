@@ -46,13 +46,13 @@ public sealed class AutonomousZoneClampTests : IDisposable
             autonomous ? "reminder/s1" : "signalr/s1",
             _sessionDir,
             new TestToolExecutionContextOptions
-        {
-            Audience = audience,
-            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
-            SupportsInteractiveApproval = !autonomous,
-            ProjectDirectory = withProject ? _projectDir : null,
-            ChannelType = autonomous ? "reminder" : "signalr"
-        });
+            {
+                Audience = audience,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
+                SupportsInteractiveApproval = !autonomous,
+                ProjectDirectory = withProject ? _projectDir : null,
+                ChannelType = autonomous ? "reminder" : "signalr"
+            });
 
     [Fact]
     public void Autonomous_personal_write_outside_zone_is_denied()
@@ -99,6 +99,23 @@ public sealed class AutonomousZoneClampTests : IDisposable
         var outside = Path.Combine(_outsideDir, "anything.txt");
 
         Assert.True(policy.TryResolveWritePath(outside, ctx, out _, out var e), e);
+    }
+
+    [Fact]
+    public void Unspecified_interactive_capability_preserves_legacy_unclamped_behavior()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var ctx = TestToolExecutionContext.CreateBound(
+            "legacy/s1",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SupportsInteractiveApproval = null,
+                ProjectDirectory = _projectDir,
+            });
+
+        Assert.True(policy.TryResolveWritePath(Path.Combine(_outsideDir, "legacy.txt"), ctx, out _, out var error), error);
     }
 
     [Fact]
