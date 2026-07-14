@@ -9,7 +9,7 @@
     <OpenTelemetryVersion>1.16.0</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
-    <MattermostNetVersion>5.0.0</MattermostNetVersion>
+    <MattermostNetVersion>5.0.3</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.9</MicrosoftAspNetCoreVersion>
     <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
