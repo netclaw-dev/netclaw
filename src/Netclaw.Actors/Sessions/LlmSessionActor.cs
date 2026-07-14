@@ -55,6 +55,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionConfig _config;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
+    private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
     private readonly IToolExecutor? _toolExecutor;
     private readonly Tools.ToolRegistry? _toolRegistry;
     private readonly IToolAuditLogger? _auditLogger;
@@ -226,6 +227,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _config = config;
         _promptProvider = services.PromptProvider;
         _contextLayers = services.ContextLayers;
+        _workingContextSnapshots = services.WorkingContextSnapshots;
         _skillRegistry = tools?.SkillRegistry;
         _subAgentRegistry = tools?.SubAgentRegistry;
         _subAgentSpawner = tools?.SubAgentSpawner;
@@ -852,6 +854,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var run in msg.CompletedSubAgentRuns)
         {
+            MergeSuccessfulSubAgentWorkingContext(run.Success, run.WorkingContext);
             if (!emittedRunIds.Add(run.RunId))
                 continue;
 
@@ -2006,6 +2009,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             approvalTimeout: Timeout.InfiniteTimeSpan,
             backgroundJobManager: bgJobManager,
             projectDirectory: _state.WorkingContext.ProjectDirectory,
+            recentFiles: _state.WorkingContext.RecentFiles,
             setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,
             streamToolResults: true,
             modelInputModalities: _model.InputModalities,
@@ -2693,6 +2697,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // through this content on every subsequent turn instead of
             // re-tokenizing it from scratch.
             _activeRecall = _recallManager.TurnRecallCache;
+            var workingContextBlock = _workingContextSnapshots
+                .Create(_state.WorkingContext, CurrentTurnAudience())
+                .ToContextBlock();
             var volatileBlock = SessionMessageAssembler.BuildVolatileContextBlock(new ContextAssemblyInput(
                 State: _state,
                 ContextLayers: _contextLayers,
@@ -2704,6 +2711,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionsBasePath: _sessionsBasePath,
                 FileReadGranted: HasFileReadGranted(),
                 ActiveRecall: _activeRecall,
+                WorkingContextBlock: workingContextBlock,
                 Audience: CurrentTurnAudience(),
                 SkillHint: BuildSkillHint()));
             if (!string.IsNullOrEmpty(volatileBlock))
@@ -2736,6 +2744,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionsBasePath: _sessionsBasePath,
             FileReadGranted: HasFileReadGranted(),
             ActiveRecall: _activeRecall,
+            WorkingContextBlock: string.Empty,
             Audience: CurrentTurnAudience(),
             SkillHint: skillHint,
             // Canonical names live in history (post-PR follow-up); the
@@ -3038,6 +3047,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ChannelType = _currentTurnContext?.ChannelType?.ToWireValue()
                               ?? (_currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue()),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,
+                RecentFiles = _state.WorkingContext.RecentFiles,
                 SupportsInteractiveApproval = false,
             };
 
@@ -3085,6 +3095,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ErrorCategory.ToolFailure);
             return;
         }
+
+        MergeSuccessfulSubAgentWorkingContext(msg.Result.Success, msg.Result.WorkingContext);
 
         var userMsg = _state.FindLastUserMessage();
         var turnEvent = new TurnRecorded
@@ -3140,6 +3152,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeGenerateTitle();
             DrainBufferedMessagesOrBecomeReady();
         });
+    }
+
+    private void MergeSuccessfulSubAgentWorkingContext(
+        bool success,
+        SubAgentWorkingContextInfo? workingContext)
+    {
+        var updated = MergeSuccessfulSubAgentWorkingContext(_state.WorkingContext, success, workingContext);
+        if (!ReferenceEquals(updated, _state.WorkingContext))
+            _state = _state with { WorkingContext = updated };
+    }
+
+    internal static WorkingContext MergeSuccessfulSubAgentWorkingContext(
+        WorkingContext current,
+        bool success,
+        SubAgentWorkingContextInfo? child)
+    {
+        if (!success || child is null)
+            return current;
+
+        var updated = current;
+        foreach (var path in child.ConfirmedChangedFiles)
+            updated = updated.AddRecentFile(path);
+
+        return updated;
     }
 
     // Transient: skill body injected by slash-command dispatch for the current turn
@@ -4385,6 +4421,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var run in result.CompletedSubAgentRuns)
         {
+            MergeSuccessfulSubAgentWorkingContext(run.Success, run.WorkingContext);
             if (!emittedRunIds.Add(run.RunId))
                 continue;
 

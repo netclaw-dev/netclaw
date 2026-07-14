@@ -239,10 +239,15 @@ archive_eval_run() {
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
     fi
 
-    # Write run metadata
+    # Write run metadata, including the immutable image identity so before/after
+    # comparisons remain auditable even when tags are later rebuilt.
+    local image_id
+    image_id=$(docker image inspect "$NETCLAW_IMAGE" --format '{{.Id}}' 2>/dev/null || echo unknown)
     cat > "$archive_dir/run-info.txt" <<RUNEOF
 run_id:    $RUN_ID
 started:   ${STARTED_AT:-unknown}
+image:     ${NETCLAW_IMAGE:-unknown}
+image_id:  $image_id
 model:     ${EVAL_MODEL_ID:-unknown}
 provider:  ${EVAL_PROVIDER_TYPE:-unknown} @ ${EVAL_PROVIDER_ENDPOINT:-unknown}
 version:   ${NETCLAW_VER:-unknown}
@@ -323,7 +328,7 @@ start_eval_daemon() {
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
     # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
     # substitute with eval defaults.
-    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/data/agents"
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data/config" "$EVAL_HOME/data/agents"
     local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
     if [[ -d "$template_dir" ]]; then
         # Substitute placeholders with eval-appropriate defaults
@@ -373,6 +378,13 @@ start_eval_daemon() {
         cp -r "$REPO_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
     fi
 
+    # Install the eval-only approval policy before daemon startup. Headless eval
+    # sessions cannot answer approval prompts, so tools must be automatic for the
+    # Personal audience. Exposure, filesystem, and command-deny rules remain in force.
+    cp "$REPO_ROOT/evals/fixtures/config/netclaw.json" \
+        "$REPO_ROOT/evals/fixtures/config/tool-approvals.json" \
+        "$EVAL_HOME/data/config/"
+
     # Pre-seed a large (>256 KB) text file in the workspaces read-root for the
     # bounded-tool-output file_read eval (complex_large_file_read_ranged). It must
     # be too big for one inline read AND have model-unguessable content so the only
@@ -385,18 +397,6 @@ start_eval_daemon() {
     mkdir -p "$EVAL_HOME/data/workspaces"
     awk 'BEGIN{x=1;for(i=1;i<=30000;i++){x=(x*48271)%2147483647;print x}}' \
         > "$EVAL_HOME/data/workspaces/netclaw-eval-largefile.txt"
-
-    # Pre-trust the 'sleep' verb so the background-job lifecycle eval can
-    # actually submit its job: the headless container has no approval
-    # requester, and background submission evaluates the approval gate before
-    # StartBackgroundJob — without this every submission dies at the gate and
-    # the case can only test API shape, not the lifecycle. trust-verb writes a
-    # global-wildcard (verb, null) entry to tool-approvals.json under the
-    # CLI's NETCLAW_HOME; $EVAL_HOME/data is what the container mounts at
-    # /home/netclaw/.netclaw, and the daemon re-reads the file per approval
-    # evaluation.
-    NETCLAW_HOME="$EVAL_HOME/data" "$NETCLAW_BIN" approvals trust-verb sleep --audience personal >/dev/null 2>&1 \
-        || echo "WARN: could not pre-trust 'sleep' — tool_background_job_lifecycle will fail at the approval gate" >&2
 
     # The eval container runs as the non-root `netclaw` user and needs write
     # access to the bind-mounted identity, logs, skills, and data trees.
@@ -768,6 +768,11 @@ run_prompt_resume() {
     local prompt="$2"
     local turn_file="$TMPDIR_EVAL/stdout_$(date +%s%N)_turn.txt"
 
+    if [[ ! -x "$NETCLAW_BIN" ]]; then
+        echo "ERROR: eval CLI disappeared during the run: $NETCLAW_BIN" >&2
+        exit 2
+    fi
+
     # First call in a multi-turn case: open a fresh shared STDOUT_FILE.
     if [[ -z "${MULTI_TURN_STDOUT_FILE:-}" ]]; then
         MULTI_TURN_STDOUT_FILE="$TMPDIR_EVAL/stdout_$(date +%s%N)_multi.txt"
@@ -823,20 +828,33 @@ run_multi_turn_case() {
         local session_id="eval/${case_name}-run${run}-$$"
         MULTI_TURN_STDOUT_FILE=""
 
+        local setup_fn="setup_${case_name}"
+        if declare -f "$setup_fn" >/dev/null 2>&1; then
+            "$setup_fn" "$run"
+        fi
+
         local turn=1
         local prompt
         for prompt in "${prompts[@]}"; do
-            run_prompt_resume "$session_id" "$prompt"
+            local rendered_prompt="$prompt"
+            rendered_prompt="${rendered_prompt//\{\{FIRST_WORKTREE\}\}/${CODING_CONTEXT_FIRST_WORKTREE:-}}"
+            rendered_prompt="${rendered_prompt//\{\{SECOND_WORKTREE\}\}/${CODING_CONTEXT_SECOND_WORKTREE:-}}"
+            rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/${CODING_CONTEXT_TARGET_BRANCH:-}}"
+            rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/${CODING_CONTEXT_TARGET_FILE:-}}"
+            run_prompt_resume "$session_id" "$rendered_prompt"
             store_metrics "$case_name" "$run" "$turn" "$LAST_TURN_USAGE_LINE"
             turn=$((turn + 1))
         done
 
         local passed=0
         local details="fail"
+        EVAL_ASSERTION_DETAILS=""
         if $assert_fn 2>/dev/null; then
             passed=1
             passes=$((passes + 1))
             details="pass"
+        elif [[ -n "${EVAL_ASSERTION_DETAILS:-}" ]]; then
+            details="$EVAL_ASSERTION_DETAILS"
         fi
 
         # Use the first prompt as the representative prompt_used for eval_results.
@@ -1224,6 +1242,94 @@ assert_subagent_specialization_precedence() {
         stdout_contains 'SPECIALIZED ANALYST BRIEF' && \
         stdout_response_contains '^Subject:' && \
         stdout_response_contains 'Would Tuesday or Wednesday work for a 15-minute call?'
+}
+
+setup_coding_context_worktree_handoff() {
+    local run="$1"
+    if (( run % 2 == 1 )); then
+        CODING_CONTEXT_FIRST="blue"
+        CODING_CONTEXT_SECOND="green"
+    else
+        CODING_CONTEXT_FIRST="green"
+        CODING_CONTEXT_SECOND="blue"
+    fi
+    CODING_CONTEXT_FIRST_WORKTREE="/home/netclaw/.netclaw/workspaces/coding-context-$CODING_CONTEXT_FIRST"
+    CODING_CONTEXT_SECOND_WORKTREE="/home/netclaw/.netclaw/workspaces/coding-context-$CODING_CONTEXT_SECOND"
+    CODING_CONTEXT_TARGET_BRANCH="feature/$CODING_CONTEXT_SECOND"
+    local -a target_files=(
+        "src/CalculatorAlpha.cs"
+        "src/CalculatorBeta.cs"
+        "src/CalculatorGamma.cs"
+        "src/CalculatorDelta.cs"
+    )
+    CODING_CONTEXT_TARGET_FILE="${target_files[$(((run - 1) % ${#target_files[@]}))]}"
+
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" bash -lc '
+        set -euo pipefail
+        base=/home/netclaw/.netclaw/workspaces
+        rm -rf "$base/coding-context" "$base/coding-context-blue" "$base/coding-context-green"
+        mkdir -p "$base/coding-context/src"
+        git -C "$base/coding-context" init -b main >/dev/null
+        git -C "$base/coding-context" config user.name "Netclaw Eval"
+        git -C "$base/coding-context" config user.email "eval@netclaw.dev"
+        for name in Alpha Beta Gamma Delta; do
+            printf "public static class Calculator%s\n{\n    public static int Add(int a, int b) => a + b;\n}\n" "$name" > "$base/coding-context/src/Calculator$name.cs"
+        done
+        git -C "$base/coding-context" add src
+        git -C "$base/coding-context" commit -m seed >/dev/null
+        git -C "$base/coding-context" worktree add -b feature/blue "$base/coding-context-blue" >/dev/null
+        git -C "$base/coding-context" worktree add -b feature/green "$base/coding-context-green" >/dev/null
+        for color in blue green; do
+            printf "%s staged context\n" "$color" > "$base/coding-context-$color/STAGED-$color.txt"
+            git -C "$base/coding-context-$color" add "STAGED-$color.txt"
+            printf "%s untracked context\n" "$color" > "$base/coding-context-$color/UNTRACKED-$color.txt"
+        done
+    '
+}
+
+assert_coding_context_worktree_handoff() {
+    if ! docker exec --user netclaw \
+        -e "EVAL_FIRST=$CODING_CONTEXT_FIRST" \
+        -e "EVAL_SECOND=$CODING_CONTEXT_SECOND" \
+        -e "EVAL_TARGET_FILE=$CODING_CONTEXT_TARGET_FILE" \
+        "$EVAL_CONTAINER_NAME" bash -lc '
+        set -euo pipefail
+        base=/home/netclaw/.netclaw/workspaces
+        first="$base/coding-context-$EVAL_FIRST"
+        second="$base/coding-context-$EVAL_SECOND"
+        main="$base/coding-context"
+        test "$(git -C "$second" branch --show-current)" = "feature/$EVAL_SECOND"
+        grep -q "Divide" "$second/$EVAL_TARGET_FILE"
+        for tree in "$first" "$main"; do
+            ! grep -R -q "Divide" "$tree/src"
+        done
+        while IFS= read -r file; do
+            [[ "$file" == "$second/$EVAL_TARGET_FILE" ]] || ! grep -q "Divide" "$file"
+        done < <(find "$second/src" -type f -name "*.cs" -print)
+    '; then
+        EVAL_ASSERTION_DETAILS="wrong_worktree_or_missing_edit"
+        return 1
+    fi
+    if ! stdout_tool_called 'spawn_agent'; then
+        EVAL_ASSERTION_DETAILS="spawn_agent_not_called"
+        return 1
+    fi
+    if ! grep -a '^\[tool:call\] spawn_agent' "$STDOUT_FILE" | grep -qv '"Context"'; then
+        EVAL_ASSERTION_DETAILS="manual_context_injected"
+        return 1
+    fi
+    if grep -a '^\[tool:call\] spawn_agent' "$STDOUT_FILE" | grep -q 'Calculator'; then
+        EVAL_ASSERTION_DETAILS="file_name_leaked_to_child"
+        return 1
+    fi
+    if ! stdout_response_contains "$(basename "$CODING_CONTEXT_TARGET_FILE")"; then
+        EVAL_ASSERTION_DETAILS="changed_file_not_reported"
+        return 1
+    fi
+    if ! stdout_response_contains "$CODING_CONTEXT_TARGET_BRANCH"; then
+        EVAL_ASSERTION_DETAILS="target_branch_not_reported"
+        return 1
+    fi
 }
 
 # Category 7: Complex Task Execution
@@ -1718,6 +1824,16 @@ run_all() {
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
     PROMPT_TIMEOUT="$previous_timeout"
+
+    end_category
+
+    print_category "Coding Context"
+
+    run_multi_turn_case coding_context_worktree_handoff "maintains branch, worktree, and recent-file coherence across a project switch and child handoff" \
+        "Adopt {{FIRST_WORKTREE}} as the project, inspect {{TARGET_FILE}}, and tell me the current branch, worktree, and staged-file count." \
+        "Switch the project to {{SECOND_WORKTREE}}, inspect its {{TARGET_FILE}}, and report its current branch. Do not modify either worktree yet." \
+        "Call spawn_agent with Agent coding-worker and Task exactly: Add a Divide(int a, int b) method to the file the parent most recently inspected, using a first-party file editing tool. Do not include a Context argument or add any path, file name, file contents, branch, worktree, or cwd to the Task; this exercise measures inherited working context. Return the child result." \
+        "Without running any more tools, report the current branch and the exact files the subagent changed."
 
     end_category
 

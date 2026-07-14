@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.3.2"
+  version: "1.4.0"
 ---
 
 # Subagent Authoring
@@ -22,6 +22,16 @@ Subagents are subject to two independent gates:
   the subagent discovery context layer returns empty.
 
 Both gates must pass for subagent features to be available.
+
+## Working context
+
+A spawned subagent receives the parent turn's project directory and recent-file
+snapshot in its initial runtime context. The child tracks its own first-party
+file reads and edits for the lifetime of the run; it never mutates the parent's
+durable working context directly. On successful completion Netclaw returns a
+structured file handoff and merges confirmed child edits into the parent for
+the next turn. Git changes merely observed in a shared worktree are reported
+without claiming that the child authored them.
 
 ## When to use
 

@@ -1,0 +1,21 @@
+{
+  "configVersion": 1,
+  "Tools": {
+    "AudienceProfiles": {
+      "Personal": {
+        "ReadFiles": {
+          "Mode": "All",
+          "Roots": []
+        },
+        "WriteFiles": {
+          "Mode": "All",
+          "Roots": []
+        },
+        "ApprovalPolicy": {
+          "DefaultMode": "Auto",
+          "ToolOverrides": {}
+        }
+      }
+    }
+  }
+}

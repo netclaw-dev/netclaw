@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -915,6 +916,7 @@ public class SkillToolTests : IDisposable
             policy,
             approvalService: null,
             NullSystemPromptProvider.Instance,
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
     }
 

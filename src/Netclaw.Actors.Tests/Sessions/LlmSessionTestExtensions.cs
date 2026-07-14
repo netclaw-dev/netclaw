@@ -21,10 +21,12 @@ internal static class LlmSessionTestExtensions
 {
     public static IServiceCollection AddLlmSessionCompositeRecords(this IServiceCollection services)
     {
+        services.TryAddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
         services.TryAddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetRequiredService<IWorkingContextSnapshotProvider>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
             sp.GetRequiredService<NetclawPaths>()));
 

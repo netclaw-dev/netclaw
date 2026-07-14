@@ -462,7 +462,11 @@ public sealed class SessionMessageAssemblerTests
             WorkingContext = WorkingContext.Empty.AddRecentFile("src/Rect.cs")
         };
         var input = MakeInput(SeedHistory("hi"), FakeRecall("mem-1"), audience: TrustAudience.Personal);
-        input = input with { State = stateWithWorkingContext };
+        input = input with
+        {
+            State = stateWithWorkingContext,
+            WorkingContextBlock = stateWithWorkingContext.WorkingContext.ToContextBlock()
+        };
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
         Assert.Contains("[working-context]", block);
@@ -491,6 +495,7 @@ public sealed class SessionMessageAssemblerTests
             SessionsBasePath: "/tmp/netclaw-test",
             FileReadGranted: fileReadGranted,
             ActiveRecall: activeRecall,
+            WorkingContextBlock: state.WorkingContext.ToContextBlock(),
             Audience: audience);
     }
 

@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -23,6 +24,9 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 public sealed class SubAgentSpawner
 {
+    private static readonly StringComparer FilePathComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private const int SubAgentMaxToolIterations = 30;
 
     private readonly IChatClientProvider _chatClientProvider;
@@ -32,6 +36,7 @@ public sealed class SubAgentSpawner
     private readonly ISystemPromptProvider _promptProvider;
     private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
+    private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
 
     // The process-wide daily-stats sink, handed to each spawned SubAgentActor so its
     // LLM calls are billed to `netclaw stats`. Nullable to match the rest of the stats
@@ -45,6 +50,7 @@ public sealed class SubAgentSpawner
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService,
         ISystemPromptProvider promptProvider,
+        IWorkingContextSnapshotProvider workingContextSnapshots,
         ILogger<SubAgentSpawner> logger,
         SubAgentConfig? subAgentConfig = null,
         Telemetry.ISessionMetrics? sessionMetrics = null)
@@ -54,6 +60,7 @@ public sealed class SubAgentSpawner
         _toolAccessPolicy = toolAccessPolicy;
         _approvalService = approvalService;
         _promptProvider = promptProvider;
+        _workingContextSnapshots = workingContextSnapshots;
         _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger;
         _sessionMetrics = sessionMetrics;
@@ -140,6 +147,12 @@ public sealed class SubAgentSpawner
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
         var scopeId = new SubAgentScopeId(subAgentScopeId);
+        var parentWorkingContext = new WorkingContext
+        {
+            ProjectDirectory = context.ProjectDirectory,
+            RecentFiles = [.. context.RecentFiles.Take(WorkingContext.MaxRecentFiles)]
+        };
+        var initialWorkingSnapshot = _workingContextSnapshots.Create(parentWorkingContext, context.Audience);
 
         // Spawn as child of the session actor via the context factory
         var props = SubAgentActor.CreateProps(
@@ -199,6 +212,8 @@ public sealed class SubAgentSpawner
                     ModelInputModalities = context.ModelInputModalities,
                     ParentSessionDirectory = context.SessionDirectory,
                     ParentProjectDirectory = context.ProjectDirectory,
+                    ParentRecentFiles = context.RecentFiles,
+                    WorkingContextBlock = initialWorkingSnapshot.ToContextBlock(),
                     ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
                     // A session owns an approval channel even when its transport cannot
@@ -229,6 +244,8 @@ public sealed class SubAgentSpawner
 
             sw.Stop();
 
+            result = EnrichWorkingContextResult(result, initialWorkingSnapshot, context.Audience);
+
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
                 RunId = runId,
@@ -238,7 +255,8 @@ public sealed class SubAgentSpawner
                 Outcome = result.Outcome,
                 OutcomeReason = result.OutcomeReason,
                 Duration = sw.Elapsed,
-                Findings = result.Findings
+                Findings = result.Findings,
+                WorkingContext = result.WorkingContext
             });
 
             SubAgentSpawnBreadcrumbs.Completed(_logger, context, profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
@@ -283,6 +301,51 @@ public sealed class SubAgentSpawner
             // Terminate the streaming caller's activity reader even on failure.
             activitySink?.TryComplete();
         }
+    }
+
+    private SubAgentResult EnrichWorkingContextResult(
+        SubAgentResult result,
+        WorkingContextSnapshot initialSnapshot,
+        TrustAudience audience)
+    {
+        if (!result.Success || result.WorkingContext is not { } childContext)
+            return result;
+
+        var finalContext = new WorkingContext
+        {
+            ProjectDirectory = childContext.ProjectDirectory,
+            RecentFiles = [.. childContext.ReadFiles
+                .Concat(childContext.ConfirmedChangedFiles)
+                .Distinct(FilePathComparer)
+                .Take(WorkingContext.MaxRecentFiles)]
+        };
+        var finalSnapshot = _workingContextSnapshots.Create(finalContext, audience);
+        var initialChanged = CanonicalChangedFiles(initialSnapshot.Git);
+        var observed = CanonicalChangedFiles(finalSnapshot.Git)
+            .Except(initialChanged, FilePathComparer)
+            .Except(childContext.ConfirmedChangedFiles, FilePathComparer)
+            .Order(FilePathComparer)
+            .ToArray();
+
+        return result with
+        {
+            WorkingContext = childContext with
+            {
+                Worktree = finalSnapshot.Git?.Worktree,
+                Branch = finalSnapshot.Git?.Branch,
+                Head = finalSnapshot.Git?.Head,
+                ObservedChangedFiles = observed
+            }
+        };
+    }
+
+    private static IEnumerable<string> CanonicalChangedFiles(GitWorkingContextSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return [];
+
+        return snapshot.ChangedFiles.Select(path =>
+            Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(path, snapshot.Worktree));
     }
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolExecutionContext context)

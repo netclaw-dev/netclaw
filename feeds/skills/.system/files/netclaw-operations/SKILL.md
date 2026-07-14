@@ -43,6 +43,13 @@ allowed roots); the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`,
 `AGENTS.md`, or `CONTEXT.md`) then loads into the prompt. Full rules:
 `skill_read_resource('netclaw-operations', 'references/projects.md')`.
 
+For Team and Personal sessions, `[working-context]` is refreshed at the start
+of each new turn. In a Git project it includes the active worktree, branch,
+HEAD, upstream divergence, and dirty counts. Treat this as turn-start
+grounding: a checkout or commit performed during the current tool loop appears
+in the next turn's snapshot. Subagents receive a read-only project/recent-file
+snapshot and return confirmed file edits to the parent when they complete.
+
 ## Scheduling & Background Jobs
 
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always

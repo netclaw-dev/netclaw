@@ -10,6 +10,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -49,6 +50,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
@@ -172,6 +174,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var notifications = new List<SubAgentNotificationInfo>();
@@ -215,6 +218,57 @@ public sealed class SubAgentSpawnerTests : TestKit
     }
 
     [Fact]
+    public async Task Spawn_async_returns_only_unconfirmed_git_changes_as_observed()
+    {
+        var projectDirectory = Path.GetFullPath(Path.Join(Path.GetTempPath(), "netclaw-spawner-context"));
+        var confirmedPath = Path.GetFullPath(Path.Join(projectDirectory, "src", "Confirmed.cs"));
+        var observedPath = Path.GetFullPath(Path.Join(projectDirectory, "src", "Observed.cs"));
+        var snapshots = new Queue<WorkingContextSnapshot>(
+        [
+            new WorkingContextSnapshot
+            {
+                WorkingContext = WorkingContext.Empty.WithProjectDirectory(projectDirectory),
+                Git = GitSnapshot(projectDirectory)
+            },
+            new WorkingContextSnapshot
+            {
+                WorkingContext = WorkingContext.Empty.WithProjectDirectory(projectDirectory),
+                Git = GitSnapshot(projectDirectory, "src/Confirmed.cs", "src/Observed.cs")
+            }
+        ]);
+        var spawner = CreateSpawner(new SequenceWorkingContextSnapshotProvider(snapshots));
+        var childProbe = CreateTestProbe("working-context-child");
+        var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
+        {
+            Audience = TrustAudience.Personal,
+            ProjectDirectory = projectDirectory,
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+        };
+
+        var spawnTask = spawner.SpawnAsync(
+            CreateProfile(),
+            "Update the project.",
+            runtimeContext: null,
+            context,
+            TestContext.Current.CancellationToken);
+
+        await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+        childProbe.Reply(SuccessfulResult() with
+        {
+            WorkingContext = new SubAgentWorkingContextInfo
+            {
+                ProjectDirectory = projectDirectory,
+                ConfirmedChangedFiles = [confirmedPath]
+            }
+        });
+
+        var result = await spawnTask;
+
+        Assert.Equal([confirmedPath], result.WorkingContext!.ConfirmedChangedFiles);
+        Assert.Equal([observedPath], result.WorkingContext.ObservedChangedFiles);
+    }
+
+    [Fact]
     public async Task Spawned_sub_agent_bills_its_llm_calls_to_session_metrics()
     {
         // Full-wiring regression guard for #1597: a sub-agent spawned through the real
@@ -246,6 +300,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
+            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
 
@@ -278,6 +333,10 @@ public sealed class SubAgentSpawnerTests : TestKit
     }
 
     private static SubAgentSpawner CreateSpawner()
+        => CreateSpawner(new WorkingContextSnapshotProvider(
+            NullLogger<WorkingContextSnapshotProvider>.Instance));
+
+    private static SubAgentSpawner CreateSpawner(IWorkingContextSnapshotProvider workingContextSnapshots)
     {
         var toolRegistry = new ToolRegistry();
         toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
@@ -295,8 +354,16 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are an inspector."),
+            workingContextSnapshots,
             NullLogger<SubAgentSpawner>.Instance);
     }
+
+    private static GitWorkingContextSnapshot GitSnapshot(string worktree, params string[] changedFiles) => new()
+    {
+        Worktree = worktree,
+        CommonDirectory = Path.Join(worktree, ".git"),
+        ChangedFiles = [.. changedFiles]
+    };
 
     private static SubAgentProfile CreateProfile() => new()
     {
@@ -313,4 +380,11 @@ public sealed class SubAgentSpawnerTests : TestKit
         Output = "ok",
         AgentName = new AgentName("inspector")
     };
+
+    private sealed class SequenceWorkingContextSnapshotProvider(Queue<WorkingContextSnapshot> snapshots)
+        : IWorkingContextSnapshotProvider
+    {
+        public WorkingContextSnapshot Create(WorkingContext context, TrustAudience audience)
+            => snapshots.Dequeue();
+    }
 }

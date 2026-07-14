@@ -119,6 +119,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     // sub-agent's own session.log (SubSessionId) — matching the enriched logger's own context.
     private string? _parentSessionId;
     private string? _subSessionId;
+    private WorkingContext _workingContext = WorkingContext.Empty;
+    private readonly HashSet<string> _readFiles = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _confirmedChangedFiles = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PendingFileActivity> _pendingFileActivities = new(StringComparer.Ordinal);
 
     // Default wait-for-first-delta budget when the spawn message carries none
     // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
@@ -270,6 +274,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 Audience = subAgentAudience,
                 InheritedCwd = msg.ParentCwd,
+                RecentFiles = msg.ParentRecentFiles,
             };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
@@ -277,6 +282,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionContext.RequestedDeliveryTarget = msg.RequestedDeliveryTarget;
             _toolExecutionContext.ModelInputModalities = msg.ModelInputModalities;
             _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;
+            _workingContext = new WorkingContext
+            {
+                ProjectDirectory = msg.ParentProjectDirectory,
+                RecentFiles = [.. msg.ParentRecentFiles.Take(WorkingContext.MaxRecentFiles)]
+            };
             _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
             _aiTools = ResolveExposedAiTools();
             _executionCts = new CancellationTokenSource();
@@ -320,7 +330,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // If the caller supplied runtime context, prefix it onto the user message so the
             // system prompt stays reproducible across invocations.
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildSystemPrompt(_definition)));
-            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildUserMessage(msg.RuntimeContext, msg.Task)));
+            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User,
+                BuildUserMessage(
+                    msg.RuntimeContext,
+                    subAgentAudience == TrustAudience.Public
+                        ? string.Empty
+                        : msg.WorkingContextBlock ?? _workingContext.ToContextBlock(),
+                    msg.Task)));
 
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
                 _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
@@ -459,6 +475,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             foreach (var result in msg.ToolResults)
             {
                 _history.Add(ChatMessageConverter.ToAiMessage(result));
+                if (result.ToolCallId is { } callId
+                    && _pendingFileActivities.Remove(callId.Value, out var activity)
+                    && IsSuccessfulFileActivity(activity.Kind, result.Content))
+                {
+                    _workingContext = _workingContext.AddRecentFile(activity.Path);
+                    if (activity.Kind == FileActivityKind.Read)
+                        _readFiles.Add(activity.Path);
+                    else
+                        _confirmedChangedFiles.Add(activity.Path);
+                }
                 var preview = result.Content is { Length: > 200 }
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
@@ -688,6 +714,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ? JsonSerializer.Serialize(toolCall.Arguments)
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
+            if (toolCall.CallId is { Length: > 0 } callId
+                && WorkingContextUpdater.TryExtractFilePath(argsJson, out var path)
+                && TryClassifyFileActivity(toolCall.Name, out var kind))
+            {
+                _pendingFileActivities[callId] = new PendingFileActivity(ResolveTrackedPath(path), kind);
+            }
 
             // Log tool START event so tool execution spans are visible in Seq
             // (previously only tool results were logged, making it impossible to
@@ -814,6 +846,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             ? BuildFindings(output, _toolExecutionContext.SessionId, resolvedOutcome, outcomeReason)
             : [];
 
+        var workingContextResult = BuildWorkingContextResult(success);
         _replyTo.Tell(new SubAgentResult
         {
             Success = success,
@@ -822,7 +855,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Outcome = resolvedOutcome,
             OutcomeReason = outcomeReason,
             Findings = findings,
-            FindingsCount = findings.Count
+            FindingsCount = findings.Count,
+            WorkingContext = workingContextResult
         });
 
         Context.Stop(Self);
@@ -946,12 +980,68 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     /// When runtime context is null or whitespace, returns the raw task string for backward
     /// compatibility with the pre-Context protocol.
     /// </summary>
-    private static string BuildUserMessage(string? runtimeContext, string task)
+    private static string BuildUserMessage(string? runtimeContext, string workingContext, string task)
     {
-        if (string.IsNullOrWhiteSpace(runtimeContext))
+        var contextParts = new[] { runtimeContext?.Trim(), workingContext.Trim() }
+            .Where(part => !string.IsNullOrWhiteSpace(part));
+        var combinedContext = string.Join("\n\n", contextParts);
+        if (combinedContext.Length == 0)
             return task;
 
-        return $"Context:\n{runtimeContext.Trim()}\n\nTask:\n{task}";
+        return $"Context:\n{combinedContext}\n\nTask:\n{task}";
+    }
+
+    private SubAgentWorkingContextInfo? BuildWorkingContextResult(bool success)
+    {
+        if (!success)
+            return null;
+
+        return new SubAgentWorkingContextInfo
+        {
+            ProjectDirectory = _workingContext.ProjectDirectory,
+            ReadFiles = _readFiles.Order(StringComparer.Ordinal).ToArray(),
+            ConfirmedChangedFiles = _confirmedChangedFiles.Order(StringComparer.Ordinal).ToArray(),
+            ObservedChangedFiles = []
+        };
+    }
+
+    private string ResolveTrackedPath(string path)
+    {
+        if (Path.IsPathRooted(path) || string.IsNullOrWhiteSpace(_workingContext.ProjectDirectory))
+            return path;
+        return Path.GetFullPath(path, _workingContext.ProjectDirectory);
+    }
+
+    private static bool TryClassifyFileActivity(string toolName, out FileActivityKind kind)
+    {
+        kind = toolName switch
+        {
+            "file_read" => FileActivityKind.Read,
+            "file_write" or "file_edit" => FileActivityKind.Changed,
+            _ => FileActivityKind.None
+        };
+        return kind != FileActivityKind.None;
+    }
+
+    private static bool IsSuccessfulFileActivity(FileActivityKind kind, string? result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return false;
+
+        return kind == FileActivityKind.Changed
+            ? result.StartsWith("Successfully ", StringComparison.Ordinal)
+            : !result.StartsWith("Error:", StringComparison.Ordinal)
+              && !result.StartsWith("Tool access denied:", StringComparison.Ordinal)
+              && !result.Contains("requires approval", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record PendingFileActivity(string Path, FileActivityKind Kind);
+
+    private enum FileActivityKind
+    {
+        None,
+        Read,
+        Changed
     }
 
     private static string ExtractText(AiChatMessage message)
@@ -1276,6 +1366,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             RequestedDeliveryTarget = source.RequestedDeliveryTarget,
             ModelInputModalities = source.ModelInputModalities,
             ProjectDirectory = source.ProjectDirectory,
+            RecentFiles = source.RecentFiles,
             InheritedCwd = source.InheritedCwd,
             SupportsInteractiveApproval = source.SupportsInteractiveApproval,
             OnSubAgentActivity = source.OnSubAgentActivity,

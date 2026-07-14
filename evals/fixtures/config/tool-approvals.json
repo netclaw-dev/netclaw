@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "audiences": {
+    "personal": {
+      "shell_execute": [
+        {
+          "verb": "git",
+          "directory": null
+        },
+        {
+          "verb": "git branch",
+          "directory": null
+        },
+        {
+          "verb": "git config",
+          "directory": null
+        },
+        {
+          "verb": "git diff",
+          "directory": null
+        },
+        {
+          "verb": "git rev-parse",
+          "directory": null
+        },
+        {
+          "verb": "git status",
+          "directory": null
+        },
+        {
+          "verb": "git worktree",
+          "directory": null
+        }
+      ]
+    }
+  }
+}
