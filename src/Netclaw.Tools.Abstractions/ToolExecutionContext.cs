@@ -60,7 +60,7 @@ public abstract record ChildRunCompletion
                 new Cancelled(reason.Value),
             SubAgentRunOutcome.Failed when reason is { } failureReason => new Failed(failureReason),
             _ => throw new ArgumentException(
-                $"Invalid child completion: outcome={outcome}, reason={reason?.Value ?? "none"}, hasDelta={delta is not null}.",
+                $"Invalid child completion: outcome={outcome}, reason={(reason is { } value ? value.Value : "none")}, hasDelta={delta is not null}.",
                 nameof(outcome))
         };
 
