@@ -323,7 +323,7 @@ public sealed class ToolAccessPolicy
         // every "Always here" click into "Always anywhere" because the
         // persistence path reads PendingToolInteraction.Cwd.
         var isShell = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal);
-        if (isShell && context is not null)
+        if (isShell)
             context.Approval.SetCwd(context.ResolveShellCwd(ExtractWorkingDirectory(arguments)));
 
         // Safe-verb ∩ safe-space short-circuit. Runs only for shell and only
@@ -332,7 +332,6 @@ public sealed class ToolAccessPolicy
         // demonstrably read-only verbs (cat/ls/grep/find/git status/...)
         // when the cwd is inside session_dir or project_dir.
         if (_safeVerbPolicy is not null
-            && context is not null
             && isShell
             && !isMessy
             && candidateVerbs.Count > 0
@@ -343,9 +342,9 @@ public sealed class ToolAccessPolicy
 
         var options = BuildApprovalOptions(
             isMessy,
-            isCwdShallow: IsCwdTooShallow(context?.Approval.Cwd),
+            isCwdShallow: IsCwdTooShallow(context.Approval.Cwd),
             allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
-                candidates, context?.Approval.Cwd, context?.SessionDirectory));
+                candidates, context.Approval.Cwd, context.SessionDirectory));
 
         var approvalContext = new ToolApprovalContext(
             toolName.Value,
@@ -353,7 +352,7 @@ public sealed class ToolAccessPolicy
             patterns,
             candidateVerbs,
             options,
-            Cwd: context?.Approval.Cwd,
+            Cwd: context.Approval.Cwd,
             IsMessy: isMessy,
             Candidates: candidates);
 

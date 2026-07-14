@@ -15,4 +15,9 @@
     <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
+  </ItemGroup>
+
 </Project>

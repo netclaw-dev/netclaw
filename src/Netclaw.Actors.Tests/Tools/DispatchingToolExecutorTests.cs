@@ -537,13 +537,6 @@ public class DispatchingToolExecutorTests
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
-        var teamContext = TestToolExecutionContext.CreateBound("slack/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Team,
-            Boundary = TrustBoundary.Team,
-            ChannelType = "slack"
-        });
-
         Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Team));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Team));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_write")!, TrustAudience.Team));
@@ -575,13 +568,6 @@ public class DispatchingToolExecutorTests
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-public-tools-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
-
-        var publicContext = TestToolExecutionContext.CreateBound("slack/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Public,
-            Boundary = TrustBoundary.Public,
-            ChannelType = "slack"
-        });
 
         Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Public));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Public));

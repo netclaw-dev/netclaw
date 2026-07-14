@@ -115,7 +115,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
                 ProjectDirectory = _projectDir,
             });
 
-        Assert.True(policy.TryResolveWritePath(Path.Combine(_outsideDir, "legacy.txt"), ctx.Invocation, out _, out var error), error);
+        Assert.True(policy.TryResolveWritePath(Path.Join(_outsideDir, "legacy.txt"), ctx.Invocation, out _, out var error), error);
     }
 
     [Fact]
@@ -183,6 +183,6 @@ public sealed class AutonomousZoneClampTests : IDisposable
             SupportsInteractiveApproval = false
         });
 
-        Assert.False(policy.TryResolveWritePath(Path.Combine(_outsideDir, "x.txt"), ctx.Invocation, out _, out _));
+        Assert.False(policy.TryResolveWritePath(Path.Join(_outsideDir, "x.txt"), ctx.Invocation, out _, out _));
     }
 }
