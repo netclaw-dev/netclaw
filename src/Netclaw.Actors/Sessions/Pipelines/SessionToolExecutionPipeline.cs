@@ -259,7 +259,6 @@ internal sealed class SessionToolExecutionPipeline
         try
         {
             batch.Validate();
-            var timeout = batch.DefaultTimeout.Value;
             // Execute all tool calls in parallel. Calls are not always
             // independent -- e.g. two file_edit calls on the same file -- so
             // file-mutating tools serialize their read-modify-write per target
