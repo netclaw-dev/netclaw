@@ -143,6 +143,37 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ServerFeedSkill_loads_and_reads_resource_by_logical_name()
+    {
+        WriteServerFeedSkill("managed", "feed-skill", """
+            ---
+            name: feed-skill
+            description: Managed guidance.
+            ---
+            # Managed Skill
+            Use the bundled runbook.
+            """);
+        var resourcePath = Path.Combine(
+            _paths.ServerFeedDirectory("managed"), "feed-skill", "references", "runbook.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(resourcePath)!);
+        File.WriteAllText(resourcePath, "managed-resource-marker");
+        ScanFeedSkills("managed");
+
+        var loadTool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var loadResult = await loadTool.ExecuteAsync(
+            ToolInput.Create("Name", "feed-skill"), PersonalCtx, TestContext.Current.CancellationToken);
+        var resourceTool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
+        var resourceResult = await resourceTool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "feed-skill", "ResourcePath", "references/runbook.md"),
+            PersonalCtx,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("Managed Skill", loadResult);
+        Assert.Contains("managed-resource-marker", resourceResult);
+    }
+
+    [Fact]
     public async Task SkillLoad_RecordsDetailedTelemetryForKnownSkill()
     {
         WriteSkill("test-skill", """
@@ -852,7 +883,19 @@ public class SkillToolTests : IDisposable
     }
 
     private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
-        => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
+    {
+        var feeds = new SkillFeedsConfig();
+        if (Directory.Exists(_paths.ServerFeedsDirectory))
+        {
+            foreach (var directory in Directory.GetDirectories(_paths.ServerFeedsDirectory))
+                feeds.Feeds.Add(new SkillFeedSource { Name = Path.GetFileName(directory) });
+        }
+
+        var refresher = new SkillInventoryRefresher(
+            _paths, feeds, [], _registry, _indexLayer);
+        return new SkillManageTool(
+            _registry, _paths, scanner ?? new NoOpSkillContentScanner(), refresher);
+    }
 
     private static SubAgentSpawner CreateSubAgentSpawner()
     {

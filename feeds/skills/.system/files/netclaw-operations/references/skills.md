@@ -7,6 +7,11 @@
 The `netclaw skill` CLI manages skills and skill sources. All subcommands
 are offline — no daemon required.
 
+During an agent session, use `skill_load(name)` to activate guidance and
+`skill_read_resource(name, path)` for bundled files. Skill origin and physical
+location are intentionally hidden behind those logical tools. Use the CLI path
+commands below only for explicit operator inspection and diagnostics.
+
 | Command | What it does |
 |---------|--------------|
 | `netclaw skill list` | List all discovered skills with source, version, status |
@@ -29,5 +34,7 @@ Register additional skill directories (e.g. `~/.claude/skills/`):
 | `netclaw skill source enable <name>` | Enable a disabled source |
 | `netclaw skill source disable <name>` | Disable without removing |
 
-The daemon's `SkillDirectoryWatcherService` automatically rescans all skill
-directories (native + external) when files change on disk. No restart needed.
+The daemon automatically rebuilds one complete inventory across native,
+managed-feed, and external sources after syncs and supported mutations. Native
+skills take precedence over managed feeds, which take precedence over external
+sources. No restart is needed.

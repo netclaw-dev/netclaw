@@ -307,6 +307,11 @@ consider model capability as the cause.
 
 ## System Skills Sync Rule
 
+Runtime skill use is logical: call `skill_load` by canonical name and
+`skill_read_resource` for bundled files. Do not expose physical skill roots in
+prompt indexes or teach agents to derive `SKILL.md` paths. Direct filesystem
+inspection is reserved for explicit operator diagnostics.
+
 System skills in `feeds/skills/.system/files/` are the agent's operational
 guidance — they tell the running agent how to use features. When you change a
 feature area, the corresponding skill **must** be updated in the same PR.

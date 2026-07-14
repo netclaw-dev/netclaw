@@ -85,6 +85,12 @@ phrasing — not just one magic prompt.
   `turn_skill_auto_load`, `turn_memory_recall`, and
   `turn_memory_checkpoint_enqueued`.
 
+Skill activation assertions require the exact structured method
+`turn_skill_loaded ... method=skill_load`; a direct `file_read` of `SKILL.md`
+does not count as normal activation. The explicit physical-inspection case is
+the exception and verifies `method=file_read` only when the prompt asks to
+inspect a concrete file on disk.
+
 ### Memory Pipeline Semantics
 
 The memory category intentionally separates three behaviors that used to be
@@ -161,15 +167,24 @@ NETCLAW_EVAL_MODEL_ID=qwen3:30b \
 ## Results Database
 
 Results are stored in `$EVAL_HOME/evals/results.db` (SQLite) inside the
-per-run throwaway directory, NOT under `~/.netclaw/`. This means results
-don't persist across runs by default — on script exit, the database is
-deleted along with `$EVAL_HOME`.
+per-run directory and copied with the run artifacts to `evals/runs/<run-id>/`.
+The final `Archived:` line identifies the retained directory.
 
-If you want to retain results for trend analysis, copy the database out
-of `$EVAL_HOME` before the EXIT trap fires (look for the "Results:
-..."  line at the bottom of the script output to get the path). A
-dedicated results-retention follow-up may add a `NETCLAW_EVAL_RESULTS_DB`
-override.
+For the logical-skill-access change, the pre-change baseline used
+`nvidia/Qwen3.6-27B-NVFP4` through the Spark OpenAI-compatible endpoint:
+
+- Full Skill category: 18/18 (`e065b33c-a1f7-4536-bfc4-71e40489f58e`)
+- Managed-feed logical load/resource: 3/3 (`3d66228b-21f2-4131-8c91-1b8215111e7c`)
+- Progressive disclosure: 3/3 (`a97185f4-abb1-44c4-9077-60f587f7185a`)
+- Explicit physical inspection exception: 3/3 (`5524daee-def3-4626-8c4e-14f1edbe5482`)
+
+Post-change results from the rebuilt development image:
+
+- Full Skill category: 17/18 (`ca5f3d24-ec0c-4339-894e-b07366441dd8`); the
+  single serialization activation miss passed 3/3 on focused rerun
+  (`08c9a01b-5b16-4ffa-818d-3fcf485ddc3a`).
+- Managed-feed logical load/resource: 3/3
+  (`e220e85e-df8c-4453-ad6e-c663924dd495`).
 
 Requires `sqlite3` CLI — if not available, the script still runs but
 skips persistence.

@@ -93,7 +93,7 @@ public class SkillRegistryTests
     public void GenerateIndex_returns_empty_when_no_skills()
     {
         var registry = new SkillRegistry();
-        Assert.Equal(string.Empty, registry.GenerateIndex("/test/skills"));
+        Assert.Equal(string.Empty, registry.GenerateIndex());
     }
 
     [Fact]
@@ -102,20 +102,20 @@ public class SkillRegistryTests
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "Short description"));
 
-        var index = registry.GenerateIndex("/test/skills");
+        var index = registry.GenerateIndex();
 
         Assert.Contains("my-skill: Short description", index);
     }
 
     [Fact]
-    public void GenerateIndex_includes_root_path()
+    public void GenerateIndex_includes_logical_catalog_header()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "desc"));
 
-        var index = registry.GenerateIndex("/home/user/.netclaw/skills");
+        var index = registry.GenerateIndex();
 
-        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
+        Assert.Contains("[skills]|invoke via /name", index);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class SkillRegistryTests
         registry.Register(MakeEntry("netclaw-memory", "Memory guidance", ".system"));
         registry.Register(MakeEntry("my-workflow", "Workflow help"));
 
-        var index = registry.GenerateIndex("/test/skills");
+        var index = registry.GenerateIndex();
 
         Assert.Contains("|.system:", index);
         Assert.Contains("netclaw-memory: Memory guidance", index);
@@ -141,7 +141,7 @@ public class SkillRegistryTests
             disableModelInvocation: true));
         registry.Register(MakeEntry("memory", "Memory guidance", ".system"));
 
-        var index = registry.GenerateIndex("/test/skills");
+        var index = registry.GenerateIndex();
 
         Assert.DoesNotContain("ops:", index);
         Assert.Contains("memory: Memory guidance", index);
@@ -153,11 +153,11 @@ public class SkillRegistryTests
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "A user skill"));
 
-        Assert.NotEqual(string.Empty, registry.GenerateIndex("/test/skills"));
+        Assert.NotEqual(string.Empty, registry.GenerateIndex());
 
         registry.Clear();
 
-        Assert.Equal(string.Empty, registry.GenerateIndex("/test/skills"));
+        Assert.Equal(string.Empty, registry.GenerateIndex());
     }
 
     // --- Slash-command dispatch tests ---
@@ -293,71 +293,42 @@ public class SkillRegistryTests
         Assert.Contains("/ops", decision.ErrorMessage!, StringComparison.Ordinal);
     }
 
-    // --- Multi-root index tests ---
+    // --- Logical index contract ---
 
     [Fact]
-    public void GenerateIndex_with_external_sources_uses_roots_header()
+    public void GenerateIndex_uses_logical_skill_tools_without_physical_roots()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "desc"));
 
-        var externalSources = new[]
-        {
-            new ResolvedExternalSource("claude-code", new[] { "/home/user/.claude/skills" }, true)
-        };
+        var index = registry.GenerateIndex();
 
-        var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
-
-        Assert.Contains("roots: native=/home/user/.netclaw/skills,claude-code=/home/user/.claude/skills", index);
-        Assert.DoesNotContain("[skills]|root:", index);
+        Assert.Contains("skill_load(name)", index);
+        Assert.Contains("skill_read_resource(skillName, resourcePath)", index);
+        Assert.DoesNotContain("file_read", index);
+        Assert.DoesNotContain("/home/", index);
     }
 
     [Fact]
-    public void GenerateIndex_with_multi_path_external_source_joins_paths_with_semicolon()
+    public void GenerateIndex_explains_routed_skill_task_requirement()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "desc"));
 
-        var externalSources = new[]
-        {
-            new ResolvedExternalSource(
-                "claude-code",
-                new[]
-                {
-                    "/home/user/.claude/skills",
-                    "/home/user/.claude/commands",
-                    "/home/user/.claude/plugins/marketplaces/dotnet-skills/skills"
-                },
-                true)
-        };
+        var index = registry.GenerateIndex();
 
-        var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
-
-        Assert.Contains(
-            "claude-code=/home/user/.claude/skills;/home/user/.claude/commands;/home/user/.claude/plugins/marketplaces/dotnet-skills/skills",
-            index);
+        Assert.Contains("routed to a subagent require a concrete task", index);
     }
 
     [Fact]
-    public void GenerateIndex_without_external_sources_uses_single_root_header()
+    public void GenerateIndex_does_not_expose_skill_file_path()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "desc"));
 
-        var index = registry.GenerateIndex("/home/user/.netclaw/skills");
+        var index = registry.GenerateIndex();
 
-        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
-        Assert.DoesNotContain("roots:", index);
-    }
-
-    [Fact]
-    public void GenerateIndex_with_empty_external_sources_uses_single_root_header()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("my-skill", "desc"));
-
-        var index = registry.GenerateIndex("/home/user/.netclaw/skills", Array.Empty<ResolvedExternalSource>());
-
-        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
+        Assert.DoesNotContain("SKILL.md", index);
+        Assert.DoesNotContain("root", index, StringComparison.OrdinalIgnoreCase);
     }
 }
