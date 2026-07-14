@@ -124,7 +124,7 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         var content = completed.ToolResults[0].Content;
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(1200, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(1200), executor.LastContext?.ExecutionTimeout.Value);
         Assert.DoesNotContain("clamped", content);
         Assert.DoesNotContain("[timeout", content);
         Assert.Contains("ok", content);
@@ -144,7 +144,7 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         var content = completed.ToolResults[0].Content;
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(10, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(10), executor.LastContext?.ExecutionTimeout.Value);
         Assert.DoesNotContain("[timeout", content);
     }
 
@@ -162,7 +162,7 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         });
 
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(300, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(300), executor.LastContext?.ExecutionTimeout.Value);
         Assert.DoesNotContain("NOT executed", completed.ToolResults[0].Content);
     }
 
@@ -178,7 +178,7 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         var content = completed.ToolResults[0].Content;
         Assert.Equal(1, executor.Invocations);
-        Assert.Equal(300, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(300), executor.LastContext?.ExecutionTimeout.Value);
         Assert.DoesNotContain("[timeout", content);
         Assert.Equal("ok", content);
     }

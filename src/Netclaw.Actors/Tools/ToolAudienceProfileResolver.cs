@@ -20,7 +20,7 @@ internal sealed class ToolAudienceProfileResolver
         _paths = paths;
     }
 
-    public ToolAudienceProfile ResolveProfile(ToolExecutionContext? context)
+    public ToolAudienceProfile ResolveProfile(ToolInvocationContext context)
     {
         return ResolveProfile(ResolveAudience(context));
     }
@@ -30,7 +30,7 @@ internal sealed class ToolAudienceProfileResolver
         return ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
     }
 
-    public IReadOnlyList<string> ResolveRoots(ToolFilesystemAccessProfile access, ToolExecutionContext context)
+    public IReadOnlyList<string> ResolveRoots(ToolFilesystemAccessProfile access, ToolInvocationContext context)
     {
         if (access.Mode != ToolFilesystemMode.Roots)
             return [];
@@ -73,7 +73,7 @@ internal sealed class ToolAudienceProfileResolver
     /// </summary>
     public string? ResolveWorkspacesDirectory() => _paths?.WorkspacesDirectory;
 
-    public bool IsToolAllowed(ToolName toolName, ToolExecutionContext? context)
+    public bool IsToolAllowed(ToolName toolName, ToolInvocationContext context)
     {
         if (!IsProfileManagedTool(toolName))
             return true;
@@ -86,7 +86,7 @@ internal sealed class ToolAudienceProfileResolver
         return profile.AllowedTools.Contains(toolName.Value, StringComparer.Ordinal);
     }
 
-    public bool IsMcpServerAllowed(McpServerName serverName, ToolExecutionContext? context)
+    public bool IsMcpServerAllowed(McpServerName serverName, ToolInvocationContext context)
     {
         var profile = ResolveProfile(context);
         return IsMcpServerAllowed(serverName, profile);
@@ -111,7 +111,7 @@ internal sealed class ToolAudienceProfileResolver
         return IsMcpToolAllowed(serverName, toolName, profile);
     }
 
-    public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolExecutionContext? context)
+    public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolInvocationContext context)
     {
         var profile = ResolveProfile(context);
         return IsMcpToolAllowed(serverName, toolName, profile);
@@ -143,7 +143,7 @@ internal sealed class ToolAudienceProfileResolver
         return PathUtility.ExpandHome(trimmed);
     }
 
-    private string? ResolveToken(string root, ToolExecutionContext context)
+    private string? ResolveToken(string root, ToolInvocationContext context)
     {
         if (string.IsNullOrWhiteSpace(root))
             return null;
@@ -158,8 +158,8 @@ internal sealed class ToolAudienceProfileResolver
         return ResolvePathToken(trimmed);
     }
 
-    private static TrustAudience ResolveAudience(ToolExecutionContext? context)
-        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context?.Audience, context?.SessionId);
+    private static TrustAudience ResolveAudience(ToolInvocationContext context)
+        => context.Audience;
 
     private static bool IsMcpServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
     {

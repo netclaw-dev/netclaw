@@ -33,7 +33,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Ids))
             return "No memory IDs provided.";
@@ -73,6 +73,4 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         return sb.ToString().TrimEnd();
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 }

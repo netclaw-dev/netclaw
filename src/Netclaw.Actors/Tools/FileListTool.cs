@@ -38,10 +38,7 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         _pathPolicy = pathPolicy;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return Task.FromResult("Error: 'path' parameter is required.");

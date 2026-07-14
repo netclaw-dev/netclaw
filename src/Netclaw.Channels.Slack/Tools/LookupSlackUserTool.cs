@@ -60,7 +60,7 @@ public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserToo
         _timeProvider = timeProvider;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Query))
             return "Error: 'query' parameter is required.";

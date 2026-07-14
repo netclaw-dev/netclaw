@@ -147,7 +147,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     public ITimerScheduler Timers { get; set; } = null!;
     private CancellationTokenRegistration _externalCancellationRegistration;
-    private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
+    private ToolExecutionContext? _toolExecutionContext;
+    private ToolExecutionContext ToolExecutionContext
+        => _toolExecutionContext
+           ?? throw new InvalidOperationException("Sub-agent tool context is unavailable before a run is admitted.");
     private bool _malformedFinalOutputRepairAttempted;
     private SubAgentOutcomeReason? _forcedFinalOutcomeReason;
 
@@ -270,24 +273,27 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 return;
             }
 
-            _toolExecutionContext = new ToolExecutionContext(scopeId, msg.ParentSessionDirectory)
+            _toolExecutionContext = new ToolExecutionContext(new ToolRunScope
             {
+                Session = new ToolSessionScope.Bound(scopeId, msg.ParentSessionDirectory),
                 Audience = subAgentAudience,
+                InlineOutputBudget = InlineOutputBudget.Default,
+                Boundary = msg.Boundary,
+                ChannelType = msg.ChannelType,
+                DefaultDeliveryTarget = msg.DefaultDeliveryTarget,
+                RequestedDeliveryTarget = msg.RequestedDeliveryTarget,
+                ModelInputModalities = msg.ModelInputModalities,
+                ApprovalBridge = _approvalBridge,
+                ProjectDirectory = msg.ParentProjectDirectory,
                 InheritedCwd = msg.ParentCwd,
                 RecentFiles = msg.ParentRecentFiles,
-            };
-            _toolExecutionContext.Boundary = msg.Boundary;
-            _toolExecutionContext.ChannelType = msg.ChannelType;
-            _toolExecutionContext.DefaultDeliveryTarget = msg.DefaultDeliveryTarget;
-            _toolExecutionContext.RequestedDeliveryTarget = msg.RequestedDeliveryTarget;
-            _toolExecutionContext.ModelInputModalities = msg.ModelInputModalities;
-            _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;
+                SupportsInteractiveApproval = _approvalBridge is not null,
+            }, ToolExecutionTimeout.Default);
             _workingContext = new WorkingContext
             {
                 ProjectDirectory = msg.ParentProjectDirectory,
                 RecentFiles = [.. msg.ParentRecentFiles.Take(WorkingContext.MaxRecentFiles)]
             };
-            _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
             _aiTools = ResolveExposedAiTools();
             _executionCts = new CancellationTokenSource();
             _externalCts = new CancellationTokenSource();
@@ -742,7 +748,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _ = ExecuteToolsAsync(
             executor,
             toolCalls,
-            _toolExecutionContext,
+            ToolExecutionContext,
             _executionCts?.Token ?? CancellationToken.None,
             _externalCts?.Token ?? CancellationToken.None,
             self,
@@ -791,7 +797,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         var tools = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
         return _toolAccessPolicy
-            .FilterDiscoverableTools(tools, _toolExecutionContext)
+            .FilterDiscoverableTools(tools, ToolExecutionContext)
             .Select(tool => tool.ToAITool())
             .ToList();
     }
@@ -843,7 +849,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _runStopwatch.Elapsed.TotalSeconds);
 
         var findings = success && _definition.EmitStructuredFindings
-            ? BuildFindings(output, _toolExecutionContext.SessionId, resolvedOutcome, outcomeReason)
+            ? BuildFindings(output, ToolExecutionContext.SessionId, resolvedOutcome, outcomeReason)
             : [];
 
         var workingContextResult = BuildWorkingContextResult(success);
@@ -970,7 +976,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                       "Use the attached media along with the tool result to complete the delegated task.]",
             MediaReferences = mediaReferences
         };
-        _history.Add(ChatMessageConverter.ToAiMessage(message, _toolExecutionContext.SessionDirectory));
+        _history.Add(ChatMessageConverter.ToAiMessage(message, ToolExecutionContext.SessionDirectory));
     }
 
     /// <summary>
@@ -1232,22 +1238,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var modelInputBudget = new ModelInputBatchBudget(ChannelAttachmentPolicy.DefaultMaxFileBytes);
             var tasks = toolCalls.Select(async tc =>
             {
-                var toolContext = CreatePerToolExecutionContext(executionContext);
-
                 // Same execution-preflight seam as the main pipeline: validate +
                 // extract in one step (the sub-agent previously skipped extraction
                 // entirely, silently dropping timeout hints). meta.Background and
                 // meta.Rationale are intentionally not consumed here — sub-agents
                 // have no background-job manager or audit logger; only the timeout
-                // hint maps onto the per-tool context via ApplyMeta.
+                // hint is materialized into the immutable per-tool context.
                 var interpretation = executor.InterpretToolCall(tc);
+                var toolContext = CreatePerToolExecutionContext(executionContext, interpretation.Meta);
                 if (interpretation.Rejection is { } rejection)
                     return BuildToolResult(tc, rejection.Message, toolContext, modelInputBudget);
 
                 var meta = interpretation.Meta;
                 var cleanedTc = interpretation.Cleaned;
-                toolContext.ApplyMeta(meta);
-
                 try
                 {
                     var result = await executor.ExecuteAsync(cleanedTc, toolContext, ct);
@@ -1300,11 +1303,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         // approvals because the sub-agent's scope ID differs from the parent
                         // session's scope. Keep that retry-local so approve-once cannot bleed
                         // across parallel tool calls or later iterations.
-                        var retryContext = CreatePerToolExecutionContext(executionContext);
-                        retryContext.OneTimeApprovedToolName = tc.Name;
-                        retryContext.SetOneTimeApprovedPatterns(ctx.Patterns);
-                        retryContext.ApplyMeta(meta);
-
+                        var retryContext = CreatePerToolExecutionContext(executionContext, meta);
+                        retryContext.Approval.SeedOneTimeApproval(tc.Name, ctx.Patterns);
                         var result = await executor.ExecuteAsync(cleanedTc, retryContext, ct);
                         return BuildToolResult(cleanedTc, result, retryContext, modelInputBudget);
                     }
@@ -1355,24 +1355,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         }
     }
 
-    private static ToolExecutionContext CreatePerToolExecutionContext(ToolExecutionContext source)
-        => new(source.SessionId, source.SessionDirectory)
-        {
-            Audience = source.Audience,
-            Boundary = source.Boundary,
-            RequestedTimeoutSeconds = source.RequestedTimeoutSeconds,
-            ChannelType = source.ChannelType,
-            DefaultDeliveryTarget = source.DefaultDeliveryTarget,
-            RequestedDeliveryTarget = source.RequestedDeliveryTarget,
-            ModelInputModalities = source.ModelInputModalities,
-            ProjectDirectory = source.ProjectDirectory,
-            RecentFiles = source.RecentFiles,
-            InheritedCwd = source.InheritedCwd,
-            SupportsInteractiveApproval = source.SupportsInteractiveApproval,
-            OnSubAgentActivity = source.OnSubAgentActivity,
-            SpawnChildActor = source.SpawnChildActor,
-            ApprovalBridge = source.ApprovalBridge
-        };
+    private static ToolExecutionContext CreatePerToolExecutionContext(
+        ToolExecutionContext source,
+        ToolCallMeta? meta)
+    {
+        var timeout = meta?.TimeoutHintSeconds is { } seconds
+            ? new ToolExecutionTimeout(TimeSpan.FromSeconds(seconds))
+            : source.ExecutionTimeout;
+        var context = new ToolExecutionContext(source.RunScope, timeout);
+        context.Outputs.SubAgentActivitySink = source.Outputs.SubAgentActivitySink;
+        return context;
+    }
 
     private static SubAgentToolCallResult BuildToolResult(
         FunctionCallContent toolCall,
@@ -1403,11 +1396,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolExecutionContext toolContext,
         ModelInputBatchBudget modelInputBudget)
     {
-        if (toolContext.ModelInputFiles.Count == 0)
+        if (toolContext.Outputs.ModelInputFiles.Count == 0)
             return new ModelInputMaterializationResult([], 0);
 
         if (string.IsNullOrWhiteSpace(toolContext.SessionDirectory))
-            return new ModelInputMaterializationResult([], toolContext.ModelInputFiles.Count);
+            return new ModelInputMaterializationResult([], toolContext.Outputs.ModelInputFiles.Count);
 
         return SessionToolExecutionPipeline.MaterializeModelInputFiles(
             toolContext,

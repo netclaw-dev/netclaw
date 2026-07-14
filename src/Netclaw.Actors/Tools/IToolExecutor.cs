@@ -17,9 +17,9 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public interface IToolExecutor
 {
-    Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
+    Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
 
-    Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
+    Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
 
     /// <summary>
     /// Pre-dispatch argument validation shared by every caller (main session
@@ -76,7 +76,7 @@ public interface IToolExecutor
     /// </summary>
     async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         FunctionCallContent toolCall,
-        ToolExecutionContext? context = null,
+        ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         yield return new ToolCompletedUpdate(await ExecuteAsync(toolCall, context, ct));

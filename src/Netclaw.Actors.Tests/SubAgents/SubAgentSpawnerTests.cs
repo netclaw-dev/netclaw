@@ -57,9 +57,9 @@ public sealed class SubAgentSpawnerTests : TestKit
         var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
         {
             Audience = TrustAudience.Personal,
-            ProjectDirectory = "/home/user/repos/foo"
+            ProjectDirectory = "/home/user/repos/foo",
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
         };
-        context.SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref);
 
         var profile = new SubAgentProfile
         {
@@ -101,14 +101,16 @@ public sealed class SubAgentSpawnerTests : TestKit
     {
         var childProbe = CreateTestProbe($"non-interactive-{channelType}-child");
         var spawner = CreateSpawner();
-        var context = new ToolExecutionContext("automation/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = new ToolExecutionContext(new ToolRunScope
         {
+            Session = new ToolSessionScope.Bound("automation/subagent-parent", "/tmp/netclaw/sessions/parent"),
             Audience = TrustAudience.Personal,
+            InlineOutputBudget = InlineOutputBudget.Default,
             ChannelType = channelType.ToWireValue(),
             SupportsInteractiveApproval = false,
             ApprovalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce),
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
-        };
+        }, ToolExecutionTimeout.Default);
 
         var spawnTask = spawner.SpawnAsync(
             CreateProfile(),
@@ -131,14 +133,16 @@ public sealed class SubAgentSpawnerTests : TestKit
         var childProbe = CreateTestProbe("interactive-approval-child");
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
         var spawner = CreateSpawner();
-        var context = new ToolExecutionContext("interactive/subagent-parent", "/tmp/netclaw/sessions/parent")
+        var context = new ToolExecutionContext(new ToolRunScope
         {
+            Session = new ToolSessionScope.Bound("interactive/subagent-parent", "/tmp/netclaw/sessions/parent"),
             Audience = TrustAudience.Personal,
+            InlineOutputBudget = InlineOutputBudget.Default,
             ChannelType = ChannelType.Tui.ToWireValue(),
             SupportsInteractiveApproval = true,
             ApprovalBridge = approvalBridge,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
-        };
+        }, ToolExecutionTimeout.Default);
 
         var spawnTask = spawner.SpawnAsync(
             CreateProfile(),
@@ -182,9 +186,9 @@ public sealed class SubAgentSpawnerTests : TestKit
         var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
         {
             Audience = TrustAudience.Personal,
-            OnSubAgentActivity = notifications.Add
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
         };
-        context.SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref);
+        context.Outputs.SubAgentActivitySink = notifications.Add;
 
         var profile = new SubAgentProfile
         {
@@ -306,9 +310,9 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var context = new ToolExecutionContext("console/subagent-parent", "/tmp/netclaw/sessions/parent")
         {
-            Audience = TrustAudience.Personal
+            Audience = TrustAudience.Personal,
+            SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
         };
-        context.SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name));
 
         var profile = new SubAgentProfile
         {

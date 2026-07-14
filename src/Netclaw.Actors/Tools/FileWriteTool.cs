@@ -34,10 +34,7 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
         _editTool = new FileEditTool(config, paths, pathPolicy);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return Task.FromResult("Error: 'Path' parameter is required.");

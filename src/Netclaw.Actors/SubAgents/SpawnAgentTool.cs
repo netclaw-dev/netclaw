@@ -59,10 +59,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         _logger = logger;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var (error, profile) = Resolve(args, context);
         if (error is not null)
@@ -81,7 +78,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     /// </summary>
     public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         SubAgentProfile? profile = null;
@@ -138,7 +135,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     /// string (and a null profile) when the spawn must be refused, otherwise a
     /// null error and the resolved profile.
     /// </summary>
-    private (string? Error, SubAgentProfile? Profile) Resolve(Params args, ToolExecutionContext context)
+    private (string? Error, SubAgentProfile? Profile) Resolve(Params args, ToolInvocationContext context)
     {
         // Rejections here return a (sometimes deliberately opaque) error string to
         // the model. The breadcrumb records the real reason under a SessionId scope (so it

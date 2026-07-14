@@ -18,6 +18,6 @@ public interface IMcpToolInvoker
         string serverName,
         string toolName,
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext? context,
+        ToolInvocationContext context,
         CancellationToken ct = default);
 }

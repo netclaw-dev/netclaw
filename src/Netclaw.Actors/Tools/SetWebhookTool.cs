@@ -57,15 +57,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         _store = store;
     }
 
-    // Context-less invocation falls back to ToolExecutionContext.Empty, whose
-    // audience is Public (the lowest privilege). A missing context can therefore
-    // only make a webhook LESS powerful, never accidentally grant it more — the
-    // escalation guard in TryResolveAudience is keyed off creatorAudience, and
-    // Public is the floor.
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");
@@ -126,7 +118,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
     /// <c>set_reminder</c>). A route may not be minted above the creator's
     /// authority — downgrade-only, mirroring
     /// <c>ReminderManagerActor.ValidateRequestedAudience</c>. A context-less
-    /// invocation carries <see cref="ToolExecutionContext.Empty"/>'s
+    /// invocation carries the unbound tool scope's
     /// <see cref="TrustAudience.Public"/>, so it cannot escalate. (Routes defined
     /// directly in config never reach this tool; they keep
     /// <c>WebhooksConfig.Audience</c>'s <see cref="TrustAudience.Public"/> default.)

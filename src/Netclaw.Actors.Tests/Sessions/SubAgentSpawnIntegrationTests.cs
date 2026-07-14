@@ -371,7 +371,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         // The sub-agent extracted the meta timeout hint and applied it to the
         // tool context (regression guard for the previously-dropped hint).
-        Assert.Equal(1800, _recordingShellTool.LastContext?.RequestedTimeoutSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(1800), _recordingShellTool.LastContext?.ExecutionTimeout.Value);
     }
 
     [Fact]
@@ -833,14 +833,14 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         public System.Text.Json.JsonElement ParameterSchema => default;
 
         public bool WasCalled { get; private set; }
-        public ToolExecutionContext? LastContext { get; private set; }
+        public ToolInvocationContext? LastContext { get; private set; }
 
         public AITool ToAITool() => AIFunctionFactory.Create(() => result, name: Name, description: Description);
 
         public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-            => ExecuteAsync(arguments, ToolExecutionContext.Empty, ct);
+            => ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), ct);
 
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
         {
             WasCalled = true;
             LastContext = context;

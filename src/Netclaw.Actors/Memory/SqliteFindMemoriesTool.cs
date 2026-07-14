@@ -41,7 +41,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var limit = args.Limit is > 0 ? args.Limit.Value : 5;
         var includeStale = args.IncludeStale ?? false;
@@ -92,9 +92,6 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         _logger.LogInformation("SQLite memory find completed: query='{Query}', results={Count}, includeStale={IncludeStale}", args.Query, results.Count, includeStale);
         return sb.ToString().TrimEnd();
     }
-
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 
     private static string BuildSnippet(string content)
         => content.Length <= 160 ? content : content[..160] + "...";

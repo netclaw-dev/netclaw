@@ -13,7 +13,7 @@ namespace Netclaw.Tools;
 /// <summary>
 /// Base class for source-generated tools. The generator implements
 /// <see cref="INetclawTool"/> members and a typed <c>ParseArguments</c> method.
-/// Tool authors override <see cref="ExecuteAsync(TParams, CancellationToken)"/>.
+/// Tool implementations receive a required per-call execution context.
 /// </summary>
 /// <typeparam name="TParams">
 /// A record type whose constructor parameters define the tool's schema.
@@ -37,26 +37,12 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     }
 
     /// <summary>
-    /// Execute the tool with typed, deserialized arguments.
+    /// Execute the tool with typed arguments and required execution context.
     /// </summary>
-    protected abstract Task<string> ExecuteAsync(TParams args, CancellationToken ct);
-
-    /// <summary>
-    /// Execute the tool with typed arguments and execution context.
-    /// Override this in tools that need session-scoped state (e.g. temp directories).
-    /// Default delegates to the context-free overload.
-    /// </summary>
-    protected virtual Task<string> ExecuteAsync(TParams args, ToolExecutionContext context, CancellationToken ct)
-        => ExecuteAsync(args, ct);
+    protected abstract Task<string> ExecuteAsync(TParams args, ToolInvocationContext context, CancellationToken ct);
 
     /// <inheritdoc />
-    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-    {
-        return await ExecuteAsync(arguments, ToolExecutionContext.Empty, ct);
-    }
-
-    /// <inheritdoc />
-    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
     {
         return TryParse(arguments, out var error, out var args)
             ? await ExecuteAsync(args, context, ct)
@@ -80,7 +66,7 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     /// </remarks>
     public virtual async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         yield return new ToolCompletedUpdate(await ExecuteAsync(arguments, context, ct));

@@ -75,10 +75,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         _resolversByTransport = resolvers;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (!_schedulingConfig.Enabled)
             return "Error: Scheduling is disabled for this deployment.";

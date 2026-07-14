@@ -147,7 +147,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         return null;
     }
 
-    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
     {
         if (_registry.GetByName(toolCall.Name) is null)
         {
@@ -173,9 +173,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            var result = context is not null
-                ? await tool.ExecuteAsync(toolCall.Arguments, context, ct)
-                : await tool.ExecuteAsync(toolCall.Arguments, ct);
+            var result = await tool.ExecuteAsync(toolCall.Arguments, context, ct);
 
             var redacted = SecretOutputRedactor.Redact(result);
 
@@ -210,23 +208,23 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         }
     }
 
-    public async Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+    public async Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
     {
         _ = await AuthorizeCoreAsync(toolCall, context, ct);
     }
 
     // The tool's own override (verbose tools like shell opt down) wins; otherwise
     // the session content budget; otherwise the built-in content default.
-    private static int ResolveInlineBudget(INetclawTool tool, ToolExecutionContext? context)
+    private static int ResolveInlineBudget(INetclawTool tool, ToolExecutionContext context)
         => tool.InlineOutputBudgetChars is > 0 and var toolBudget
             ? toolBudget
-            : context?.MaxInlineToolResultChars is > 0 and var contentBudget
+            : context.MaxInlineToolResultChars is > 0 and var contentBudget
                 ? contentBudget
                 : ToolOutputSpill.DefaultContentBudget;
 
     public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         FunctionCallContent toolCall,
-        ToolExecutionContext? context = null,
+        ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (_registry.GetByName(toolCall.Name) is null)
@@ -250,10 +248,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // before the first item is produced; the tool-execution pipeline handles
         // those exactly as it does for the non-streaming path.
         var tool = await AuthorizeCoreAsync(toolCall, context, ct);
-        var execContext = context ?? ToolExecutionContext.Empty;
-
         var sw = Stopwatch.StartNew();
-        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, execContext, ct))
+        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, context, ct))
         {
             switch (update)
             {
@@ -278,13 +274,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         }
     }
 
-    private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext? context, CancellationToken ct)
+    private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
     {
-        if (context is not null)
-        {
-            context.AppliedApprovalDecision = null;
-            context.AppliedApprovalPattern = null;
-        }
+        context.Approval.ClearAppliedDecision();
 
         var tool = _registry.GetByName(toolCall.Name);
         if (tool is null)
@@ -301,7 +293,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 ?? throw new InvalidOperationException("Approval decision missing approval context.");
 
             // Cwd resolution happens upstream in ToolAccessPolicy.CheckApprovalGate
-            // for shell tools, so context.Cwd is already populated when the
+            // for shell tools, so the attempt Cwd is already populated when the
             // gate produced an approval context. Other tools have no
             // directory anchor; cwd stays null.
 
@@ -317,7 +309,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             else
             {
                 var audience = SecurityPolicyDefaults.ResolveAudienceWithFallback(
-                    context?.Audience, context?.SessionId);
+                    context.Audience, context.SessionId);
 
                 // Pure side-effect candidates (echo "X" with no path/redirect,
                 // bash :, true/false) are not persisted on Always-here clicks
@@ -351,18 +343,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     // grant and re-throw ToolApprovalRequiredException on
                     // approved retries.
                     var approvalCheck = await _approvalService.CheckApprovalAsync(
-                        ToApprovalSessionId(context?.SessionId),
+                        ToApprovalSessionId(context.SessionId),
                         audience,
                         new ToolName(tool.Name),
                         candidatesForCheck,
-                        context?.Cwd,
+                        context.Approval.Cwd,
                         ct);
 
-                    if (approvalCheck.UnapprovedPatterns.Count == 0 && context is not null)
-                    {
-                        context.AppliedApprovalDecision = "PreviouslyApproved";
-                        context.AppliedApprovalPattern = FormatApprovalMatches(approvalCheck.ApprovedMatches);
-                    }
+                    if (approvalCheck.UnapprovedPatterns.Count == 0)
+                        context.Approval.ApplyDecision(
+                            "PreviouslyApproved",
+                            FormatApprovalMatches(approvalCheck.ApprovedMatches));
 
                     accessDecision = approvalCheck.UnapprovedPatterns.Count == 0
                         ? ToolAccessDecision.Allow()
@@ -372,7 +363,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         }
 
         if (accessDecision.NeedsApproval
-            && context is not null
             && IsOneTimeApprovalSatisfied(context, toolCall, accessDecision.ApprovalContext))
         {
             _logger.LogInformation(
@@ -413,8 +403,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
         // Tool-name match is required for any one-time bypass — without it
         // we could never tell which tool the grant applies to.
-        if (!string.IsNullOrEmpty(context.OneTimeApprovedToolName)
-            && !string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
+        if (!string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName)
+            && !string.Equals(context.Approval.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
             return false;
 
         // By this point: either OneTimeApprovedToolName is empty (no
@@ -425,18 +415,18 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // ToolApprovalRequiredException. The pipeline clears
         // OneTimeApprovedToolName after the retry, so the bypass cannot
         // leak into a subsequent call.
-        if (approvalContext.IsMessy && !string.IsNullOrEmpty(context.OneTimeApprovedToolName))
+        if (approvalContext.IsMessy && !string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName))
             return true;
 
-        if (context.OneTimeApprovedPatterns.Count == 0)
+        if (context.Approval.OneTimeApprovedPatterns.Count == 0)
             return false;
 
         if (approvalContext.Patterns.Count == 0)
             return false;
 
-        if (string.IsNullOrEmpty(context.OneTimeApprovedToolName))
+        if (string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName))
             return false;
 
-        return approvalContext.Patterns.All(pattern => context.OneTimeApprovedPatterns.Contains(pattern));
+        return approvalContext.Patterns.All(pattern => context.Approval.OneTimeApprovedPatterns.Contains(pattern));
     }
 }

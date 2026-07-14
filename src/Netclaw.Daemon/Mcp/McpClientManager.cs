@@ -127,7 +127,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         string serverName,
         string toolName,
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext? context,
+        ToolInvocationContext context,
         CancellationToken ct = default)
     {
         var server = new McpServerName(serverName);

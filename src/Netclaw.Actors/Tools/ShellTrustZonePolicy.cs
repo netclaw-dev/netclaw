@@ -36,6 +36,6 @@ public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
     // allow it (the read zone includes the global read roots, the write zone does
     // not). This is a known capability gap, not a security hole; making the check
     // verb-aware (read-verbs against the read zone) is a possible follow-up.
-    public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
+    public bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context)
         => _fileAccessPolicy.TryResolveWritePath(fullPath, context, out _, out _);
 }

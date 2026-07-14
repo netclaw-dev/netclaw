@@ -76,7 +76,10 @@ public sealed class ToolLivenessValidatorTests
         public System.Text.Json.JsonElement ParameterSchema => default;
         public AITool ToAITool() => AIFunctionFactory.Create(() => "", name: Name, description: Description);
 
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
             => Task.FromResult(string.Empty);
     }
 }

@@ -85,9 +85,9 @@ public class SpawnAgentStreamingTests : TestKit
 
         var ctx = new ToolExecutionContext("console/streaming-test", dir.Path)
         {
-            Audience = TrustAudience.Personal
+            Audience = TrustAudience.Personal,
+            SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
         };
-        ctx.SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name));
 
         var spawnCall = new FunctionCallContent(
             "call-1",
@@ -175,9 +175,9 @@ public class SpawnAgentStreamingTests : TestKit
 
         var ctx = new ToolExecutionContext("console/self-monitoring-test", dir.Path)
         {
-            Audience = TrustAudience.Personal
+            Audience = TrustAudience.Personal,
+            SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
         };
-        ctx.SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name));
 
         var spawnCall = new FunctionCallContent(
             "call-1",

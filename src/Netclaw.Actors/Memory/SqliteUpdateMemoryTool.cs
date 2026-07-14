@@ -40,7 +40,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Id))
             return "Error: memory ID is required.";
@@ -109,6 +109,4 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
         return $"Record \"{resolved.Handle}\" superseded.";
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 }

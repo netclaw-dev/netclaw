@@ -26,13 +26,8 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     public const string ToolName = "shell_execute";
 
-    // Fallback wall-clock timeout used only when ShellTool runs without a
-    // pipeline-provided context (direct/test calls). In the session pipeline
-    // the per-call timeout always arrives via ToolExecutionContext
-    // .RequestedTimeoutSeconds (SessionConfig.ToolExecutionTimeout, or the
-    // agent's honored _timeout_seconds hint), so this default is just a safety
-    // net against an unbounded process.
-    private const int DefaultTimeoutSeconds = 90;
+    // The required execution context carries the session default or the
+    // agent's validated _timeout_seconds hint as a semantic value.
 
     // Shell output is mostly verbose noise the model skims, so bound it
     // aggressively: small inline head+tail, full output spilled to a session file
@@ -55,10 +50,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         _commandPolicy = commandPolicy;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
@@ -140,9 +132,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             psi.WorkingDirectory = resolvedCwd;
         }
 
-        var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
-            ? context.RequestedTimeoutSeconds.Value
-            : DefaultTimeoutSeconds;
+        var effectiveTimeout = context.ExecutionTimeout.Value;
 
         using var timeoutCts = new CancellationTokenSource();
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -160,7 +150,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         // Start the timeout countdown only after the shell process exists, so
         // process-spawn overhead (heavier on Windows: cmd.exe plus the child it
         // execs) is not charged against the command's execution budget.
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+        timeoutCts.CancelAfter(effectiveTimeout);
 
         using (process)
         {
@@ -220,7 +210,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 }
 
                 return timeoutCts.IsCancellationRequested
-                    ? $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."
+                    ? $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."
                     : "Error: Command cancelled.";
             }
 
@@ -257,7 +247,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     /// </summary>
     public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         // All items (activities + completion) are produced by the non-iterator
@@ -275,7 +265,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     private async Task ExecuteStreamCoreAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         ChannelWriter<ToolCallUpdate> output,
         CancellationToken ct)
     {
@@ -380,9 +370,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
-                ? context.RequestedTimeoutSeconds.Value
-                : DefaultTimeoutSeconds;
+            var effectiveTimeout = context.ExecutionTimeout.Value;
 
             // Wall-clock ceiling matching the non-streaming path. The parent
             // pipeline also bounds opaque shell calls by wall-clock time, but the
@@ -390,7 +378,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             // semantics stay consistent.
             using var wallClockCts = new CancellationTokenSource();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, wallClockCts.Token);
-            wallClockCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+            wallClockCts.CancelAfter(effectiveTimeout);
 
             var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>(
                 new UnboundedChannelOptions { SingleReader = true });
@@ -428,7 +416,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     {
                         await KillAndDrainAsync(process, drainStdout, drainStderr);
                         output.TryWrite(new ToolCompletedUpdate(
-                            $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."));
+                            $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."));
                         return;
                     }
                 }

@@ -102,8 +102,7 @@ public class FileReadToolTests : IDisposable
     {
         var filePath = Path.Combine(_dir.Path, "diagram.png");
         await File.WriteAllBytesAsync(filePath, FakePngBytes, TestContext.Current.CancellationToken);
-        var context = CreatePersonalContext();
-        context.ModelInputModalities = ModelModality.Text | ModelModality.Image;
+        var context = CreateImageCapablePersonalContext();
 
         var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), context, CancellationToken.None);
 
@@ -132,8 +131,7 @@ public class FileReadToolTests : IDisposable
     {
         var filePath = Path.Combine(_dir.Path, "diagram.png");
         await File.WriteAllBytesAsync(filePath, [0, 1, 2, 3, 4, 5, 6, 7], TestContext.Current.CancellationToken);
-        var context = CreatePersonalContext();
-        context.ModelInputModalities = ModelModality.Text | ModelModality.Image;
+        var context = CreateImageCapablePersonalContext();
 
         var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), context, CancellationToken.None);
 
@@ -472,6 +470,15 @@ public class FileReadToolTests : IDisposable
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
+        };
+
+    private ToolExecutionContext CreateImageCapablePersonalContext()
+        => new("signalr/thread-1", _sessionDir)
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.TrustedInstance,
+            ChannelType = "signalr",
+            ModelInputModalities = ModelModality.Text | ModelModality.Image,
         };
 
     private ToolExecutionContext CreateTeamContext()

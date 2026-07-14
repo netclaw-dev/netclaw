@@ -62,10 +62,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         _logger = logger;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         // Defense-in-depth: block skill loading for Public audience or when skills subsystem is disabled
         var audience = context.Audience;

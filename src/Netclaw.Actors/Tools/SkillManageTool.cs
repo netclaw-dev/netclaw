@@ -65,7 +65,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         _inventoryRefresher = inventoryRefresher;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var action = args.Action.Trim().ToLowerInvariant();
         return action switch

@@ -32,7 +32,7 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
         _backend = backend;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Query))
             return "Error: 'query' parameter is required.";

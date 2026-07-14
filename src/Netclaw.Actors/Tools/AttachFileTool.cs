@@ -33,10 +33,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => Task.FromResult("Error: attach_file requires a session context.");
-
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return Task.FromResult("Error: 'path' parameter is required.");
@@ -83,7 +80,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var sanitizedFilename = FilenameSanitizer.Sanitize(rawFilename);
         var mimeType = MimeTypeCatalog.FromPathExtension(attachPath) ?? MimeType.Default;
 
-        context.AddFileAttachment(attachPath, sanitizedFilename, mimeType);
+        context.Outputs.AddFileAttachment(attachPath, sanitizedFilename, mimeType);
         var copiedText = string.Equals(attachPath, resolvedPath, StringComparison.Ordinal)
             ? string.Empty
             : " (copied into current session)";

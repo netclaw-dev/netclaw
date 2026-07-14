@@ -798,7 +798,7 @@ public sealed class ToolApprovalGateTests
 
         public FakeShellTrustZonePolicy(IReadOnlyList<string> roots) => _roots = roots;
 
-        public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
+        public bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context)
             => PathUtility.IsWithinAnyRoot(fullPath, _roots);
     }
 

@@ -25,7 +25,7 @@ public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Pa
         _store = store;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");

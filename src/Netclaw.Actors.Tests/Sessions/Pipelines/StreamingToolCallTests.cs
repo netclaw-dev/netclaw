@@ -26,7 +26,7 @@ public sealed class StreamingToolCallTests
 
         var updates = new List<ToolCallUpdate>();
         await foreach (var update in tool.ExecuteStreamAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, TestContext.Current.CancellationToken))
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken))
         {
             updates.Add(update);
         }

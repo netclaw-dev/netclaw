@@ -63,10 +63,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         _logger = logger;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
@@ -197,7 +194,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private string HandleNonTextFile(
         string authorizedPath,
         FileInspection inspection,
-        ToolExecutionContext context)
+        ToolInvocationContext context)
     {
         var inlineImages = context.ModelInputModalities.HasFlag(ModelModality.Image);
         var (inlined, note) = AttachmentInlineDecision.Resolve(inspection.MimeType, inspection.Category, inlineImages);
@@ -212,7 +209,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                     $"Image exceeds the {ByteSizeFormatter.Format(MaxModelInputFileBytes)} model-input handoff limit. Raw binary output is not returned by file_read.");
             }
 
-            context.AddModelInputFile(authorizedPath, Path.GetFileName(authorizedPath), inspection.MimeType);
+            context.Outputs.AddModelInputFile(authorizedPath, Path.GetFileName(authorizedPath), inspection.MimeType);
             return BuildMetadataResponse(
                 authorizedPath,
                 inspection,

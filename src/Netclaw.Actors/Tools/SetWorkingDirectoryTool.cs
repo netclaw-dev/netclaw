@@ -41,7 +41,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var raw = args.Path?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(raw))
@@ -56,6 +56,4 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
         return Task.FromResult(fullPath);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 }

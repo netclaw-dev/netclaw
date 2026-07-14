@@ -37,7 +37,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         _policy = policy;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var query = args.Query.Trim();
         var serverFilter = NormalizeServerFilter(args.Server);
@@ -107,10 +107,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         return Task.FromResult(BuildToolList(results, $"Found {results.Count} tool(s):"));
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    private string BuildServerCatalog(ToolExecutionContext context, string? trailingHint = null)
+    private string BuildServerCatalog(ToolInvocationContext context, string? trailingHint = null)
     {
         var summaries = _registry.GetMcpServerSummaries()
             .Where(summary => FilterVisible(_registry.GetToolsForServer(new McpServerName(summary.ServerName), int.MaxValue), context).Count > 0)
@@ -141,7 +138,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         return sb.ToString();
     }
 
-    private IReadOnlyList<INetclawTool> FilterVisible(IReadOnlyList<INetclawTool> tools, ToolExecutionContext context)
+    private IReadOnlyList<INetclawTool> FilterVisible(IReadOnlyList<INetclawTool> tools, ToolInvocationContext context)
         => _policy?.FilterDiscoverableTools(tools, context) ?? tools;
 
     private static string BuildToolList(IReadOnlyList<INetclawTool> tools, string heading)

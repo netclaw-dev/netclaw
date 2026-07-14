@@ -80,17 +80,9 @@ public interface INetclawTool
     AITool ToAITool();
 
     /// <summary>
-    /// Execute the tool with raw arguments from the LLM provider.
+    /// Execute the tool with raw arguments and required execution context.
     /// </summary>
-    Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default);
-
-    /// <summary>
-    /// Execute the tool with raw arguments and session execution context.
-    /// Default implementation ignores context and delegates to the simple overload.
-    /// Tools that need session-scoped state (e.g. temp directories) override this.
-    /// </summary>
-    Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
-        => ExecuteAsync(arguments, ct);
+    Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default);
 
     /// <summary>
     /// Execute the tool as a stream of <see cref="ToolCallUpdate"/> items: zero
@@ -102,7 +94,7 @@ public interface INetclawTool
     /// </summary>
     async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         yield return new ToolCompletedUpdate(await ExecuteAsync(arguments, context, ct));

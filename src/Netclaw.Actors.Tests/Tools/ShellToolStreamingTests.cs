@@ -23,7 +23,7 @@ public class ShellToolStreamingTests
         var activities = new List<ToolActivityUpdate>();
         ToolCompletedUpdate? completion = null;
 
-        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? ToolExecutionContext.Empty, ct))
+        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? TestToolExecutionContext.CreateUnbound(), ct))
         {
             switch (update)
             {
@@ -151,7 +151,7 @@ public class ShellToolStreamingTests
     {
         var args = ToolInput.Create("Command", "echo hello && echo world");
 
-        var nonStreaming = await _tool.ExecuteAsync(args, ToolExecutionContext.Empty, TestContext.Current.CancellationToken);
+        var nonStreaming = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
         var (_, completion) = await CollectStreamAsync(_tool, args, ct: TestContext.Current.CancellationToken);
 
         Assert.NotNull(completion);

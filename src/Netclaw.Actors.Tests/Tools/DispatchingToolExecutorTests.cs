@@ -510,7 +510,10 @@ public class DispatchingToolExecutorTests
             "call-4", "unknown_tool",
             ToolInput.Create("arg", "value"));
 
-        var result = await _executor.ExecuteAsync(toolCall, null, TestContext.Current.CancellationToken);
+        var result = await _executor.ExecuteAsync(
+            toolCall,
+            TestToolExecutionContext.CreateUnbound(),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("Unknown tool: unknown_tool", result);
     }

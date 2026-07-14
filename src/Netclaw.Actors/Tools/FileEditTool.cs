@@ -41,10 +41,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'Path' parameter is required.";
@@ -72,7 +69,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         return await EditFileAsync(args.Path, args.OldString, args.NewString, args.ReplaceAll == true, context, ct);
     }
 
-    internal async Task<string> WriteFileAsync(string path, string content, ToolExecutionContext context, CancellationToken ct)
+    internal async Task<string> WriteFileAsync(string path, string content, ToolInvocationContext context, CancellationToken ct)
     {
         if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
             return accessError;
@@ -104,7 +101,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         }
     }
 
-    private async Task<string> EditFileAsync(string path, string oldString, string newString, bool replaceAll, ToolExecutionContext context, CancellationToken ct)
+    private async Task<string> EditFileAsync(string path, string oldString, string newString, bool replaceAll, ToolInvocationContext context, CancellationToken ct)
     {
         if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
             return accessError;

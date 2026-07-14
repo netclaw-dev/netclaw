@@ -109,7 +109,7 @@ public sealed class McpToolAdapter : INetclawTool
 
     public async Task<string> ExecuteAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         CancellationToken ct = default)
     {
         if (_invoker is null)
@@ -127,9 +127,6 @@ public sealed class McpToolAdapter : INetclawTool
             return $"Error: MCP tool '{Name}' failed: {ex.Message}";
         }
     }
-
-    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-        => await ExecuteViaBoundToolAsync(arguments, ct);
 
     private async Task<string> ExecuteViaBoundToolAsync(IDictionary<string, object?>? arguments, CancellationToken ct)
     {

@@ -1,0 +1,35 @@
+## 1. Stage 1 — Required Execution Scope
+
+- [x] 1.1 Inventory the current tool execution call graph, nullable/default dependencies, mutable state owners, persisted message boundaries, and MCP schema consumers; record the migration map in the design or implementation notes.
+- [ ] 1.2 Introduce validated semantic value objects for execution limits and the immutable admitted `ToolRunScope`, with no implicit primitive conversions.
+- [ ] 1.3 Replace production `ToolExecutionContext.Empty`, context-free overloads, and nullable authority/security dependencies with required immutable invocation APIs; keep any temporary friend-only test fixture out of production and remove it after test migration.
+- [ ] 1.4 Split mutable tool outputs into a per-invocation append-only sink and approval retry/match state into a pipeline-owned attempt object while sharing only immutable run authority across a batch.
+- [ ] 1.5 Add focused tests proving invalid scope values fail before dispatch, missing authority has no dispatch path, and parallel calls cannot observe each other's mutable state.
+- [ ] 1.6 Update affected engineering documentation and `netclaw-operations` system-skill guidance, bumping the skill version, for the changed internal tool execution contract.
+- [ ] 1.7 Run targeted tests, tool-related evals/full eval suite as required, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 1 through review, CI, merge, and post-merge `dev` verification.
+
+## 2. Stage 2 — Composed Session Pipeline
+
+- [ ] 2.1 Replace the broad session tool-call parameter list with a cohesive batch command and a composed `SessionToolExecutionPipeline` whose production dependencies are required.
+- [ ] 2.2 Trace each nullable pipeline service through every intended production composition path; make proven-unconditional services required, model genuinely production-reachable absence explicitly with unchanged behavior, and keep test-only fixture states out of the production API.
+- [ ] 2.3 Preserve existing `_background` behavior for shell, non-shell, missing-manager, and dispatch-failure paths while removing redundant parameter plumbing.
+- [ ] 2.4 Add characterization tests for audit/logging/approval/background infrastructure, malformed metadata, ACL and approval denial, supported background routing, missing-manager fallback, dispatch failure, and non-shell fallback.
+- [ ] 2.5 Verify MCP request/response schemas and persisted actor contracts remain compatible; update affected engineering docs, specs, and the versioned `netclaw-operations` system skill.
+- [ ] 2.6 Run targeted tests, the tool-definition eval suite, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 2 through review, CI, merge, and post-merge `dev` verification.
+
+## 3. Stage 3 — Child Context and Async Git
+
+- [ ] 3.1 Introduce a framework-owned child-run scope that forks immutable parent authority and a read-only working-context snapshot while allocating independent child activity state.
+- [ ] 3.2 Introduce typed child outcomes and working-context deltas; merge only confirmed changed files from successful children and keep Git-observed changes non-attributed.
+- [ ] 3.3 Split Git process execution, snapshot composition, and rendering; make inspection asynchronous with explicit available, not-repository, and unavailable outcomes.
+- [ ] 3.4 Gate Git inspection before process launch so it occurs only for Team/Personal runs with a declared project directory that Git recognizes as a worktree.
+- [ ] 3.5 Correlate session-actor Git continuations with turn generations and discard stale results; await bounded spawn/completion snapshots at subagent async boundaries.
+- [ ] 3.6 Add deterministic tests for Public no-inspection, missing/non-Git project handling, sanitized failures, stale continuation rejection, child isolation, successful confirmed merge, and failed/cancelled no-merge without sleeps.
+- [ ] 3.7 Update engineering docs and the versioned `netclaw-operations` and `netclaw-projects` system skills for working-context and subagent behavior.
+- [ ] 3.8 Run targeted tests, prompt/tool eval suites, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 3 through review, CI, merge, and post-merge `dev` verification.
+
+## 4. Closeout
+
+- [ ] 4.1 Verify all three merged stages against the OpenSpec scenarios and PRD traceability from current `dev`, including serialization/recovery and MCP compatibility evidence.
+- [ ] 4.2 Sync the delta specs to main specs with `/opsx-sync`, run `/opsx-verify`, and archive the completed change with `/opsx-archive`.
+- [ ] 4.3 Run the RALPH adversarial output review, diagnostics, and after-action workflow; capture durable follow-ups without leaving undocumented behavior drift.

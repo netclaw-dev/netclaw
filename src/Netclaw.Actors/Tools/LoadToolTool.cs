@@ -32,7 +32,7 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
         _policy = policy;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var name = args.Name.Trim();
 
@@ -64,6 +64,4 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
         return Task.FromResult(registration.Tool.LlmFacingName.Value);
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 }

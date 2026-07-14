@@ -44,7 +44,7 @@ internal static class ToolOutputSpill
     /// session content budget.
     /// </summary>
     public static Task<string> BoundAndSpillAsync(
-        string redactedResult, string? toolCallId, int budget, ToolExecutionContext? context, CancellationToken ct)
+        string redactedResult, string? toolCallId, int budget, ToolInvocationContext context, CancellationToken ct)
         => BoundAndSpillAsync(modelFacingResult: redactedResult, spillContent: redactedResult,
             toolCallId, budget, context, ct);
 
@@ -56,7 +56,7 @@ internal static class ToolOutputSpill
     /// </summary>
     public static async Task<string> BoundAndSpillAsync(
         string modelFacingResult, string spillContent, string? toolCallId, int budget,
-        ToolExecutionContext? context, CancellationToken ct)
+        ToolInvocationContext context, CancellationToken ct)
     {
         if (budget <= 0)
             budget = DefaultContentBudget;
@@ -70,7 +70,7 @@ internal static class ToolOutputSpill
     }
 
     private static async Task<string?> TryWriteSpillAsync(
-        string redacted, string? toolCallId, ToolExecutionContext? context, CancellationToken ct)
+        string redacted, string? toolCallId, ToolInvocationContext context, CancellationToken ct)
     {
         // A spill needs both a place (session dir) and a name (call id). Without
         // either, degrade to inline-only.

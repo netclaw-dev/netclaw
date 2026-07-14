@@ -26,7 +26,7 @@ public sealed partial class ListWebhooksTool : NetclawTool<ListWebhooksTool.Para
         _store = store;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var filter = args.Filter?.ToLowerInvariant() ?? "active";
         if (filter is not ("active" or "all"))

@@ -35,7 +35,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
@@ -75,6 +75,4 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
         return $"Memory save confirmed: \"{args.Title}\" (checkpoint: {result.CheckpointId}).";
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 }

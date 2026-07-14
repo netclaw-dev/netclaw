@@ -53,7 +53,7 @@ public class ShellToolTests
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
-            RequestedTimeoutSeconds = 1
+            ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(1))
         };
 
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -69,7 +69,7 @@ public class ShellToolTests
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
-            RequestedTimeoutSeconds = 5
+            ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(5))
         };
 
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -95,7 +95,7 @@ public class ShellToolTests
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
-            RequestedTimeoutSeconds = 100
+            ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(100))
         };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
@@ -181,7 +181,7 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, TrustAudience.Personal);
             // ProjectDirectory not set
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
@@ -203,7 +203,7 @@ public class ShellToolTests
         var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, TrustAudience.Personal);
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -260,7 +260,7 @@ public class ShellToolTests
             // assert the resolved cwd is the session dir, not whatever
             // Environment.CurrentDirectory happens to be — proving the
             // ProcessStartInfo default-fall-through is gone.
-            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
+            var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, TrustAudience.Personal);
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);

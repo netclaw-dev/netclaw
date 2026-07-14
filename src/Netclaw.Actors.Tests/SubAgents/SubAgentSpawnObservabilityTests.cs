@@ -55,7 +55,7 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
 
         // A context with a session id but no SpawnChildActor factory — the
         // "subagent tried to spawn but never launched" failure shape.
-        var context = new ToolExecutionContext(SessionId, null) { Audience = TrustAudience.Personal };
+        var context = TestToolExecutionContext.CreateBound(SessionId, null, TrustAudience.Personal);
 
         var result = await spawner.SpawnAsync(
             Profile("summarizer"), "do the work", null, context, TestContext.Current.CancellationToken);
@@ -78,7 +78,7 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
 
         // Public audience is refused with a deliberately opaque model-facing string;
         // the operator-facing breadcrumb must still record the real reason.
-        var context = new ToolExecutionContext(SessionId, null) { Audience = TrustAudience.Public };
+        var context = TestToolExecutionContext.CreateBound(SessionId, null, TrustAudience.Public);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["agent"] = "summarizer", ["task"] = "do the work" },

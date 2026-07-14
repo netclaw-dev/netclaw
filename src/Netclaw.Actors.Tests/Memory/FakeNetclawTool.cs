@@ -12,13 +12,13 @@ namespace Netclaw.Actors.Tests.Memory;
 internal sealed class FakeNetclawTool : INetclawTool
 {
     private readonly string _result;
-    private readonly Action<ToolExecutionContext>? _onExecute;
+    private readonly Action<ToolInvocationContext>? _onExecute;
 
     public FakeNetclawTool(
         string name,
         string result,
         string grantCategory = "builtin",
-        Action<ToolExecutionContext>? onExecute = null)
+        Action<ToolInvocationContext>? onExecute = null)
     {
         Name = name;
         LlmFacingName = LlmFacingToolName.FromCanonical(name);
@@ -35,7 +35,7 @@ internal sealed class FakeNetclawTool : INetclawTool
 
     public bool WasCalled { get; private set; }
     public IDictionary<string, object?>? LastArguments { get; private set; }
-    public ToolExecutionContext? LastContext { get; private set; }
+    public ToolInvocationContext? LastContext { get; private set; }
 
     public AITool ToAITool() => AIFunctionFactory.Create(() => _result, name: Name, description: Description);
 
@@ -46,7 +46,7 @@ internal sealed class FakeNetclawTool : INetclawTool
         return Task.FromResult(_result);
     }
 
-    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
     {
         LastContext = context;
         _onExecute?.Invoke(context);

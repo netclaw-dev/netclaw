@@ -39,15 +39,12 @@ internal sealed class SendChannelMessageTool(IChannelRegistry registry) : IChann
         return _aiTool ??= AIFunctionFactory.CreateDeclaration(Name, Description, ParameterSchema);
     }
 
-    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-        => await ExecuteCoreAsync(arguments, context: null, ct);
-
-    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
         => ExecuteCoreAsync(arguments, context, ct);
 
     private async Task<string> ExecuteCoreAsync(
         IDictionary<string, object?>? arguments,
-        ToolExecutionContext? context,
+        ToolInvocationContext context,
         CancellationToken ct)
     {
         var channelKeyValue = ToolArgumentHelper.GetString(arguments, "channel_key");
@@ -59,7 +56,7 @@ internal sealed class SendChannelMessageTool(IChannelRegistry registry) : IChann
         if (string.IsNullOrWhiteSpace(text))
             return "Error: 'text' parameter is required.";
 
-        if (IsTriggerOrigin(context) && context!.RequestedDeliveryTarget is null)
+        if (IsTriggerOrigin(context) && context.RequestedDeliveryTarget is null)
         {
             return "Error: trigger-originated channel send requires a configured channel delivery target on the turn. " +
                    "No default output channel will be selected.";
@@ -339,9 +336,9 @@ internal sealed class SendChannelMessageTool(IChannelRegistry registry) : IChann
         return null;
     }
 
-    private static bool IsTriggerOrigin(ToolExecutionContext? context)
+    private static bool IsTriggerOrigin(ToolInvocationContext context)
     {
-        if (string.IsNullOrWhiteSpace(context?.ChannelType))
+        if (string.IsNullOrWhiteSpace(context.ChannelType))
             return false;
 
         return string.Equals(context.ChannelType, ChannelType.Reminder.ToWireValue(), StringComparison.OrdinalIgnoreCase)

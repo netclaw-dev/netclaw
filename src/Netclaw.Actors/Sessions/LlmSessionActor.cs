@@ -3039,25 +3039,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         try
         {
-            var context = new ToolExecutionContext(_sessionId.Value, GetSessionDirectory())
+            Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
+                await self.Ask<IActorRef>(
+                    new SpawnChildActorRequest((Props)props, name),
+                    timeout: _config.ToolExecutionTimeout,
+                    cancellationToken: ct);
+            var context = new ToolExecutionContext(new ToolRunScope
             {
+                Session = new ToolSessionScope.Bound(_sessionId.Value, GetSessionDirectory()),
                 // No active turn context/source carries no trust context — fall closed.
                 Audience = _currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public,
+                InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
                 Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
                 ChannelType = _currentTurnContext?.ChannelType?.ToWireValue()
                               ?? (_currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue()),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,
                 RecentFiles = _state.WorkingContext.RecentFiles,
                 SupportsInteractiveApproval = false,
-            };
+                SpawnChildActor = spawnChildActor,
+            }, new ToolExecutionTimeout(_config.ToolExecutionTimeout));
 
-            context.SpawnChildActor = async (props, name, ct) =>
-                await self.Ask<IActorRef>(
-                    new SpawnChildActorRequest((Props)props, name),
-                    timeout: _config.ToolExecutionTimeout,
-                    cancellationToken: ct);
-
-            context.OnSubAgentActivity = info =>
+            context.Outputs.SubAgentActivitySink = info =>
             {
                 self.Tell(new RoutedSkillSubAgentActivity(
                     _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),

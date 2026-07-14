@@ -68,16 +68,16 @@ public sealed class SubAgentSpawner
 
     /// <summary>
     /// Spawn a subagent as a child of the owning session, execute the task, and return the result.
-    /// The subagent is created via <see cref="ToolExecutionContext.SpawnChildActor"/> which is
+    /// The subagent is created via <see cref="ToolInvocationContext.SpawnChildActor"/> which is
     /// wired by <c>LlmSessionActor</c> to <c>Context.ActorOf</c>. If no spawn factory is
     /// available (e.g., in tests or standalone mode), returns a failure result.
-    /// Reports start/complete notifications via <see cref="ToolExecutionContext.OnSubAgentActivity"/>.
+    /// Reports start/complete notifications through the per-call output sink.
     /// </summary>
     public async Task<SubAgentResult> SpawnAsync(
         SubAgentProfile profile,
         string task,
         string? runtimeContext,
-        ToolExecutionContext context,
+        ToolInvocationContext context,
         CancellationToken ct = default,
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
@@ -130,7 +130,7 @@ public sealed class SubAgentSpawner
         var runId = SubAgentRunId.New();
 
         // Notify session that subagent is starting
-        context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+        context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
         {
             RunId = runId,
             AgentName = definition.Name.Value,
@@ -175,9 +175,9 @@ public sealed class SubAgentSpawner
             // exception propagates to the tool pipeline.
             SubAgentSpawnBreadcrumbs.ChildSpawnFailed(_logger, context, profile.Name, runId, ex);
             // Balance the IsStarted=true notification above: the non-streaming path
-            // (activitySink is null) relies solely on OnSubAgentActivity, so without
+            // (activitySink is null) relies solely on the per-call output sink, so without
             // a terminal event the session UI shows a sub-agent stuck in "Started".
-            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
                 RunId = runId,
                 AgentName = definition.Name.Value,
@@ -246,7 +246,7 @@ public sealed class SubAgentSpawner
 
             result = EnrichWorkingContextResult(result, initialWorkingSnapshot, context.Audience);
 
-            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
                 RunId = runId,
                 AgentName = definition.Name.Value,
@@ -273,7 +273,7 @@ public sealed class SubAgentSpawner
 
             TryStopSubAgent(subAgent);
 
-            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
                 RunId = runId,
                 AgentName = definition.Name.Value,
@@ -348,7 +348,7 @@ public sealed class SubAgentSpawner
             Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(path, snapshot.Worktree));
     }
 
-    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolExecutionContext context)
+    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolInvocationContext context)
     {
         // Sub-agents inherit the parent session's runtime tool policy. Agent
         // definition tool metadata is advisory only; the only static
@@ -387,7 +387,7 @@ public sealed class SubAgentSpawner
             overlay.Trim());
     }
 
-    private string? ResolveProjectInstructions(ToolExecutionContext context)
+    private string? ResolveProjectInstructions(ToolInvocationContext context)
     {
         if (string.IsNullOrWhiteSpace(context.ProjectDirectory))
             return null;
@@ -395,7 +395,7 @@ public sealed class SubAgentSpawner
         return _promptProvider.GetProjectInstructions(context.Audience, context.ProjectDirectory);
     }
 
-    private string? ResolveOperatingRules(ToolExecutionContext context)
+    private string? ResolveOperatingRules(ToolInvocationContext context)
     {
         // Sub-agents inherit the audience-appropriate embedded operating core and
         // the deployment mission playbook. This keeps safety, grounding, and the

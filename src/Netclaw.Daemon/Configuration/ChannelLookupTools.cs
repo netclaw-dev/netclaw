@@ -86,7 +86,10 @@ internal abstract class ChannelLookupTool : IChannelTool
         return _aiTool ??= AIFunctionFactory.CreateDeclaration(Name, Description, ParameterSchema);
     }
 
-    public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct = default)
     {
         var channelKeyValue = ToolArgumentHelper.GetString(arguments, "channel_key");
         if (string.IsNullOrWhiteSpace(channelKeyValue))

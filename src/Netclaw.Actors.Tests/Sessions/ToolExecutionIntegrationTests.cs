@@ -353,7 +353,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
 
-    public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
+    public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         if (FailForTools.Contains(toolCall.Name))
             throw new InvalidOperationException($"Tool '{toolCall.Name}' failed (simulated)");
@@ -361,7 +361,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         return Task.CompletedTask;
     }
 
-    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
 
@@ -376,9 +376,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         // has no tool instance, so it uses the session content budget (per-tool
         // verbose overrides are exercised in DispatchingToolExecutorTests).
         result = Netclaw.Security.SecretOutputRedactor.Redact(result);
-        var budget = context?.MaxInlineToolResultChars is > 0 and var b
-            ? b
-            : Netclaw.Actors.Tools.ToolOutputSpill.DefaultContentBudget;
+        var budget = context.MaxInlineToolResultChars;
         return await Netclaw.Actors.Tools.ToolOutputSpill.BoundAndSpillAsync(
             result, toolCall.CallId, budget, context, ct);
     }

@@ -98,7 +98,10 @@ public class MetaFieldResolutionTests
         public string Description => "";
         public string GrantCategory => "test";
         public JsonElement ParameterSchema { get; } = JsonDocument.Parse(schema).RootElement.Clone();
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
             => Task.FromResult("ok");
         public AITool ToAITool() => AIFunctionFactory.Create(() => "ok", Name);
     }

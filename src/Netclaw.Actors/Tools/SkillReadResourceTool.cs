@@ -39,10 +39,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         _skillSyncConfig = skillSyncConfig ?? new SkillSyncConfig();
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         // Defense-in-depth: block skill resource reading for Public audience or when skills subsystem is disabled
         var audience = context.Audience;

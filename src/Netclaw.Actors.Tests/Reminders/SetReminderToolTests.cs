@@ -329,7 +329,7 @@ public class SetReminderToolTests : TestKit
         // Session id present but ChannelType is null — pre-v0.16 context
         // shape or an unusual caller. Fail loud, do not silently persist a
         // headless reminder that would drop on the floor at fire time.
-        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null) { Audience = TrustAudience.Personal };
+        var context = TestToolExecutionContext.CreateBound("C0123ABC/1234567890.123456", null, TrustAudience.Personal);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -362,7 +362,7 @@ public class SetReminderToolTests : TestKit
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "10m",
                 ["DeliveryKind"] = "none"
-            }, ToolExecutionContext.Empty);
+            }, TestToolExecutionContext.CreateUnbound());
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);

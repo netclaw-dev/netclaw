@@ -59,7 +59,7 @@ public sealed class SmokeMcpServerArgumentCoercionTests
             ["reference"] = "00713",
         };
 
-        var result = await recordTasks!.ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+        var result = await recordTasks!.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), ct);
 
         // count=2 (with the trailing delimiter) proves the stringified array was
         // reconstructed before the server bound it to `object[]` — a raw string

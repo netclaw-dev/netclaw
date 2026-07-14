@@ -307,7 +307,13 @@ public sealed class ToolRegistry
     }
 
     private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => new(null, null) { Audience = audience };
+        => new(new ToolRunScope
+        {
+            Session = new ToolSessionScope.Unbound(),
+            Audience = audience,
+            InlineOutputBudget = InlineOutputBudget.Default,
+            SupportsInteractiveApproval = false,
+        }, ToolExecutionTimeout.Default);
 
     private static string DescribeServerCapability(string serverName, IReadOnlyList<McpToolAdapter> tools)
     {
@@ -459,7 +465,10 @@ public sealed class ToolRegistry
         public System.Text.Json.JsonElement ParameterSchema { get; }
         public AITool ToAITool() => _tool;
 
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
             => Task.FromResult("Not supported via adapter");
     }
 }

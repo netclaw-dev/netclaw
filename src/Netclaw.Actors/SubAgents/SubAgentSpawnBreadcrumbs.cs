@@ -20,7 +20,7 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 internal static class SubAgentSpawnBreadcrumbs
 {
-    public static void SpawnRequested(ILogger? logger, ToolExecutionContext context, string agentName, int taskChars)
+    public static void SpawnRequested(ILogger? logger, ToolInvocationContext context, string agentName, int taskChars)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogInformation(
@@ -28,7 +28,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, taskChars);
     }
 
-    public static void NoSessionContext(ILogger? logger, ToolExecutionContext context, string agentName)
+    public static void NoSessionContext(ILogger? logger, ToolInvocationContext context, string agentName)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogWarning(
@@ -36,7 +36,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName);
     }
 
-    public static void NoToolsAvailable(ILogger? logger, ToolExecutionContext context, string agentName)
+    public static void NoToolsAvailable(ILogger? logger, ToolInvocationContext context, string agentName)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogWarning(
@@ -44,7 +44,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName);
     }
 
-    public static void ChildSpawnFailed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, Exception ex)
+    public static void ChildSpawnFailed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogError(
@@ -52,7 +52,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value);
     }
 
-    public static void ChildSpawned(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId)
+    public static void ChildSpawned(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogInformation(
@@ -60,7 +60,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value);
     }
 
-    public static void Completed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, bool success, long durationMs)
+    public static void Completed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, bool success, long durationMs)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogInformation(
@@ -68,7 +68,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value, success, durationMs);
     }
 
-    public static void RunFailed(ILogger? logger, ToolExecutionContext context, string agentName, SubAgentRunId runId, Exception ex)
+    public static void RunFailed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogError(
@@ -76,7 +76,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value);
     }
 
-    public static void ToolDenied(ILogger? logger, ToolExecutionContext context, string agentName, string toolName)
+    public static void ToolDenied(ILogger? logger, ToolInvocationContext context, string agentName, string toolName)
     {
         // INFO so tool denials are visible in production: a sub-agent missing a tool may be unable
         // to finish its task. Routed via the SessionId scope like every other breadcrumb (no
@@ -87,7 +87,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, toolName);
     }
 
-    public static void SpawnRefused(ILogger? logger, ToolExecutionContext context, string agentName, TrustAudience audience, bool subsystemEnabled)
+    public static void SpawnRefused(ILogger? logger, ToolInvocationContext context, string agentName, TrustAudience audience, bool subsystemEnabled)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogWarning(
@@ -95,7 +95,7 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, audience, subsystemEnabled);
     }
 
-    public static void UnknownAgentRefused(ILogger? logger, ToolExecutionContext context, string agentName, int availableCount)
+    public static void UnknownAgentRefused(ILogger? logger, ToolInvocationContext context, string agentName, int availableCount)
     {
         using (BeginSessionScope(logger, context.SessionId))
             logger?.LogWarning(

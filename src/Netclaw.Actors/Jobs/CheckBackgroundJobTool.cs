@@ -33,10 +33,7 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
         _jobManager = jobManager;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.JobId))
             return "Error: job_id is required.";

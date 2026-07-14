@@ -65,7 +65,7 @@ public sealed class SmokeMcpServerHttpHeaderTests
         Assert.NotNull(lastAuthHeader);
 
         var observed = await lastAuthHeader!.ExecuteAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), ct);
 
         Assert.Contains(expectedHeader, observed, StringComparison.Ordinal);
     }
@@ -100,7 +100,7 @@ public sealed class SmokeMcpServerHttpHeaderTests
             .SingleOrDefault(t => t.Name == "smoke-http/last_user_agent");
         Assert.NotNull(lastUserAgent);
         var observedUa = await lastUserAgent!.ExecuteAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), ct);
         // Pin the exact UA we expect on the wire so a regression that ships
         // "Netclaw/0.0.0 (...; sha=unknown)" against testhost still fails.
         Assert.Contains(NetclawUserAgent.Value, observedUa, StringComparison.Ordinal);
@@ -111,7 +111,7 @@ public sealed class SmokeMcpServerHttpHeaderTests
             .SingleOrDefault(t => t.Name == "smoke-http/last_netclaw_component");
         Assert.NotNull(lastComponent);
         var observedComponent = await lastComponent!.ExecuteAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), ct);
         // Daemon path advertises "mcp" exactly; the CLI probe path uses
         // "mcp-probe". Substring "mcp" alone would not catch a swap.
         Assert.Contains("mcp", observedComponent, StringComparison.Ordinal);
@@ -149,7 +149,7 @@ public sealed class SmokeMcpServerHttpHeaderTests
         Assert.NotNull(lastAuthHeader);
 
         var observed = await lastAuthHeader!.ExecuteAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), ct);
 
         Assert.Contains("(none)", observed, StringComparison.Ordinal);
     }
@@ -196,7 +196,7 @@ public sealed class SmokeMcpServerHttpHeaderTests
         Assert.NotNull(lastAuthHeader);
 
         var observed = await lastAuthHeader!.ExecuteAsync(
-            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+            new Dictionary<string, object?>(), TestToolExecutionContext.CreateUnbound(), ct);
 
         Assert.Contains(expectedHeader, observed, StringComparison.Ordinal);
     }

@@ -66,10 +66,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
     public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
         : this(new ToolConfig(), httpClient, fetchDirectory, timeProvider) { }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Url))
             return "Error: 'url' parameter is required.";

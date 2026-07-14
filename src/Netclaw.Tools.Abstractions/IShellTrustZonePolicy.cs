@@ -20,5 +20,5 @@ public interface IShellTrustZonePolicy
     /// path argument or working directory is not authorized is denied for
     /// non-interactive channels.
     /// </summary>
-    bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context);
+    bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context);
 }
