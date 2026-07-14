@@ -6,6 +6,7 @@
 using System.ComponentModel;
 using System.Text;
 using Mattermost;
+using MattermostUser = Mattermost.Models.Users.User;
 using Netclaw.Actors.Channels;
 using Netclaw.Channels;
 using Netclaw.Tools;
@@ -145,11 +146,11 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
             : ChannelAddressResolutionResult.NotFound($"No Mattermost user matched '{query}'.");
     }
 
-    private bool IsFilteredOut(global::Mattermost.Models.Users.User user)
+    private bool IsFilteredOut(MattermostUser user)
         => _options.AllowedUserIds.Length > 0
             && !_options.AllowedUserIds.Contains(user.Id, StringComparer.Ordinal);
 
-    private async Task<(global::Mattermost.Models.Users.User? User, Exception? LookupError)> FindUserAsync(string query)
+    private async Task<(MattermostUser? User, Exception? LookupError)> FindUserAsync(string query)
     {
         Exception? lookupError = null;
 
@@ -181,7 +182,7 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
         return (null, lookupError);
     }
 
-    private ResolvedChannelAddress ToResolvedAddress(ChannelAddressKind addressKind, global::Mattermost.Models.Users.User user)
+    private ResolvedChannelAddress ToResolvedAddress(ChannelAddressKind addressKind, MattermostUser user)
     {
         return new ResolvedChannelAddress(Key, addressKind, user.Id, GetDisplayName(user));
     }
@@ -192,7 +193,7 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
         return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
     }
 
-    private static string GetDisplayName(global::Mattermost.Models.Users.User user)
+    private static string GetDisplayName(MattermostUser user)
     {
         if (!string.IsNullOrWhiteSpace(user.Username))
             return $"@{user.Username}";
@@ -207,7 +208,7 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
         return user.Id;
     }
 
-    private static void AppendUser(StringBuilder sb, global::Mattermost.Models.Users.User user)
+    private static void AppendUser(StringBuilder sb, MattermostUser user)
     {
         sb.AppendLine("Found user:");
         sb.Append($"  {user.Id} (@{user.Username})");

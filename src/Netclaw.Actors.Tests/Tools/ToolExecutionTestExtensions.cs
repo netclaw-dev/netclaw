@@ -11,5 +11,5 @@ internal static class ToolExecutionTestExtensions
         this INetclawTool tool,
         IDictionary<string, object?>? arguments,
         CancellationToken ct = default)
-        => tool.ExecuteAsync(arguments, ToolExecutionContext.Empty, ct);
+        => tool.ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), ct);
 }
