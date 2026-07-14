@@ -42,9 +42,10 @@ internal static class LlmSessionTestExtensions
 
         if (services.Any(d => d.ServiceType == typeof(IToolExecutor)))
         {
+            services.TryAddSingleton<IToolAuditLogger>(NullToolAuditLogger.Instance);
             services.TryAddSingleton(sp => new SessionToolServices(
                 sp.GetRequiredService<IToolExecutor>(),
-                sp.GetService<IToolAuditLogger>() ?? NullToolAuditLogger.Instance,
+                sp.GetRequiredService<IToolAuditLogger>(),
                 sp.GetRequiredService<ToolRegistry>(),
                 sp.GetService<ToolAccessPolicy>(),
                 sp.GetService<TrustContextDeriver>(),

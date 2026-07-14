@@ -739,6 +739,7 @@ static void ConfigureDaemonServices(
             toolAccessPolicy,
             sp.GetService<IToolApprovalService>(),
             sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+    services.AddSingleton<IToolAuditLogger>(NullToolAuditLogger.Instance);
 
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
@@ -965,7 +966,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton(sp => new SessionToolServices(
         sp.GetRequiredService<IToolExecutor>(),
-        sp.GetService<IToolAuditLogger>() ?? NullToolAuditLogger.Instance,
+        sp.GetRequiredService<IToolAuditLogger>(),
         sp.GetRequiredService<ToolRegistry>(),
         sp.GetService<ToolAccessPolicy>(),
         sp.GetService<TrustContextDeriver>(),
