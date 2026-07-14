@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WorkingContextSnapshot.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -27,13 +27,27 @@ public sealed record GitWorkingContextSnapshot
     public ImmutableHashSet<string> ChangedFiles { get; init; } = [];
 }
 
+public abstract record GitWorkingContextInspection
+{
+    private GitWorkingContextInspection()
+    {
+    }
+
+    public sealed record Skipped : GitWorkingContextInspection;
+
+    public sealed record Available(GitWorkingContextSnapshot Snapshot) : GitWorkingContextInspection;
+
+    public sealed record NotRepository : GitWorkingContextInspection;
+
+    public sealed record Unavailable(string Reason) : GitWorkingContextInspection;
+}
+
 public sealed record WorkingContextSnapshot
 {
     public required WorkingContext WorkingContext { get; init; }
-    public GitWorkingContextSnapshot? Git { get; init; }
-    public string? GitUnavailableReason { get; init; }
+    public required GitWorkingContextInspection Git { get; init; }
 
-    public bool IsEmpty => WorkingContext.IsEmpty && Git is null && GitUnavailableReason is null;
+    public bool IsEmpty => WorkingContext.IsEmpty && Git is GitWorkingContextInspection.Skipped or GitWorkingContextInspection.NotRepository;
 
     public string ToContextBlock()
     {
@@ -51,98 +65,196 @@ public sealed record WorkingContextSnapshot
                 sb.Append("\n  - ").Append(path);
         }
 
-        if (Git is { } git)
+        switch (Git)
         {
-            sb.Append("\ngit:")
-                .Append("\n  worktree: ").Append(git.Worktree)
-                .Append("\n  common_dir: ").Append(git.CommonDirectory)
-                .Append("\n  branch: ").Append(git.Detached ? "(detached)" : git.Branch)
-                .Append("\n  head: ").Append(git.Head ?? "(unborn)");
-            if (git.Upstream is not null)
-            {
-                sb.Append("\n  upstream: ").Append(git.Upstream)
-                    .Append("\n  ahead: ").Append(git.Ahead)
-                    .Append("\n  behind: ").Append(git.Behind);
-            }
-            sb.Append("\n  staged: ").Append(git.Staged)
-                .Append("\n  modified: ").Append(git.Modified)
-                .Append("\n  untracked: ").Append(git.Untracked);
-        }
-        else if (GitUnavailableReason is not null)
-        {
-            sb.Append("\ngit:")
-                .Append("\n  status: unavailable")
-                .Append("\n  reason: ").Append(GitUnavailableReason);
+            case GitWorkingContextInspection.Available { Snapshot: var git }:
+                sb.Append("\ngit:")
+                    .Append("\n  worktree: ").Append(git.Worktree)
+                    .Append("\n  common_dir: ").Append(git.CommonDirectory)
+                    .Append("\n  branch: ").Append(git.Detached ? "(detached)" : git.Branch)
+                    .Append("\n  head: ").Append(git.Head ?? "(unborn)");
+                if (git.Upstream is not null)
+                {
+                    sb.Append("\n  upstream: ").Append(git.Upstream)
+                        .Append("\n  ahead: ").Append(git.Ahead)
+                        .Append("\n  behind: ").Append(git.Behind);
+                }
+
+                sb.Append("\n  staged: ").Append(git.Staged)
+                    .Append("\n  modified: ").Append(git.Modified)
+                    .Append("\n  untracked: ").Append(git.Untracked);
+                break;
+            case GitWorkingContextInspection.Unavailable unavailable:
+                sb.Append("\ngit:")
+                    .Append("\n  status: unavailable")
+                    .Append("\n  reason: ").Append(unavailable.Reason);
+                break;
         }
 
         return sb.ToString();
     }
 }
 
-public interface IWorkingContextSnapshotProvider
+public interface IGitWorkingContextInspector
 {
-    WorkingContextSnapshot Create(WorkingContext context, TrustAudience audience);
+    Task<GitWorkingContextInspection> InspectAsync(
+        string projectDirectory,
+        CancellationToken cancellationToken);
 }
 
-public sealed class WorkingContextSnapshotProvider(ILogger<WorkingContextSnapshotProvider> logger)
+internal interface IGitCommandRunner
+{
+    Task<GitCommandResult> RunAsync(
+        string workingDirectory,
+        IReadOnlyList<string> arguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
+}
+
+internal sealed record GitCommandResult(
+    bool Success,
+    string StandardOutput,
+    string StandardError,
+    string Error)
+{
+    public static GitCommandResult Succeeded(string stdout, string stderr) =>
+        new(true, stdout, stderr, string.Empty);
+
+    public static GitCommandResult Failed(string error, string stdout = "", string stderr = "") =>
+        new(false, stdout, stderr, error);
+}
+
+public interface IWorkingContextSnapshotProvider
+{
+    Task<WorkingContextSnapshot> CreateAsync(
+        WorkingContext context,
+        TrustAudience audience,
+        CancellationToken cancellationToken);
+}
+
+public sealed class WorkingContextSnapshotProvider(
+    IGitWorkingContextInspector gitInspector,
+    ILogger<WorkingContextSnapshotProvider> logger)
     : IWorkingContextSnapshotProvider
 {
-    internal static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(2);
-    private const int MaxOutputChars = 256 * 1024;
-
-    public WorkingContextSnapshot Create(WorkingContext context, TrustAudience audience)
+    public async Task<WorkingContextSnapshot> CreateAsync(
+        WorkingContext context,
+        TrustAudience audience,
+        CancellationToken cancellationToken)
     {
-        if (audience == TrustAudience.Public)
-            return new WorkingContextSnapshot { WorkingContext = WorkingContext.Empty };
-        if (context.ProjectDirectory is null)
-            return new WorkingContextSnapshot { WorkingContext = context };
+        ArgumentNullException.ThrowIfNull(context);
 
-        var inspection = InspectGit(context.ProjectDirectory);
-        if (inspection.Snapshot is not null)
-            return new WorkingContextSnapshot { WorkingContext = context, Git = inspection.Snapshot };
-        if (inspection.IsNotRepository)
-            return new WorkingContextSnapshot { WorkingContext = context };
+        if (audience == TrustAudience.Public || context.ProjectDirectory is null)
+        {
+            return new WorkingContextSnapshot
+            {
+                WorkingContext = audience == TrustAudience.Public ? WorkingContext.Empty : context,
+                Git = new GitWorkingContextInspection.Skipped()
+            };
+        }
 
-        logger.LogWarning("Git working-context inspection failed: {Reason}", inspection.Error);
+        var inspection = Directory.Exists(context.ProjectDirectory)
+            ? await gitInspector.InspectAsync(context.ProjectDirectory, cancellationToken).ConfigureAwait(false)
+            : new GitWorkingContextInspection.Unavailable("project directory does not exist");
+
+        if (inspection is GitWorkingContextInspection.Unavailable unavailable)
+            logger.LogWarning("Git working-context inspection failed: {Reason}", unavailable.Reason);
+
         return new WorkingContextSnapshot
         {
             WorkingContext = context,
-            GitUnavailableReason = SanitizeReason(inspection.Error)
+            Git = inspection switch
+            {
+                GitWorkingContextInspection.Unavailable failure =>
+                    new GitWorkingContextInspection.Unavailable(SanitizeReason(failure.Reason)),
+                _ => inspection
+            }
         };
     }
 
-    internal static GitInspectionResult InspectGit(string projectDirectory)
+    private static string SanitizeReason(string reason)
     {
-        if (!Directory.Exists(projectDirectory))
-            return GitInspectionResult.Failed("project directory does not exist");
+        var firstLine = reason.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
+                        ?? "inspection failed";
+        return firstLine.Length <= 200 ? firstLine : firstLine[..200];
+    }
+}
 
-        var roots = RunGit(projectDirectory,
-            ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"]);
+public sealed class GitWorkingContextInspector : IGitWorkingContextInspector
+{
+    internal static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(2);
+    private readonly IGitCommandRunner _commandRunner;
+    private readonly TimeProvider _timeProvider;
+
+    public GitWorkingContextInspector(TimeProvider timeProvider)
+        : this(new GitCommandRunner(), timeProvider)
+    {
+    }
+
+    internal GitWorkingContextInspector(
+        IGitCommandRunner commandRunner,
+        TimeProvider timeProvider)
+    {
+        _commandRunner = commandRunner;
+        _timeProvider = timeProvider;
+    }
+
+    public async Task<GitWorkingContextInspection> InspectAsync(
+        string projectDirectory,
+        CancellationToken cancellationToken)
+    {
+        var deadline = new GitInspectionDeadline(_timeProvider.GetUtcNow() + GitTimeout);
+        var roots = await _commandRunner.RunAsync(
+            projectDirectory,
+            ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"],
+            deadline.Remaining(_timeProvider),
+            cancellationToken).ConfigureAwait(false);
         if (!roots.Success)
         {
-            var notRepo = roots.StandardError.Contains("not a git repository", StringComparison.OrdinalIgnoreCase);
-            return notRepo ? GitInspectionResult.NotRepository() : GitInspectionResult.Failed(roots.Error);
+            var notRepository = roots.StandardError.Contains(
+                "not a git repository",
+                StringComparison.OrdinalIgnoreCase);
+            return notRepository
+                ? new GitWorkingContextInspection.NotRepository()
+                : new GitWorkingContextInspection.Unavailable(roots.Error);
         }
 
-        var rootLines = roots.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var rootLines = roots.StandardOutput.Split(
+            '\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (rootLines.Length != 2)
-            return GitInspectionResult.Failed("git returned an unexpected repository-root response");
+        {
+            return new GitWorkingContextInspection.Unavailable(
+                "git returned an unexpected repository-root response");
+        }
 
-        var status = RunGit(projectDirectory, ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"]);
+        var remaining = deadline.Remaining(_timeProvider);
+        if (remaining <= TimeSpan.Zero)
+            return new GitWorkingContextInspection.Unavailable("git inspection timed out");
+
+        var status = await _commandRunner.RunAsync(
+            projectDirectory,
+            ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+            remaining,
+            cancellationToken).ConfigureAwait(false);
         if (!status.Success)
-            return GitInspectionResult.Failed(status.Error);
+            return new GitWorkingContextInspection.Unavailable(status.Error);
 
         try
         {
-            return GitInspectionResult.Succeeded(ParseStatus(rootLines[0], rootLines[1], status.StandardOutput));
+            return new GitWorkingContextInspection.Available(
+                ParseStatus(rootLines[0], rootLines[1], status.StandardOutput));
         }
         catch (FormatException ex)
         {
-            return GitInspectionResult.Failed(ex.Message);
+            return new GitWorkingContextInspection.Unavailable(ex.Message);
         }
     }
 
-    internal static GitWorkingContextSnapshot ParseStatus(string worktree, string commonDirectory, string output)
+    internal static GitWorkingContextSnapshot ParseStatus(
+        string worktree,
+        string commonDirectory,
+        string output)
     {
         string? branch = null;
         string? head = null;
@@ -221,7 +333,25 @@ public sealed class WorkingContextSnapshotProvider(ILogger<WorkingContextSnapsho
         };
     }
 
-    private static GitCommandResult RunGit(string workingDirectory, IReadOnlyList<string> arguments)
+    internal readonly record struct GitInspectionDeadline(DateTimeOffset ExpiresAt)
+    {
+        public TimeSpan Remaining(TimeProvider provider)
+        {
+            var remaining = ExpiresAt - provider.GetUtcNow();
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+    }
+}
+
+internal sealed class GitCommandRunner : IGitCommandRunner
+{
+    private const int MaxOutputChars = 256 * 1024;
+
+    public async Task<GitCommandResult> RunAsync(
+        string workingDirectory,
+        IReadOnlyList<string> arguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -241,56 +371,52 @@ public sealed class WorkingContextSnapshotProvider(ILogger<WorkingContextSnapsho
                 process.StartInfo.ArgumentList.Add(argument);
 
             process.Start();
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(GitTimeout))
+            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+            using var commandTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            commandTimeout.CancelAfter(timeout);
+
+            try
             {
-                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(commandTimeout.Token).ConfigureAwait(false);
+                await Task.WhenAll(stdout, stderr).WaitAsync(commandTimeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                TryKill(process);
                 return GitCommandResult.Failed("git inspection timed out");
             }
 
-            if (!Task.WaitAll([stdout, stderr], GitTimeout))
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-                return GitCommandResult.Failed("git output collection timed out");
-            }
-            var standardOutput = Bound(stdout.Result);
-            var standardError = Bound(stderr.Result);
+            var standardOutput = Bound(await stdout.ConfigureAwait(false));
+            var standardError = Bound(await stderr.ConfigureAwait(false));
             return process.ExitCode == 0
                 ? GitCommandResult.Succeeded(standardOutput, standardError)
-                : GitCommandResult.Failed(string.IsNullOrWhiteSpace(standardError)
-                    ? $"git exited with code {process.ExitCode}"
-                    : standardError, standardOutput, standardError);
+                : GitCommandResult.Failed(
+                    string.IsNullOrWhiteSpace(standardError)
+                        ? $"git exited with code {process.ExitCode}"
+                        : standardError,
+                    standardOutput,
+                    standardError);
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException or AggregateException)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
         {
-            return GitCommandResult.Failed(ex is AggregateException ? "git output collection timed out" : ex.Message);
+            return GitCommandResult.Failed(ex.Message);
         }
     }
 
-    private static string Bound(string value) => value.Length <= MaxOutputChars ? value : value[..MaxOutputChars];
-
-    private static string SanitizeReason(string reason)
+    private static void TryKill(Process process)
     {
-        var firstLine = reason.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
-                        ?? "inspection failed";
-        return firstLine.Length <= 200 ? firstLine : firstLine[..200];
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between the state check and Kill.
+        }
     }
 
-    internal sealed record GitInspectionResult(
-        GitWorkingContextSnapshot? Snapshot,
-        bool IsNotRepository,
-        string Error)
-    {
-        public static GitInspectionResult Succeeded(GitWorkingContextSnapshot snapshot) => new(snapshot, false, string.Empty);
-        public static GitInspectionResult NotRepository() => new(null, true, string.Empty);
-        public static GitInspectionResult Failed(string error) => new(null, false, error);
-    }
+    internal static string Bound(string value) => value.Length <= MaxOutputChars ? value : value[..MaxOutputChars];
 
-    private sealed record GitCommandResult(bool Success, string StandardOutput, string StandardError, string Error)
-    {
-        public static GitCommandResult Succeeded(string stdout, string stderr) => new(true, stdout, stderr, string.Empty);
-        public static GitCommandResult Failed(string error, string stdout = "", string stderr = "") => new(false, stdout, stderr, error);
-    }
 }

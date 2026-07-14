@@ -65,7 +65,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -91,7 +91,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -118,7 +118,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -153,7 +153,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Explain malformed output", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Explain malformed output", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -180,7 +180,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Say hello", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -206,7 +206,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -228,25 +228,6 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Spawn_without_audience_fails_fast_with_unsuccessful_result()
-    {
-        var fakeClient = new FakeChatClient();
-        var definition = CreateDefinition();
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
-
-        // A RunSubAgent with no audience must not run — the sub-agent must reply
-        // with an unsuccessful result immediately, not crash and make the caller
-        // wait out the Ask timeout. A generous Ask timeout would still elapse if
-        // the actor merely threw; this asserts the prompt failure reply.
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Do the thing", Timeout = TimeSpan.FromSeconds(5), Audience = null },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        Assert.False(result.Success);
-        Assert.Contains("audience", result.Output, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task Tool_call_executes_and_continues()
     {
         var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
@@ -263,7 +244,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Greet the user", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Greet the user", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -293,11 +274,11 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: dir.Path,
+                    modelInputModalities: ModelModality.Text | ModelModality.Image),
                 Task = "Inspect the image.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ParentSessionDirectory = dir.Path,
-                ModelInputModalities = ModelModality.Text | ModelModality.Image
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -330,12 +311,12 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/tmp/netclaw/sessions/abc",
+                    projectDirectory: "/home/user/workspaces/netclaw",
+                    recentFiles: ["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"]),
                 Task = "Inspect the inherited paths.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentSessionDirectory = "/tmp/netclaw/sessions/abc",
-                ParentProjectDirectory = "/home/user/workspaces/netclaw",
-                ParentRecentFiles = ["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"],
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -361,10 +342,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(sessionDirectory: "/tmp/netclaw/sessions/xyz"),
                 Task = "Inspect inherited paths.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentSessionDirectory = "/tmp/netclaw/sessions/xyz",
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -388,12 +368,12 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/tmp/netclaw/sessions/parent",
+                    projectDirectory: "/home/user/repos/foo",
+                    inheritedCwd: "/home/user/repos/foo"),
                 Task = "Inspect inherited cwd.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentSessionDirectory = "/tmp/netclaw/sessions/parent",
-                ParentProjectDirectory = "/home/user/repos/foo",
-                ParentCwd = "/home/user/repos/foo",
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -419,10 +399,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Inspect null cwd.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentCwd = null,
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -451,12 +430,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(inheritedCwd: "/home/user/repos/foo"),
                 Task = "Inspect inherited cwd with no other sources.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentSessionDirectory = null,
-                ParentProjectDirectory = null,
-                ParentCwd = "/home/user/repos/foo",
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -480,10 +456,9 @@ public class SubAgentActorTests : TestKit
         var firstResult = await firstAgent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(projectDirectory: "/home/user/workspaces/project-a"),
                 Task = "First run.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentProjectDirectory = "/home/user/workspaces/project-a",
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.True(firstResult.Success);
@@ -499,10 +474,9 @@ public class SubAgentActorTests : TestKit
         var secondResult = await secondAgent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(projectDirectory: "/home/user/workspaces/project-b"),
                 Task = "Second run after parent project switch.",
-                Timeout = TimeSpan.FromSeconds(5),
-                ParentProjectDirectory = "/home/user/workspaces/project-b",
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.True(secondResult.Success);
@@ -518,7 +492,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -536,7 +510,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -564,7 +538,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -599,13 +573,13 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/tmp/netclaw/sessions/parent",
+                    projectDirectory: "/home/user/repos/foo",
+                    inheritedCwd: "/home/user/repos/foo",
+                    approvalBridge: approvalBridge),
                 Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ParentSessionDirectory = "/tmp/netclaw/sessions/parent",
-                ParentProjectDirectory = "/home/user/repos/foo",
-                ParentCwd = "/home/user/repos/foo",
-                ApprovalBridge = approvalBridge,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -643,10 +617,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Run the same approval-gated tool twice",
-                Timeout = TimeSpan.FromSeconds(5),
-                ApprovalBridge = approvalBridge,
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -682,12 +655,11 @@ public class SubAgentActorTests : TestKit
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin",
                 // 250ms inactivity budget — much smaller than the human delay
                 // below. Before this fix, this would always abort.
-                Timeout = TimeSpan.FromMilliseconds(250),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge
+                Timeout = TimeSpan.FromMilliseconds(250)
             },
             ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
@@ -728,10 +700,9 @@ public class SubAgentActorTests : TestKit
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin",
                 Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge,
                 ActivitySink = activityChannel.Writer
             },
             ApprovalAskTimeout, TestContext.Current.CancellationToken);
@@ -785,10 +756,9 @@ public class SubAgentActorTests : TestKit
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin",
                 Timeout = TimeSpan.FromSeconds(10),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge,
                 Cancellation = externalCts.Token
             },
             ApprovalAskTimeout, TestContext.Current.CancellationToken);
@@ -837,12 +807,11 @@ public class SubAgentActorTests : TestKit
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin twice",
                 // 200ms budget — shorter than the assertion window below, so
                 // a non-paused watchdog would abort before release.
-                Timeout = TimeSpan.FromMilliseconds(200),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge
+                Timeout = TimeSpan.FromMilliseconds(200)
             },
             ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
@@ -882,10 +851,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -916,10 +884,9 @@ public class SubAgentActorTests : TestKit
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(10),
-                Audience = TrustAudience.Personal,
-                ApprovalBridge = approvalBridge
+                Timeout = TimeSpan.FromSeconds(10)
             },
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
@@ -1024,7 +991,7 @@ public class SubAgentActorTests : TestKit
             maxToolIterations: 3));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) },
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         // After the configured tool budget, force a no-tools call which returns text.
@@ -1058,10 +1025,10 @@ public class SubAgentActorTests : TestKit
             // to Timeout, so Timeout alone no longer bounds the wait-for-first-token.)
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Slow task",
                 Timeout = TimeSpan.FromMilliseconds(500),
-                PrefillTimeout = TimeSpan.FromMilliseconds(500),
-                Audience = TrustAudience.Personal
+                PrefillTimeout = TimeSpan.FromMilliseconds(500)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1087,10 +1054,10 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Silent prefill",
                 Timeout = TimeSpan.FromSeconds(30),         // inter-delta — not the governing budget here
-                PrefillTimeout = TimeSpan.FromSeconds(2),   // the budget under test
-                Audience = TrustAudience.Personal
+                PrefillTimeout = TimeSpan.FromSeconds(2)    // the budget under test
             },
             TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
@@ -1111,11 +1078,11 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Wedged",
                 Timeout = TimeSpan.FromSeconds(30),           // inter-delta — not governing
                 PrefillTimeout = TimeSpan.FromSeconds(30),    // liveness — generous, not governing
-                NoProgressTimeout = TimeSpan.FromSeconds(2),  // the budget under test
-                Audience = TrustAudience.Personal
+                NoProgressTimeout = TimeSpan.FromSeconds(2)   // the budget under test
             },
             TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
@@ -1186,7 +1153,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, throwingClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Fail", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Fail", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -1202,7 +1169,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
         Watch(agent);
 
-        agent.Tell(new RunSubAgent { Task = "Done", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal });
+        agent.Tell(new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Done", Timeout = TimeSpan.FromSeconds(5) });
 
         // SubAgentResult arrives before Terminated — drain it first
         await ExpectMsgAsync<SubAgentResult>(cancellationToken: TestContext.Current.CancellationToken);
@@ -1247,10 +1214,11 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    audience: TrustAudience.Team,
+                    scopeId: "session/subagent-scope"),
                 Task = "Open example.com",
-                Timeout = TimeSpan.FromSeconds(5),
-                SessionScopeId = "session/subagent-scope",
-                Audience = TrustAudience.Team
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1272,7 +1240,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -1293,7 +1261,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
@@ -1318,10 +1286,10 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Summarize the recent commits.",
                 RuntimeContext = "Workspace is netclaw on branch feature/foo.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1349,9 +1317,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(),
                 Task = "Do the thing.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1370,11 +1338,11 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(
+                    projectDirectory: MissingProjectDirectory,
+                    recentFiles: ["src/Netclaw.Actors/Sessions/WorkingContext.cs"]),
                 Task = "Continue the implementation.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ParentProjectDirectory = MissingProjectDirectory,
-                ParentRecentFiles = ["src/Netclaw.Actors/Sessions/WorkingContext.cs"]
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1403,10 +1371,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(projectDirectory: MissingProjectDirectory),
                 Task = "Edit Calculator.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ParentProjectDirectory = MissingProjectDirectory
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1435,10 +1402,9 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
+                Scope = SubAgentTestScope.Create(projectDirectory: MissingProjectDirectory),
                 Task = "Edit Calculator.",
-                Timeout = TimeSpan.FromSeconds(5),
-                Audience = TrustAudience.Personal,
-                ParentProjectDirectory = MissingProjectDirectory
+                Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 

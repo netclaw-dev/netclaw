@@ -26,7 +26,7 @@
 - [ ] 3.5 Correlate session-actor Git continuations with turn generations and discard stale results; await bounded spawn/completion snapshots at subagent async boundaries.
 - [ ] 3.6 Add deterministic tests for Public no-inspection, missing/non-Git project handling, sanitized failures, stale continuation rejection, child isolation, successful confirmed merge, and failed/cancelled no-merge without sleeps.
 - [ ] 3.7 Update engineering docs and the versioned `netclaw-operations` and `netclaw-projects` system skills for working-context and subagent behavior.
-- [ ] 3.8 Run targeted tests, prompt/tool eval suites, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 3 through review, CI, merge, and post-merge `dev` verification.
+- [ ] 3.8 Run targeted tests, prompt/tool eval suites, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 3 through review, CI, merge, and post-merge `dev` verification, then close GitHub issue #1633 with the acceptance evidence.
 
 ## 4. Closeout
 

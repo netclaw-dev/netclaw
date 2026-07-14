@@ -917,7 +917,9 @@ public class SkillToolTests : IDisposable
             policy,
             approvalService: null,
             NullSystemPromptProvider.Instance,
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
     }
 

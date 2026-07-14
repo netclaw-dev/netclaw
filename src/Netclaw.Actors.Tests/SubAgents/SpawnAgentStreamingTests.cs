@@ -75,7 +75,9 @@ public class SpawnAgentStreamingTests : TestKit
             toolAccessPolicy,
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, paths));
@@ -165,7 +167,9 @@ public class SpawnAgentStreamingTests : TestKit
             toolAccessPolicy,
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, paths));

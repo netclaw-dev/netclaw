@@ -634,7 +634,7 @@ public class SessionStateTests
     [Fact]
     public void Successful_subagent_merge_adds_only_confirmed_changed_files()
     {
-        var child = new SubAgentWorkingContextInfo
+        var child = new WorkingContextDelta
         {
             ReadFiles = ["src/ReadOnly.cs"],
             ConfirmedChangedFiles = ["src/Changed.cs"],
@@ -651,7 +651,7 @@ public class SessionStateTests
     public void Failed_subagent_merge_does_not_change_parent_working_context()
     {
         var current = WorkingContext.Empty.AddRecentFile("src/Existing.cs");
-        var child = new SubAgentWorkingContextInfo
+        var child = new WorkingContextDelta
         {
             ConfirmedChangedFiles = ["src/Denied.cs"]
         };

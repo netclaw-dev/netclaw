@@ -47,10 +47,10 @@ public sealed class SubAgentObservabilityTests : TestKit
     private static RunSubAgent NewRun(string task, string? scopeId = null)
         => new()
         {
+            Scope = SubAgentTestScope.Create(
+                scopeId: scopeId ?? "test-session/subagent/test/run"),
             Task = task,
-            Timeout = TimeSpan.FromSeconds(5),
-            Audience = TrustAudience.Personal,
-            SessionScopeId = scopeId
+            Timeout = TimeSpan.FromSeconds(5)
         };
 
     [Fact]

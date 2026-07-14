@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 
@@ -14,7 +15,7 @@ public class WorkingContextSnapshotTests
     [Fact]
     public void ParseStatus_reads_branch_divergence_and_dirty_counts()
     {
-        var snapshot = WorkingContextSnapshotProvider.ParseStatus(
+        var snapshot = GitWorkingContextInspector.ParseStatus(
             "/worktrees/feature",
             "/repos/app/.git",
             """
@@ -41,7 +42,7 @@ public class WorkingContextSnapshotTests
     [Fact]
     public void ParseStatus_uses_rename_destination_as_changed_file()
     {
-        var snapshot = WorkingContextSnapshotProvider.ParseStatus(
+        var snapshot = GitWorkingContextInspector.ParseStatus(
             "/worktrees/feature",
             "/repos/app/.git",
             "2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 src/New Name.cs\tsrc/Old Name.cs");
@@ -57,7 +58,7 @@ public class WorkingContextSnapshotTests
             WorkingContext = WorkingContext.Empty
                 .WithProjectDirectory("/worktrees/feature")
                 .AddRecentFile("src/App.cs"),
-            Git = new GitWorkingContextSnapshot
+            Git = new GitWorkingContextInspection.Available(new GitWorkingContextSnapshot
             {
                 Worktree = "/worktrees/feature",
                 CommonDirectory = "/repos/app/.git",
@@ -67,7 +68,7 @@ public class WorkingContextSnapshotTests
                 Staged = 1,
                 Modified = 2,
                 Untracked = 3
-            }
+            })
         };
 
         var block = snapshot.ToContextBlock();
@@ -80,29 +81,188 @@ public class WorkingContextSnapshotTests
     }
 
     [Fact]
-    public void Public_audience_does_not_inspect_or_render_git()
+    public async Task Public_audience_does_not_inspect_or_render_git()
     {
+        var inspector = new RecordingGitInspector();
         var provider = new WorkingContextSnapshotProvider(
+            inspector,
             NullLogger<WorkingContextSnapshotProvider>.Instance);
         var context = WorkingContext.Empty.WithProjectDirectory("/path/that/does/not/exist");
 
-        var snapshot = provider.Create(context, TrustAudience.Public);
+        var snapshot = await provider.CreateAsync(
+            context,
+            TrustAudience.Public,
+            TestContext.Current.CancellationToken);
 
-        Assert.Null(snapshot.Git);
-        Assert.Null(snapshot.GitUnavailableReason);
+        Assert.IsType<GitWorkingContextInspection.Skipped>(snapshot.Git);
+        Assert.Equal(0, inspector.InvocationCount);
         Assert.Equal(string.Empty, snapshot.ToContextBlock());
     }
 
     [Fact]
-    public void Missing_project_directory_reports_unavailable_for_personal_audience()
+    public async Task Missing_project_directory_reports_unavailable_for_personal_audience()
     {
+        var inspector = new RecordingGitInspector();
         var provider = new WorkingContextSnapshotProvider(
+            inspector,
             NullLogger<WorkingContextSnapshotProvider>.Instance);
         var context = WorkingContext.Empty.WithProjectDirectory("/path/that/does/not/exist");
 
-        var snapshot = provider.Create(context, TrustAudience.Personal);
+        var snapshot = await provider.CreateAsync(
+            context,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal("project directory does not exist", snapshot.GitUnavailableReason);
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(snapshot.Git);
+        Assert.Equal("project directory does not exist", unavailable.Reason);
+        Assert.Equal(0, inspector.InvocationCount);
         Assert.Contains("status: unavailable", snapshot.ToContextBlock());
+    }
+
+    [Fact]
+    public async Task Git_inspection_shares_one_deadline_across_root_and_status_commands()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-07-14T12:00:00Z"));
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.FromMilliseconds(1_500), GitCommandResult.Succeeded(
+                "/repo\n/repo/.git\n",
+                string.Empty)),
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Succeeded(
+                "# branch.oid 01234567\n# branch.head dev\n",
+                string.Empty))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitWorkingContextInspection.Available>(result);
+        Assert.Equal(2, runner.Timeouts.Count);
+        Assert.Equal(TimeSpan.FromSeconds(2), runner.Timeouts[0]);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), runner.Timeouts[1]);
+    }
+
+    [Fact]
+    public async Task Git_inspection_does_not_launch_status_after_aggregate_deadline_expires()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-07-14T12:00:00Z"));
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.FromSeconds(2), GitCommandResult.Succeeded(
+                "/repo\n/repo/.git\n",
+                string.Empty))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
+        Assert.Equal("git inspection timed out", unavailable.Reason);
+        Assert.Single(runner.Timeouts);
+    }
+
+    [Fact]
+    public async Task Git_inspection_classifies_non_repository_without_status_command()
+    {
+        var time = new FakeTimeProvider();
+        var runner = new SequenceGitCommandRunner(time,
+        [
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Failed(
+                "fatal: not a git repository",
+                stderr: "fatal: not a git repository"))
+        ]);
+        var inspector = new GitWorkingContextInspector(runner, time);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitWorkingContextInspection.NotRepository>(result);
+        Assert.Single(runner.Timeouts);
+    }
+
+    [Fact]
+    public void Git_command_output_is_bounded()
+    {
+        var oversized = new string('x', 300_000);
+
+        var bounded = GitCommandRunner.Bound(oversized);
+
+        Assert.Equal(256 * 1024, bounded.Length);
+    }
+
+    [Fact]
+    public async Task Unavailable_reason_is_single_line_and_bounded_before_rendering()
+    {
+        var reason = new string('x', 300) + "\ncredential-bearing second line";
+        var provider = new WorkingContextSnapshotProvider(
+            new FixedGitInspector(new GitWorkingContextInspection.Unavailable(reason)),
+            NullLogger<WorkingContextSnapshotProvider>.Instance);
+        var context = WorkingContext.Empty.WithProjectDirectory(Path.GetTempPath());
+
+        var snapshot = await provider.CreateAsync(
+            context,
+            TrustAudience.Team,
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(snapshot.Git);
+        Assert.Equal(200, unavailable.Reason.Length);
+        Assert.DoesNotContain("credential-bearing", unavailable.Reason);
+    }
+
+    private sealed class RecordingGitInspector : IGitWorkingContextInspector
+    {
+        public int InvocationCount { get; private set; }
+
+        public Task<GitWorkingContextInspection> InspectAsync(
+            string projectDirectory,
+            CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            return Task.FromResult<GitWorkingContextInspection>(
+                new GitWorkingContextInspection.NotRepository());
+        }
+    }
+
+    private sealed class FixedGitInspector(GitWorkingContextInspection result)
+        : IGitWorkingContextInspector
+    {
+        public Task<GitWorkingContextInspection> InspectAsync(
+            string projectDirectory,
+            CancellationToken cancellationToken) => Task.FromResult(result);
+    }
+
+    private sealed record TimedGitResult(TimeSpan Elapsed, GitCommandResult Result);
+
+    private sealed class SequenceGitCommandRunner : IGitCommandRunner
+    {
+        private readonly FakeTimeProvider _timeProvider;
+        private readonly Queue<TimedGitResult> _results;
+
+        public SequenceGitCommandRunner(
+            FakeTimeProvider timeProvider,
+            IReadOnlyList<TimedGitResult> results)
+        {
+            _timeProvider = timeProvider;
+            _results = new Queue<TimedGitResult>(results);
+        }
+
+        public List<TimeSpan> Timeouts { get; } = [];
+
+        public Task<GitCommandResult> RunAsync(
+            string workingDirectory,
+            IReadOnlyList<string> arguments,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            Timeouts.Add(timeout);
+            var next = _results.Dequeue();
+            _timeProvider.Advance(next.Elapsed);
+            return Task.FromResult(next.Result);
+        }
     }
 }

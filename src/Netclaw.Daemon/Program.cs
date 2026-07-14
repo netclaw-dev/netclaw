@@ -851,6 +851,7 @@ static void ConfigureDaemonServices(
 
     // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
     services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
+    services.AddSingleton<IGitWorkingContextInspector, GitWorkingContextInspector>();
     services.AddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
 
     // Expose all context layers as IReadOnlyList for actor DI resolution

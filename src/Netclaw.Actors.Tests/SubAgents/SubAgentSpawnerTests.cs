@@ -50,7 +50,9 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
@@ -78,13 +80,14 @@ public sealed class SubAgentSpawnerTests : TestKit
             TestContext.Current.CancellationToken);
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("/tmp/netclaw/sessions/parent", run.ParentSessionDirectory);
-        Assert.Equal("/home/user/repos/foo", run.ParentProjectDirectory);
-        Assert.Equal("/home/user/repos/foo", run.ParentCwd);
+        var bound = Assert.IsType<ToolSessionScope.Bound>(run.Scope.Authority.Session);
+        Assert.Equal("/tmp/netclaw/sessions/parent", bound.SessionDirectory);
+        Assert.Equal("/home/user/repos/foo", run.Scope.Authority.ProjectDirectory);
+        Assert.Equal("/home/user/repos/foo", run.Scope.Authority.InheritedCwd);
 
         childProbe.Reply(new SubAgentResult
         {
-            Success = true,
+            Completion = new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
             Output = "ok",
             AgentName = new AgentName(profile.Name)
         });
@@ -121,7 +124,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Null(run.ApprovalBridge);
+        Assert.Null(run.Scope.Authority.ApprovalBridge);
 
         childProbe.Reply(SuccessfulResult());
         Assert.True((await spawnTask).Success);
@@ -153,7 +156,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Same(approvalBridge, run.ApprovalBridge);
+        Assert.Same(approvalBridge, run.Scope.Authority.ApprovalBridge);
 
         childProbe.Reply(SuccessfulResult());
         Assert.True((await spawnTask).Success);
@@ -178,7 +181,9 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
         var notifications = new List<SubAgentNotificationInfo>();
@@ -209,7 +214,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
         childProbe.Reply(new SubAgentResult
         {
-            Success = true,
+            Completion = new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
             Output = "ok",
             AgentName = new AgentName(profile.Name)
         });
@@ -232,12 +237,13 @@ public sealed class SubAgentSpawnerTests : TestKit
             new WorkingContextSnapshot
             {
                 WorkingContext = WorkingContext.Empty.WithProjectDirectory(projectDirectory),
-                Git = GitSnapshot(projectDirectory)
+                Git = new GitWorkingContextInspection.Available(GitSnapshot(projectDirectory))
             },
             new WorkingContextSnapshot
             {
                 WorkingContext = WorkingContext.Empty.WithProjectDirectory(projectDirectory),
-                Git = GitSnapshot(projectDirectory, "src/Confirmed.cs", "src/Observed.cs")
+                Git = new GitWorkingContextInspection.Available(
+                    GitSnapshot(projectDirectory, "src/Confirmed.cs", "src/Observed.cs"))
             }
         ]);
         var spawner = CreateSpawner(new SequenceWorkingContextSnapshotProvider(snapshots));
@@ -259,11 +265,11 @@ public sealed class SubAgentSpawnerTests : TestKit
         await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
         childProbe.Reply(SuccessfulResult() with
         {
-            WorkingContext = new SubAgentWorkingContextInfo
+            Completion = new ChildRunCompletion.Completed(new WorkingContextDelta
             {
                 ProjectDirectory = projectDirectory,
                 ConfirmedChangedFiles = [confirmedPath]
-            }
+            })
         });
 
         var result = await spawnTask;
@@ -304,7 +310,9 @@ public sealed class SubAgentSpawnerTests : TestKit
                 new ShellCommandPolicy()),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
-            new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
 
@@ -338,6 +346,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
     private static SubAgentSpawner CreateSpawner()
         => CreateSpawner(new WorkingContextSnapshotProvider(
+            new GitWorkingContextInspector(TimeProvider.System),
             NullLogger<WorkingContextSnapshotProvider>.Instance));
 
     private static SubAgentSpawner CreateSpawner(IWorkingContextSnapshotProvider workingContextSnapshots)
@@ -380,7 +389,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
     private static SubAgentResult SuccessfulResult() => new()
     {
-        Success = true,
+        Completion = new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
         Output = "ok",
         AgentName = new AgentName("inspector")
     };
@@ -388,7 +397,10 @@ public sealed class SubAgentSpawnerTests : TestKit
     private sealed class SequenceWorkingContextSnapshotProvider(Queue<WorkingContextSnapshot> snapshots)
         : IWorkingContextSnapshotProvider
     {
-        public WorkingContextSnapshot Create(WorkingContext context, TrustAudience audience)
-            => snapshots.Dequeue();
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken)
+            => Task.FromResult(snapshots.Dequeue());
     }
 }
