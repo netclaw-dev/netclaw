@@ -51,6 +51,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record WorkingContextSnapshotReady(
         long Generation,
         bool ForceNoTools,
+        string? TurnRestartNotice,
         WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
 
     private sealed record WorkingContextSnapshotCancelled(long Generation)
@@ -2741,6 +2742,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _ = CreateWorkingContextContinuationAsync(
                     workingContextGeneration,
                     forceNoTools,
+                    _turnRestartNotice,
                     _state.WorkingContext,
                     CurrentTurnAudience(),
                     _activeLlmCts.Token)
@@ -2811,6 +2813,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private async Task<INoSerializationVerificationNeeded> CreateWorkingContextContinuationAsync(
         long generation,
         bool forceNoTools,
+        string? turnRestartNotice,
         WorkingContext workingContext,
         TrustAudience audience,
         CancellationToken cancellationToken)
@@ -2821,7 +2824,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 workingContext,
                 audience,
                 cancellationToken).ConfigureAwait(false);
-            return new WorkingContextSnapshotReady(generation, forceNoTools, snapshot);
+            return new WorkingContextSnapshotReady(generation, forceNoTools, turnRestartNotice, snapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -2849,7 +2852,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             StartupContextInjected: _startupContextInjected,
             SlashCommandSkillContent: _slashCommandSkillContent,
             SessionPromptOverlay: _sessionPromptOverlay,
-            TurnRestartNotice: _turnRestartNotice,
+            TurnRestartNotice: message.TurnRestartNotice,
             SessionId: _sessionId,
             SessionsBasePath: _sessionsBasePath,
             FileReadGranted: HasFileReadGranted(),
