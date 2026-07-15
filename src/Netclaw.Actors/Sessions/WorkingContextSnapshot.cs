@@ -39,6 +39,8 @@ public abstract record GitWorkingContextInspection
 
     public sealed record NotRepository : GitWorkingContextInspection;
 
+    public sealed record ExecutableNotFound : GitWorkingContextInspection;
+
     public sealed record Unavailable(string Reason) : GitWorkingContextInspection;
 }
 
@@ -89,6 +91,11 @@ public sealed record WorkingContextSnapshot
                     .Append("\n  status: unavailable")
                     .Append("\n  reason: ").Append(unavailable.Reason);
                 break;
+            case GitWorkingContextInspection.ExecutableNotFound:
+                sb.Append("\ngit:")
+                    .Append("\n  status: unavailable")
+                    .Append("\n  reason: git executable not found");
+                break;
         }
 
         return sb.ToString();
@@ -115,13 +122,27 @@ internal sealed record GitCommandResult(
     bool Success,
     string StandardOutput,
     string StandardError,
-    string Error)
+    string Error,
+    GitCommandFailureKind FailureKind)
 {
     public static GitCommandResult Succeeded(string stdout, string stderr) =>
-        new(true, stdout, stderr, string.Empty);
+        new(true, stdout, stderr, string.Empty, GitCommandFailureKind.None);
 
-    public static GitCommandResult Failed(string error, string stdout = "", string stderr = "") =>
-        new(false, stdout, stderr, error);
+    public static GitCommandResult Failed(string error) =>
+        Failed(error, string.Empty, string.Empty);
+
+    public static GitCommandResult Failed(string error, string stdout, string stderr) =>
+        new(false, stdout, stderr, error, GitCommandFailureKind.CommandFailed);
+
+    public static GitCommandResult ExecutableNotFound() =>
+        new(false, string.Empty, string.Empty, "git executable not found", GitCommandFailureKind.ExecutableNotFound);
+}
+
+internal enum GitCommandFailureKind
+{
+    None,
+    CommandFailed,
+    ExecutableNotFound
 }
 
 public interface IWorkingContextSnapshotProvider
@@ -157,8 +178,15 @@ public sealed class WorkingContextSnapshotProvider(
             ? await gitInspector.InspectAsync(context.ProjectDirectory, cancellationToken).ConfigureAwait(false)
             : new GitWorkingContextInspection.Unavailable("project directory does not exist");
 
-        if (inspection is GitWorkingContextInspection.Unavailable unavailable)
-            logger.LogWarning("Git working-context inspection failed: {Reason}", unavailable.Reason);
+        switch (inspection)
+        {
+            case GitWorkingContextInspection.ExecutableNotFound:
+                logger.LogWarning("Git working-context inspection failed: git executable not found");
+                break;
+            case GitWorkingContextInspection.Unavailable unavailable:
+                logger.LogWarning("Git working-context inspection failed: {Reason}", unavailable.Reason);
+                break;
+        }
 
         return new WorkingContextSnapshot
         {
@@ -211,6 +239,9 @@ public sealed class GitWorkingContextInspector : IGitWorkingContextInspector
             cancellationToken).ConfigureAwait(false);
         if (!roots.Success)
         {
+            if (roots.FailureKind == GitCommandFailureKind.ExecutableNotFound)
+                return new GitWorkingContextInspection.ExecutableNotFound();
+
             var notRepository = roots.StandardError.Contains(
                 "not a git repository",
                 StringComparison.OrdinalIgnoreCase);
@@ -402,7 +433,11 @@ internal sealed class GitCommandRunner : IGitCommandRunner
                     standardOutput,
                     standardError);
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return GitCommandResult.ExecutableNotFound();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
         {
             return GitCommandResult.Failed(ex.Message);
         }

@@ -29,7 +29,6 @@ public sealed record SessionServices(
 /// </summary>
 public sealed record SessionToolServices(
     IToolExecutor ToolExecutor,
-    IToolAuditLogger AuditLogger,
     ToolRegistry ToolRegistry,
     ToolAccessPolicy? AccessPolicy,
     TrustContextDeriver? TrustDeriver,

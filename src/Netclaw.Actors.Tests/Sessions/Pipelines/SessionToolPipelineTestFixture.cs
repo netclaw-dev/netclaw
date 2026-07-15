@@ -25,7 +25,6 @@ internal sealed class SessionToolPipelineTestFixture(
 {
     private MessageSource? _source;
     private TurnContext? _turnContext;
-    private IToolAuditLogger _auditLogger = NullToolAuditLogger.Instance;
     private TimeProvider _timeProvider = TimeProvider.System;
     private string _sessionDirectory = Path.GetTempPath();
     private InlineOutputBudget _inlineOutputBudget = new(4096);
@@ -56,12 +55,6 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture WithTurnContext(TurnContext turnContext)
     {
         _turnContext = turnContext;
-        return this;
-    }
-
-    public SessionToolPipelineTestFixture WithAudit(IToolAuditLogger auditLogger)
-    {
-        _auditLogger = auditLogger;
         return this;
     }
 
@@ -178,7 +171,6 @@ internal sealed class SessionToolPipelineTestFixture(
         };
         var pipeline = new SessionToolExecutionPipeline(
             executor,
-            _auditLogger,
             _timeProvider,
             NoLogger.Instance);
         var batch = new SessionToolBatch(turnContext, runEnvironment)

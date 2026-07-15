@@ -257,7 +257,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ? null
             : new SessionToolExecutionPipeline(
                 tools.ToolExecutor,
-                tools.AuditLogger,
                 services.TimeProvider,
                 NoLogger.Instance);
 

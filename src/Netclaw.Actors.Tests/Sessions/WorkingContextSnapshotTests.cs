@@ -173,6 +173,7 @@ public class WorkingContextSnapshotTests
         [
             new TimedGitResult(TimeSpan.Zero, GitCommandResult.Failed(
                 "fatal: not a git repository",
+                stdout: string.Empty,
                 stderr: "fatal: not a git repository"))
         ]);
         var inspector = new GitWorkingContextInspector(runner, time);
@@ -191,8 +192,7 @@ public class WorkingContextSnapshotTests
         var time = new FakeTimeProvider();
         var runner = new SequenceGitCommandRunner(time,
         [
-            new TimedGitResult(TimeSpan.Zero, GitCommandResult.Failed(
-                "The system cannot find the file specified"))
+            new TimedGitResult(TimeSpan.Zero, GitCommandResult.ExecutableNotFound())
         ]);
         var inspector = new GitWorkingContextInspector(runner, time);
 
@@ -200,8 +200,7 @@ public class WorkingContextSnapshotTests
             "/repo",
             TestContext.Current.CancellationToken);
 
-        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
-        Assert.Equal("The system cannot find the file specified", unavailable.Reason);
+        Assert.IsType<GitWorkingContextInspection.ExecutableNotFound>(result);
         Assert.Single(runner.Timeouts);
     }
 
@@ -297,6 +296,25 @@ public class WorkingContextSnapshotTests
         Assert.True(process.KillTreeCalled);
         Assert.True(process.WaitedAfterTermination);
         Assert.True(process.Disposed);
+    }
+
+    [Fact]
+    public async Task Missing_git_executable_has_stable_typed_result()
+    {
+        var runner = new GitCommandRunner(new MissingGitProcessFactory());
+        var inspector = new GitWorkingContextInspector(runner, TimeProvider.System);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitWorkingContextInspection.ExecutableNotFound>(result);
+        var snapshot = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty.WithProjectDirectory("/repo"),
+            Git = result
+        };
+        Assert.Contains("reason: git executable not found", snapshot.ToContextBlock());
     }
 
     [Fact]
@@ -396,6 +414,12 @@ public class WorkingContextSnapshotTests
     private sealed class FixedGitProcessFactory(IRunningGitProcess process) : IGitProcessFactory
     {
         public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments) => process;
+    }
+
+    private sealed class MissingGitProcessFactory : IGitProcessFactory
+    {
+        public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments) =>
+            throw new System.ComponentModel.Win32Exception(2, "platform-specific message");
     }
 
     private sealed class ControlledGitProcess : IRunningGitProcess

@@ -25,7 +25,6 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
-    private readonly FakeToolAuditLogger _fakeAuditLogger = new();
 
     public ToolExecutionIntegrationTests(ITestOutputHelper output) : base(output)
     {
@@ -51,7 +50,6 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
-        services.AddSingleton<IToolAuditLogger>(_fakeAuditLogger);
 
         var registry = new ToolRegistry();
         registry.Register(
@@ -114,9 +112,6 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         Assert.Equal(1, _fakeToolExecutor.CallCount);
 
         // Audit logger recorded the invocation
-        Assert.Single(_fakeAuditLogger.Entries);
-        Assert.Equal("web_search", _fakeAuditLogger.Entries[0].ToolName.Value);
-        Assert.True(_fakeAuditLogger.Entries[0].Allowed);
     }
 
     [Fact]
@@ -162,7 +157,6 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _fakeToolExecutor.CallCount);
-        Assert.Equal(2, _fakeAuditLogger.Entries.Count);
     }
 
     [Fact]
@@ -385,12 +379,3 @@ internal sealed class FakeToolExecutor : IToolExecutor
 /// <summary>
 /// Fake audit logger that captures entries for verification.
 /// </summary>
-internal sealed class FakeToolAuditLogger : IToolAuditLogger
-{
-    public List<ToolAuditEntry> Entries { get; } = [];
-
-    public void Log(ToolAuditEntry entry)
-    {
-        Entries.Add(entry);
-    }
-}

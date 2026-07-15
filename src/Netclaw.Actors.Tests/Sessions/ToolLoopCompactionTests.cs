@@ -26,7 +26,6 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
-    private readonly FakeToolAuditLogger _fakeAuditLogger = new();
 
     public ToolLoopCompactionTests(ITestOutputHelper output) : base(output)
     {
@@ -55,7 +54,6 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
-        services.AddSingleton<IToolAuditLogger>(_fakeAuditLogger);
 
         var registry = new ToolRegistry();
         registry.Register(

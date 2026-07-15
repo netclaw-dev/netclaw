@@ -98,13 +98,6 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         }
     }
 
-    private sealed class RecordingAuditLogger : IToolAuditLogger
-    {
-        public List<ToolAuditEntry> Entries { get; } = [];
-
-        public void Log(ToolAuditEntry entry) => Entries.Add(entry);
-    }
-
     // ── Timeout hint is honored exactly (no clamp, no floor) ──
 
     [Fact]
@@ -218,10 +211,9 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
     }
 
     [Fact]
-    public async Task Malformed_metadata_is_audited_as_denied()
+    public async Task Malformed_metadata_returns_denial_without_execution()
     {
         var executor = new EchoExecutor();
-        var audit = new RecordingAuditLogger();
         var probe = CreateTestProbe("malformed-metadata-audit");
         var sessionId = new SessionId("D1/malformed-metadata-audit");
         var toolCalls = new List<FunctionCallContent>
@@ -235,16 +227,16 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
 
         await new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
             .WithTurnContext(InteractiveTurnContext(sessionId))
-            .WithAudit(audit)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
-        var entry = Assert.Single(audit.Entries);
-        Assert.False(entry.Allowed);
-        Assert.Equal("invalid_meta_value", entry.DenyReason);
-        Assert.Equal(new ToolCallId("call-invalid-background"), entry.CallId);
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(0, executor.Invocations);
+        Assert.Equal(new ToolCallId("call-invalid-background"), result.ToolCallId);
+        Assert.Contains("NOT executed", result.Content);
+        Assert.Contains("'_background'", result.Content);
     }
 
     [Fact]
