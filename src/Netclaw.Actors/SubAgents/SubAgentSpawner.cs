@@ -152,7 +152,10 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
             return CancelledResult(definition.Name, runId, scopeId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not (
+            OutOfMemoryException or
+            StackOverflowException or
+            AccessViolationException))
         {
             SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
             activitySink?.TryComplete();
