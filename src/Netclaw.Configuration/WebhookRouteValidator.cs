@@ -45,17 +45,13 @@ public static class WebhookRouteValidator
             if (route.Verification.ToleranceSeconds is < 1 or > 3600)
                 errors.Add("Verification.ToleranceSeconds must be between 1 and 3600.");
 
-            if (route.Verification.TimestampField is { } timestampField
-                && string.IsNullOrWhiteSpace(timestampField))
-            {
-                errors.Add("Verification.TimestampField cannot be blank.");
-            }
+            var timestampField = route.Verification.TimestampField ?? "t";
+            var signatureField = route.Verification.SignatureField ?? "v1";
+            ValidateStructuredHeaderField(errors, "TimestampField", timestampField);
+            ValidateStructuredHeaderField(errors, "SignatureField", signatureField);
 
-            if (route.Verification.SignatureField is { } signatureField
-                && string.IsNullOrWhiteSpace(signatureField))
-            {
-                errors.Add("Verification.SignatureField cannot be blank.");
-            }
+            if (string.Equals(timestampField, signatureField, StringComparison.Ordinal))
+                errors.Add("Verification.TimestampField and Verification.SignatureField must be different.");
         }
 
         if (route.MaxBodyBytes < 1)
@@ -120,5 +116,24 @@ public static class WebhookRouteValidator
                 kind = default;
                 return false;
         }
+    }
+
+    private static void ValidateStructuredHeaderField(
+        List<string> errors,
+        string propertyName,
+        string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            errors.Add($"Verification.{propertyName} cannot be blank.");
+            return;
+        }
+
+        if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            errors.Add($"Verification.{propertyName} cannot have leading or trailing whitespace.");
+
+        if (value.Contains(',', StringComparison.Ordinal)
+            || value.Contains('=', StringComparison.Ordinal))
+            errors.Add($"Verification.{propertyName} cannot contain ',' or '='.");
     }
 }

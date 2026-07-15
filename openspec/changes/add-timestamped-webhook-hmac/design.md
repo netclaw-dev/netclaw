@@ -33,7 +33,9 @@ Compatibility includes existing files, CLI/tool callers, and downgrade behavior.
 
 5. **Keep configuration generic at the user surface.** The CLI adds `hmac-timestamped` plus advanced optional flags. Providers still specify `SignatureHeaderName` because Stripe and TextForge use different names. Provider presets are deferred until repeated configuration demonstrates a need.
 
-6. **Preserve inactive fields.** Validation applies timestamp constraints only when `HmacTimestamped` is selected. Switching kinds does not erase dormant settings, and old kinds do not acquire new behavior.
+6. **Preserve inactive and omitted fields.** Validation applies timestamp constraints only when `HmacTimestamped` is selected. Switching kinds does not erase dormant settings, and old kinds do not acquire new behavior. CLI and `set_webhook` updates retain optional route and verification values that the caller omits; updating an existing route also requires authority for its current audience.
+
+7. **Reject unrepresentable structured-header field names before persistence.** Effective timestamp and signature field names must be distinct, have no leading or trailing whitespace, and contain neither `,` nor `=`. These constraints match the verifier's comma-separated `key=value` grammar and prevent routes that could never authenticate.
 
 No actor or persistence boundary changes. Verification still returns the existing in-memory result consumed by the endpoint before any session actor is created.
 

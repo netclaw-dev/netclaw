@@ -70,6 +70,20 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");
 
+        WebhookRouteConfig? existing = null;
+        if (_store.TryGet(routeName, out var stored))
+        {
+            if (stored.Definition is null)
+                return Task.FromResult($"Error: Existing webhook route '{routeName}' could not be parsed.");
+
+            existing = stored.Definition;
+            if (existing.Audience > context.Audience)
+            {
+                return Task.FromResult(
+                    $"Error: Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({context.Audience.ToWireValue()}).");
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(args.Prompt))
             return Task.FromResult("Error: 'prompt' is required.");
         if (string.IsNullOrWhiteSpace(args.Secret))
@@ -87,36 +101,68 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             return Task.FromResult("Error: Timestamp signature settings require 'verificationKind' to be 'HmacTimestamped'.");
         }
 
-        if (!TryResolveAudience(args.Audience, context.Audience, out var audience, out var audienceError))
+        TrustAudience audience;
+        if (string.IsNullOrWhiteSpace(args.Audience) && existing is not null)
+        {
+            audience = existing.Audience;
+        }
+        else if (!TryResolveAudience(args.Audience, context.Audience, out audience, out var audienceError))
+        {
             return Task.FromResult(audienceError!);
+        }
+
+        var existingVerification = existing?.Verification;
 
         var definition = new WebhookRouteConfig
         {
-            Enabled = args.Enabled ?? true,
+            Enabled = args.Enabled ?? existing?.Enabled ?? true,
             Prompt = args.Prompt.Trim(),
-            Events = ParseEvents(args.Events),
+            Events = args.Events is null ? [.. existing?.Events ?? []] : ParseEvents(args.Events),
             Audience = audience,
-            NotifyInstructions = args.NotifyInstructions?.Trim() ?? string.Empty,
-            DeliveryRequired = args.DeliveryRequired ?? true,
-            MaxBodyBytes = args.MaxBodyBytes ?? 1024 * 1024,
-            RateLimitPerMinute = args.RateLimitPerMinute ?? 30,
+            NotifyInstructions = args.NotifyInstructions?.Trim() ?? existing?.NotifyInstructions ?? string.Empty,
+            DeliveryRequired = args.DeliveryRequired ?? existing?.DeliveryRequired ?? true,
+            MaxBodyBytes = args.MaxBodyBytes ?? existing?.MaxBodyBytes ?? 1024 * 1024,
+            RateLimitPerMinute = args.RateLimitPerMinute ?? existing?.RateLimitPerMinute ?? 30,
             Verification = new WebhookVerificationConfig
             {
                 Kind = verificationKind,
+                HmacAlgorithm = existingVerification?.HmacAlgorithm ?? WebhookHmacAlgorithm.Sha256,
                 Secret = new SensitiveString(args.Secret),
-                SignatureHeaderName = string.IsNullOrWhiteSpace(args.SignatureHeaderName) ? null : args.SignatureHeaderName.Trim(),
-                SignaturePrefix = string.IsNullOrWhiteSpace(args.SignaturePrefix) ? null : args.SignaturePrefix,
-                SecretHeaderName = string.IsNullOrWhiteSpace(args.SecretHeaderName) ? null : args.SecretHeaderName.Trim(),
-                EventHeaderName = string.IsNullOrWhiteSpace(args.EventHeaderName) ? null : args.EventHeaderName.Trim(),
-                DeliveryIdHeaderName = string.IsNullOrWhiteSpace(args.DeliveryIdHeaderName) ? null : args.DeliveryIdHeaderName.Trim(),
-                TimestampField = args.TimestampField?.Trim(),
-                SignatureField = args.SignatureField?.Trim(),
-                SignedPayloadSeparator = args.SignedPayloadSeparator,
-                ToleranceSeconds = args.ToleranceSeconds
+                SignatureHeaderName = args.SignatureHeaderName is null
+                    ? existingVerification?.SignatureHeaderName
+                    : NormalizeOptional(args.SignatureHeaderName),
+                SignaturePrefix = args.SignaturePrefix is null
+                    ? existingVerification?.SignaturePrefix
+                    : NormalizeOptional(args.SignaturePrefix, trim: false),
+                SecretHeaderName = args.SecretHeaderName is null
+                    ? existingVerification?.SecretHeaderName
+                    : NormalizeOptional(args.SecretHeaderName),
+                EventHeaderName = args.EventHeaderName is null
+                    ? existingVerification?.EventHeaderName
+                    : NormalizeOptional(args.EventHeaderName),
+                DeliveryIdHeaderName = args.DeliveryIdHeaderName is null
+                    ? existingVerification?.DeliveryIdHeaderName
+                    : NormalizeOptional(args.DeliveryIdHeaderName),
+                TimestampField = args.TimestampField is null
+                    ? existingVerification?.TimestampField
+                    : args.TimestampField,
+                SignatureField = args.SignatureField is null
+                    ? existingVerification?.SignatureField
+                    : args.SignatureField,
+                SignedPayloadSeparator = args.SignedPayloadSeparator ?? existingVerification?.SignedPayloadSeparator,
+                ToleranceSeconds = args.ToleranceSeconds ?? existingVerification?.ToleranceSeconds
             }
         };
 
-        if (!string.IsNullOrWhiteSpace(args.NotificationChannelId))
+        if (args.NotificationChannelId is null && existing?.NotificationTarget is { } existingTarget)
+        {
+            definition.NotificationTarget = new NotificationTargetConfig
+            {
+                Kind = existingTarget.Kind,
+                ChannelId = existingTarget.ChannelId
+            };
+        }
+        else if (!string.IsNullOrWhiteSpace(args.NotificationChannelId))
         {
             definition.NotificationTarget = new NotificationTargetConfig
             {
@@ -178,5 +224,13 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             return [];
 
         return [.. value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !string.IsNullOrWhiteSpace(x))];
+    }
+
+    private static string? NormalizeOptional(string value, bool trim = true)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return trim ? value.Trim() : value;
     }
 }

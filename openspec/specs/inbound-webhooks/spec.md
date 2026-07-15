@@ -244,14 +244,25 @@ The route schema, CLI, and `set_webhook` tool SHALL expose timestamp field,
 signature field, signed-payload separator, and tolerance settings as optional
 configuration for timestamped HMAC routes. Body-only HMAC SHALL remain the
 default verification kind, and the system SHALL NOT infer or fall back between
-verification kinds.
+verification kinds. Effective timestamp and signature field names SHALL be
+distinct, SHALL NOT have leading or trailing whitespace, and SHALL NOT contain
+the structured-header delimiters `,` or `=`.
 
 #### Scenario: Existing route is updated without timestamp options
 
-- **GIVEN** an existing body-only HMAC or shared-header secret route
-- **WHEN** an operator updates an unrelated route property using the CLI
+- **GIVEN** an existing body-only HMAC, timestamped-HMAC, or shared-header secret
+  route
+- **WHEN** an operator updates an unrelated route property using the CLI or
+  `set_webhook` without supplying optional verification settings
 - **THEN** the stored verifier kind and settings remain unchanged
 - **AND** timestamped-HMAC properties are not introduced into the route file
+
+#### Scenario: Unrepresentable structured-header fields are rejected
+
+- **GIVEN** a timestamped-HMAC route has equal timestamp and signature fields,
+  surrounding field-name whitespace, or a field name containing `,` or `=`
+- **WHEN** the operator attempts to persist the route
+- **THEN** validation rejects the configuration before persistence
 
 #### Scenario: New timestamped route uses effective defaults
 

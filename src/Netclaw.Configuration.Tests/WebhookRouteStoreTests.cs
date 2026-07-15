@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -170,6 +171,59 @@ public sealed class WebhookRouteStoreTests : IDisposable
     }
 
     [Theory]
+    [InlineData("t", "t")]
+    [InlineData(null, "t")]
+    [InlineData("v1", null)]
+    [InlineData(" timestamp", "v1")]
+    [InlineData("timestamp ", "v1")]
+    [InlineData("time,stamp", "v1")]
+    [InlineData("time=stamp", "v1")]
+    public void Timestamped_route_rejects_unusable_structured_header_fields(
+        string? timestampField,
+        string? signatureField)
+    {
+        var route = CreateValidRoute();
+        route.Verification.Kind = WebhookVerifierKind.HmacTimestamped;
+        route.Verification.TimestampField = timestampField;
+        route.Verification.SignatureField = signatureField;
+
+        var errors = WebhookRouteValidator.Validate("stripe", route);
+
+        Assert.NotEmpty(errors);
+    }
+
+    [Fact]
+    public void Embedded_config_and_route_schemas_share_timestamped_verification_contract()
+    {
+        using var configSchema = LoadEmbeddedSchema("netclaw-config.v1.schema.json");
+        using var routeSchema = LoadEmbeddedSchema("webhook-route.v1.schema.json");
+        var configVerification = configSchema.RootElement
+            .GetProperty("$defs")
+            .GetProperty("WebhookVerification")
+            .GetProperty("properties");
+        var routeVerification = routeSchema.RootElement
+            .GetProperty("properties")
+            .GetProperty("Verification")
+            .GetProperty("properties");
+
+        foreach (var propertyName in new[]
+                 {
+                     "Kind",
+                     "ToleranceSeconds",
+                     "TimestampField",
+                     "SignatureField",
+                     "SignedPayloadSeparator"
+                 })
+        {
+            var configProperty = configVerification.GetProperty(propertyName);
+            var routeProperty = routeVerification.GetProperty(propertyName);
+            Assert.Equal(
+                JsonSerializer.Serialize(routeProperty),
+                JsonSerializer.Serialize(configProperty));
+        }
+    }
+
+    [Theory]
     [InlineData("hmac", WebhookVerifierKind.Hmac)]
     [InlineData("header-secret", WebhookVerifierKind.HeaderSecret)]
     [InlineData("HeaderSecret", WebhookVerifierKind.HeaderSecret)]
@@ -193,4 +247,14 @@ public sealed class WebhookRouteStoreTests : IDisposable
                 Secret = new SensitiveString("secret")
             }
         };
+
+    private static JsonDocument LoadEmbeddedSchema(string fileName)
+    {
+        var assembly = typeof(EmbeddedSchemaLoader).Assembly;
+        var resourceName = Assert.Single(
+            assembly.GetManifestResourceNames(),
+            name => name.EndsWith(fileName, StringComparison.Ordinal));
+        using var stream = Assert.IsAssignableFrom<Stream>(assembly.GetManifestResourceStream(resourceName));
+        return JsonDocument.Parse(stream);
+    }
 }

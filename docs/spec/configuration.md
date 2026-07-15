@@ -426,8 +426,8 @@ Route-file fields:
 | `Verification.EventHeaderName` | string? | `null` | Event-name header. Defaults to `X-Webhook-Event`. |
 | `Verification.DeliveryIdHeaderName` | string? | `null` | Delivery ID header. Defaults to `X-Webhook-Delivery`. |
 | `Verification.ToleranceSeconds` | int? | `300` | Maximum past or future clock difference for `HmacTimestamped`, from 1 through 3600 seconds. |
-| `Verification.TimestampField` | string? | `t` | Structured-header timestamp field for `HmacTimestamped`. |
-| `Verification.SignatureField` | string? | `v1` | Structured-header signature field for `HmacTimestamped`; multiple instances support sender secret rotation. |
+| `Verification.TimestampField` | string? | `t` | Structured-header timestamp field for `HmacTimestamped`; must differ from the signature field and cannot have surrounding whitespace or contain `,` or `=`. |
+| `Verification.SignatureField` | string? | `v1` | Structured-header signature field for `HmacTimestamped`; follows the same name constraints, and multiple instances support sender secret rotation. |
 | `Verification.SignedPayloadSeparator` | string? | `.` | Separator between the exact timestamp text and raw body for `HmacTimestamped`. |
 | `Events` | string[] | `[]` | Optional allow-list of event types. Empty means all verified events are accepted. |
 | `Audience` | string | `Public` | Source audience for the autonomous webhook session (`Public`, `Team`, `Personal`). |

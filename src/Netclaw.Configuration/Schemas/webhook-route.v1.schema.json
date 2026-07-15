@@ -48,11 +48,13 @@
         "TimestampField": {
           "type": ["string", "null"],
           "minLength": 1,
+          "pattern": "^[^,=\\s](?:[^,=]*[^,=\\s])?$",
           "default": "t"
         },
         "SignatureField": {
           "type": ["string", "null"],
           "minLength": 1,
+          "pattern": "^[^,=\\s](?:[^,=]*[^,=\\s])?$",
           "default": "v1"
         },
         "SignedPayloadSeparator": {

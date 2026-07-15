@@ -54,6 +54,11 @@ when the sender documents a different wire format. Multiple `v1` values are
 accepted for sender-side secret rotation. Missing, malformed, stale, or
 future-dated signatures fail closed.
 
+Timestamp and signature field names must be distinct, have no surrounding
+whitespace, and contain neither `,` nor `=`. When updating a route through
+`set_webhook`, omitted optional settings retain their existing values; provide
+an argument only when changing that setting.
+
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
 

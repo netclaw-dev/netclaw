@@ -479,6 +479,27 @@ public sealed class WebhooksCommandTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "invalid-route.json")));
     }
 
+    [Theory]
+    [InlineData("v1", "v1")]
+    [InlineData(" timestamp", "v1")]
+    [InlineData("time=stamp", "v1")]
+    public async Task Set_Unusable_timestamp_fields_fail_without_persisting(
+        string timestampField,
+        string signatureField)
+    {
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "invalid-route",
+            "--prompt", "Process event",
+            "--secret", "secret",
+            "--verification-kind", "hmac-timestamped",
+            "--timestamp-field", timestampField,
+            "--signature-field", signatureField
+        ], _paths);
+
+        Assert.Equal(1, result);
+        Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "invalid-route.json")));
+    }
+
     [Fact]
     public async Task Set_Unrelated_update_preserves_legacy_verifier_without_timestamp_fields()
     {
