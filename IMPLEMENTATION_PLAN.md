@@ -113,7 +113,7 @@ the smallest repeatable manual script plus expected output.
 ### Priority: Simplify Tool Execution Context Architecture
 
 **PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`, `docs/prd/PRD-007-agent-personality-and-local-memory.md`
-**Specs:** `openspec/changes/simplify-tool-execution-context/`
+**Specs:** `openspec/changes/archive/2026-07-15-simplify-tool-execution-context/`
 **Surface area:** tool execution, session actors, subagents, working context
 **Verification:** L2 plus behavioral evals
 
@@ -135,10 +135,10 @@ Done when:
   repository quality gates. Stage 3 eval execution was attempted but explicitly
   blocked because the required `NETCLAW_EVAL_*` provider environment was absent;
   no model-facing tool schema or prompt behavior changed in that stage.
-- [ ] OpenSpec deltas are verified, synced, and archived after the final merge.
+- [x] OpenSpec deltas are verified, synced, and archived after the final merge.
 
 Durable execution details and checkbox state live in
-`openspec/changes/simplify-tool-execution-context/tasks.md`. Per-run evidence
+`openspec/changes/archive/2026-07-15-simplify-tool-execution-context/tasks.md`. Per-run evidence
 lives in `.ralph/runs/`; Git commits and PR state remain the recovery source of
 truth across context compaction.
 
