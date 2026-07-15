@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Working context includes derived Git worktree state
-For Team and Personal turns whose `WorkingContext.ProjectDirectory` is declared and Git identifies it as a worktree, the system SHALL asynchronously derive a fresh Git snapshot at turn start and render it as a nested section of `[working-context]`. The snapshot SHALL include worktree root, common repository directory, branch or detached state, HEAD, upstream and ahead/behind when configured, and staged, modified, and untracked counts. Derived Git state SHALL NOT be persisted in session state. Git inspection SHALL return explicit available, not-repository, or unavailable outcomes.
+For Team and Personal turns whose `WorkingContext.ProjectDirectory` is declared and Git identifies it as a worktree, the system SHALL asynchronously derive a fresh Git snapshot at turn start and render it as a nested section of `[working-context]`. The snapshot SHALL include worktree root, common repository directory, branch or detached state, HEAD, upstream and ahead/behind when configured, and staged, modified, and untracked counts. Derived Git state SHALL NOT be persisted in session state. Git inspection SHALL return explicit available, not-repository, executable-not-found, or unavailable outcomes.
 
 #### Scenario: Linked worktree is distinguished from common repository
 - **GIVEN** a Team or Personal session project directory inside a linked Git worktree
