@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Akka.Reminders;
 using Akka.Reminders.Sharding;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -24,6 +25,7 @@ namespace Netclaw.Actors.Tests.Reminders;
 public class ReminderManagerActorTests : TestKit
 {
     private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
+    private readonly FakeTimeProvider _timeProvider = new(TimeProvider.System.GetUtcNow());
     private ReminderDefinitionStore _definitionStore = null!;
     private TestNotificationSink _notificationSink = null!;
 
@@ -70,7 +72,7 @@ public class ReminderManagerActorTests : TestKit
                     pipeline,
                     defaults,
                     new SchedulingConfig(),
-                    TimeProvider.System,
+                    _timeProvider,
                     definitionStore,
                     historyStore,
                     _notificationSink,
@@ -912,76 +914,88 @@ public class ReminderManagerActorTests : TestKit
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(700);
-        try
+        var gatewayProbe = CreateTestProbe("deferred-expiry-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-deferred-expiry");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        // Save before dispatch so filesystem latency cannot consume any test
+        // timing window while execution slots are being filled.
+        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
         {
-            var gatewayProbe = CreateTestProbe("deferred-expiry-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-deferred-expiry");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            // Saturate execution slots with CurrentSession reminders waiting for
-            // delivery observation timeout.
-            for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
-            {
-                var id = $"blocking-{i}";
-                _definitionStore.Save(CreateCurrentSessionDefinition(id, deliveryRequired: true));
-                manager.Tell(CreateEnvelope(id));
-            }
-
-            var now = TimeProvider.System.GetUtcNow();
-            var expiringId = "queued-expiring";
-            var expiringReminder = new ReminderDefinition
-            {
-                Id = new ReminderId(expiringId),
-                Title = "Queued expiring reminder",
-                Instructions = "Should not execute after expiry",
-                Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
-                Schedule = new ReminderSchedule
-                {
-                    Type = ReminderScheduleType.Interval,
-                    Interval = TimeSpan.FromMinutes(30),
-                    FireAt = now.AddMinutes(30)
-                },
-                ExpiresAt = now.AddMilliseconds(200),
-                Audience = TrustAudience.Team,
-                Boundary = TrustBoundary.Team,
-                Enabled = true,
-                CreatedBy = "test",
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _definitionStore.Save(expiringReminder);
-
-            manager.Tell(CreateEnvelope(expiringId));
-
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions, health.ActiveExecutions);
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-
-            await AwaitAssertAsync(async () =>
-            {
-                var stored = _definitionStore.Get(new ReminderId(expiringId));
-                Assert.NotNull(stored);
-                Assert.False(stored!.Enabled);
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-
-            Assert.DoesNotContain(_notificationSink.Alerts, alert =>
-                alert.Category == AlertType.ReminderExecutionFailed
-                && alert.Source == expiringId);
+            var id = $"blocking-{i}";
+            _definitionStore.Save(CreateCurrentSessionDefinition(id, deliveryRequired: true));
         }
-        finally
+
+        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+            manager.Tell(CreateEnvelope($"blocking-{i}"));
+
+        var blockers = new List<DeliverTrustedSessionTurn>();
+        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
         {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+            Assert.NotNull(delivered.Source.DeliveryObserver);
+            blockers.Add(delivered);
         }
+
+        var now = _timeProvider.GetUtcNow();
+        var expiringId = "queued-expiring";
+        var expiringReminder = new ReminderDefinition
+        {
+            Id = new ReminderId(expiringId),
+            Title = "Queued expiring reminder",
+            Instructions = "Should not execute after expiry",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                Interval = TimeSpan.FromMinutes(30),
+                FireAt = now.AddMinutes(30)
+            },
+            ExpiresAt = now.AddMinutes(1),
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _definitionStore.Save(expiringReminder);
+
+        // The query comes from the same sender as the fire, so its reply is a
+        // mailbox-order barrier proving the fire was handled while all three
+        // blockers were still active.
+        var controlProbe = CreateTestProbe("deferred-expiry-control");
+        controlProbe.Send(manager, CreateEnvelope(expiringId));
+        controlProbe.Send(manager, GetReminderHealthQuery.Instance);
+        var health = await controlProbe.ExpectMsgAsync<ReminderHealthResponse>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions, health.ActiveExecutions);
+
+        _timeProvider.Advance(TimeSpan.FromMinutes(2));
+
+        var blocker = blockers[0];
+        blocker.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+            blocker.Source.ReminderId!.Value,
+            ChannelType.Slack,
+            Delivered: true,
+            ObservedAtMs: _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
+
+        await AwaitAssertAsync(() =>
+        {
+            var stored = _definitionStore.Get(new ReminderId(expiringId));
+            Assert.NotNull(stored);
+            Assert.False(stored!.Enabled);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_notificationSink.Alerts, alert =>
+            alert.Category == AlertType.ReminderExecutionFailed
+            && alert.Source == expiringId);
     }
 
     [Fact]

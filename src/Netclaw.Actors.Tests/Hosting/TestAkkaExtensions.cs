@@ -33,6 +33,7 @@ internal static class TestAkkaExtensions
                     "Akka.Actor.Identify, Akka" = json
                     "Akka.Actor.ReceiveTimeout, Akka" = json
                     "Akka.Dispatch.SysMsg.StopChild, Akka" = json
+                    "Akka.Hosting.TestKit.TestKit+StableTestProbeRef+UpdateTarget, Akka.Hosting.TestKit" = json
                     "Akka.Persistence.Journal.AsyncWriteJournal+Desequenced, Akka.Persistence" = json
                     "Akka.Persistence.RecoveryPermitGranted, Akka.Persistence" = json
                     "Akka.Persistence.RequestRecoveryPermit, Akka.Persistence" = json
