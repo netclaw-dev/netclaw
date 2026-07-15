@@ -159,12 +159,14 @@ public sealed class WebhooksCommandTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_paths.WebhooksDirectory, "blocked-route.json"));
         using var output = new StringWriter();
 
-        await Assert.ThrowsAnyAsync<IOException>(() => WebhooksCommand.RunAsync([
+        var exception = await Assert.ThrowsAnyAsync<SystemException>(() => WebhooksCommand.RunAsync([
             "webhooks", "set", "blocked-route",
             "--prompt", "Test prompt",
             "--secret", "test-secret"
         ], _paths, output));
 
+        Assert.True(exception is IOException or UnauthorizedAccessException,
+            $"Expected a persistence IO exception, got {exception.GetType().Name}: {exception.Message}");
         Assert.DoesNotContain("[OK]", output.ToString(), StringComparison.Ordinal);
     }
 
