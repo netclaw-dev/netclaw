@@ -24,6 +24,6 @@
 
 ## 5. Verification and External Documentation
 
-- [ ] 5.1 Run targeted tests, full test suite, evals, Slopwatch, header verification, and diff checks
+- [x] 5.1 Run targeted tests, full test suite, evals, Slopwatch, header verification, and diff checks
 - [x] 5.2 Verify implementation against OpenSpec artifacts and sync the delta spec
 - [x] 5.3 File scoped configuration and CLI documentation issues in `netclaw-dev/netclaw-website`
