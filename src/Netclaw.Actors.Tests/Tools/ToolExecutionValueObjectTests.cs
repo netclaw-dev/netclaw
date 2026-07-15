@@ -52,9 +52,14 @@ public sealed class ToolExecutionValueObjectTests
             InlineOutputBudget = InlineOutputBudget.Default,
             InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
         };
+        var missingApprovalCapability = validScope with { InteractiveApproval = null! };
 
         Assert.Throws<ArgumentNullException>(
             () => new ToolExecutionContext(missingBudget, ToolExecutionTimeout.Default));
+        Assert.Throws<ArgumentNullException>(
+            () => new ToolExecutionContext(missingApprovalCapability, ToolExecutionTimeout.Default));
+        Assert.Throws<ArgumentNullException>(
+            () => new InteractiveApprovalCapability.Available(null!));
         Assert.Throws<ArgumentNullException>(
             () => new ToolExecutionContext(validScope, null!));
     }

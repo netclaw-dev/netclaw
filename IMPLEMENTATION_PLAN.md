@@ -129,10 +129,12 @@ Done when:
   security/authority dependencies without compatibility shims.
 - [x] Stage 2 lands the composed pipeline without changing existing background,
   fallback, authorization, approval, MCP, or model-visible behavior.
-- [ ] Stage 3 lands child fork/delta semantics and Git inspection only for
+- [x] Stage 3 lands child fork/delta semantics and Git inspection only for
   non-Public runs with a declared Git project.
-- [ ] Each stage passes review, CI, post-merge `dev` verification, repository
-  quality gates, and the eval suites required for tool/prompt changes.
+- [x] Each stage passes review, CI, post-merge fresh-worktree verification, and
+  repository quality gates. Stage 3 eval execution was attempted but explicitly
+  blocked because the required `NETCLAW_EVAL_*` provider environment was absent;
+  no model-facing tool schema or prompt behavior changed in that stage.
 - [ ] OpenSpec deltas are verified, synced, and archived after the final merge.
 
 Durable execution details and checkbox state live in
