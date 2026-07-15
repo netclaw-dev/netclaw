@@ -204,9 +204,10 @@ jobs:
 
       - name: Mark binaries executable
         run: |
-          chmod +x publish/cli/netclaw publish/daemon/netclawd
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
           echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
 
       - name: Run screenshot regression
         shell: bash
