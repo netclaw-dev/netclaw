@@ -44,7 +44,7 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             }
             var oauth = Descriptor.Auth.GetOAuthConfig()
                         ?? throw new InvalidOperationException("OpenAI OAuth configuration is unavailable.");
-            var options = new OpenAIClientOptions
+            var options = new OpenAI.Responses.ResponsesClientOptions
             {
                 Endpoint = new Uri("https://chatgpt.com/backend-api/codex")
             };
