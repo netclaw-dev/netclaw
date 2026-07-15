@@ -12,7 +12,7 @@
     <MattermostNetVersion>5.0.3</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.9</MicrosoftAspNetCoreVersion>
+    <MicrosoftAspNetCoreVersion>10.0.10</MicrosoftAspNetCoreVersion>
     <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
