@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonRestartCoordinator.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -70,11 +70,17 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
         {
             var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
 
-            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            drainCts.CancelAfter(_restartDrainTimeout);
+            using var deadlineCts = new CancellationTokenSource(_restartDrainTimeout, _timeProvider);
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                deadlineCts.Token);
 
             var drainResult = await SessionDrainHelper.DrainAsync(
-                sessionManager, "config-reload", _logger, drainCts.Token);
+                sessionManager,
+                "config-reload",
+                _logger,
+                drainCts.Token,
+                cancellationToken);
 
             var manifest = new RestartManifest
             {

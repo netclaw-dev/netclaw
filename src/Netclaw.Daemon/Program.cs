@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="Program.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -1074,7 +1074,11 @@ static void ConfigureDaemonServices(
                 try
                 {
                     var drainResult = await SessionDrainHelper.DrainAsync(
-                        sessionManager, "daemon-stop", drainLogger, CancellationToken.None);
+                        sessionManager,
+                        "daemon-stop",
+                        drainLogger,
+                        CancellationToken.None,
+                        CancellationToken.None);
 
                     lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext());
                 }
