@@ -68,11 +68,14 @@ public sealed class WebhookRequestVerifier(TimeProvider timeProvider)
         }
 
         var secret = route.Config.Verification.Secret!.Value;
-        var expected = ComputeTimestampedSha256(
-            secret,
+        var signedPayload = CreateTimestampedPayload(
             timestampText,
             route.SignedPayloadSeparator,
             bodyBytes);
+        var expected = ComputeHmac(
+            route.Config.Verification.HmacAlgorithm,
+            secret,
+            signedPayload);
         if (!signatures.Any(signature => IsMatchingHexSignature(expected, signature)))
             return WebhookVerificationResult.Reject("invalid_signature");
 
@@ -91,11 +94,10 @@ public sealed class WebhookRequestVerifier(TimeProvider timeProvider)
             return WebhookVerificationResult.Reject("missing_signature");
 
         var secret = route.Config.Verification.Secret!.Value;
-        var expected = route.Config.Verification.HmacAlgorithm switch
-        {
-            WebhookHmacAlgorithm.Sha256 => ComputeExpectedSha256(secret, bodyBytes, route.SignaturePrefix),
-            _ => throw new ArgumentOutOfRangeException(nameof(route.Config.Verification.HmacAlgorithm), route.Config.Verification.HmacAlgorithm, null)
-        };
+        var hash = ComputeHmac(route.Config.Verification.HmacAlgorithm, secret, bodyBytes);
+        var expected = string.Concat(
+            route.SignaturePrefix,
+            Convert.ToHexString(hash).ToLowerInvariant());
 
         if (!FixedTimeEquals(signature, expected))
             return WebhookVerificationResult.Reject("invalid_signature");
@@ -128,15 +130,20 @@ public sealed class WebhookRequestVerifier(TimeProvider timeProvider)
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 
-    private static string ComputeExpectedSha256(string secret, byte[] bodyBytes, string prefix)
+    private static byte[] ComputeHmac(
+        WebhookHmacAlgorithm algorithm,
+        string secret,
+        byte[] payload)
     {
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var hash = Convert.ToHexString(hmac.ComputeHash(bodyBytes)).ToLowerInvariant();
-        return string.Concat(prefix, hash);
+        using HMAC hmac = algorithm switch
+        {
+            WebhookHmacAlgorithm.Sha256 => new HMACSHA256(Encoding.UTF8.GetBytes(secret)),
+            _ => throw new ArgumentOutOfRangeException(nameof(algorithm), algorithm, null)
+        };
+        return hmac.ComputeHash(payload);
     }
 
-    private static byte[] ComputeTimestampedSha256(
-        string secret,
+    private static byte[] CreateTimestampedPayload(
         string timestamp,
         string separator,
         byte[] bodyBytes)
@@ -146,8 +153,7 @@ public sealed class WebhookRequestVerifier(TimeProvider timeProvider)
         Buffer.BlockCopy(prefixBytes, 0, signedPayload, 0, prefixBytes.Length);
         Buffer.BlockCopy(bodyBytes, 0, signedPayload, prefixBytes.Length, bodyBytes.Length);
 
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        return hmac.ComputeHash(signedPayload);
+        return signedPayload;
     }
 
     private static bool IsMatchingHexSignature(byte[] expected, string providedHex)

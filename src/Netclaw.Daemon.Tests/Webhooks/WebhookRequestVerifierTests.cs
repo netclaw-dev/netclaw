@@ -235,6 +235,30 @@ public sealed class WebhookRequestVerifierTests
         Assert.Equal("invalid_signature", result.RejectionReason);
     }
 
+    [Fact]
+    public void TimestampedHmac_rejects_unsupported_hmac_algorithm()
+    {
+        var timestamp = Now.ToUnixTimeSeconds().ToString();
+        var body = Encoding.UTF8.GetBytes("{}");
+        var route = CreateTimestampedRoute(new WebhookVerificationConfig
+        {
+            Kind = WebhookVerifierKind.HmacTimestamped,
+            HmacAlgorithm = (WebhookHmacAlgorithm)99,
+            Secret = new SensitiveString("super-secret"),
+            SignatureHeaderName = "Stripe-Signature"
+        });
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => _sut.Verify(
+            route,
+            new HeaderDictionary
+            {
+                ["Stripe-Signature"] = $"t={timestamp},v1={new string('0', 64)}"
+            },
+            body));
+
+        Assert.Equal("algorithm", exception.ParamName);
+    }
+
     private static RegisteredWebhookRoute CreateRoute(WebhookRouteConfig config)
         => new(
             "github-issues",
