@@ -229,11 +229,18 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         var firstStore = new WebhookRouteStore(_paths);
         string? aliasPath = null;
+        string? parentAliasPath = null;
         NetclawPaths secondPaths = _paths;
         if (!OperatingSystem.IsWindows())
         {
+            var parentPath = Path.GetDirectoryName(_dir.Path)
+                ?? throw new InvalidOperationException("Test directory has no parent directory.");
+            parentAliasPath = $"{_dir.Path}-parent-alias";
+            Directory.CreateSymbolicLink(parentAliasPath, parentPath);
+
+            var targetThroughParentAlias = Path.Combine(parentAliasPath, Path.GetFileName(_dir.Path));
             aliasPath = $"{_dir.Path}-alias";
-            Directory.CreateSymbolicLink(aliasPath, _dir.Path);
+            Directory.CreateSymbolicLink(aliasPath, targetThroughParentAlias);
             secondPaths = new NetclawPaths(aliasPath);
         }
 
@@ -279,6 +286,8 @@ public sealed class WebhookRouteStoreTests : IDisposable
             releaseFirst.Set();
             if (aliasPath is not null)
                 Directory.Delete(aliasPath);
+            if (parentAliasPath is not null)
+                Directory.Delete(parentAliasPath);
         }
     }
 

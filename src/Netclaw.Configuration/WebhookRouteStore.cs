@@ -232,19 +232,28 @@ public sealed class WebhookRouteStore
         var fullPath = Path.GetFullPath(filePath);
         var directoryPath = Path.GetDirectoryName(fullPath)
             ?? throw new InvalidOperationException("Webhook route path has no parent directory.");
-        var root = Path.GetPathRoot(directoryPath)
+        return Path.Combine(GetCanonicalDirectoryPath(directoryPath), Path.GetFileName(fullPath));
+    }
+
+    private static string GetCanonicalDirectoryPath(string directoryPath)
+    {
+        var fullPath = Path.GetFullPath(directoryPath);
+        var root = Path.GetPathRoot(fullPath)
             ?? throw new InvalidOperationException("Webhook route path has no root directory.");
         var current = root;
-        var relativeDirectory = Path.GetRelativePath(root, directoryPath);
+        var relativeDirectory = Path.GetRelativePath(root, fullPath);
         foreach (var segment in relativeDirectory.Split(
                      [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                      StringSplitOptions.RemoveEmptyEntries))
         {
             var directory = new DirectoryInfo(Path.Combine(current, segment));
-            current = (directory.ResolveLinkTarget(returnFinalTarget: true) ?? directory).FullName;
+            var target = directory.ResolveLinkTarget(returnFinalTarget: true);
+            current = target is null
+                ? directory.FullName
+                : GetCanonicalDirectoryPath(target.FullName);
         }
 
-        return Path.Combine(current, Path.GetFileName(fullPath));
+        return current;
     }
 
     private static void DeleteAbandonedTempFiles(string filePath)
