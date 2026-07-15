@@ -105,6 +105,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
+        // The store can be constructed before all persisted files are present.
+        // Rescan at the actor's startup boundary so schema alerts reflect the
+        // authoritative on-disk state rather than constructor timing.
+        _definitionStore.List();
         EmitDroppedInvalidDefinitionAlerts();
         EmitRejectedLegacyDefinitionAlerts();
 
