@@ -98,18 +98,35 @@ internal sealed record JobReapResolved(long Epoch, int ReapedCount, Exception? E
 
 internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
 
+internal sealed record WorkingContextSnapshotReady(
+    long Generation,
+    bool ForceNoTools,
+    string? TurnRestartNotice,
+    WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
+
+internal sealed record WorkingContextSnapshotCancelled(long Generation)
+    : INoSerializationVerificationNeeded;
+
+internal sealed record WorkingContextSnapshotFailed(
+    long Generation,
+    bool ForceNoTools,
+    string? TurnRestartNotice,
+    WorkingContext WorkingContext,
+    Exception Cause) : INoSerializationVerificationNeeded;
+
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
     public required SubAgentRunId RunId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
-    public required bool Success { get; init; }
-    public required SubAgentRunOutcome Outcome { get; init; }
-    public SubAgentOutcomeReason? OutcomeReason { get; init; }
+    public required ChildRunCompletion Completion { get; init; }
     public required TimeSpan Duration { get; init; }
     public int FindingsCount { get; init; }
     public string? MemoryDecision { get; init; }
     public string? MemoryDecisionReason { get; init; }
-    public SubAgentWorkingContextInfo? WorkingContext { get; init; }
+    public bool Success => Completion.Success;
+    public SubAgentRunOutcome Outcome => Completion.Outcome;
+    public SubAgentOutcomeReason? OutcomeReason => Completion.Reason;
+    public WorkingContextDelta? WorkingContext => Completion.Delta;
 }
 
 internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNeeded

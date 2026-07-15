@@ -399,14 +399,14 @@ internal sealed class SessionToolExecutionPipeline
                 {
                     RunId = info.RunId,
                     AgentName = new SubAgents.AgentName(info.AgentName),
-                    Success = info.Success,
-                    Outcome = info.Outcome ?? (info.Success ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed),
-                    OutcomeReason = info.OutcomeReason,
+                    Completion = ChildRunCompletion.FromReportedOutcome(
+                        info.Outcome ?? (info.Success ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed),
+                        info.OutcomeReason,
+                        info.WorkingContext),
                     Duration = info.Duration,
                     FindingsCount = info.Findings.Count,
                     MemoryDecision = decision,
                     MemoryDecisionReason = reason,
-                    WorkingContext = info.WorkingContext
                 });
             }
 

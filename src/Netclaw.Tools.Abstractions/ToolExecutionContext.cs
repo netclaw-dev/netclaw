@@ -24,8 +24,10 @@ public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeTy
 /// Confirmed changes have first-party tool provenance; observed changes are
 /// derived from shared worktree state and do not imply authorship.
 /// </summary>
-public sealed record SubAgentWorkingContextInfo
+public sealed record WorkingContextDelta
 {
+    public static WorkingContextDelta Empty { get; } = new();
+
     public string? ProjectDirectory { get; init; }
     public string? Worktree { get; init; }
     public string? Branch { get; init; }
@@ -33,6 +35,68 @@ public sealed record SubAgentWorkingContextInfo
     public IReadOnlyList<string> ReadFiles { get; init; } = [];
     public IReadOnlyList<string> ConfirmedChangedFiles { get; init; } = [];
     public IReadOnlyList<string> ObservedChangedFiles { get; init; } = [];
+}
+
+public abstract record ChildRunCompletion
+{
+    private ChildRunCompletion()
+    {
+    }
+
+    public abstract bool Success { get; }
+    public abstract SubAgentRunOutcome Outcome { get; }
+    public abstract SubAgentOutcomeReason? Reason { get; }
+    public abstract WorkingContextDelta? Delta { get; }
+
+    public static ChildRunCompletion FromReportedOutcome(
+        SubAgentRunOutcome outcome,
+        SubAgentOutcomeReason? reason,
+        WorkingContextDelta? delta) => outcome switch
+        {
+            SubAgentRunOutcome.Completed when delta is not null => new Completed(delta),
+            SubAgentRunOutcome.Partial when delta is not null && reason is { } partialReason =>
+                new Partial(partialReason, delta),
+            SubAgentRunOutcome.Failed when reason == SubAgentOutcomeReason.CancelledByParent =>
+                new Cancelled(reason.Value),
+            SubAgentRunOutcome.Failed when reason is { } failureReason => new Failed(failureReason),
+            _ => throw new ArgumentException(
+                $"Invalid child completion: outcome={outcome}, reason={(reason is { } value ? value.Value : "none")}, hasDelta={delta is not null}.",
+                nameof(outcome))
+        };
+
+    public sealed record Completed(WorkingContextDelta WorkingContext) : ChildRunCompletion
+    {
+        public override bool Success => true;
+        public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Completed;
+        public override SubAgentOutcomeReason? Reason => null;
+        public override WorkingContextDelta Delta => WorkingContext;
+    }
+
+    public sealed record Partial(
+        SubAgentOutcomeReason PartialReason,
+        WorkingContextDelta WorkingContext) : ChildRunCompletion
+    {
+        public override bool Success => true;
+        public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Partial;
+        public override SubAgentOutcomeReason? Reason => PartialReason;
+        public override WorkingContextDelta Delta => WorkingContext;
+    }
+
+    public sealed record Failed(SubAgentOutcomeReason FailureReason) : ChildRunCompletion
+    {
+        public override bool Success => false;
+        public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Failed;
+        public override SubAgentOutcomeReason? Reason => FailureReason;
+        public override WorkingContextDelta? Delta => null;
+    }
+
+    public sealed record Cancelled(SubAgentOutcomeReason CancellationReason) : ChildRunCompletion
+    {
+        public override bool Success => false;
+        public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Failed;
+        public override SubAgentOutcomeReason? Reason => CancellationReason;
+        public override WorkingContextDelta? Delta => null;
+    }
 }
 
 /// <summary>
@@ -51,7 +115,7 @@ public sealed record SubAgentNotificationInfo
     public SubAgentOutcomeReason? OutcomeReason { get; init; }
     public TimeSpan Duration { get; init; }
     public IReadOnlyList<SubAgentFinding> Findings { get; init; } = [];
-    public SubAgentWorkingContextInfo? WorkingContext { get; init; }
+    public WorkingContextDelta? WorkingContext { get; init; }
 }
 
 /// <summary>

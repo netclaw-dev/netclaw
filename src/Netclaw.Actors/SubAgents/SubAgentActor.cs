@@ -119,10 +119,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     // sub-agent's own session.log (SubSessionId) — matching the enriched logger's own context.
     private string? _parentSessionId;
     private string? _subSessionId;
-    private WorkingContext _workingContext = WorkingContext.Empty;
-    private readonly HashSet<string> _readFiles = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _confirmedChangedFiles = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, PendingFileActivity> _pendingFileActivities = new(StringComparer.Ordinal);
+    private ChildFileActivityTracker _fileActivity = new(WorkingContext.Empty);
 
     // Default wait-for-first-delta budget when the spawn message carries none
     // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
@@ -227,11 +224,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _completed = true;
             _replyTo.Tell(new SubAgentResult
             {
-                Success = false,
+                Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped),
                 Output = "Subagent stopped before completion.",
                 AgentName = _definition.Name,
-                Outcome = SubAgentRunOutcome.Failed,
-                OutcomeReason = SubAgentOutcomeReason.ActorStopped,
                 Findings = [],
                 FindingsCount = 0
             });
@@ -248,52 +243,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             _replyTo = Sender;
 
-            _approvalBridge = msg.ApprovalBridge;
-
-            var scopeId = !string.IsNullOrWhiteSpace(msg.SessionScopeId)
-                ? msg.SessionScopeId!
-                : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
-            // A sub-agent inherits the spawning session's audience. A spawn with no
-            // audience is a programming error — defaulting to Personal would
-            // silently grant the sub-agent broader trust than its parent. Fail the
-            // run immediately with a result so the caller fails fast, rather than
-            // throwing (which crashes the actor and makes the caller wait out the
-            // Ask timeout).
-            if (msg.Audience is not { } subAgentAudience)
-            {
-                _log.Error(
-                    "SubAgent [{AgentName}] spawn rejected: RunSubAgent carried no trust audience.",
-                    _definition.Name);
-                Complete(
-                    success: false,
-                    "Sub-agent spawn failed: no trust audience was provided. A sub-agent "
-                    + "must inherit the spawning session's audience.",
-                    SubAgentRunOutcome.Failed,
-                    SubAgentOutcomeReason.MissingAudience);
-                return;
-            }
-
-            _toolExecutionContext = new ToolExecutionContext(new ToolRunScope
-            {
-                Session = new ToolSessionScope.Bound(scopeId, msg.ParentSessionDirectory),
-                Audience = subAgentAudience,
-                InlineOutputBudget = InlineOutputBudget.Default,
-                Boundary = msg.Boundary,
-                ChannelType = msg.ChannelType,
-                DefaultDeliveryTarget = msg.DefaultDeliveryTarget,
-                RequestedDeliveryTarget = msg.RequestedDeliveryTarget,
-                ModelInputModalities = msg.ModelInputModalities,
-                ApprovalBridge = _approvalBridge,
-                ProjectDirectory = msg.ParentProjectDirectory,
-                InheritedCwd = msg.ParentCwd,
-                RecentFiles = msg.ParentRecentFiles,
-                SupportsInteractiveApproval = _approvalBridge is not null,
-            }, ToolExecutionTimeout.Default);
-            _workingContext = new WorkingContext
-            {
-                ProjectDirectory = msg.ParentProjectDirectory,
-                RecentFiles = [.. msg.ParentRecentFiles.Take(WorkingContext.MaxRecentFiles)]
-            };
+            _approvalBridge = msg.Scope.Authority.ApprovalBridge;
+            var scopeId = msg.Scope.ScopeId.Value;
+            var subAgentAudience = msg.Scope.Authority.Audience;
+            _toolExecutionContext = new ToolExecutionContext(
+                msg.Scope.Authority,
+                ToolExecutionTimeout.Default);
+            _fileActivity = new ChildFileActivityTracker(msg.Scope.InitialWorkingSnapshot.WorkingContext);
             _aiTools = ResolveExposedAiTools();
             _executionCts = new CancellationTokenSource();
             _externalCts = new CancellationTokenSource();
@@ -341,7 +297,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     msg.RuntimeContext,
                     subAgentAudience == TrustAudience.Public
                         ? string.Empty
-                        : msg.WorkingContextBlock ?? _workingContext.ToContextBlock(),
+                        : msg.Scope.InitialWorkingSnapshot.ToContextBlock(),
                     msg.Task)));
 
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
@@ -481,16 +437,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             foreach (var result in msg.ToolResults)
             {
                 _history.Add(ChatMessageConverter.ToAiMessage(result));
-                if (result.ToolCallId is { } callId
-                    && _pendingFileActivities.Remove(callId.Value, out var activity)
-                    && IsSuccessfulFileActivity(activity.Kind, result.Content))
-                {
-                    _workingContext = _workingContext.AddRecentFile(activity.Path);
-                    if (activity.Kind == FileActivityKind.Read)
-                        _readFiles.Add(activity.Path);
-                    else
-                        _confirmedChangedFiles.Add(activity.Path);
-                }
+                if (result.ToolCallId is { } callId)
+                    _fileActivity.Complete(callId.Value, result.Content);
                 var preview = result.Content is { Length: > 200 }
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
@@ -721,11 +669,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
             if (toolCall.CallId is { Length: > 0 } callId
-                && WorkingContextUpdater.TryExtractFilePath(argsJson, out var path)
-                && TryClassifyFileActivity(toolCall.Name, out var kind))
-            {
-                _pendingFileActivities[callId] = new PendingFileActivity(ResolveTrackedPath(path), kind);
-            }
+                && WorkingContextUpdater.TryExtractFilePath(argsJson, out var path))
+                _fileActivity.Begin(callId, toolCall.Name, path);
 
             // Log tool START event so tool execution spans are visible in Seq
             // (previously only tool results were logged, making it impossible to
@@ -855,14 +800,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var workingContextResult = BuildWorkingContextResult(success);
         _replyTo.Tell(new SubAgentResult
         {
-            Success = success,
+            Completion = ChildRunCompletion.FromReportedOutcome(resolvedOutcome, outcomeReason, workingContextResult),
             Output = output,
             AgentName = _definition.Name,
-            Outcome = resolvedOutcome,
-            OutcomeReason = outcomeReason,
             Findings = findings,
             FindingsCount = findings.Count,
-            WorkingContext = workingContextResult
         });
 
         Context.Stop(Self);
@@ -997,57 +939,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return $"Context:\n{combinedContext}\n\nTask:\n{task}";
     }
 
-    private SubAgentWorkingContextInfo? BuildWorkingContextResult(bool success)
+    private WorkingContextDelta? BuildWorkingContextResult(bool success)
     {
         if (!success)
             return null;
 
-        return new SubAgentWorkingContextInfo
-        {
-            ProjectDirectory = _workingContext.ProjectDirectory,
-            ReadFiles = _readFiles.Order(StringComparer.Ordinal).ToArray(),
-            ConfirmedChangedFiles = _confirmedChangedFiles.Order(StringComparer.Ordinal).ToArray(),
-            ObservedChangedFiles = []
-        };
-    }
-
-    private string ResolveTrackedPath(string path)
-    {
-        if (Path.IsPathRooted(path) || string.IsNullOrWhiteSpace(_workingContext.ProjectDirectory))
-            return path;
-        return Path.GetFullPath(path, _workingContext.ProjectDirectory);
-    }
-
-    private static bool TryClassifyFileActivity(string toolName, out FileActivityKind kind)
-    {
-        kind = toolName switch
-        {
-            "file_read" => FileActivityKind.Read,
-            "file_write" or "file_edit" => FileActivityKind.Changed,
-            _ => FileActivityKind.None
-        };
-        return kind != FileActivityKind.None;
-    }
-
-    private static bool IsSuccessfulFileActivity(FileActivityKind kind, string? result)
-    {
-        if (string.IsNullOrWhiteSpace(result))
-            return false;
-
-        return kind == FileActivityKind.Changed
-            ? result.StartsWith("Successfully ", StringComparison.Ordinal)
-            : !result.StartsWith("Error:", StringComparison.Ordinal)
-              && !result.StartsWith("Tool access denied:", StringComparison.Ordinal)
-              && !result.Contains("requires approval", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private sealed record PendingFileActivity(string Path, FileActivityKind Kind);
-
-    private enum FileActivityKind
-    {
-        None,
-        Read,
-        Changed
+        return _fileActivity.BuildResult();
     }
 
     private static string ExtractText(AiChatMessage message)
@@ -1428,6 +1325,77 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         // Append the headless execution and precedence contract — always at the bottom,
         // after the specialized role prompt it protects from inherited mission conflicts.
         return string.Concat(rolePrompt.TrimEnd(), "\n\n", HeadlessExecutionContract);
+    }
+
+    private sealed class ChildFileActivityTracker
+    {
+        private readonly HashSet<string> _readFiles = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _confirmedChangedFiles = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, PendingFileActivity> _pending = new(StringComparer.Ordinal);
+        private WorkingContext _workingContext;
+
+        public ChildFileActivityTracker(WorkingContext parentSnapshot)
+        {
+            _workingContext = parentSnapshot;
+        }
+
+        public void Begin(string callId, string toolName, string path)
+        {
+            var kind = toolName switch
+            {
+                "file_read" => FileActivityKind.Read,
+                "file_write" or "file_edit" => FileActivityKind.Changed,
+                _ => FileActivityKind.None
+            };
+            if (kind == FileActivityKind.None)
+                return;
+
+            var resolvedPath = Path.IsPathRooted(path) || string.IsNullOrWhiteSpace(_workingContext.ProjectDirectory)
+                ? path
+                : Path.GetFullPath(path, _workingContext.ProjectDirectory);
+            _pending[callId] = new PendingFileActivity(resolvedPath, kind);
+        }
+
+        public void Complete(string callId, string? result)
+        {
+            if (!_pending.Remove(callId, out var activity) || !Succeeded(activity.Kind, result))
+                return;
+
+            _workingContext = _workingContext.AddRecentFile(activity.Path);
+            if (activity.Kind == FileActivityKind.Read)
+                _readFiles.Add(activity.Path);
+            else
+                _confirmedChangedFiles.Add(activity.Path);
+        }
+
+        public WorkingContextDelta BuildResult() => new()
+        {
+            ProjectDirectory = _workingContext.ProjectDirectory,
+            ReadFiles = _readFiles.Order(StringComparer.Ordinal).ToArray(),
+            ConfirmedChangedFiles = _confirmedChangedFiles.Order(StringComparer.Ordinal).ToArray(),
+            ObservedChangedFiles = []
+        };
+
+        private static bool Succeeded(FileActivityKind kind, string? result)
+        {
+            if (string.IsNullOrWhiteSpace(result))
+                return false;
+
+            return kind == FileActivityKind.Changed
+                ? result.StartsWith("Successfully ", StringComparison.Ordinal)
+                : !result.StartsWith("Error:", StringComparison.Ordinal)
+                  && !result.StartsWith("Tool access denied:", StringComparison.Ordinal)
+                  && !result.Contains("requires approval", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed record PendingFileActivity(string Path, FileActivityKind Kind);
+
+        private enum FileActivityKind
+        {
+            None,
+            Read,
+            Changed
+        }
     }
 
     private sealed class SubAgentCancelled

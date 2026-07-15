@@ -116,5 +116,9 @@ public sealed record WorkingContext : INetclawSerializableMessage
     /// emit a barren header.
     /// </summary>
     public string ToContextBlock()
-        => new WorkingContextSnapshot { WorkingContext = this }.ToContextBlock();
+        => new WorkingContextSnapshot
+        {
+            WorkingContext = this,
+            Git = new GitWorkingContextInspection.Skipped()
+        }.ToContextBlock();
 }

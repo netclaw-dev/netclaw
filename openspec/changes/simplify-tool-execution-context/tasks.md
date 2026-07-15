@@ -15,21 +15,22 @@
 - [x] 2.3 Preserve existing `_background` behavior for shell, non-shell, missing-manager, and dispatch-failure paths while removing redundant parameter plumbing.
 - [x] 2.4 Add characterization tests for audit/logging/approval/background infrastructure, malformed metadata, ACL and approval denial, supported background routing, missing-manager fallback, dispatch failure, and non-shell fallback.
 - [x] 2.5 Verify MCP request/response schemas and persisted actor contracts remain compatible; update affected engineering docs and specs, and review the versioned `netclaw-operations` system skill without changing model-visible guidance for an internal behavior-preserving refactor.
-- [ ] 2.6 Run targeted tests, the tool-definition eval suite, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 2 through review, CI, merge, and post-merge `dev` verification.
+- [x] 2.6 Run targeted tests, the tool-definition eval suite, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 2 through review, CI, merge, and post-merge `dev` verification.
 
 ## 3. Stage 3 — Child Context and Async Git
 
-- [ ] 3.1 Introduce a framework-owned child-run scope that forks immutable parent authority and a read-only working-context snapshot while allocating independent child activity state.
-- [ ] 3.2 Introduce typed child outcomes and working-context deltas; merge only confirmed changed files from successful children and keep Git-observed changes non-attributed.
-- [ ] 3.3 Split Git process execution, snapshot composition, and rendering; make inspection asynchronous with explicit available, not-repository, and unavailable outcomes.
-- [ ] 3.4 Gate Git inspection before process launch so it occurs only for Team/Personal runs with a declared project directory that Git recognizes as a worktree.
-- [ ] 3.5 Correlate session-actor Git continuations with turn generations and discard stale results; await bounded spawn/completion snapshots at subagent async boundaries.
-- [ ] 3.6 Add deterministic tests for Public no-inspection, missing/non-Git project handling, sanitized failures, stale continuation rejection, child isolation, successful confirmed merge, and failed/cancelled no-merge without sleeps.
-- [ ] 3.7 Update engineering docs and the versioned `netclaw-operations` and `netclaw-projects` system skills for working-context and subagent behavior.
-- [ ] 3.8 Run targeted tests, prompt/tool eval suites, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 3 through review, CI, merge, and post-merge `dev` verification.
+- [x] 3.1 Introduce a framework-owned child-run scope that forks immutable parent authority and a read-only working-context snapshot while allocating independent child activity state.
+- [x] 3.2 Introduce typed child outcomes and working-context deltas; merge only confirmed changed files from successful children and keep Git-observed changes non-attributed.
+- [x] 3.3 Split Git process execution, snapshot composition, and rendering; make inspection asynchronous with explicit available, not-repository, and unavailable outcomes.
+- [x] 3.4 Gate Git inspection before process launch so it occurs only for Team/Personal runs with a declared project directory that Git recognizes as a worktree.
+- [x] 3.5 Correlate session-actor Git continuations with turn generations and discard stale results; await bounded spawn/completion snapshots at subagent async boundaries.
+- [x] 3.6 Add deterministic tests for Public no-inspection, missing/non-Git project handling, sanitized failures, stale continuation rejection, child isolation, successful confirmed merge, and failed/cancelled no-merge without sleeps.
+- [x] 3.7 Update engineering docs and the versioned `netclaw-operations` and `netclaw-projects` system skills for working-context and subagent behavior.
+- [ ] 3.8 Run targeted tests, prompt/tool eval suites, `dotnet test`, Slopwatch, file-header verification, and `git diff --check`; open and babysit Stage 3 through review, CI, merge, and post-merge `dev` verification, then close GitHub issue #1633 with the acceptance evidence.
 
 ## 4. Closeout
 
 - [ ] 4.1 Verify all three merged stages against the OpenSpec scenarios and PRD traceability from current `dev`, including serialization/recovery and MCP compatibility evidence.
 - [ ] 4.2 Sync the delta specs to main specs with `/opsx-sync`, run `/opsx-verify`, and archive the completed change with `/opsx-archive`.
 - [ ] 4.3 Run the RALPH adversarial output review, diagnostics, and after-action workflow; capture durable follow-ups without leaving undocumented behavior drift.
+- [ ] 4.4 Decide whether `IToolAuditLogger` should adapt structured tool events into the canonical `SessionLogActor` transcript or be removed; Stage 2 deliberately retained the existing disabled production diagnostics and null audit sink to avoid behavior drift.

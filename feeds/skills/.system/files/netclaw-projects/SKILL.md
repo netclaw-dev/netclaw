@@ -3,7 +3,7 @@ name: netclaw-projects
 description: "How to create, find, and work with project workspaces. Load when the user references a project, asks to organize work, or you need a sustained workspace."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.0"
 license: MIT
 compatibility: "netclaw >= 0.10.0"
 disable-model-invocation: false
@@ -64,6 +64,12 @@ re-read it manually.
 
 Use the project directory as your working directory for all project-related
 file operations. Commit meaningful changes so the project has history.
+
+Team and Personal sessions refresh Git working context at the beginning of a
+turn. That snapshot is grounding, not a live view: changes made during the turn
+appear in the next turn. A spawned subagent receives its own read-only snapshot
+and reports only changes confirmed through its tools. Do not infer that every
+dirty file in the shared worktree was changed by that subagent.
 
 ## When NOT to Create a Project
 

@@ -50,7 +50,9 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             toolAccessPolicy: null!,
             approvalService: null,
             promptProvider: null!,
-            workingContextSnapshots: new WorkingContextSnapshotProvider(NullLogger<WorkingContextSnapshotProvider>.Instance),
+            workingContextSnapshots: new WorkingContextSnapshotProvider(
+                new GitWorkingContextInspector(TimeProvider.System),
+                NullLogger<WorkingContextSnapshotProvider>.Instance),
             logger);
 
         // A context with a session id but no SpawnChildActor factory — the

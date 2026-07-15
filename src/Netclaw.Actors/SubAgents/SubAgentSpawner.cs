@@ -93,11 +93,9 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
             return new SubAgentResult
             {
-                Success = false,
+                Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnUnavailable),
                 Output = $"Cannot spawn subagent '{profile.Name}': no session context available.",
-                AgentName = new AgentName(profile.Name),
-                Outcome = SubAgentRunOutcome.Failed,
-                OutcomeReason = SubAgentOutcomeReason.SpawnUnavailable
+                AgentName = new AgentName(profile.Name)
             };
         }
 
@@ -108,11 +106,9 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
             return new SubAgentResult
             {
-                Success = false,
+                Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.NoToolsAvailable),
                 Output = $"Cannot spawn subagent '{profile.Name}': no tools are available under the parent audience policy.",
-                AgentName = new AgentName(profile.Name),
-                Outcome = SubAgentRunOutcome.Failed,
-                OutcomeReason = SubAgentOutcomeReason.NoToolsAvailable
+                AgentName = new AgentName(profile.Name)
             };
         }
 
@@ -152,7 +148,37 @@ public sealed class SubAgentSpawner
             ProjectDirectory = context.ProjectDirectory,
             RecentFiles = [.. context.RecentFiles.Take(WorkingContext.MaxRecentFiles)]
         };
-        var initialWorkingSnapshot = _workingContextSnapshots.Create(parentWorkingContext, context.Audience);
+        var initialWorkingSnapshot = await _workingContextSnapshots.CreateAsync(
+            parentWorkingContext,
+            context.Audience,
+            ct).ConfigureAwait(false);
+        // A transport can own an approval channel without being able to service
+        // interactive prompts. Fork only the admitted capability, never bridge
+        // presence by itself.
+        var approvalBridge = context.SupportsInteractiveApproval == true
+            ? context.ApprovalBridge
+            : null;
+        var childScope = new ChildRunScope
+        {
+            ScopeId = scopeId,
+            Authority = new ToolRunScope
+            {
+                Session = new ToolSessionScope.Bound(scopeId.Value, context.SessionDirectory),
+                Audience = context.Audience,
+                InlineOutputBudget = InlineOutputBudget.Default,
+                Boundary = context.Boundary,
+                ChannelType = context.ChannelType,
+                DefaultDeliveryTarget = context.DefaultDeliveryTarget,
+                RequestedDeliveryTarget = context.RequestedDeliveryTarget,
+                ModelInputModalities = context.ModelInputModalities,
+                ApprovalBridge = approvalBridge,
+                ProjectDirectory = context.ProjectDirectory,
+                InheritedCwd = context.ResolveShellCwd(null),
+                RecentFiles = context.RecentFiles,
+                SupportsInteractiveApproval = approvalBridge is not null
+            },
+            InitialWorkingSnapshot = initialWorkingSnapshot
+        };
 
         // Spawn as child of the session actor via the context factory
         var props = SubAgentActor.CreateProps(
@@ -198,30 +224,13 @@ public sealed class SubAgentSpawner
             var result = await subAgent.Ask<SubAgentResult>(
                 new RunSubAgent
                 {
+                    Scope = childScope,
                     Task = task,
                     RuntimeContext = runtimeContext,
                     Timeout = subAgentTimeout,
                     PrefillTimeout = prefillTimeout,
                     NoProgressTimeout = noProgressTimeout,
-                    SessionScopeId = subAgentScopeId,
-                    Audience = context.Audience,
-                    Boundary = context.Boundary,
-                    ChannelType = context.ChannelType,
-                    DefaultDeliveryTarget = context.DefaultDeliveryTarget,
-                    RequestedDeliveryTarget = context.RequestedDeliveryTarget,
-                    ModelInputModalities = context.ModelInputModalities,
-                    ParentSessionDirectory = context.SessionDirectory,
-                    ParentProjectDirectory = context.ProjectDirectory,
-                    ParentRecentFiles = context.RecentFiles,
-                    WorkingContextBlock = initialWorkingSnapshot.ToContextBlock(),
-                    ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
-                    // A session owns an approval channel even when its transport cannot
-                    // service prompts. Preserve the channel capability as the authority:
-                    // bridge presence alone must never make an unattended child interactive.
-                    ApprovalBridge = context.SupportsInteractiveApproval == true
-                        ? context.ApprovalBridge
-                        : null,
                     // Null for non-streaming callers such as routed skills and the
                     // legacy ExecuteAsync path; the sub-agent surfaces its progress
                     // through its own session-correlated logs regardless. Streaming
@@ -244,7 +253,11 @@ public sealed class SubAgentSpawner
 
             sw.Stop();
 
-            result = EnrichWorkingContextResult(result, initialWorkingSnapshot, context.Audience);
+            result = await EnrichWorkingContextResultAsync(
+                result,
+                initialWorkingSnapshot,
+                context.Audience,
+                ct).ConfigureAwait(false);
 
             context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
@@ -287,11 +300,9 @@ public sealed class SubAgentSpawner
             SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
             return new SubAgentResult
             {
-                Success = false,
+                Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
                 Output = $"Subagent error: {ex.Message}",
                 AgentName = new AgentName(profile.Name),
-                Outcome = SubAgentRunOutcome.Failed,
-                OutcomeReason = SubAgentOutcomeReason.SpawnError,
                 RunId = runId,
                 ScopeId = scopeId
             };
@@ -303,10 +314,11 @@ public sealed class SubAgentSpawner
         }
     }
 
-    private SubAgentResult EnrichWorkingContextResult(
+    private async Task<SubAgentResult> EnrichWorkingContextResultAsync(
         SubAgentResult result,
         WorkingContextSnapshot initialSnapshot,
-        TrustAudience audience)
+        TrustAudience audience,
+        CancellationToken cancellationToken)
     {
         if (!result.Success || result.WorkingContext is not { } childContext)
             return result;
@@ -319,7 +331,10 @@ public sealed class SubAgentSpawner
                 .Distinct(FilePathComparer)
                 .Take(WorkingContext.MaxRecentFiles)]
         };
-        var finalSnapshot = _workingContextSnapshots.Create(finalContext, audience);
+        var finalSnapshot = await _workingContextSnapshots.CreateAsync(
+            finalContext,
+            audience,
+            cancellationToken).ConfigureAwait(false);
         var initialChanged = CanonicalChangedFiles(initialSnapshot.Git);
         var observed = CanonicalChangedFiles(finalSnapshot.Git)
             .Except(initialChanged, FilePathComparer)
@@ -327,26 +342,36 @@ public sealed class SubAgentSpawner
             .Order(FilePathComparer)
             .ToArray();
 
+        var delta = childContext with
+        {
+            Worktree = AvailableSnapshot(finalSnapshot.Git)?.Worktree,
+            Branch = AvailableSnapshot(finalSnapshot.Git)?.Branch,
+            Head = AvailableSnapshot(finalSnapshot.Git)?.Head,
+            ObservedChangedFiles = observed
+        };
         return result with
         {
-            WorkingContext = childContext with
+            Completion = result.Completion switch
             {
-                Worktree = finalSnapshot.Git?.Worktree,
-                Branch = finalSnapshot.Git?.Branch,
-                Head = finalSnapshot.Git?.Head,
-                ObservedChangedFiles = observed
+                ChildRunCompletion.Completed => new ChildRunCompletion.Completed(delta),
+                ChildRunCompletion.Partial partial => new ChildRunCompletion.Partial(partial.PartialReason, delta),
+                _ => throw new InvalidOperationException("Only successful child runs can carry a working-context delta.")
             }
         };
     }
 
-    private static IEnumerable<string> CanonicalChangedFiles(GitWorkingContextSnapshot? snapshot)
+    private static IEnumerable<string> CanonicalChangedFiles(GitWorkingContextInspection inspection)
     {
+        var snapshot = AvailableSnapshot(inspection);
         if (snapshot is null)
             return [];
 
         return snapshot.ChangedFiles.Select(path =>
             Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(path, snapshot.Worktree));
     }
+
+    private static GitWorkingContextSnapshot? AvailableSnapshot(GitWorkingContextInspection inspection)
+        => inspection is GitWorkingContextInspection.Available available ? available.Snapshot : null;
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolInvocationContext context)
     {

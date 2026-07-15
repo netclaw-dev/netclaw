@@ -127,7 +127,7 @@ Done when:
 
 - [x] Stage 1 lands required run scopes, per-call isolation, and non-null
   security/authority dependencies without compatibility shims.
-- [ ] Stage 2 lands the composed pipeline without changing existing background,
+- [x] Stage 2 lands the composed pipeline without changing existing background,
   fallback, authorization, approval, MCP, or model-visible behavior.
 - [ ] Stage 3 lands child fork/delta semantics and Git inspection only for
   non-Public runs with a declared Git project.

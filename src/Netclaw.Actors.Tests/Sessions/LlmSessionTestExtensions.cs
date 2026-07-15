@@ -21,13 +21,15 @@ internal static class LlmSessionTestExtensions
 {
     public static IServiceCollection AddLlmSessionCompositeRecords(this IServiceCollection services)
     {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IGitWorkingContextInspector, GitWorkingContextInspector>();
         services.TryAddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
         services.TryAddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetRequiredService<IWorkingContextSnapshotProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<NetclawPaths>()));
 
         services.TryAddSingleton(sp => new SessionMemoryServices(
