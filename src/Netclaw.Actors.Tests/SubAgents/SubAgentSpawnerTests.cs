@@ -350,6 +350,37 @@ public sealed class SubAgentSpawnerTests : TestKit
     }
 
     [Fact]
+    public async Task Fatal_initial_snapshot_failure_completes_stream_and_propagates()
+    {
+        var spawner = CreateSpawner(new FatalWorkingContextSnapshotProvider());
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var childSpawned = false;
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) =>
+                {
+                    childSpawned = true;
+                    return Task.FromResult<object>(TestActor);
+                }
+            });
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() => spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            TestContext.Current.CancellationToken,
+            activitySink: channel.Writer));
+
+        Assert.False(childSpawned);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Cancellation_while_waiting_for_child_returns_typed_cancellation_and_completes_stream()
     {
         using var cancellation = new CancellationTokenSource();
@@ -424,6 +455,41 @@ public sealed class SubAgentSpawnerTests : TestKit
         var result = await spawn;
 
         Assert.IsType<ChildRunCompletion.Cancelled>(result.Completion);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Fatal_final_snapshot_failure_completes_stream_and_propagates()
+    {
+        var childProbe = CreateTestProbe("final-snapshot-fatal-child");
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var spawner = CreateSpawner(new FatalOnSecondWorkingContextSnapshotProvider());
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+            });
+
+        var spawn = spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            TestContext.Current.CancellationToken,
+            activitySink: channel.Writer);
+        await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+        childProbe.Reply(SuccessfulResult() with
+        {
+            Completion = new ChildRunCompletion.Completed(new WorkingContextDelta
+            {
+                ProjectDirectory = Path.GetTempPath()
+            })
+        });
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() => spawn);
         await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
     }
 
@@ -574,6 +640,28 @@ public sealed class SubAgentSpawnerTests : TestKit
             TrustAudience audience,
             CancellationToken cancellationToken) =>
             Task.FromException<WorkingContextSnapshot>(new IOException("snapshot failed"));
+    }
+
+    private sealed class FatalWorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
+    {
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken) =>
+            Task.FromException<WorkingContextSnapshot>(new OutOfMemoryException("snapshot failed fatally"));
+    }
+
+    private sealed class FatalOnSecondWorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
+    {
+        private int _invocation;
+
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken) => ++_invocation == 1
+                ? Task.FromResult(EmptySnapshot())
+                : Task.FromException<WorkingContextSnapshot>(
+                    new OutOfMemoryException("snapshot failed fatally"));
     }
 
     private sealed class CancelOnSecondWorkingContextSnapshotProvider(CancellationTokenSource cancellation)

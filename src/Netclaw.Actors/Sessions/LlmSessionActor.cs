@@ -2406,6 +2406,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnLog().Debug("working_context_inspection_cancelled generation={Generation}", msg.Generation);
         });
         Command<WorkingContextSnapshotFailed>(HandleWorkingContextSnapshotFailed);
+        Command<WorkingContextSnapshotFatal>(message => throw message.Cause);
 
         // Title generation result — can arrive in any behavior, always safe to apply
         Command<TitleGenerationCompleted>(msg =>
@@ -2821,7 +2822,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             return new WorkingContextSnapshotCancelled(generation);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             return new WorkingContextSnapshotFailed(
                 generation,
@@ -2829,6 +2830,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 turnRestartNotice,
                 workingContext,
                 ex);
+        }
+        catch (Exception ex) when (FatalExceptionPolicy.IsFatal(ex))
+        {
+            return new WorkingContextSnapshotFatal(ex);
         }
     }
 

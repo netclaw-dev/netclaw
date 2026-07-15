@@ -114,6 +114,9 @@ internal sealed record WorkingContextSnapshotFailed(
     WorkingContext WorkingContext,
     Exception Cause) : INoSerializationVerificationNeeded;
 
+internal sealed record WorkingContextSnapshotFatal(Exception Cause)
+    : INoSerializationVerificationNeeded;
+
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
     public required SubAgentRunId RunId { get; init; }

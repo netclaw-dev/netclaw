@@ -152,10 +152,7 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
             return CancelledResult(definition.Name, runId, scopeId);
         }
-        catch (Exception ex) when (ex is not (
-            OutOfMemoryException or
-            StackOverflowException or
-            AccessViolationException))
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
             activitySink?.TryComplete();
@@ -167,6 +164,11 @@ public sealed class SubAgentSpawner
                 RunId = runId,
                 ScopeId = scopeId
             };
+        }
+        catch (Exception ex) when (FatalExceptionPolicy.IsFatal(ex))
+        {
+            activitySink?.TryComplete();
+            throw;
         }
         // A transport can own an approval channel without being able to service
         // interactive prompts. Fork only the admitted capability, never bridge
@@ -229,7 +231,7 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
             return CancelledResult(definition.Name, runId, scopeId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             // The child actor was never created (session actor ActorOf failed or the
             // spawn ask timed out). Record it to the session transcript before the
@@ -238,6 +240,20 @@ public sealed class SubAgentSpawner
             // Balance the IsStarted=true notification above: the non-streaming path
             // (activitySink is null) relies solely on the per-call output sink, so without
             // a terminal event the session UI shows a sub-agent stuck in "Started".
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
+            {
+                RunId = runId,
+                AgentName = definition.Name.Value,
+                IsStarted = false,
+                Success = false,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.SpawnError
+            });
+            activitySink?.TryComplete();
+            throw;
+        }
+        catch (Exception ex) when (FatalExceptionPolicy.IsFatal(ex))
+        {
             context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
                 RunId = runId,
@@ -333,7 +349,7 @@ public sealed class SubAgentSpawner
 
             return CancelledResult(definition.Name, runId, scopeId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             sw.Stop();
 
