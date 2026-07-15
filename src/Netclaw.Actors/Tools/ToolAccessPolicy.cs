@@ -149,7 +149,7 @@ public sealed class ToolAccessPolicy
         // Even if the verb-chain is pre-approved, path arguments must fall within
         // the channel's allowed filesystem roots. Fail-closed: if no trust zone
         // policy is configured, deny any shell command with path arguments.
-        if (context.SupportsInteractiveApproval == false && shellCommand is not null)
+        if (context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable && shellCommand is not null)
         {
             if (_shellTrustZonePolicy is null)
             {

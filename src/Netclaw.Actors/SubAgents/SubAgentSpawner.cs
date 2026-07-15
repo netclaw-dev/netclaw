@@ -125,15 +125,6 @@ public sealed class SubAgentSpawner
 
         var runId = SubAgentRunId.New();
 
-        // Notify session that subagent is starting
-        context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
-        {
-            RunId = runId,
-            AgentName = definition.Name.Value,
-            IsStarted = true,
-            ToolCount = tools.Count
-        });
-
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
         var prefillTimeout = TimeSpan.FromSeconds(
@@ -148,16 +139,36 @@ public sealed class SubAgentSpawner
             ProjectDirectory = context.ProjectDirectory,
             RecentFiles = [.. context.RecentFiles.Take(WorkingContext.MaxRecentFiles)]
         };
-        var initialWorkingSnapshot = await _workingContextSnapshots.CreateAsync(
-            parentWorkingContext,
-            context.Audience,
-            ct).ConfigureAwait(false);
+        WorkingContextSnapshot initialWorkingSnapshot;
+        try
+        {
+            initialWorkingSnapshot = await _workingContextSnapshots.CreateAsync(
+                parentWorkingContext,
+                context.Audience,
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            activitySink?.TryComplete();
+            return CancelledResult(definition.Name, runId, scopeId);
+        }
+        catch (Exception ex)
+        {
+            SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
+            activitySink?.TryComplete();
+            return new SubAgentResult
+            {
+                Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
+                Output = $"Subagent error: {ex.Message}",
+                AgentName = definition.Name,
+                RunId = runId,
+                ScopeId = scopeId
+            };
+        }
         // A transport can own an approval channel without being able to service
         // interactive prompts. Fork only the admitted capability, never bridge
         // presence by itself.
-        var approvalBridge = context.SupportsInteractiveApproval == true
-            ? context.ApprovalBridge
-            : null;
+        var interactiveApproval = context.RunScope.InteractiveApproval;
         var childScope = new ChildRunScope
         {
             ScopeId = scopeId,
@@ -171,14 +182,21 @@ public sealed class SubAgentSpawner
                 DefaultDeliveryTarget = context.DefaultDeliveryTarget,
                 RequestedDeliveryTarget = context.RequestedDeliveryTarget,
                 ModelInputModalities = context.ModelInputModalities,
-                ApprovalBridge = approvalBridge,
+                InteractiveApproval = interactiveApproval,
                 ProjectDirectory = context.ProjectDirectory,
                 InheritedCwd = context.ResolveShellCwd(null),
                 RecentFiles = context.RecentFiles,
-                SupportsInteractiveApproval = approvalBridge is not null
             },
             InitialWorkingSnapshot = initialWorkingSnapshot
         };
+
+        context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
+        {
+            RunId = runId,
+            AgentName = definition.Name.Value,
+            IsStarted = true,
+            ToolCount = tools.Count
+        });
 
         // Spawn as child of the session actor via the context factory
         var props = SubAgentActor.CreateProps(
@@ -193,6 +211,20 @@ public sealed class SubAgentSpawner
         try
         {
             subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
+            {
+                RunId = runId,
+                AgentName = definition.Name.Value,
+                IsStarted = false,
+                Success = false,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.CancelledByParent
+            });
+            activitySink?.TryComplete();
+            return CancelledResult(definition.Name, runId, scopeId);
         }
         catch (Exception ex)
         {
@@ -280,6 +312,24 @@ public sealed class SubAgentSpawner
                 ScopeId = scopeId
             };
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            sw.Stop();
+            TryStopSubAgent(subAgent);
+
+            context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
+            {
+                RunId = runId,
+                AgentName = definition.Name.Value,
+                IsStarted = false,
+                Success = false,
+                Outcome = SubAgentRunOutcome.Failed,
+                OutcomeReason = SubAgentOutcomeReason.CancelledByParent,
+                Duration = sw.Elapsed
+            });
+
+            return CancelledResult(definition.Name, runId, scopeId);
+        }
         catch (Exception ex)
         {
             sw.Stop();
@@ -313,6 +363,18 @@ public sealed class SubAgentSpawner
             activitySink?.TryComplete();
         }
     }
+
+    private static SubAgentResult CancelledResult(
+        AgentName agentName,
+        SubAgentRunId runId,
+        SubAgentScopeId scopeId) => new()
+        {
+            Completion = new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent),
+            Output = "Subagent cancelled by parent",
+            AgentName = agentName,
+            RunId = runId,
+            ScopeId = scopeId
+        };
 
     private async Task<SubAgentResult> EnrichWorkingContextResultAsync(
         SubAgentResult result,

@@ -88,7 +88,7 @@ public static class ReminderEndpointRouteBuilderExtensions
                 InlineOutputBudget = InlineOutputBudget.Default,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType("manual", reminderSourceAudience),
                 ChannelType = "manual",
-                SupportsInteractiveApproval = false,
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
             }, ToolExecutionTimeout.Default);
             var result = await tool.ExecuteAsync(
                 new Dictionary<string, object?>

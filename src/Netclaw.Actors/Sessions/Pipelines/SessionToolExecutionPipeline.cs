@@ -153,7 +153,7 @@ internal sealed class SessionToolBatch
             ChannelType = turnContext.ChannelType?.ToWireValue(),
             DefaultDeliveryTarget = turnContext.DefaultDeliveryTarget,
             RequestedDeliveryTarget = turnContext.RequestedDeliveryTarget,
-            SupportsInteractiveApproval = turnContext.SupportsInteractiveApproval,
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
             InlineOutputBudget = environment.InlineOutputBudget,
             ModelInputModalities = environment.ModelInputModalities,
             SpawnChildActor = environment.SpawnChildActor,
@@ -438,7 +438,12 @@ internal sealed class SessionToolExecutionPipeline
                 batch.TurnContext.HasThirdPartyAdoptedContext,
                 batch.TurnContext.AdoptedSpeakerIds)
             : null;
-        var callScope = batch.RunScope with { ApprovalBridge = approvalBridge };
+        var callScope = batch.RunScope with
+        {
+            InteractiveApproval = approvalBridge is null
+                ? new InteractiveApprovalCapability.Unavailable()
+                : new InteractiveApprovalCapability.Available(approvalBridge)
+        };
         var context = new ToolExecutionContext(
             callScope,
             new ToolExecutionTimeout(timeout),

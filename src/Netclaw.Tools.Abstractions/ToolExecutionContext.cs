@@ -215,10 +215,9 @@ public sealed record ToolRunScope
     public string? ChannelType { get; init; }
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
     public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
-    public bool? SupportsInteractiveApproval { get; init; }
+    public required InteractiveApprovalCapability InteractiveApproval { get; init; }
     public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; init; }
-    public IParentApprovalBridge? ApprovalBridge { get; init; }
     public string? ProjectDirectory { get; init; }
     public string? InheritedCwd { get; init; }
     public IReadOnlyList<string> RecentFiles
@@ -343,6 +342,7 @@ public sealed class ToolInvocationContext
         RunScope = runScope;
         ArgumentNullException.ThrowIfNull(runScope.Session);
         ArgumentNullException.ThrowIfNull(runScope.InlineOutputBudget);
+        ArgumentNullException.ThrowIfNull(runScope.InteractiveApproval);
         ArgumentNullException.ThrowIfNull(executionTimeout);
 
         Outputs = outputs;
@@ -396,12 +396,6 @@ public sealed class ToolInvocationContext
         => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
 
     /// <summary>
-    /// Whether the originating channel supports interactive approval prompts.
-    /// When false, approval-gated tools are automatically denied.
-    /// </summary>
-    public bool? SupportsInteractiveApproval => RunScope.SupportsInteractiveApproval;
-
-    /// <summary>
     /// Modalities accepted by the active model for this tool call.
     /// </summary>
     public ModelModality ModelInputModalities => RunScope.ModelInputModalities;
@@ -424,7 +418,6 @@ public sealed class ToolInvocationContext
     /// Parent session's approval bridge for sub-agent approval chaining. When set,
     /// the sub-agent can route approval requests back to the interactive user.
     /// </summary>
-    public IParentApprovalBridge? ApprovalBridge => RunScope.ApprovalBridge;
 
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }
@@ -575,13 +568,11 @@ public sealed class ToolExecutionContext
     public TrustAudience Audience => Invocation.Audience;
     public TrustBoundary? Boundary => Invocation.Boundary;
     public string? ChannelType => Invocation.ChannelType;
-    public bool? SupportsInteractiveApproval => Invocation.SupportsInteractiveApproval;
     public string? SessionId => Invocation.SessionId;
     public string? SessionDirectory => Invocation.SessionDirectory;
     public int MaxInlineToolResultChars => Invocation.MaxInlineToolResultChars;
     public string? ProjectDirectory => Invocation.ProjectDirectory;
     public ModelModality ModelInputModalities => Invocation.ModelInputModalities;
-    public IParentApprovalBridge? ApprovalBridge => Invocation.ApprovalBridge;
 
     internal IReadOnlyList<FileAttachmentInfo> FileAttachments => Invocation.FileAttachments;
 

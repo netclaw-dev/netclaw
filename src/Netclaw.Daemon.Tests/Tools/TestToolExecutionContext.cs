@@ -41,6 +41,6 @@ internal static class TestToolExecutionContext
             InlineOutputBudget = InlineOutputBudget.Default,
             ChannelType = channelType,
             RequestedDeliveryTarget = requestedDeliveryTarget,
-            SupportsInteractiveApproval = true,
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
         }, ToolExecutionTimeout.Default);
 }

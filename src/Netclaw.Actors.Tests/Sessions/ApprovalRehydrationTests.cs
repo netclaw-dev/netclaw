@@ -1597,7 +1597,8 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
         LastExecutionAudience = context?.Audience;
         LastExecutionBoundary = context?.Boundary;
         LastExecutionChannelType = context?.ChannelType;
-        LastSupportsInteractiveApproval = context?.SupportsInteractiveApproval;
+        LastSupportsInteractiveApproval = context is not null
+            && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
         _executionsByTool[toolCall.Name] = _executionsByTool.GetValueOrDefault(toolCall.Name) + 1;
         Interlocked.Increment(ref _successfulExecutions);
         return $"[executed {toolCall.Name}]";

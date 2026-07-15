@@ -49,7 +49,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
             {
                 Audience = audience,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
-                SupportsInteractiveApproval = !autonomous,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(!autonomous),
                 ProjectDirectory = withProject ? _projectDir : null,
                 ChannelType = autonomous ? "reminder" : "signalr"
             }).Invocation;
@@ -102,7 +102,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
     }
 
     [Fact]
-    public void Unspecified_interactive_capability_preserves_legacy_unclamped_behavior()
+    public void Unavailable_interactive_capability_enforces_autonomous_clamp()
     {
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
         var ctx = TestToolExecutionContext.CreateBound(
@@ -111,11 +111,16 @@ public sealed class AutonomousZoneClampTests : IDisposable
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
-                SupportsInteractiveApproval = null,
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
                 ProjectDirectory = _projectDir,
             });
 
-        Assert.True(policy.TryResolveWritePath(Path.Join(_outsideDir, "legacy.txt"), ctx.Invocation, out _, out var error), error);
+        Assert.False(policy.TryResolveWritePath(
+            Path.Join(_outsideDir, "legacy.txt"),
+            ctx.Invocation,
+            out _,
+            out var error));
+        Assert.Contains("autonomous session", error);
     }
 
     [Fact]
@@ -180,7 +185,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
         var ctx = TestToolExecutionContext.CreateBound("reminder/none", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-            SupportsInteractiveApproval = false
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
         });
 
         Assert.False(policy.TryResolveWritePath(Path.Join(_outsideDir, "x.txt"), ctx.Invocation, out _, out _));

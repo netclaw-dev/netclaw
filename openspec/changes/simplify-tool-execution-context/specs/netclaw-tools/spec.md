@@ -31,7 +31,7 @@ Timeouts, inline output budgets, and other scalar execution limits crossing the 
 
 ### Requirement: Tool-enabled sessions require execution infrastructure
 
-A tool-enabled session SHALL have authorization, approval, audit, logging, and dispatch infrastructure available before accepting a tool batch. Infrastructure that production constructs unconditionally SHALL be a required dependency rather than a nullable feature switch.
+A tool-enabled session SHALL have authorization, approval, logging, and dispatch infrastructure available before accepting a tool batch. Infrastructure that production constructs unconditionally SHALL be a required dependency rather than a nullable feature switch. Interactive approval SHALL be represented as one required capability value: unavailable, or available with its required bridge. Tool-call and tool-result observability SHALL flow through the session's canonical `ToolCallOutput` and `ToolResultOutput` transcript path; the execution pipeline SHALL NOT require a parallel no-op audit sink.
 
 #### Scenario: Security dependency is unavailable
 
@@ -39,3 +39,17 @@ A tool-enabled session SHALL have authorization, approval, audit, logging, and d
 - **WHEN** the session attempts to enable tools
 - **THEN** session initialization or batch execution fails visibly
 - **AND** the missing dependency does not disable its check
+
+#### Scenario: Interactive approval cannot disagree with its bridge
+
+- **GIVEN** a tool invocation has no admitted interactive approval bridge
+- **WHEN** path and shell policies evaluate autonomous trust-zone restrictions
+- **THEN** the invocation is represented as non-interactive
+- **AND** no nullable support flag can bypass those restrictions
+
+#### Scenario: Production tool transcript has one owner
+
+- **GIVEN** a production tool invocation is admitted and executed or denied
+- **WHEN** the session publishes its tool-call and tool-result outputs
+- **THEN** the existing session transcript path receives those outputs
+- **AND** execution does not also depend on an always-discarded audit logger

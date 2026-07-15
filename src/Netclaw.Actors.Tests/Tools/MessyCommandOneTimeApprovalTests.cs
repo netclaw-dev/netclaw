@@ -101,7 +101,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
-            SupportsInteractiveApproval = true
+            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
         });
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>

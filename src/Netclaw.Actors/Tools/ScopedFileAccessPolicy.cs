@@ -79,7 +79,7 @@ internal sealed class ScopedFileAccessPolicy
             // blanket grant — the live approval gate is their backstop. This is the
             // single seam that covers shell (via TryResolveWritePath) and every file
             // tool at once.
-            if (context.SupportsInteractiveApproval == false)
+            if (context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
                 return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
 
             error = string.Empty;

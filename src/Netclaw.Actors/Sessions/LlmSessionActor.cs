@@ -3185,7 +3185,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                               ?? (_currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue()),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,
                 RecentFiles = _state.WorkingContext.RecentFiles,
-                SupportsInteractiveApproval = false,
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
                 SpawnChildActor = spawnChildActor,
             }, new ToolExecutionTimeout(_config.ToolExecutionTimeout), outputs);
 

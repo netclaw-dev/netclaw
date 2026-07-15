@@ -5,6 +5,26 @@
 // -----------------------------------------------------------------------
 namespace Netclaw.Tools;
 
+public abstract record InteractiveApprovalCapability
+{
+    private InteractiveApprovalCapability()
+    {
+    }
+
+    public sealed record Unavailable : InteractiveApprovalCapability;
+
+    public sealed record Available : InteractiveApprovalCapability
+    {
+        public Available(IParentApprovalBridge bridge)
+        {
+            ArgumentNullException.ThrowIfNull(bridge);
+            Bridge = bridge;
+        }
+
+        public IParentApprovalBridge Bridge { get; }
+    }
+}
+
 /// <summary>
 /// Decision returned by a parent session's approval channel in response to a
 /// tool approval request from a sub-agent.

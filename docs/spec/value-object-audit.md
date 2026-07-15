@@ -99,12 +99,12 @@ Ranked by occurrence × semantic weight.
 3. **`ToolCallId`** (wrap-with-existing) — unwrapped on
    `ToolInteractionResponse.CallId`, `ToolCallOutput.CallId`,
    `ToolResultOutput.CallId`, `ToolInteractionRequest.CallId`,
-   `ToolAuditEntry.CallId`, `SerializableChatMessage.ToolCallId`,
+   `SerializableChatMessage.ToolCallId`,
    `SerializableToolCall.CallId`, `DiscordApprovalResponse.CallId`,
    `SlackApprovalResponse.CallId`. The approval-flow lynchpin.
 4. **`ToolName`** (wrap-with-existing) — unwrapped on `ToolCallOutput.ToolName`,
-   `ToolResultOutput.ToolName`, `ToolInteractionRequest.ToolName`,
-   `ToolAuditEntry.ToolName`, `SerializableToolCall.Name`.
+   `ToolResultOutput.ToolName`, `ToolInteractionRequest.ToolName`, and
+   `SerializableToolCall.Name`.
 5. **`AgentName`** (wrap-with-new) — `SubAgentDefinition.Name`,
    `SubAgentResult.AgentName`, `SubAgentNotification.AgentName`,
    `SubAgentOutput.AgentName`, `CompletedSubAgentRun.AgentName`,

@@ -85,7 +85,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal(turnContext.Audience, batch.RunScope.Audience);
         Assert.Equal(turnContext.Boundary, batch.RunScope.Boundary);
         Assert.Equal(turnContext.ChannelType?.ToWireValue(), batch.RunScope.ChannelType);
-        Assert.Equal(turnContext.SupportsInteractiveApproval, batch.RunScope.SupportsInteractiveApproval);
+        Assert.IsType<InteractiveApprovalCapability.Unavailable>(batch.RunScope.InteractiveApproval);
         Assert.Equal(turnContext.DefaultDeliveryTarget, batch.RunScope.DefaultDeliveryTarget);
         Assert.Equal(turnContext.RequestedDeliveryTarget, batch.RunScope.RequestedDeliveryTarget);
     }
@@ -207,8 +207,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.NotNull(executor.Context);
-        Assert.False(executor.Context.SupportsInteractiveApproval);
-        Assert.Null(executor.Context.ApprovalBridge);
+        Assert.IsType<InteractiveApprovalCapability.Unavailable>(executor.Context.RunScope.InteractiveApproval);
     }
 
     [Fact]

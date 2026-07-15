@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Threading.Channels;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions;
@@ -110,8 +111,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             Audience = TrustAudience.Personal,
             InlineOutputBudget = InlineOutputBudget.Default,
             ChannelType = channelType.ToWireValue(),
-            SupportsInteractiveApproval = false,
-            ApprovalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce),
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
         }, ToolExecutionTimeout.Default);
 
@@ -124,7 +124,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Null(run.Scope.Authority.ApprovalBridge);
+        Assert.IsType<InteractiveApprovalCapability.Unavailable>(run.Scope.Authority.InteractiveApproval);
 
         childProbe.Reply(SuccessfulResult());
         Assert.True((await spawnTask).Success);
@@ -142,8 +142,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             Audience = TrustAudience.Personal,
             InlineOutputBudget = InlineOutputBudget.Default,
             ChannelType = ChannelType.Tui.ToWireValue(),
-            SupportsInteractiveApproval = true,
-            ApprovalBridge = approvalBridge,
+            InteractiveApproval = new InteractiveApprovalCapability.Available(approvalBridge),
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
         }, ToolExecutionTimeout.Default);
 
@@ -156,7 +155,9 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Same(approvalBridge, run.Scope.Authority.ApprovalBridge);
+        var available = Assert.IsType<InteractiveApprovalCapability.Available>(
+            run.Scope.Authority.InteractiveApproval);
+        Assert.Same(approvalBridge, available.Bridge);
 
         childProbe.Reply(SuccessfulResult());
         Assert.True((await spawnTask).Success);
@@ -279,6 +280,154 @@ public sealed class SubAgentSpawnerTests : TestKit
     }
 
     [Fact]
+    public async Task Initial_snapshot_cancellation_completes_stream_without_starting_child()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var spawner = CreateSpawner(new CancelledWorkingContextSnapshotProvider());
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var childSpawned = false;
+        var notifications = new List<SubAgentNotificationInfo>();
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) =>
+                {
+                    childSpawned = true;
+                    return Task.FromResult<object>(TestActor);
+                },
+                SubAgentActivitySink = notifications.Add
+            });
+
+        var result = await spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            cancellation.Token,
+            activitySink: channel.Writer);
+
+        Assert.IsType<ChildRunCompletion.Cancelled>(result.Completion);
+        Assert.False(childSpawned);
+        Assert.Empty(notifications);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Initial_snapshot_failure_completes_stream_without_starting_child()
+    {
+        var spawner = CreateSpawner(new FailedWorkingContextSnapshotProvider());
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var childSpawned = false;
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) =>
+                {
+                    childSpawned = true;
+                    return Task.FromResult<object>(TestActor);
+                }
+            });
+
+        var result = await spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            TestContext.Current.CancellationToken,
+            activitySink: channel.Writer);
+
+        var failed = Assert.IsType<ChildRunCompletion.Failed>(result.Completion);
+        Assert.Equal(SubAgentOutcomeReason.SpawnError, failed.FailureReason);
+        Assert.False(childSpawned);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Cancellation_while_waiting_for_child_returns_typed_cancellation_and_completes_stream()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var childProbe = CreateTestProbe("cancelled-child");
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var notifications = new List<SubAgentNotificationInfo>();
+        var spawner = CreateSpawner(new SequenceWorkingContextSnapshotProvider(new Queue<WorkingContextSnapshot>(
+        [
+            EmptySnapshot()
+        ])));
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
+                SubAgentActivitySink = notifications.Add
+            });
+
+        var spawn = spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            cancellation.Token,
+            activitySink: channel.Writer);
+        await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+        var result = await spawn;
+
+        Assert.IsType<ChildRunCompletion.Cancelled>(result.Completion);
+        Assert.Contains(notifications, notification => notification.IsStarted);
+        Assert.Contains(notifications, notification =>
+            !notification.IsStarted && notification.OutcomeReason == SubAgentOutcomeReason.CancelledByParent);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Final_snapshot_cancellation_returns_typed_cancellation_and_completes_stream()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var childProbe = CreateTestProbe("final-snapshot-cancelled-child");
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var spawner = CreateSpawner(new CancelOnSecondWorkingContextSnapshotProvider(cancellation));
+        var context = TestToolExecutionContext.CreateBound(
+            "console/subagent-parent",
+            "/tmp/netclaw/sessions/parent",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+            });
+
+        var spawn = spawner.SpawnAsync(
+            CreateProfile(),
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            cancellation.Token,
+            activitySink: channel.Writer);
+        await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+        childProbe.Reply(SuccessfulResult() with
+        {
+            Completion = new ChildRunCompletion.Completed(new WorkingContextDelta
+            {
+                ProjectDirectory = Path.GetTempPath()
+            })
+        });
+
+        var result = await spawn;
+
+        Assert.IsType<ChildRunCompletion.Cancelled>(result.Completion);
+        await channel.Reader.Completion.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Spawned_sub_agent_bills_its_llm_calls_to_session_metrics()
     {
         // Full-wiring regression guard for #1597: a sub-agent spawned through the real
@@ -378,6 +527,12 @@ public sealed class SubAgentSpawnerTests : TestKit
         ChangedFiles = [.. changedFiles]
     };
 
+    private static WorkingContextSnapshot EmptySnapshot() => new()
+    {
+        WorkingContext = WorkingContext.Empty,
+        Git = new GitWorkingContextInspection.Skipped()
+    };
+
     private static SubAgentProfile CreateProfile() => new()
     {
         Name = "inspector",
@@ -402,5 +557,40 @@ public sealed class SubAgentSpawnerTests : TestKit
             TrustAudience audience,
             CancellationToken cancellationToken)
             => Task.FromResult(snapshots.Dequeue());
+    }
+
+    private sealed class CancelledWorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
+    {
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken) => Task.FromCanceled<WorkingContextSnapshot>(cancellationToken);
+    }
+
+    private sealed class FailedWorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
+    {
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken) =>
+            Task.FromException<WorkingContextSnapshot>(new IOException("snapshot failed"));
+    }
+
+    private sealed class CancelOnSecondWorkingContextSnapshotProvider(CancellationTokenSource cancellation)
+        : IWorkingContextSnapshotProvider
+    {
+        private int _invocations;
+
+        public Task<WorkingContextSnapshot> CreateAsync(
+            WorkingContext context,
+            TrustAudience audience,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _invocations) == 1)
+                return Task.FromResult(EmptySnapshot());
+
+            cancellation.Cancel();
+            return Task.FromCanceled<WorkingContextSnapshot>(cancellationToken);
+        }
     }
 }

@@ -243,7 +243,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             _replyTo = Sender;
 
-            _approvalBridge = msg.Scope.Authority.ApprovalBridge;
+            _approvalBridge = msg.Scope.Authority.InteractiveApproval is InteractiveApprovalCapability.Available available
+                ? available.Bridge
+                : null;
             var scopeId = msg.Scope.ScopeId.Value;
             var subAgentAudience = msg.Scope.Authority.Audience;
             _toolExecutionContext = new ToolExecutionContext(

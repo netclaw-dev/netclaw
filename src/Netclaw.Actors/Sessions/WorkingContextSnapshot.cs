@@ -433,11 +433,11 @@ internal sealed class GitCommandRunner : IGitCommandRunner
                     standardOutput,
                     standardError);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 2)
         {
             return GitCommandResult.ExecutableNotFound();
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
         {
             return GitCommandResult.Failed(ex.Message);
         }

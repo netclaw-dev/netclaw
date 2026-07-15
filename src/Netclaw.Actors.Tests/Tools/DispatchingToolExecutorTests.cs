@@ -656,7 +656,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
@@ -717,7 +717,7 @@ public class DispatchingToolExecutorTests
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
-            SupportsInteractiveApproval = true
+            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
         });
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
@@ -774,7 +774,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
@@ -844,7 +844,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             await approvalService.RecordApprovalAsync(
@@ -926,7 +926,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var call = new FunctionCallContent(
@@ -990,7 +990,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var secondContext = TestToolExecutionContext.CreateBound("signalr/thread-2", null, new TestToolExecutionContextOptions
@@ -998,7 +998,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
@@ -1098,7 +1098,7 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "slack",
-                SupportsInteractiveApproval = true
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>

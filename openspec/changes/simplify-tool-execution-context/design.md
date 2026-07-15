@@ -41,6 +41,8 @@ The migration order is abstraction contract, dispatcher/policies, production roo
 
 `ToolRunScope` is an immutable value assembled only after audience admission. It groups the resolved audience, explicit bound/unbound session identity, channel and delivery authority, workspace/project roots, model modalities, child-spawn capability, and typed output limits. Per-call timeout remains on the invocation because metadata can select a different clamped timeout for each call. Semantic scalar values use validated value objects with explicit `.Value` access and no implicit primitive conversions.
 
+Interactive approval is one required capability union: unavailable, or available with a required parent bridge. The scope does not carry a nullable support flag alongside a nullable bridge, so policy enforcement cannot observe “interactive” while the request path is absent.
+
 `ToolInvocationContext` will be created afresh for each invocation from the run scope and normalized tool arguments. It is an immutable description of the call: run authority, call identity, validated timeout, resolved working directory, and tool-visible services. Context-free overloads and `ToolExecutionContext.Empty` will be removed; all production call sites migrate in the same staged series.
 
 Mutable data is not stored as replaceable context properties. Tool-produced attachments, model inputs, and activity flow into a separate per-call append-only `ToolExecutionOutputs` sink. Approval grants, match results, and retry state remain owned by the pipeline in a dedicated `ToolApprovalAttempt`; tools receive only the `ToolInvocationContext` base contract and cannot access approval state.
@@ -49,7 +51,9 @@ Mutable data is not stored as replaceable context properties. Tool-produced atta
 
 ### Composed session execution pipeline
 
-The session actor will invoke a composed pipeline with required constructor dependencies for authorization, approval, audit, logging, and dispatch. A batch command carries the run scope and calls instead of threading the current broad parameter list through helpers. Dependencies that are always constructed in production are non-nullable and required.
+The session actor invokes a composed pipeline with required constructor dependencies for execution and logging. A batch command carries the run scope and calls instead of threading the current broad parameter list through helpers. Authorization and approval authority travel in required typed scope values. Dependencies that are always constructed in production are non-nullable and required.
+
+`IToolAuditLogger` is removed rather than adapted. Production registered only `NullToolAuditLogger`, while the session already emits `ToolCallOutput` and `ToolResultOutput` through `SessionLogActor`, the shipped canonical session transcript path. Keeping a second always-discarded sink would misrepresent production observability, duplicate ownership, and preserve fallback plumbing. This removal changes no production output: tool calls, results, denials, approval outcomes, persisted `ToolCallMeta`, and the existing best-effort `session.log` behavior remain unchanged.
 
 Before making any pipeline dependency required, the implementation will prove from the composition root whether every intended production path constructs it unconditionally. Background dispatch is not assumed to satisfy that test merely because it ships in the executable: if an intended production mode executes without a manager, that state will be represented explicitly and retain its current synchronous behavior. Test fixtures and direct unit invocation do not make a state production-reachable and will use explicit test-only construction instead of weakening the production contract. This refactor does not change non-shell background handling, job-creation failure handling, or any model-visible result. Security infrastructure already proven unconditional remains required and fail-closed.
 
@@ -63,7 +67,7 @@ These local actor messages are serialization-safe framework types but are not ex
 
 ### Async Git inspection behind eligibility gates
 
-`WorkingContextSnapshotProvider` first checks audience and project-directory eligibility. Public turns never invoke Git inspection. Missing project directories yield ordinary non-Git working context. For eligible directories, `IGitWorkingContextInspector.InspectAsync` returns an explicit result: available snapshot, not a repository, or unavailable with a sanitized reason.
+`WorkingContextSnapshotProvider` first checks audience and project-directory eligibility. Public turns never invoke Git inspection. Missing project directories yield ordinary non-Git working context. For eligible directories, `IGitWorkingContextInspector.InspectAsync` returns an explicit result: available snapshot, not a repository, Git executable not found, or unavailable with a sanitized reason. A missing executable is not conflated with repository absence and renders a deterministic diagnostic.
 
 The inspector owns process execution and timeouts; composition owns eligibility; rendering is pure. Session actors correlate async inspection continuations with the active turn generation and discard stale results. Subagent spawn and completion await bounded inspections at their natural async boundaries.
 
@@ -87,4 +91,4 @@ Each stage updates its tests and specs and lands only after CI, review, and post
 
 ## Failure / Recovery
 
-Invalid scope construction and missing infrastructure already required by the production composition root fail loudly before dispatch. Existing background and metadata behavior is preserved exactly. Git process failures retain their current sanitized unavailable result for eligible internal audiences. A failed or cancelled child retains its current no-merge behavior. No new durable schema is introduced, so rollback consists of reverting the relevant stage without data migration.
+Invalid scope construction and missing infrastructure already required by the production composition root fail loudly before dispatch. Existing background and metadata behavior is preserved exactly. Git process failures produce an explicit sanitized unavailable result for eligible internal audiences; a missing Git executable has its own stable typed outcome. A failed or cancelled child retains its current no-merge behavior. No new durable schema is introduced, so rollback consists of reverting the relevant stage without data migration.

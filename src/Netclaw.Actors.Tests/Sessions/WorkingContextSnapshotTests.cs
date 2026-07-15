@@ -318,6 +318,21 @@ public class WorkingContextSnapshotTests
     }
 
     [Fact]
+    public async Task Non_missing_executable_start_failure_remains_unavailable()
+    {
+        var runner = new GitCommandRunner(new FailingGitProcessFactory(
+            new System.ComponentModel.Win32Exception(5, "access denied")));
+        var inspector = new GitWorkingContextInspector(runner, TimeProvider.System);
+
+        var result = await inspector.InspectAsync(
+            "/repo",
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(result);
+        Assert.Equal("access denied", unavailable.Reason);
+    }
+
+    [Fact]
     public async Task Unavailable_reason_is_single_line_and_bounded_before_rendering()
     {
         var reason = new string('x', 300) + "\ncredential-bearing second line";
@@ -420,6 +435,11 @@ public class WorkingContextSnapshotTests
     {
         public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments) =>
             throw new System.ComponentModel.Win32Exception(2, "platform-specific message");
+    }
+
+    private sealed class FailingGitProcessFactory(Exception failure) : IGitProcessFactory
+    {
+        public IRunningGitProcess Start(string workingDirectory, IReadOnlyList<string> arguments) => throw failure;
     }
 
     private sealed class ControlledGitProcess : IRunningGitProcess

@@ -9,6 +9,10 @@ namespace Netclaw.Tools;
 
 internal static class TestToolExecutionContext
 {
+    public static InteractiveApprovalCapability InteractiveApproval(bool available) => available
+        ? new InteractiveApprovalCapability.Available(new TestParentApprovalBridge())
+        : new InteractiveApprovalCapability.Unavailable();
+
     public static ToolExecutionContext CreateUnbound()
         => CreateUnbound(new TestToolExecutionContextOptions
         {
@@ -27,7 +31,7 @@ internal static class TestToolExecutionContext
             Session = new ToolSessionScope.Bound(sessionId, sessionDirectory),
             Audience = audience,
             InlineOutputBudget = InlineOutputBudget.Default,
-            SupportsInteractiveApproval = true,
+            InteractiveApproval = new InteractiveApprovalCapability.Available(new TestParentApprovalBridge()),
         }, ToolExecutionTimeout.Default);
 
     public static ToolExecutionContext CreateBound(
@@ -50,10 +54,9 @@ internal static class TestToolExecutionContext
             ChannelType = options.ChannelType,
             DefaultDeliveryTarget = options.DefaultDeliveryTarget,
             RequestedDeliveryTarget = options.RequestedDeliveryTarget,
-            SupportsInteractiveApproval = options.SupportsInteractiveApproval,
+            InteractiveApproval = options.InteractiveApproval,
             ModelInputModalities = options.ModelInputModalities,
             SpawnChildActor = options.SpawnChildActor,
-            ApprovalBridge = options.ApprovalBridge,
             ProjectDirectory = options.ProjectDirectory,
             InheritedCwd = options.InheritedCwd,
             RecentFiles = options.RecentFiles,
@@ -74,14 +77,30 @@ internal sealed record TestToolExecutionContextOptions
     public string? ChannelType { get; init; }
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
     public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
-    public bool? SupportsInteractiveApproval { get; init; } = true;
+    public InteractiveApprovalCapability InteractiveApproval { get; init; }
+        = new InteractiveApprovalCapability.Available(new TestParentApprovalBridge());
     public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; init; }
-    public IParentApprovalBridge? ApprovalBridge { get; init; }
     public string? ProjectDirectory { get; init; }
     public string? InheritedCwd { get; init; }
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
     public ToolExecutionTimeout ExecutionTimeout { get; init; } = ToolExecutionTimeout.Default;
     public string? Cwd { get; init; }
     public Action<SubAgentNotificationInfo>? SubAgentActivitySink { get; init; }
+}
+
+internal sealed class TestParentApprovalBridge : IParentApprovalBridge
+{
+    public Task<ParentApprovalDecision> RequestApprovalAsync(
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
+        bool isMessy,
+        CancellationToken ct) =>
+        throw new InvalidOperationException("This test context does not service parent approval requests.");
 }

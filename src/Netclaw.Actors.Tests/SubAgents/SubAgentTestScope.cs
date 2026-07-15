@@ -37,11 +37,12 @@ internal static class SubAgentTestScope
                 Audience = audience,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 ModelInputModalities = modelInputModalities,
-                ApprovalBridge = approvalBridge,
+                InteractiveApproval = approvalBridge is null
+                    ? new InteractiveApprovalCapability.Unavailable()
+                    : new InteractiveApprovalCapability.Available(approvalBridge),
                 ProjectDirectory = projectDirectory,
                 InheritedCwd = inheritedCwd,
-                RecentFiles = recentFiles ?? [],
-                SupportsInteractiveApproval = approvalBridge is not null
+                RecentFiles = recentFiles ?? []
             },
             InitialWorkingSnapshot = new WorkingContextSnapshot
             {
