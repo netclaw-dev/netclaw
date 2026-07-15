@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhookRouteCatalogTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -77,6 +77,26 @@ public sealed class WebhookRouteCatalogTests : IDisposable
         var sut = CreateCatalog();
 
         Assert.False(sut.TryGetRoute("future-route", out _));
+        Assert.True(sut.TryGetRoute("valid-route", out _));
+        Assert.Contains(_sink.Alerts, alert => alert.Category == AlertType.WebhookRouteInvalid);
+    }
+
+    [Fact]
+    public void Undefined_numeric_verifier_invalidates_only_that_route()
+    {
+        WriteRouteFile("valid-route", CreateRoute());
+        WriteRouteText("numeric-route", """
+{
+  "Prompt": "process invalid numeric verifier",
+  "Verification": {
+    "Kind": 99,
+    "Secret": "secret"
+  }
+}
+""");
+        var sut = CreateCatalog();
+
+        Assert.False(sut.TryGetRoute("numeric-route", out _));
         Assert.True(sut.TryGetRoute("valid-route", out _));
         Assert.Contains(_sink.Alerts, alert => alert.Category == AlertType.WebhookRouteInvalid);
     }

@@ -1,8 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhookRouteStore.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -99,12 +101,39 @@ public sealed class WebhookRouteStore
     {
         lock (_sync)
         {
-            Directory.CreateDirectory(_paths.WebhooksDirectory);
-
             var filePath = GetPath(routeName);
-            var tempPath = $"{filePath}.tmp";
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(definition, JsonOptions));
-            File.Move(tempPath, filePath, overwrite: true);
+            using var routeLock = AcquireRouteLock(filePath);
+            Write(filePath, definition);
+        }
+    }
+
+    /// <summary>
+    /// Reads and conditionally replaces one route while holding a route-scoped interprocess lock.
+    /// Returning a null definition leaves the file unchanged.
+    /// </summary>
+    public TResult Update<TResult>(
+        string routeName,
+        Func<WebhookRouteConfig?, (WebhookRouteConfig? Definition, TResult Result)> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        lock (_sync)
+        {
+            var filePath = GetPath(routeName);
+            using var routeLock = AcquireRouteLock(filePath);
+            WebhookRouteConfig? existing = null;
+            if (File.Exists(filePath))
+            {
+                existing = TryRead(filePath);
+                if (existing is null)
+                    throw new InvalidDataException($"Existing webhook route '{routeName}' could not be parsed.");
+            }
+
+            var outcome = update(existing);
+            if (outcome.Definition is not null)
+                Write(filePath, outcome.Definition);
+
+            return outcome.Result;
         }
     }
 
@@ -113,6 +142,7 @@ public sealed class WebhookRouteStore
         lock (_sync)
         {
             var filePath = GetPath(routeName);
+            using var routeLock = AcquireRouteLock(filePath);
             if (!File.Exists(filePath))
                 return false;
 
@@ -130,6 +160,68 @@ public sealed class WebhookRouteStore
         catch
         {
             return null;
+        }
+    }
+
+    private void Write(string filePath, WebhookRouteConfig definition)
+    {
+        Directory.CreateDirectory(_paths.WebhooksDirectory);
+        var tempPath = $"{filePath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(definition, JsonOptions));
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    private static IDisposable AcquireRouteLock(string filePath)
+    {
+        var canonicalPath = Path.GetFullPath(filePath);
+        var lockId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalPath)));
+        var mutex = new Mutex(initiallyOwned: false, $"netclaw-webhook-route-{lockId}");
+
+        try
+        {
+            try
+            {
+                mutex.WaitOne();
+            }
+            catch (AbandonedMutexException)
+            {
+                // The abandoning process exited while holding the route lock. This process now owns it,
+                // and the route's atomic file replacement guarantees the existing file is still complete.
+                DeleteAbandonedTempFiles(canonicalPath);
+            }
+
+            return new RouteLock(mutex);
+        }
+        catch
+        {
+            mutex.Dispose();
+            throw;
+        }
+    }
+
+    private static void DeleteAbandonedTempFiles(string filePath)
+    {
+        var directory = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException("Webhook route path has no parent directory.");
+        var fileName = Path.GetFileName(filePath);
+        foreach (var tempPath in Directory.EnumerateFiles(directory, $"{fileName}.*.tmp"))
+            File.Delete(tempPath);
+    }
+
+    private sealed class RouteLock(Mutex mutex) : IDisposable
+    {
+        public void Dispose()
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
         }
     }
 

@@ -940,13 +940,13 @@
         "TimestampField": {
           "type": ["string", "null"],
           "minLength": 1,
-          "pattern": "^[^,=\\s](?:[^,=]*[^,=\\s])?$",
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
           "default": "t"
         },
         "SignatureField": {
           "type": ["string", "null"],
           "minLength": 1,
-          "pattern": "^[^,=\\s](?:[^,=]*[^,=\\s])?$",
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
           "default": "v1"
         },
         "SignedPayloadSeparator": {

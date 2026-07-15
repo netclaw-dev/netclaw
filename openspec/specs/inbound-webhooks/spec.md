@@ -245,8 +245,8 @@ signature field, signed-payload separator, and tolerance settings as optional
 configuration for timestamped HMAC routes. Body-only HMAC SHALL remain the
 default verification kind, and the system SHALL NOT infer or fall back between
 verification kinds. Effective timestamp and signature field names SHALL be
-distinct, SHALL NOT have leading or trailing whitespace, and SHALL NOT contain
-the structured-header delimiters `,` or `=`.
+distinct HTTP tokens. Undefined numeric verifier-kind or HMAC-algorithm values
+SHALL be rejected during route validation before request handling.
 
 #### Scenario: Existing route is updated without timestamp options
 
@@ -257,12 +257,28 @@ the structured-header delimiters `,` or `=`.
 - **THEN** the stored verifier kind and settings remain unchanged
 - **AND** timestamped-HMAC properties are not introduced into the route file
 
+#### Scenario: Concurrent tool updates are serialized
+
+- **GIVEN** two authorized `set_webhook` invocations concurrently update the
+  same existing route
+- **WHEN** each invocation reads, patches, validates, and saves the definition
+- **THEN** those operations execute atomically under the route store lock
+- **AND** neither invocation overwrites fields retained from the other's update
+
 #### Scenario: Unrepresentable structured-header fields are rejected
 
-- **GIVEN** a timestamped-HMAC route has equal timestamp and signature fields,
-  surrounding field-name whitespace, or a field name containing `,` or `=`
+- **GIVEN** a timestamped-HMAC route has equal timestamp and signature fields or
+  a field name containing characters outside the HTTP token grammar
 - **WHEN** the operator attempts to persist the route
 - **THEN** validation rejects the configuration before persistence
+
+#### Scenario: Undefined numeric verification enum is rejected
+
+- **GIVEN** a route contains a numeric verifier-kind or HMAC-algorithm value not
+  defined by the running daemon
+- **WHEN** the route catalog validates that definition
+- **THEN** the route is invalidated before request handling
+- **AND** other valid routes remain available
 
 #### Scenario: New timestamped route uses effective defaults
 

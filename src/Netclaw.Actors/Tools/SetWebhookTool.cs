@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SetWebhookTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -70,20 +70,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");
 
-        WebhookRouteConfig? existing = null;
-        if (_store.TryGet(routeName, out var stored))
-        {
-            if (stored.Definition is null)
-                return Task.FromResult($"Error: Existing webhook route '{routeName}' could not be parsed.");
-
-            existing = stored.Definition;
-            if (existing.Audience > context.Audience)
-            {
-                return Task.FromResult(
-                    $"Error: Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({context.Audience.ToWireValue()}).");
-            }
-        }
-
         if (string.IsNullOrWhiteSpace(args.Prompt))
             return Task.FromResult("Error: 'prompt' is required.");
         if (string.IsNullOrWhiteSpace(args.Secret))
@@ -101,14 +87,40 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             return Task.FromResult("Error: Timestamp signature settings require 'verificationKind' to be 'HmacTimestamped'.");
         }
 
+        try
+        {
+            var result = _store.Update(
+                routeName,
+                existing => BuildUpdate(routeName, args, context.Audience, verificationKind, existing));
+            return Task.FromResult(result);
+        }
+        catch (InvalidDataException ex)
+        {
+            return Task.FromResult($"Error: {ex.Message}");
+        }
+    }
+
+    private static (WebhookRouteConfig? Definition, string Result) BuildUpdate(
+        string routeName,
+        Params args,
+        TrustAudience creatorAudience,
+        WebhookVerifierKind verificationKind,
+        WebhookRouteConfig? existing)
+    {
+        if (existing is not null && existing.Audience > creatorAudience)
+        {
+            return (null,
+                $"Error: Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({creatorAudience.ToWireValue()}).");
+        }
+
         TrustAudience audience;
         if (string.IsNullOrWhiteSpace(args.Audience) && existing is not null)
         {
             audience = existing.Audience;
         }
-        else if (!TryResolveAudience(args.Audience, context.Audience, out audience, out var audienceError))
+        else if (!TryResolveAudience(args.Audience, creatorAudience, out audience, out var audienceError))
         {
-            return Task.FromResult(audienceError!);
+            return (null, audienceError!);
         }
 
         var existingVerification = existing?.Verification;
@@ -173,10 +185,10 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 
         var validationErrors = WebhookRouteValidator.Validate(routeName, definition);
         if (validationErrors.Count > 0)
-            return Task.FromResult($"Error: {validationErrors[0]}");
+            return (null, $"Error: {validationErrors[0]}");
 
-        _store.Save(routeName, definition);
-        return Task.FromResult($"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
+        return (definition,
+            $"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
     }
 
     /// <summary>

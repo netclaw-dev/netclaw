@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhookRouteStoreTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -192,6 +192,78 @@ public sealed class WebhookRouteStoreTests : IDisposable
         Assert.NotEmpty(errors);
     }
 
+    [Theory]
+    [InlineData("time stamp")]
+    [InlineData("time\nstamp")]
+    [InlineData("t\0stamp")]
+    [InlineData("téstamp")]
+    public void Timestamped_route_rejects_non_token_structured_header_fields(string timestampField)
+    {
+        var route = CreateValidRoute();
+        route.Verification.Kind = WebhookVerifierKind.HmacTimestamped;
+        route.Verification.TimestampField = timestampField;
+
+        var errors = WebhookRouteValidator.Validate("stripe", route);
+
+        Assert.Contains(errors, error => error.Contains("HTTP token", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Route_rejects_undefined_numeric_verification_enums(bool invalidKind)
+    {
+        var route = CreateValidRoute();
+        if (invalidKind)
+            route.Verification.Kind = (WebhookVerifierKind)99;
+        else
+            route.Verification.HmacAlgorithm = (WebhookHmacAlgorithm)99;
+
+        var errors = WebhookRouteValidator.Validate("invalid-enum", route);
+
+        Assert.Contains(errors, error => error.Contains("not supported", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_serializes_read_modify_write_operations_across_store_instances()
+    {
+        var firstStore = new WebhookRouteStore(_paths);
+        var secondStore = new WebhookRouteStore(_paths);
+        firstStore.Save("concurrent-route", CreateValidRoute());
+        using var firstEntered = new ManualResetEventSlim();
+        using var secondStarted = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var first = Task.Run(() => firstStore.Update("concurrent-route", existing =>
+        {
+            firstEntered.Set();
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            existing!.RateLimitPerMinute = 12;
+            return (existing, true);
+        }), cancellationToken);
+        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+
+        var second = Task.Run(() =>
+        {
+            secondStarted.Set();
+            return secondStore.Update("concurrent-route", existing =>
+            {
+                existing!.MaxBodyBytes = 2048;
+                return (existing, true);
+            });
+        }, cancellationToken);
+
+        Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+        releaseFirst.Set();
+        await Task.WhenAll(first, second);
+
+        Assert.True(firstStore.TryGet("concurrent-route", out var saved));
+        Assert.Equal(12, saved.Definition!.RateLimitPerMinute);
+        Assert.Equal(2048, saved.Definition.MaxBodyBytes);
+    }
+
     [Fact]
     public void Embedded_config_and_route_schemas_share_timestamped_verification_contract()
     {
@@ -235,6 +307,15 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         Assert.True(WebhookRouteValidator.TryParseVerifierKind(value, out var actual));
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData("2")]
+    public void TryParseVerifierKind_rejects_numeric_aliases(string value)
+    {
+        Assert.False(WebhookRouteValidator.TryParseVerifierKind(value, out _));
     }
 
     private static WebhookRouteConfig CreateValidRoute()

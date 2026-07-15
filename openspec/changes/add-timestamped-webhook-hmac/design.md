@@ -33,9 +33,11 @@ Compatibility includes existing files, CLI/tool callers, and downgrade behavior.
 
 5. **Keep configuration generic at the user surface.** The CLI adds `hmac-timestamped` plus advanced optional flags. Providers still specify `SignatureHeaderName` because Stripe and TextForge use different names. Provider presets are deferred until repeated configuration demonstrates a need.
 
-6. **Preserve inactive and omitted fields.** Validation applies timestamp constraints only when `HmacTimestamped` is selected. Switching kinds does not erase dormant settings, and old kinds do not acquire new behavior. CLI and `set_webhook` updates retain optional route and verification values that the caller omits; updating an existing route also requires authority for its current audience.
+6. **Preserve inactive and omitted fields.** Validation applies timestamp constraints only when `HmacTimestamped` is selected. Switching kinds does not erase dormant settings, and old kinds do not acquire new behavior. CLI and `set_webhook` updates retain optional route and verification values that the caller omits; `set_webhook` performs its read, audience authorization, patch, validation, and write under one store lock.
 
-7. **Reject unrepresentable structured-header field names before persistence.** Effective timestamp and signature field names must be distinct, have no leading or trailing whitespace, and contain neither `,` nor `=`. These constraints match the verifier's comma-separated `key=value` grammar and prevent routes that could never authenticate.
+7. **Reject unrepresentable structured-header field names before persistence.** Effective timestamp and signature field names must be distinct HTTP tokens. This excludes whitespace, delimiters, non-ASCII characters, and controls that cannot form a valid structured-header key.
+
+8. **Reject undefined numeric enum values during shared validation.** Route deserialization retains its prior ability to read numeric enum values for compatibility, but values outside the defined verifier-kind and HMAC-algorithm sets fail route validation before request handling.
 
 No actor or persistence boundary changes. Verification still returns the existing in-memory result consumed by the endpoint before any session actor is created.
 

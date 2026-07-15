@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhooksCommandTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -149,6 +149,21 @@ public sealed class WebhooksCommandTests : IDisposable
 
         Assert.Equal(0, result);
         Assert.True(File.Exists(Path.Combine(_paths.WebhooksDirectory, "new-route.json")));
+    }
+
+    [Fact]
+    public async Task Set_WriteFailure_DoesNotReportSuccess()
+    {
+        Directory.CreateDirectory(Path.Combine(_paths.WebhooksDirectory, "blocked-route.json"));
+        using var output = new StringWriter();
+
+        await Assert.ThrowsAnyAsync<IOException>(() => WebhooksCommand.RunAsync([
+            "webhooks", "set", "blocked-route",
+            "--prompt", "Test prompt",
+            "--secret", "test-secret"
+        ], _paths, output));
+
+        Assert.DoesNotContain("[OK]", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -483,6 +498,8 @@ public sealed class WebhooksCommandTests : IDisposable
     [InlineData("v1", "v1")]
     [InlineData(" timestamp", "v1")]
     [InlineData("time=stamp", "v1")]
+    [InlineData("time stamp", "v1")]
+    [InlineData("téstamp", "v1")]
     public async Task Set_Unusable_timestamp_fields_fail_without_persisting(
         string timestampField,
         string signatureField)

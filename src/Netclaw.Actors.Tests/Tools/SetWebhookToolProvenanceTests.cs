@@ -230,6 +230,8 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [InlineData("v1")]
     [InlineData(" timestamp")]
     [InlineData("time=stamp")]
+    [InlineData("time\nstamp")]
+    [InlineData("téstamp")]
     public async Task Unusable_timestamp_field_names_are_rejected_before_save(string timestampField)
     {
         var tool = new SetWebhookTool(_store);

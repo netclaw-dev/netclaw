@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhookRouteValidator.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -39,6 +39,12 @@ public static class WebhookRouteValidator
 
         if (route.Verification.Secret.IsNullOrEmpty())
             errors.Add("Verification secret is required.");
+
+        if (!Enum.IsDefined(route.Verification.Kind))
+            errors.Add($"Verification.Kind value '{(int)route.Verification.Kind}' is not supported.");
+
+        if (!Enum.IsDefined(route.Verification.HmacAlgorithm))
+            errors.Add($"Verification.HmacAlgorithm value '{(int)route.Verification.HmacAlgorithm}' is not supported.");
 
         if (route.Verification.Kind == WebhookVerifierKind.HmacTimestamped)
         {
@@ -129,11 +135,14 @@ public static class WebhookRouteValidator
             return;
         }
 
-        if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
-            errors.Add($"Verification.{propertyName} cannot have leading or trailing whitespace.");
-
-        if (value.Contains(',', StringComparison.Ordinal)
-            || value.Contains('=', StringComparison.Ordinal))
-            errors.Add($"Verification.{propertyName} cannot contain ',' or '='.");
+        if (!value.All(IsHttpTokenCharacter))
+            errors.Add($"Verification.{propertyName} must contain only HTTP token characters.");
     }
+
+    private static bool IsHttpTokenCharacter(char value)
+        => value is >= '0' and <= '9'
+            or >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-'
+            or '.' or '^' or '_' or '`' or '|' or '~';
 }
