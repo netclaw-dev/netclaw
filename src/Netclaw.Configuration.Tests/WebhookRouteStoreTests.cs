@@ -225,43 +225,100 @@ public sealed class WebhookRouteStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_serializes_read_modify_write_operations_across_store_instances()
+    public async Task Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases()
     {
         var firstStore = new WebhookRouteStore(_paths);
-        var secondStore = new WebhookRouteStore(_paths);
+        string? aliasPath = null;
+        NetclawPaths secondPaths = _paths;
+        if (!OperatingSystem.IsWindows())
+        {
+            aliasPath = $"{_dir.Path}-alias";
+            Directory.CreateSymbolicLink(aliasPath, _dir.Path);
+            secondPaths = new NetclawPaths(aliasPath);
+        }
+
+        var secondStore = new WebhookRouteStore(secondPaths);
         firstStore.Save("concurrent-route", CreateValidRoute());
         using var firstEntered = new ManualResetEventSlim();
         using var secondStarted = new ManualResetEventSlim();
         using var releaseFirst = new ManualResetEventSlim();
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var first = Task.Run(() => firstStore.Update("concurrent-route", existing =>
+        try
         {
-            firstEntered.Set();
-            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-            Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-            existing!.RateLimitPerMinute = 12;
-            return (existing, true);
-        }), cancellationToken);
-        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-
-        var second = Task.Run(() =>
-        {
-            secondStarted.Set();
-            return secondStore.Update("concurrent-route", existing =>
+            var first = Task.Run(() => firstStore.Update("concurrent-route", cancellationToken, existing =>
             {
-                existing!.MaxBodyBytes = 2048;
+                firstEntered.Set();
+                Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+                existing!.RateLimitPerMinute = 12;
                 return (existing, true);
-            });
-        }, cancellationToken);
+            }), cancellationToken);
+            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
 
-        Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-        releaseFirst.Set();
-        await Task.WhenAll(first, second);
+            var second = Task.Run(() =>
+            {
+                secondStarted.Set();
+                return secondStore.Update("concurrent-route", cancellationToken, existing =>
+                {
+                    existing!.MaxBodyBytes = 2048;
+                    return (existing, true);
+                });
+            }, cancellationToken);
 
-        Assert.True(firstStore.TryGet("concurrent-route", out var saved));
-        Assert.Equal(12, saved.Definition!.RateLimitPerMinute);
-        Assert.Equal(2048, saved.Definition.MaxBodyBytes);
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            releaseFirst.Set();
+            await Task.WhenAll(first, second);
+
+            Assert.True(firstStore.TryGet("concurrent-route", out var saved));
+            Assert.Equal(12, saved.Definition!.RateLimitPerMinute);
+            Assert.Equal(2048, saved.Definition.MaxBodyBytes);
+        }
+        finally
+        {
+            releaseFirst.Set();
+            if (aliasPath is not null)
+                Directory.Delete(aliasPath);
+        }
+    }
+
+    [Fact]
+    public async Task Update_lock_wait_honors_cancellation()
+    {
+        var firstStore = new WebhookRouteStore(_paths);
+        var secondStore = new WebhookRouteStore(_paths);
+        firstStore.Save("cancelled-update", CreateValidRoute());
+        using var firstEntered = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        using var cancellation = new CancellationTokenSource();
+        var testCancellation = TestContext.Current.CancellationToken;
+
+        var first = Task.Run(() => firstStore.Update(
+            "cancelled-update",
+            testCancellation,
+            existing =>
+            {
+                firstEntered.Set();
+                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), testCancellation));
+                return (existing, true);
+            }), testCancellation);
+        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), testCancellation));
+
+        var second = Task.Run(() => secondStore.Update(
+            "cancelled-update",
+            cancellation.Token,
+            existing => (existing, true)), testCancellation);
+        cancellation.Cancel();
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+        }
+        finally
+        {
+            releaseFirst.Set();
+            await first;
+        }
     }
 
     [Fact]
@@ -269,14 +326,14 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         using var configSchema = LoadEmbeddedSchema("netclaw-config.v1.schema.json");
         using var routeSchema = LoadEmbeddedSchema("webhook-route.v1.schema.json");
-        var configVerification = configSchema.RootElement
+        var configVerificationSchema = configSchema.RootElement
             .GetProperty("$defs")
-            .GetProperty("WebhookVerification")
-            .GetProperty("properties");
-        var routeVerification = routeSchema.RootElement
+            .GetProperty("WebhookVerification");
+        var routeVerificationSchema = routeSchema.RootElement
             .GetProperty("properties")
-            .GetProperty("Verification")
-            .GetProperty("properties");
+            .GetProperty("Verification");
+        var configVerification = configVerificationSchema.GetProperty("properties");
+        var routeVerification = routeVerificationSchema.GetProperty("properties");
 
         foreach (var propertyName in new[]
                  {
@@ -293,6 +350,10 @@ public sealed class WebhookRouteStoreTests : IDisposable
                 JsonSerializer.Serialize(routeProperty),
                 JsonSerializer.Serialize(configProperty));
         }
+
+        Assert.Equal(
+            JsonSerializer.Serialize(routeVerificationSchema.GetProperty("allOf")),
+            JsonSerializer.Serialize(configVerificationSchema.GetProperty("allOf")));
     }
 
     [Theory]

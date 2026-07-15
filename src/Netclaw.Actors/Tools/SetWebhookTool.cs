@@ -91,10 +91,15 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         {
             var result = _store.Update(
                 routeName,
+                ct,
                 existing => BuildUpdate(routeName, args, context.Audience, verificationKind, existing));
             return Task.FromResult(result);
         }
         catch (InvalidDataException ex)
+        {
+            return Task.FromResult($"Error: {ex.Message}");
+        }
+        catch (TimeoutException ex)
         {
             return Task.FromResult($"Error: {ex.Message}");
         }

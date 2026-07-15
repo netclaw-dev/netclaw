@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Schema;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Webhooks;
 using Netclaw.Configuration;
@@ -537,6 +539,21 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Set_MalformedExistingRoute_ReturnsOneWithoutOverwriting()
+    {
+        WriteRouteText("malformed-route", "{");
+
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "malformed-route",
+            "--prompt", "updated prompt",
+            "--secret", "updated-secret"
+        ], _paths);
+
+        Assert.Equal(1, result);
+        Assert.Equal("{", File.ReadAllText(Path.Combine(_paths.WebhooksDirectory, "malformed-route.json")));
+    }
+
+    [Fact]
     public async Task Show_Json_adds_timestamp_fields_only_for_timestamped_kind()
     {
         CreateValidRoute("legacy-route");
@@ -609,6 +626,52 @@ public sealed class WebhooksCommandTests : IDisposable
 
         var result = await WebhooksCommand.RunAsync(["webhooks", "validate", "valid-route"], _paths);
         Assert.Equal(0, result);
+    }
+
+    [Fact]
+    public async Task Validate_TimestampedRoute_UsesDocumentedKindSpelling()
+    {
+        CreateValidRoute("timestamped-route");
+        var route = ReadRoute("timestamped-route");
+        route.Verification.Kind = WebhookVerifierKind.HmacTimestamped;
+        new WebhookRouteStore(_paths).Save("timestamped-route", route);
+        using var output = new StringWriter();
+
+        var result = await WebhooksCommand.RunAsync(
+            ["webhooks", "validate", "timestamped-route"],
+            _paths,
+            output);
+
+        Assert.Equal(0, result);
+        Assert.Contains("Verification: hmac-timestamped", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Hmac", 0, "not valid", true)]
+    [InlineData("HmacTimestamped", 0, "t", false)]
+    [InlineData("HmacTimestamped", 300, "not valid", false)]
+    [InlineData("HmacTimestamped", 300, "t", true)]
+    public void RouteSchema_applies_timestamp_constraints_only_to_timestamped_kind(
+        string kind,
+        int toleranceSeconds,
+        string timestampField,
+        bool expectedValid)
+    {
+        var schema = JsonSchema.FromText(LoadRouteSchema());
+        var route = new JsonObject
+        {
+            ["Prompt"] = "process delivery",
+            ["Verification"] = new JsonObject
+            {
+                ["Kind"] = kind,
+                ["ToleranceSeconds"] = toleranceSeconds,
+                ["TimestampField"] = timestampField
+            }
+        };
+
+        var evaluation = schema.Evaluate(route);
+
+        Assert.Equal(expectedValid, evaluation.IsValid);
     }
 
     [Fact]
@@ -696,6 +759,15 @@ public sealed class WebhooksCommandTests : IDisposable
     private void WriteRouteText(string routeName, string text)
     {
         File.WriteAllText(Path.Combine(_paths.WebhooksDirectory, $"{routeName}.json"), text);
+    }
+
+    private static string LoadRouteSchema()
+    {
+        using var stream = typeof(EmbeddedSchemaLoader).Assembly.GetManifestResourceStream(
+            "Netclaw.Configuration.Schemas.webhook-route.v1.schema.json");
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream!);
+        return reader.ReadToEnd();
     }
 
     private sealed class RouteListItem

@@ -933,20 +933,14 @@
         },
         "ToleranceSeconds": {
           "type": ["integer", "null"],
-          "minimum": 1,
-          "maximum": 3600,
           "default": 300
         },
         "TimestampField": {
           "type": ["string", "null"],
-          "minLength": 1,
-          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
           "default": "t"
         },
         "SignatureField": {
           "type": ["string", "null"],
-          "minLength": 1,
-          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
           "default": "v1"
         },
         "SignedPayloadSeparator": {
@@ -954,6 +948,35 @@
           "default": "."
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "Kind": { "const": "HmacTimestamped" }
+            },
+            "required": ["Kind"]
+          },
+          "then": {
+            "properties": {
+              "ToleranceSeconds": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "maximum": 3600
+              },
+              "TimestampField": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+              },
+              "SignatureField": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "WebhookRoute": {

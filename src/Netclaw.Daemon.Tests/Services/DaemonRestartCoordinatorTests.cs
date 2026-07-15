@@ -72,14 +72,12 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
     {
         var time = new FakeTimeProvider();
         var (coordinator, drain) = CreateCoordinator(
-            ["slack/C123.1", "slack/C123.2"],
+            ["slack/C123.2"],
             timedOutSessionIds: ["slack/C123.2"],
             timeProvider: time);
 
         var restart = coordinator.RequestConfigRestartAsync(CancellationToken.None);
         await drain.AllRequestsObserved;
-        drain.AcknowledgeAll();
-        await drain.AllAcknowledgementsSent;
         time.Advance(DrainTimeout);
         await restart;
 
@@ -133,10 +131,10 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task SessionDrainHelper_queries_manager_drains_sessions_and_reports_timeouts()
+    public async Task SessionDrainHelper_reports_deadline_timeouts()
     {
         var time = new FakeTimeProvider();
-        var activeIds = new[] { "slack/drain-ok", "slack/drain-timeout" };
+        var activeIds = new[] { "slack/drain-timeout" };
         var timedOut = new[] { "slack/drain-timeout" };
         var drain = new DrainControl(activeIds, timedOut);
         var sessionManager = _system.ActorOf(Props.Create(() => new StubSessionManagerActor(
@@ -152,23 +150,43 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
             deadlineCts.Token,
             CancellationToken.None);
         await drain.AllRequestsObserved;
-        drain.AcknowledgeAll();
-        await drain.AllAcknowledgementsSent;
         time.Advance(DrainTimeout);
 
         var result = await operation;
 
-        Assert.Equal(2, result.AllSessionIds.Count);
-        Assert.Single(result.DrainedSessionIds);
-        Assert.Equal("slack/drain-ok", result.DrainedSessionIds[0].Value);
+        Assert.Single(result.AllSessionIds);
+        Assert.Empty(result.DrainedSessionIds);
         Assert.Single(result.TimedOutSessionIds);
         Assert.Equal("slack/drain-timeout", result.TimedOutSessionIds[0].Value);
 
         var context = result.ToNotificationContext();
         Assert.Equal("timeout", context["drainOutcome"]);
-        Assert.Equal("2", context["activeSessions"]);
-        Assert.Equal("1", context["drainedSessions"]);
+        Assert.Equal("1", context["activeSessions"]);
+        Assert.Equal("0", context["drainedSessions"]);
         Assert.Equal("1", context["timedOutSessions"]);
+    }
+
+    [Fact]
+    public async Task SessionDrainHelper_propagates_caller_cancellation()
+    {
+        var activeIds = new[] { "slack/drain-cancelled" };
+        var drain = new DrainControl(activeIds, activeIds);
+        var sessionManager = _system.ActorOf(Props.Create(() => new StubSessionManagerActor(
+            activeIds,
+            drain,
+            throwOnEnumeration: false)));
+        using var callerCts = new CancellationTokenSource();
+
+        var operation = SessionDrainHelper.DrainAsync(
+            sessionManager,
+            "integration-test",
+            NullLogger<DaemonRestartCoordinator>.Instance,
+            callerCts.Token,
+            callerCts.Token);
+        await drain.AllRequestsObserved;
+        callerCts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
     }
 
     public async ValueTask DisposeAsync()

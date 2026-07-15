@@ -65,6 +65,10 @@ internal static class SessionDrainHelper
             {
                 return new DrainOutcome(sessionId, false);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to drain session {SessionId} before shutdown.", sessionId.Value);
