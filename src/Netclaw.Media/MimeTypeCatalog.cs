@@ -13,6 +13,7 @@ public static class MimeTypeCatalog
     public const string TextPlain = "text/plain";
     public const string TextMarkdown = "text/markdown";
     public const string TextCsv = "text/csv";
+    public const string TextTsv = "text/tab-separated-values";
     public const string TextHtml = "text/html";
     public const string ApplicationJson = "application/json";
     public const string ApplicationXml = "application/xml";
@@ -222,6 +223,7 @@ public static class MimeTypeCatalog
         Text(TextPlain, ".txt", ".txt", ".log"),
         Text(TextMarkdown, ".md", ".md", ".markdown"),
         Text(TextCsv, ".csv", ".csv"),
+        Text(TextTsv, ".tsv", ".tsv"),
         Text(TextHtml, ".html", ".html", ".htm"),
         Text(ApplicationJson, ".json", ".json"),
         Text(ApplicationXml, ".xml", ".xml"),
@@ -281,6 +283,7 @@ public static class MimeTypeCatalog
         [(".yaml", TextPlain)] = ApplicationYaml,
         [(".yml", TextPlain)] = ApplicationYaml,
         [(".csv", TextPlain)] = TextCsv,
+        [(".tsv", TextPlain)] = TextTsv,
         [(".xml", TextPlain)] = ApplicationXml,
         [(".html", TextPlain)] = TextHtml,
         [(".htm", TextPlain)] = TextHtml

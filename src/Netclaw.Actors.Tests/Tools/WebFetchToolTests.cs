@@ -700,6 +700,7 @@ public class WebFetchToolTests : IDisposable
     [InlineData("application/pdf", true, ".pdf")]
     [InlineData("application/json", false, ".json")]
     [InlineData("text/csv", false, ".csv")]
+    [InlineData("text/tab-separated-values", false, ".tsv")]
     [InlineData("image/png", true, ".png")]
     [InlineData("text/plain", false, ".txt")]
     public void GetFallbackExtension_returns_correct_extension(string contentType, bool isBinary, string expected)

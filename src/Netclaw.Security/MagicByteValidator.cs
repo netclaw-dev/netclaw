@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MagicByteValidator.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -255,6 +255,7 @@ public static class MagicByteValidator
         ["text/plain"] = AnyContent,
         ["text/markdown"] = AnyContent,
         ["text/csv"] = AnyContent,
+        ["text/tab-separated-values"] = AnyContent,
         ["text/html"] = AnyContent,
         ["application/json"] = AnyContent,
         ["application/xml"] = AnyContent,
