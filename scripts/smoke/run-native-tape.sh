@@ -142,10 +142,13 @@ echo "    NETCLAW_BIN_DIR=${NETCLAW_BIN_DIR}"
 echo "    NETCLAW_HOME=${NETCLAW_HOME}"
 
 vhs_status=0
+# Do not use --foreground here. VHS supervises ttyd and browser children;
+# foreground mode explicitly excludes child processes from the timeout.
+# A separate process group plus a TERM-to-KILL deadline bounds the whole tree.
 if command -v timeout >/dev/null 2>&1; then
-  timeout --foreground "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
+  timeout --kill-after=10s "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
 elif command -v gtimeout >/dev/null 2>&1; then
-  gtimeout --foreground "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
+  gtimeout --kill-after=10s "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
 else
   echo "ERROR: no timeout tool (timeout/gtimeout) found; refusing to run vhs unbounded." >&2
   exit 1
