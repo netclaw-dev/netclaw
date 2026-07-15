@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json.Serialization;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -68,12 +70,25 @@ public sealed class WebhookVerificationConfig
     public string? EventHeaderName { get; set; }
 
     public string? DeliveryIdHeaderName { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ToleranceSeconds { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TimestampField { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SignatureField { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SignedPayloadSeparator { get; set; }
 }
 
 public enum WebhookVerifierKind
 {
     Hmac = 0,
-    HeaderSecret = 1
+    HeaderSecret = 1,
+    HmacTimestamped = 2
 }
 
 public enum WebhookHmacAlgorithm

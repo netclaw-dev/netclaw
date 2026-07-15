@@ -1162,6 +1162,12 @@ assert_tool_file_list() {
     stdout_contains '\[tool:call\] file_list'
 }
 
+assert_tool_timestamped_webhook() {
+    stdout_tool_called 'set_webhook' \
+        && stdout_contains 'HmacTimestamped' \
+        && stdout_contains 'Stripe-Signature'
+}
+
 assert_tool_timeout_arg_recovery() {
     # Spelling-tolerant meta keys: a near-miss timeout key (TimeoutSeconds,
     # timeout_seconds, Timeout) now resolves onto _timeout_seconds and is
@@ -1764,6 +1770,9 @@ run_all() {
 
     run_case tool_file_list "file_list called" \
         "What files are in my session directory?"
+
+    run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
+        "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."
 
     run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
         "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \

@@ -95,6 +95,94 @@ public sealed class WebhookRouteStoreTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_paths.WebhooksDirectory, "github-issues.json")));
     }
 
+    [Theory]
+    [InlineData("Hmac")]
+    [InlineData("HeaderSecret")]
+    public void Legacy_route_loads_and_round_trips_without_timestamped_properties(string verifierKind)
+    {
+        var path = Path.Combine(_paths.WebhooksDirectory, "legacy.json");
+        File.WriteAllText(path, $$"""
+{
+  "Prompt": "process legacy delivery",
+  "Verification": {
+    "Kind": "{{verifierKind}}",
+    "Secret": "legacy-secret",
+    "SignatureHeaderName": "X-Legacy-Signature",
+    "SecretHeaderName": "X-Legacy-Secret"
+  }
+}
+""");
+        var store = new WebhookRouteStore(_paths);
+
+        Assert.True(store.TryGet("legacy", out var loaded));
+        var route = Assert.IsType<WebhookRouteConfig>(loaded.Definition);
+        Assert.Equal(verifierKind, route.Verification.Kind.ToString());
+        Assert.Null(route.Verification.ToleranceSeconds);
+        Assert.Null(route.Verification.TimestampField);
+
+        route.RateLimitPerMinute = 12;
+        store.Save("legacy", route);
+        var saved = File.ReadAllText(path);
+
+        Assert.DoesNotContain("ToleranceSeconds", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("TimestampField", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("SignatureField", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("SignedPayloadSeparator", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Timestamped_route_without_advanced_fields_uses_effective_defaults()
+    {
+        var path = Path.Combine(_paths.WebhooksDirectory, "stripe.json");
+        File.WriteAllText(path, """
+{
+  "Prompt": "process Stripe event",
+  "Verification": {
+    "Kind": "HmacTimestamped",
+    "Secret": "whsec_test",
+    "SignatureHeaderName": "Stripe-Signature"
+  }
+}
+""");
+        var store = new WebhookRouteStore(_paths);
+
+        Assert.True(store.TryGet("stripe", out var loaded));
+        var route = Assert.IsType<WebhookRouteConfig>(loaded.Definition);
+        Assert.Empty(WebhookRouteValidator.Validate("stripe", route));
+        Assert.Null(route.Verification.ToleranceSeconds);
+        Assert.Null(route.Verification.TimestampField);
+        Assert.Null(route.Verification.SignatureField);
+        Assert.Null(route.Verification.SignedPayloadSeparator);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3601)]
+    public void Timestamped_route_rejects_unsafe_tolerance(int toleranceSeconds)
+    {
+        var route = CreateValidRoute();
+        route.Verification.Kind = WebhookVerifierKind.HmacTimestamped;
+        route.Verification.ToleranceSeconds = toleranceSeconds;
+
+        var errors = WebhookRouteValidator.Validate("stripe", route);
+
+        Assert.Contains(errors, error => error.Contains("ToleranceSeconds", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("hmac", WebhookVerifierKind.Hmac)]
+    [InlineData("header-secret", WebhookVerifierKind.HeaderSecret)]
+    [InlineData("HeaderSecret", WebhookVerifierKind.HeaderSecret)]
+    [InlineData("hmac-timestamped", WebhookVerifierKind.HmacTimestamped)]
+    [InlineData("HmacTimestamped", WebhookVerifierKind.HmacTimestamped)]
+    public void TryParseVerifierKind_accepts_documented_and_config_spellings(
+        string value,
+        WebhookVerifierKind expected)
+    {
+        Assert.True(WebhookRouteValidator.TryParseVerifierKind(value, out var actual));
+        Assert.Equal(expected, actual);
+    }
+
     private static WebhookRouteConfig CreateValidRoute()
         => new()
         {

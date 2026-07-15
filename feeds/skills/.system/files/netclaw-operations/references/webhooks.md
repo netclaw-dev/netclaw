@@ -35,8 +35,24 @@ broad file reads/writes there unless the user explicitly wants raw config work.
 
 Verification kinds are generic:
 
-- `Hmac`
-- `HeaderSecret`
+- `Hmac` — HMAC-SHA256 over the raw body; use for GitHub-style senders. This
+  remains the default.
+- `HmacTimestamped` — HMAC-SHA256 over `{timestamp}.{rawBody}` from a structured
+  `t=...,v1=...` header; use for Stripe, TextForge, and compatible senders.
+- `HeaderSecret` — a static shared secret in one header.
+
+These are different sender protocols, not old and new security levels. Never
+switch an existing route or fall back between modes unless the sender's protocol
+also changes.
+
+For Stripe, call `set_webhook` with `verification_kind: HmacTimestamped`,
+`signature_header_name: Stripe-Signature`, and the Stripe endpoint secret. For
+TextForge, use `signature_header_name: X-TextForge-Signature`. The timestamped
+defaults are `timestamp_field: t`, `signature_field: v1`,
+`signed_payload_separator: .`, and `tolerance_seconds: 300`; only override them
+when the sender documents a different wire format. Multiple `v1` values are
+accepted for sender-side secret rotation. Missing, malformed, stale, or
+future-dated signatures fail closed.
 
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.

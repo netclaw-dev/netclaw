@@ -92,6 +92,45 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
+    public async Task Timestamped_signature_within_tolerance_dispatches()
+    {
+        _store.Save("stripe-events", CreateTimestampedRoute());
+        BumpWriteTime("stripe-events");
+        await using var app = await CreateHostAsync();
+        var body = "{\"type\":\"payment_intent.succeeded\"}";
+        var timestamp = DateTimeOffset.Parse("2026-04-02T18:30:00Z").ToUnixTimeSeconds();
+
+        using var request = BuildTimestampedRequest(
+            "/api/webhooks/stripe-events",
+            body,
+            timestamp,
+            "secret");
+        var response = await app.GetTestClient().SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Single(app.Services.GetRequiredService<FakeWebhookExecutionService>().Invocations);
+    }
+
+    [Fact]
+    public async Task Stale_timestamped_signature_returns_401_without_dispatch()
+    {
+        _store.Save("stripe-events", CreateTimestampedRoute());
+        BumpWriteTime("stripe-events");
+        await using var app = await CreateHostAsync();
+        var timestamp = DateTimeOffset.Parse("2026-04-02T18:24:59Z").ToUnixTimeSeconds();
+
+        using var request = BuildTimestampedRequest(
+            "/api/webhooks/stripe-events",
+            "{\"type\":\"payment_intent.succeeded\"}",
+            timestamp,
+            "secret");
+        var response = await app.GetTestClient().SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(app.Services.GetRequiredService<FakeWebhookExecutionService>().Invocations);
+    }
+
+    [Fact]
     public async Task Oversized_body_returns_413()
     {
         _store.Save("github-issues", CreateRoute(maxBodyBytes: 8));
@@ -330,6 +369,27 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
         return request;
     }
 
+    private static HttpRequestMessage BuildTimestampedRequest(
+        string path,
+        string body,
+        long timestamp,
+        string secret)
+    {
+        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        var signedPayload = Encoding.UTF8.GetBytes($"{timestamp}.{body}");
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var signature = Convert.ToHexString(hmac.ComputeHash(signedPayload)).ToLowerInvariant();
+
+        var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new ByteArrayContent(bodyBytes)
+        };
+        request.Content.Headers.ContentType = new("application/json") { CharSet = "utf-8" };
+        request.Headers.Add("Stripe-Signature", $"t={timestamp},v1={signature}");
+        request.Headers.Add("X-Webhook-Delivery", "evt-123");
+        return request;
+    }
+
     private static WebhookRouteConfig CreateRoute(int maxBodyBytes = 1024 * 1024, int rateLimitPerMinute = 30) => new()
     {
         Prompt = "triage this event",
@@ -350,6 +410,18 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
         },
         MaxBodyBytes = maxBodyBytes,
         RateLimitPerMinute = rateLimitPerMinute
+    };
+
+    private static WebhookRouteConfig CreateTimestampedRoute() => new()
+    {
+        Prompt = "process this Stripe event",
+        Events = [],
+        Verification = new WebhookVerificationConfig
+        {
+            Kind = WebhookVerifierKind.HmacTimestamped,
+            Secret = new SensitiveString("secret"),
+            SignatureHeaderName = "Stripe-Signature"
+        }
     };
 
     private sealed class FakeWebhookExecutionService : IWebhookExecutionService

@@ -426,6 +426,113 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Set_TimestampedHmac_Persists_advanced_settings()
+    {
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "stripe-events",
+            "--prompt", "Process Stripe event",
+            "--secret", "whsec_test",
+            "--verification-kind", "hmac-timestamped",
+            "--signature-header", "Stripe-Signature",
+            "--timestamp-field", "timestamp",
+            "--signature-field", "signature",
+            "--signed-payload-separator", "::",
+            "--signature-tolerance-seconds", "120"
+        ], _paths);
+
+        Assert.Equal(0, result);
+        var route = ReadRoute("stripe-events");
+        Assert.Equal(WebhookVerifierKind.HmacTimestamped, route.Verification.Kind);
+        Assert.Equal("Stripe-Signature", route.Verification.SignatureHeaderName);
+        Assert.Equal("timestamp", route.Verification.TimestampField);
+        Assert.Equal("signature", route.Verification.SignatureField);
+        Assert.Equal("::", route.Verification.SignedPayloadSeparator);
+        Assert.Equal(120, route.Verification.ToleranceSeconds);
+    }
+
+    [Fact]
+    public async Task Set_HeaderSecret_Accepts_documented_hyphenated_spelling()
+    {
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "internal-events",
+            "--prompt", "Process internal event",
+            "--secret", "shared-secret",
+            "--verification-kind", "header-secret",
+            "--secret-header", "X-Internal-Secret"
+        ], _paths);
+
+        Assert.Equal(0, result);
+        Assert.Equal(WebhookVerifierKind.HeaderSecret, ReadRoute("internal-events").Verification.Kind);
+    }
+
+    [Fact]
+    public async Task Set_Timestamp_options_with_body_hmac_fails_without_persisting()
+    {
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "invalid-route",
+            "--prompt", "Process event",
+            "--secret", "secret",
+            "--timestamp-field", "t"
+        ], _paths);
+
+        Assert.Equal(1, result);
+        Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "invalid-route.json")));
+    }
+
+    [Fact]
+    public async Task Set_Unrelated_update_preserves_legacy_verifier_without_timestamp_fields()
+    {
+        CreateValidRoute("legacy-route");
+
+        var result = await WebhooksCommand.RunAsync([
+            "webhooks", "set", "legacy-route",
+            "--rate-limit", "12"
+        ], _paths);
+
+        Assert.Equal(0, result);
+        var route = ReadRoute("legacy-route");
+        Assert.Equal(WebhookVerifierKind.Hmac, route.Verification.Kind);
+        Assert.Equal(12, route.RateLimitPerMinute);
+        var json = File.ReadAllText(Path.Combine(_paths.WebhooksDirectory, "legacy-route.json"));
+        Assert.DoesNotContain("ToleranceSeconds", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("TimestampField", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Show_Json_adds_timestamp_fields_only_for_timestamped_kind()
+    {
+        CreateValidRoute("legacy-route");
+        var timestamped = new WebhookRouteConfig
+        {
+            Prompt = "Process Stripe event",
+            Verification = new WebhookVerificationConfig
+            {
+                Kind = WebhookVerifierKind.HmacTimestamped,
+                Secret = new SensitiveString("whsec_test"),
+                SignatureHeaderName = "Stripe-Signature"
+            }
+        };
+        new WebhookRouteStore(_paths).Save("stripe-events", timestamped);
+
+        using var legacyOutput = new StringWriter();
+        using var timestampedOutput = new StringWriter();
+        Assert.Equal(0, await WebhooksCommand.RunAsync(
+            ["webhooks", "show", "legacy-route", "--json"], _paths, legacyOutput));
+        Assert.Equal(0, await WebhooksCommand.RunAsync(
+            ["webhooks", "show", "stripe-events", "--json"], _paths, timestampedOutput));
+
+        using var legacy = JsonDocument.Parse(legacyOutput.ToString());
+        using var stripe = JsonDocument.Parse(timestampedOutput.ToString());
+        var legacyVerification = legacy.RootElement.GetProperty("verification");
+        var stripeVerification = stripe.RootElement.GetProperty("verification");
+        Assert.False(legacyVerification.TryGetProperty("toleranceSeconds", out _));
+        Assert.Equal(300, stripeVerification.GetProperty("toleranceSeconds").GetInt32());
+        Assert.Equal("t", stripeVerification.GetProperty("timestampField").GetString());
+        Assert.Equal("v1", stripeVerification.GetProperty("signatureField").GetString());
+        Assert.Equal(".", stripeVerification.GetProperty("signedPayloadSeparator").GetString());
+    }
+
+    [Fact]
     public async Task Delete_ExistingRoute_ReturnsZero()
     {
         CreateValidRoute("delete-me");

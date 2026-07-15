@@ -1,5 +1,8 @@
 {
   "configVersion": 1,
+  "Webhooks": {
+    "Enabled": true
+  },
   "Tools": {
     "AudienceProfiles": {
       "Personal": {

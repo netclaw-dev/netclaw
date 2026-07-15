@@ -21,7 +21,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         string RouteName,
         [property: Description("Prompt overlay instructions for this route.")]
         string Prompt,
-        [property: Description("Verification kind: 'Hmac' or 'HeaderSecret'.")]
+        [property: Description("Verification kind: 'Hmac', 'HmacTimestamped', or 'HeaderSecret'.")]
         string VerificationKind,
         [property: Description("Shared secret used to verify incoming requests.")]
         string Secret,
@@ -50,7 +50,15 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         [property: Description("Per-route accepted requests per minute.")]
         int? RateLimitPerMinute = null,
         [property: Description("Whether this route is enabled. Defaults to true.")]
-        bool? Enabled = null);
+        bool? Enabled = null,
+        [property: Description("Timestamp field name for HmacTimestamped routes. Defaults to 't'.")]
+        string? TimestampField = null,
+        [property: Description("Signature field name for HmacTimestamped routes. Defaults to 'v1'.")]
+        string? SignatureField = null,
+        [property: Description("Separator between timestamp and raw body for HmacTimestamped routes. Defaults to '.'.")]
+        string? SignedPayloadSeparator = null,
+        [property: Description("Accepted timestamp tolerance in seconds for HmacTimestamped routes, from 1 to 3600. Defaults to 300.")]
+        int? ToleranceSeconds = null);
 
     public SetWebhookTool(WebhookRouteStore store)
     {
@@ -67,8 +75,17 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (string.IsNullOrWhiteSpace(args.Secret))
             return Task.FromResult("Error: 'secret' is required.");
 
-        if (!Enum.TryParse<WebhookVerifierKind>(args.VerificationKind, ignoreCase: true, out var verificationKind))
-            return Task.FromResult("Error: 'verificationKind' must be 'Hmac' or 'HeaderSecret'.");
+        if (!WebhookRouteValidator.TryParseVerifierKind(args.VerificationKind, out var verificationKind))
+            return Task.FromResult("Error: 'verificationKind' must be 'Hmac', 'HmacTimestamped', or 'HeaderSecret'.");
+
+        if ((args.TimestampField is not null
+             || args.SignatureField is not null
+             || args.SignedPayloadSeparator is not null
+             || args.ToleranceSeconds is not null)
+            && verificationKind != WebhookVerifierKind.HmacTimestamped)
+        {
+            return Task.FromResult("Error: Timestamp signature settings require 'verificationKind' to be 'HmacTimestamped'.");
+        }
 
         if (!TryResolveAudience(args.Audience, context.Audience, out var audience, out var audienceError))
             return Task.FromResult(audienceError!);
@@ -92,6 +109,10 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
                 SecretHeaderName = string.IsNullOrWhiteSpace(args.SecretHeaderName) ? null : args.SecretHeaderName.Trim(),
                 EventHeaderName = string.IsNullOrWhiteSpace(args.EventHeaderName) ? null : args.EventHeaderName.Trim(),
                 DeliveryIdHeaderName = string.IsNullOrWhiteSpace(args.DeliveryIdHeaderName) ? null : args.DeliveryIdHeaderName.Trim(),
+                TimestampField = args.TimestampField?.Trim(),
+                SignatureField = args.SignatureField?.Trim(),
+                SignedPayloadSeparator = args.SignedPayloadSeparator,
+                ToleranceSeconds = args.ToleranceSeconds
             }
         };
 

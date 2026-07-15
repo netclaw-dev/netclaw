@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -10,8 +11,10 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Webhooks;
 
-public sealed class WebhookRequestVerifier
+public sealed class WebhookRequestVerifier(TimeProvider timeProvider)
 {
+    private readonly TimeProvider _timeProvider = timeProvider;
+
     public WebhookVerificationResult Verify(
         RegisteredWebhookRoute route,
         IHeaderDictionary headers,
@@ -20,9 +23,62 @@ public sealed class WebhookRequestVerifier
         return route.Config.Verification.Kind switch
         {
             WebhookVerifierKind.Hmac => VerifyHmac(route, headers, bodyBytes),
+            WebhookVerifierKind.HmacTimestamped => VerifyTimestampedHmac(route, headers, bodyBytes),
             WebhookVerifierKind.HeaderSecret => VerifyHeaderSecret(route, headers),
             _ => throw new ArgumentOutOfRangeException(nameof(route.Config.Verification.Kind), route.Config.Verification.Kind, null)
         };
+    }
+
+    private WebhookVerificationResult VerifyTimestampedHmac(
+        RegisteredWebhookRoute route,
+        IHeaderDictionary headers,
+        byte[] bodyBytes)
+    {
+        var signatureHeader = RegisteredWebhookRoute.GetHeaderValue(headers, route.SignatureHeaderName);
+        if (string.IsNullOrWhiteSpace(signatureHeader))
+            return WebhookVerificationResult.Reject("missing_signature");
+
+        if (!TryParseTimestampedHeader(
+                signatureHeader,
+                route.TimestampField,
+                route.TimestampSignatureField,
+                out var timestampText,
+                out var signatures))
+        {
+            return WebhookVerificationResult.Reject("invalid_signature_header");
+        }
+
+        if (!long.TryParse(timestampText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timestamp))
+            return WebhookVerificationResult.Reject("invalid_signature_header");
+
+        DateTimeOffset signedAt;
+        try
+        {
+            signedAt = DateTimeOffset.FromUnixTimeSeconds(timestamp);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return WebhookVerificationResult.Reject("invalid_signature_header");
+        }
+
+        if ((_timeProvider.GetUtcNow() - signedAt).Duration()
+            > TimeSpan.FromSeconds(route.TimestampToleranceSeconds))
+        {
+            return WebhookVerificationResult.Reject("timestamp_out_of_tolerance");
+        }
+
+        var secret = route.Config.Verification.Secret!.Value;
+        var expected = ComputeTimestampedSha256(
+            secret,
+            timestampText,
+            route.SignedPayloadSeparator,
+            bodyBytes);
+        if (!signatures.Any(signature => IsMatchingHexSignature(expected, signature)))
+            return WebhookVerificationResult.Reject("invalid_signature");
+
+        return WebhookVerificationResult.Accept(
+            RegisteredWebhookRoute.GetHeaderValue(headers, route.EventHeaderName),
+            RegisteredWebhookRoute.GetHeaderValue(headers, route.DeliveryIdHeaderName));
     }
 
     private static WebhookVerificationResult VerifyHmac(
@@ -77,6 +133,74 @@ public sealed class WebhookRequestVerifier
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         var hash = Convert.ToHexString(hmac.ComputeHash(bodyBytes)).ToLowerInvariant();
         return string.Concat(prefix, hash);
+    }
+
+    private static byte[] ComputeTimestampedSha256(
+        string secret,
+        string timestamp,
+        string separator,
+        byte[] bodyBytes)
+    {
+        var prefixBytes = Encoding.UTF8.GetBytes(timestamp + separator);
+        var signedPayload = new byte[prefixBytes.Length + bodyBytes.Length];
+        Buffer.BlockCopy(prefixBytes, 0, signedPayload, 0, prefixBytes.Length);
+        Buffer.BlockCopy(bodyBytes, 0, signedPayload, prefixBytes.Length, bodyBytes.Length);
+
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        return hmac.ComputeHash(signedPayload);
+    }
+
+    private static bool IsMatchingHexSignature(byte[] expected, string providedHex)
+    {
+        byte[] provided;
+        try
+        {
+            provided = Convert.FromHexString(providedHex);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        return provided.Length == expected.Length
+               && CryptographicOperations.FixedTimeEquals(expected, provided);
+    }
+
+    private static bool TryParseTimestampedHeader(
+        string header,
+        string timestampField,
+        string signatureField,
+        out string timestamp,
+        out List<string> signatures)
+    {
+        timestamp = string.Empty;
+        signatures = [];
+
+        foreach (var component in header.Split(',', StringSplitOptions.TrimEntries))
+        {
+            var separatorIndex = component.IndexOf('=', StringComparison.Ordinal);
+            if (separatorIndex <= 0 || separatorIndex == component.Length - 1)
+                return false;
+
+            var key = component[..separatorIndex].Trim();
+            var value = component[(separatorIndex + 1)..].Trim();
+            if (key.Length == 0 || value.Length == 0)
+                return false;
+
+            if (string.Equals(key, timestampField, StringComparison.Ordinal))
+            {
+                if (timestamp.Length > 0)
+                    return false;
+
+                timestamp = value;
+            }
+            else if (string.Equals(key, signatureField, StringComparison.Ordinal))
+            {
+                signatures.Add(value);
+            }
+        }
+
+        return timestamp.Length > 0 && signatures.Count > 0;
     }
 }
 

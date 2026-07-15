@@ -99,4 +99,50 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
         Assert.Equal("Error: NotificationTarget is required when NotifyInstructions are provided.", result);
         Assert.False(_store.TryGet("notify-without-target", out _));
     }
+
+    [Fact]
+    public async Task Timestamped_hmac_settings_are_persisted()
+    {
+        var tool = new SetWebhookTool(_store);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["RouteName"] = "stripe-events",
+            ["Prompt"] = "Handle Stripe delivery.",
+            ["VerificationKind"] = "HmacTimestamped",
+            ["Secret"] = "whsec_test",
+            ["SignatureHeaderName"] = "Stripe-Signature",
+            ["TimestampField"] = "timestamp",
+            ["SignatureField"] = "signature",
+            ["SignedPayloadSeparator"] = "::",
+            ["ToleranceSeconds"] = 120
+        }, Context(TrustAudience.Public), TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("Error", result);
+        Assert.True(_store.TryGet("stripe-events", out var saved));
+        var verification = saved.Definition!.Verification;
+        Assert.Equal(WebhookVerifierKind.HmacTimestamped, verification.Kind);
+        Assert.Equal("timestamp", verification.TimestampField);
+        Assert.Equal("signature", verification.SignatureField);
+        Assert.Equal("::", verification.SignedPayloadSeparator);
+        Assert.Equal(120, verification.ToleranceSeconds);
+    }
+
+    [Fact]
+    public async Task Timestamp_settings_are_rejected_for_body_hmac()
+    {
+        var tool = new SetWebhookTool(_store);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["RouteName"] = "invalid-route",
+            ["Prompt"] = "Handle delivery.",
+            ["VerificationKind"] = "Hmac",
+            ["Secret"] = "test-secret",
+            ["TimestampField"] = "t"
+        }, Context(TrustAudience.Public), TestContext.Current.CancellationToken);
+
+        Assert.Contains("require 'verificationKind' to be 'HmacTimestamped'", result);
+        Assert.False(_store.TryGet("invalid-route", out _));
+    }
 }

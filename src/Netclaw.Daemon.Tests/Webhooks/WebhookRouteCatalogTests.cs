@@ -62,6 +62,26 @@ public sealed class WebhookRouteCatalogTests : IDisposable
     }
 
     [Fact]
+    public void Unknown_future_verifier_invalidates_only_that_route()
+    {
+        WriteRouteFile("valid-route", CreateRoute());
+        WriteRouteText("future-route", """
+{
+  "Prompt": "process future event",
+  "Verification": {
+    "Kind": "FutureVerifier",
+    "Secret": "secret"
+  }
+}
+""");
+        var sut = CreateCatalog();
+
+        Assert.False(sut.TryGetRoute("future-route", out _));
+        Assert.True(sut.TryGetRoute("valid-route", out _));
+        Assert.Contains(_sink.Alerts, alert => alert.Category == AlertType.WebhookRouteInvalid);
+    }
+
+    [Fact]
     public void Invalid_edit_removes_previously_loaded_route()
     {
         WriteRouteFile("github-issues", CreateRoute());

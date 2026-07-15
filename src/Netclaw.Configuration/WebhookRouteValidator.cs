@@ -40,6 +40,24 @@ public static class WebhookRouteValidator
         if (route.Verification.Secret.IsNullOrEmpty())
             errors.Add("Verification secret is required.");
 
+        if (route.Verification.Kind == WebhookVerifierKind.HmacTimestamped)
+        {
+            if (route.Verification.ToleranceSeconds is < 1 or > 3600)
+                errors.Add("Verification.ToleranceSeconds must be between 1 and 3600.");
+
+            if (route.Verification.TimestampField is { } timestampField
+                && string.IsNullOrWhiteSpace(timestampField))
+            {
+                errors.Add("Verification.TimestampField cannot be blank.");
+            }
+
+            if (route.Verification.SignatureField is { } signatureField
+                && string.IsNullOrWhiteSpace(signatureField))
+            {
+                errors.Add("Verification.SignatureField cannot be blank.");
+            }
+        }
+
         if (route.MaxBodyBytes < 1)
             errors.Add("MaxBodyBytes must be >= 1.");
 
@@ -82,4 +100,25 @@ public static class WebhookRouteValidator
         => WebhookRouteStore.TryNormalizeRouteName(routeName, out _, out var error)
             ? null
             : error;
+
+    public static bool TryParseVerifierKind(string value, out WebhookVerifierKind kind)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "hmac":
+                kind = WebhookVerifierKind.Hmac;
+                return true;
+            case "header-secret":
+            case "headersecret":
+                kind = WebhookVerifierKind.HeaderSecret;
+                return true;
+            case "hmac-timestamped":
+            case "hmactimestamped":
+                kind = WebhookVerifierKind.HmacTimestamped;
+                return true;
+            default:
+                kind = default;
+                return false;
+        }
+    }
 }

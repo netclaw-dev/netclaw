@@ -13,7 +13,7 @@
       "properties": {
         "Kind": {
           "type": "string",
-          "enum": ["Hmac", "HeaderSecret"],
+          "enum": ["Hmac", "HeaderSecret", "HmacTimestamped"],
           "default": "Hmac"
         },
         "HmacAlgorithm": {
@@ -38,6 +38,26 @@
         },
         "DeliveryIdHeaderName": {
           "type": ["string", "null"]
+        },
+        "ToleranceSeconds": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 300
+        },
+        "TimestampField": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "default": "t"
+        },
+        "SignatureField": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "default": "v1"
+        },
+        "SignedPayloadSeparator": {
+          "type": ["string", "null"],
+          "default": "."
         }
       },
       "additionalProperties": false,

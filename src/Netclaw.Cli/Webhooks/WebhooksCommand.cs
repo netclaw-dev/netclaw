@@ -84,7 +84,7 @@ internal static class WebhooksCommand
                     name = r.RouteName,
                     status = r.Status,
                     audience = r.IsValid ? r.Definition!.Audience.ToString().ToLowerInvariant() : "unknown",
-                    verification = r.IsValid ? r.Definition!.Verification.Kind.ToString().ToLowerInvariant() : "unknown",
+                    verification = r.IsValid ? ToCliVerifierKind(r.Definition!.Verification.Kind) : "unknown",
                     deliveryRequired = r.IsValid && r.Definition!.DeliveryRequired
                 })
                 .ToList();
@@ -95,7 +95,7 @@ internal static class WebhooksCommand
         const int colName = 24;
         const int colStatus = 10;
         const int colAudience = 10;
-        const int colVerification = 14;
+        const int colVerification = 18;
 
         output.WriteLine(
             $"{"NAME",-colName}  {"STATUS",-colStatus}  {"AUDIENCE",-colAudience}  {"VERIFICATION",-colVerification}  DELIVERY");
@@ -109,7 +109,7 @@ internal static class WebhooksCommand
                 continue;
 
             var audience = route.IsValid ? route.Definition!.Audience.ToString().ToLowerInvariant() : "-";
-            var verification = route.IsValid ? route.Definition!.Verification.Kind.ToString().ToLowerInvariant() : "-";
+            var verification = route.IsValid ? ToCliVerifierKind(route.Definition!.Verification.Kind) : "-";
             var delivery = route.IsValid && route.Definition!.DeliveryRequired ? "required" : "optional";
 
             output.WriteLine(
@@ -169,17 +169,7 @@ internal static class WebhooksCommand
                 file = match.FilePath,
                 endpoint = $"/api/webhooks/{routeName}",
                 enabled = route.Enabled,
-                verification = new
-                {
-                    kind = route.Verification.Kind.ToString().ToLowerInvariant(),
-                    secret = showSecret ? route.Verification.Secret?.Value : "********",
-                    hmacAlgorithm = route.Verification.HmacAlgorithm.ToString().ToLowerInvariant(),
-                    signatureHeader = route.Verification.SignatureHeaderName,
-                    signaturePrefix = route.Verification.SignaturePrefix,
-                    secretHeader = route.Verification.SecretHeaderName,
-                    eventHeader = route.Verification.EventHeaderName,
-                    deliveryIdHeader = route.Verification.DeliveryIdHeaderName
-                },
+                verification = BuildVerificationOutput(route.Verification, showSecret),
                 audience = route.Audience.ToString().ToLowerInvariant(),
                 events = route.Events,
                 prompt = route.Prompt,
@@ -203,13 +193,23 @@ internal static class WebhooksCommand
         output.WriteLine($"Endpoint:           /api/webhooks/{routeName}");
         output.WriteLine();
         output.WriteLine("Verification:");
-        output.WriteLine($"  Kind:             {route.Verification.Kind.ToString().ToLowerInvariant()}");
+        output.WriteLine($"  Kind:             {ToCliVerifierKind(route.Verification.Kind)}");
         output.WriteLine($"  Secret:           {(showSecret ? route.Verification.Secret?.Value ?? "(not set)" : "********** (use --show-secret to reveal)")}");
-        if (route.Verification.Kind == WebhookVerifierKind.Hmac)
+        if (route.Verification.Kind is WebhookVerifierKind.Hmac or WebhookVerifierKind.HmacTimestamped)
         {
             output.WriteLine($"  Algorithm:        {route.Verification.HmacAlgorithm.ToString().ToLowerInvariant()}");
             output.WriteLine($"  Signature Header: {route.Verification.SignatureHeaderName ?? "(default)"}");
-            output.WriteLine($"  Signature Prefix: {route.Verification.SignaturePrefix ?? "(none)"}");
+            if (route.Verification.Kind == WebhookVerifierKind.Hmac)
+            {
+                output.WriteLine($"  Signature Prefix: {route.Verification.SignaturePrefix ?? "(none)"}");
+            }
+            else
+            {
+                output.WriteLine($"  Timestamp Field:  {route.Verification.TimestampField ?? "t (default)"}");
+                output.WriteLine($"  Signature Field:  {route.Verification.SignatureField ?? "v1 (default)"}");
+                output.WriteLine($"  Payload Separator: {route.Verification.SignedPayloadSeparator ?? ". (default)"}");
+                output.WriteLine($"  Tolerance:        {route.Verification.ToleranceSeconds?.ToString() ?? "300 (default)"} seconds");
+            }
         }
         else
         {
@@ -325,9 +325,9 @@ internal static class WebhooksCommand
 
         if (hasVerificationKind)
         {
-            if (!Enum.TryParse<WebhookVerifierKind>(verificationKind, ignoreCase: true, out var kind))
+            if (!WebhookRouteValidator.TryParseVerifierKind(verificationKind, out var kind))
             {
-                Console.Error.WriteLine($"[FAIL] Invalid verification kind: '{verificationKind}'. Use 'hmac' or 'header-secret'.");
+                Console.Error.WriteLine($"[FAIL] Invalid verification kind: '{verificationKind}'. Use 'hmac', 'hmac-timestamped', or 'header-secret'.");
                 return 1;
             }
             route.Verification.Kind = kind;
@@ -363,6 +363,45 @@ internal static class WebhooksCommand
 
         if (hasDeliveryHeader)
             route.Verification.DeliveryIdHeaderName = deliveryHeader;
+
+        if (!TryGetFlagValue(args, "--timestamp-field", out var timestampField, out var hasTimestampField))
+            return 1;
+
+        if (hasTimestampField)
+            route.Verification.TimestampField = timestampField;
+
+        if (!TryGetFlagValue(args, "--signature-field", out var signatureField, out var hasSignatureField))
+            return 1;
+
+        if (hasSignatureField)
+            route.Verification.SignatureField = signatureField;
+
+        if (!TryGetFlagValue(args, "--signed-payload-separator", out var payloadSeparator, out var hasPayloadSeparator))
+            return 1;
+
+        if (hasPayloadSeparator)
+            route.Verification.SignedPayloadSeparator = payloadSeparator;
+
+        if (!TryGetFlagValue(args, "--signature-tolerance-seconds", out var tolerance, out var hasTolerance))
+            return 1;
+
+        if (hasTolerance)
+        {
+            if (!int.TryParse(tolerance, out var toleranceSeconds))
+            {
+                Console.Error.WriteLine($"[FAIL] Invalid signature tolerance: '{tolerance}'. Must be a whole number from 1 to 3600.");
+                return 1;
+            }
+
+            route.Verification.ToleranceSeconds = toleranceSeconds;
+        }
+
+        if ((hasTimestampField || hasSignatureField || hasPayloadSeparator || hasTolerance)
+            && route.Verification.Kind != WebhookVerifierKind.HmacTimestamped)
+        {
+            Console.Error.WriteLine("[FAIL] Timestamp signature options require '--verification-kind hmac-timestamped'.");
+            return 1;
+        }
 
         // Parse events
         if (!TryGetFlagValue(args, "--events", out var events, out var hasEvents))
@@ -618,6 +657,38 @@ internal static class WebhooksCommand
         return true;
     }
 
+    private static string ToCliVerifierKind(WebhookVerifierKind kind)
+        => kind == WebhookVerifierKind.HmacTimestamped
+            ? "hmac-timestamped"
+            : kind.ToString().ToLowerInvariant();
+
+    private static Dictionary<string, object?> BuildVerificationOutput(
+        WebhookVerificationConfig verification,
+        bool showSecret)
+    {
+        var output = new Dictionary<string, object?>
+        {
+            ["kind"] = ToCliVerifierKind(verification.Kind),
+            ["secret"] = showSecret ? verification.Secret?.Value : "********",
+            ["hmacAlgorithm"] = verification.HmacAlgorithm.ToString().ToLowerInvariant(),
+            ["signatureHeader"] = verification.SignatureHeaderName,
+            ["signaturePrefix"] = verification.SignaturePrefix,
+            ["secretHeader"] = verification.SecretHeaderName,
+            ["eventHeader"] = verification.EventHeaderName,
+            ["deliveryIdHeader"] = verification.DeliveryIdHeaderName
+        };
+
+        if (verification.Kind == WebhookVerifierKind.HmacTimestamped)
+        {
+            output["timestampField"] = verification.TimestampField ?? "t";
+            output["signatureField"] = verification.SignatureField ?? "v1";
+            output["signedPayloadSeparator"] = verification.SignedPayloadSeparator ?? ".";
+            output["toleranceSeconds"] = verification.ToleranceSeconds ?? 300;
+        }
+
+        return output;
+    }
+
     private static bool TryResolveTextInput(
         string[] args,
         string inlineFlag,
@@ -785,12 +856,18 @@ internal static class WebhooksCommand
         output.WriteLine("  --secret-env <VAR>           Read secret from environment variable");
         output.WriteLine();
         output.WriteLine("Verification:");
-        output.WriteLine("  --verification-kind <kind>   'hmac' (default) or 'header-secret'");
+        output.WriteLine("  --verification-kind <kind>   'hmac' (default), 'hmac-timestamped', or 'header-secret'");
         output.WriteLine("  --signature-header <name>    HMAC signature header (e.g., X-Hub-Signature-256)");
         output.WriteLine("  --signature-prefix <prefix>  HMAC signature prefix (e.g., sha256=)");
         output.WriteLine("  --secret-header <name>       Header-secret header name");
         output.WriteLine("  --event-header <name>        Event type header");
         output.WriteLine("  --delivery-header <name>     Delivery ID header");
+        output.WriteLine("  --timestamp-field <name>     Timestamped HMAC field (default: t)");
+        output.WriteLine("  --signature-field <name>     Timestamped HMAC signature field (default: v1)");
+        output.WriteLine("  --signed-payload-separator <value>");
+        output.WriteLine("                               Timestamp/body separator (default: .)");
+        output.WriteLine("  --signature-tolerance-seconds <seconds>");
+        output.WriteLine("                               Replay tolerance, 1-3600 (default: 300)");
         output.WriteLine();
         output.WriteLine("Behavior:");
         output.WriteLine("  --events <list>              Comma-separated event allowlist");
@@ -818,5 +895,11 @@ internal static class WebhooksCommand
         output.WriteLine("    --signature-header X-Hub-Signature-256 \\");
         output.WriteLine("    --signature-prefix \"sha256=\" \\");
         output.WriteLine("    --events issues.opened,issues.closed");
+        output.WriteLine();
+        output.WriteLine("  netclaw webhooks set stripe-events \\");
+        output.WriteLine("    --prompt \"Process this Stripe event\" \\");
+        output.WriteLine("    --secret-env STRIPE_WEBHOOK_SECRET \\");
+        output.WriteLine("    --verification-kind hmac-timestamped \\");
+        output.WriteLine("    --signature-header Stripe-Signature");
     }
 }
