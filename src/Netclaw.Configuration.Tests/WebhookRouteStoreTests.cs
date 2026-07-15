@@ -74,7 +74,7 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         var store = new WebhookRouteStore(_paths);
 
-        Assert.Throws<ArgumentException>(() => store.Delete("../secrets"));
+        Assert.Throws<ArgumentException>(() => store.Delete("../secrets", CancellationToken.None));
     }
 
     [Fact]
@@ -286,7 +286,6 @@ public sealed class WebhookRouteStoreTests : IDisposable
     public async Task Update_lock_wait_honors_cancellation()
     {
         var firstStore = new WebhookRouteStore(_paths);
-        var secondStore = new WebhookRouteStore(_paths);
         firstStore.Save("cancelled-update", CreateValidRoute());
         using var firstEntered = new ManualResetEventSlim();
         using var releaseFirst = new ManualResetEventSlim();
@@ -304,7 +303,7 @@ public sealed class WebhookRouteStoreTests : IDisposable
             }), testCancellation);
         Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), testCancellation));
 
-        var second = Task.Run(() => secondStore.Update(
+        var second = Task.Run(() => firstStore.Update(
             "cancelled-update",
             cancellation.Token,
             existing => (existing, true)), testCancellation);
@@ -331,29 +330,43 @@ public sealed class WebhookRouteStoreTests : IDisposable
             .GetProperty("WebhookVerification");
         var routeVerificationSchema = routeSchema.RootElement
             .GetProperty("properties")
-            .GetProperty("Verification");
+            .GetProperty("verification");
         var configVerification = configVerificationSchema.GetProperty("properties");
         var routeVerification = routeVerificationSchema.GetProperty("properties");
 
-        foreach (var propertyName in new[]
+        foreach (var (configName, routeName) in new[]
                  {
-                     "Kind",
-                     "ToleranceSeconds",
-                     "TimestampField",
-                     "SignatureField",
-                     "SignedPayloadSeparator"
+                     ("Kind", "kind"),
+                     ("ToleranceSeconds", "toleranceSeconds"),
+                     ("TimestampField", "timestampField"),
+                     ("SignatureField", "signatureField"),
+                     ("SignedPayloadSeparator", "signedPayloadSeparator")
                  })
         {
-            var configProperty = configVerification.GetProperty(propertyName);
-            var routeProperty = routeVerification.GetProperty(propertyName);
+            var configProperty = configVerification.GetProperty(configName);
+            var routeProperty = routeVerification.GetProperty(routeName);
             Assert.Equal(
                 JsonSerializer.Serialize(routeProperty),
                 JsonSerializer.Serialize(configProperty));
         }
 
-        Assert.Equal(
-            JsonSerializer.Serialize(routeVerificationSchema.GetProperty("allOf")),
-            JsonSerializer.Serialize(configVerificationSchema.GetProperty("allOf")));
+        var configConditionalProperties = configVerificationSchema.GetProperty("allOf")[0]
+            .GetProperty("then")
+            .GetProperty("properties");
+        var routeConditionalProperties = routeVerificationSchema.GetProperty("allOf")[0]
+            .GetProperty("then")
+            .GetProperty("properties");
+        foreach (var (configName, routeName) in new[]
+                 {
+                     ("ToleranceSeconds", "toleranceSeconds"),
+                     ("TimestampField", "timestampField"),
+                     ("SignatureField", "signatureField")
+                 })
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(routeConditionalProperties.GetProperty(routeName)),
+                JsonSerializer.Serialize(configConditionalProperties.GetProperty(configName)));
+        }
     }
 
     [Theory]

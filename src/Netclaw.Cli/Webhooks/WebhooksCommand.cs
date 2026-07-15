@@ -567,7 +567,18 @@ internal static class WebhooksCommand
             }
         }
 
-        if (!store.Delete(routeName))
+        bool deleted;
+        try
+        {
+            deleted = store.Delete(routeName, CancellationToken.None);
+        }
+        catch (TimeoutException ex)
+        {
+            Console.Error.WriteLine($"[FAIL] {ex.Message}");
+            return 1;
+        }
+
+        if (!deleted)
         {
             Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' not found.");
             return 1;

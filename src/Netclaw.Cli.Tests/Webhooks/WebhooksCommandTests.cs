@@ -660,18 +660,43 @@ public sealed class WebhooksCommandTests : IDisposable
         var schema = JsonSchema.FromText(LoadRouteSchema());
         var route = new JsonObject
         {
-            ["Prompt"] = "process delivery",
-            ["Verification"] = new JsonObject
+            ["prompt"] = "process delivery",
+            ["verification"] = new JsonObject
             {
-                ["Kind"] = kind,
-                ["ToleranceSeconds"] = toleranceSeconds,
-                ["TimestampField"] = timestampField
+                ["kind"] = kind,
+                ["toleranceSeconds"] = toleranceSeconds,
+                ["timestampField"] = timestampField
             }
         };
 
         var evaluation = schema.Evaluate(route);
 
         Assert.Equal(expectedValid, evaluation.IsValid);
+    }
+
+    [Fact]
+    public void RouteSchema_accepts_exact_store_serialization()
+    {
+        var route = new WebhookRouteConfig
+        {
+            Prompt = "process delivery",
+            Verification = new WebhookVerificationConfig
+            {
+                Kind = WebhookVerifierKind.HmacTimestamped,
+                Secret = new SensitiveString("test-secret"),
+                ToleranceSeconds = 300,
+                TimestampField = "t",
+                SignatureField = "v1"
+            }
+        };
+        new WebhookRouteStore(_paths).Save("schema-route", route);
+        var serializedRoute = JsonNode.Parse(
+            File.ReadAllText(Path.Combine(_paths.WebhooksDirectory, "schema-route.json")));
+        var schema = JsonSchema.FromText(LoadRouteSchema());
+
+        var evaluation = schema.Evaluate(serializedRoute);
+
+        Assert.True(evaluation.IsValid);
     }
 
     [Fact]

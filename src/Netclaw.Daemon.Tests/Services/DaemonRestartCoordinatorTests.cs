@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
@@ -71,13 +72,17 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
     public async Task RequestConfigRestartAsync_records_timed_out_sessions()
     {
         var time = new FakeTimeProvider();
+        var logger = new DrainAcknowledgementLogger();
         var (coordinator, drain) = CreateCoordinator(
-            ["slack/C123.2"],
+            ["slack/C123.1", "slack/C123.2"],
             timedOutSessionIds: ["slack/C123.2"],
-            timeProvider: time);
+            timeProvider: time,
+            logger: logger);
 
         var restart = coordinator.RequestConfigRestartAsync(CancellationToken.None);
         await drain.AllRequestsObserved;
+        drain.AcknowledgeAll();
+        await logger.Acknowledged;
         time.Advance(DrainTimeout);
         await restart;
 
@@ -199,7 +204,8 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
         IReadOnlyList<string> activeSessionIds,
         IReadOnlyList<string>? timedOutSessionIds = null,
         bool throwOnEnumeration = false,
-        FakeTimeProvider? timeProvider = null)
+        FakeTimeProvider? timeProvider = null,
+        ILogger<DaemonRestartCoordinator>? logger = null)
     {
         var timedOut = timedOutSessionIds ?? Array.Empty<string>();
         var drain = new DrainControl(activeSessionIds, timedOut);
@@ -221,7 +227,7 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
             _appLifetime,
             notifier,
             time,
-            NullLogger<DaemonRestartCoordinator>.Instance,
+            logger ?? NullLogger<DaemonRestartCoordinator>.Instance,
             DrainTimeout);
 
         return (coordinator, drain);
@@ -308,6 +314,30 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
                 if (Interlocked.Increment(ref _acknowledgementCount) == _expectedAcknowledgementCount)
                     _allAcknowledgementsSent.TrySetResult();
             }
+        }
+    }
+
+    private sealed class DrainAcknowledgementLogger : ILogger<DaemonRestartCoordinator>
+    {
+        private readonly TaskCompletionSource _acknowledged =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Acknowledged => _acknowledged.Task;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+            => NullLogger.Instance.BeginScope(state);
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (eventId == SessionDrainHelper.SessionDrainAcknowledgedEvent)
+                _acknowledged.TrySetResult();
         }
     }
 

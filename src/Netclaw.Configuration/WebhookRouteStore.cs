@@ -29,7 +29,6 @@ public sealed class WebhookRouteStore
     };
 
     private readonly NetclawPaths _paths;
-    private readonly object _sync = new();
 
     public WebhookRouteStore(NetclawPaths paths)
     {
@@ -77,38 +76,27 @@ public sealed class WebhookRouteStore
     /// </summary>
     public bool TryGet(string routeName, out (string FilePath, WebhookRouteConfig? Definition) result)
     {
-        lock (_sync)
+        var filePath = GetPath(routeName);
+        if (!File.Exists(filePath))
         {
-            var filePath = GetPath(routeName);
-            if (!File.Exists(filePath))
-            {
-                result = default;
-                return false;
-            }
-            result = (filePath, TryRead(filePath));
-            return true;
+            result = default;
+            return false;
         }
+        result = (filePath, TryRead(filePath));
+        return true;
     }
 
     public IReadOnlyList<(string RouteName, string FilePath, WebhookRouteConfig? Definition)> ListRouteFiles()
-    {
-        lock (_sync)
-        {
-            return Directory.EnumerateFiles(_paths.WebhooksDirectory, "*.json", SearchOption.TopDirectoryOnly)
-                .Select(file => (Path.GetFileNameWithoutExtension(file), file, TryRead(file)))
-                .OrderBy(x => x.Item1, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-    }
+        => Directory.EnumerateFiles(_paths.WebhooksDirectory, "*.json", SearchOption.TopDirectoryOnly)
+            .Select(file => (Path.GetFileNameWithoutExtension(file), file, TryRead(file)))
+            .OrderBy(x => x.Item1, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     public void Save(string routeName, WebhookRouteConfig definition)
     {
-        lock (_sync)
-        {
-            var filePath = GetPath(routeName);
-            using var routeLock = AcquireRouteLock(filePath, CancellationToken.None);
-            Write(filePath, definition);
-        }
+        var filePath = GetPath(routeName);
+        using var routeLock = AcquireRouteLock(filePath, CancellationToken.None);
+        Write(filePath, definition);
     }
 
     /// <summary>
@@ -122,38 +110,32 @@ public sealed class WebhookRouteStore
     {
         ArgumentNullException.ThrowIfNull(update);
 
-        lock (_sync)
+        var filePath = GetPath(routeName);
+        using var routeLock = AcquireRouteLock(filePath, cancellationToken);
+        WebhookRouteConfig? existing = null;
+        if (File.Exists(filePath))
         {
-            var filePath = GetPath(routeName);
-            using var routeLock = AcquireRouteLock(filePath, cancellationToken);
-            WebhookRouteConfig? existing = null;
-            if (File.Exists(filePath))
-            {
-                existing = TryRead(filePath);
-                if (existing is null)
-                    throw new InvalidDataException($"Existing webhook route '{routeName}' could not be parsed.");
-            }
-
-            var outcome = update(existing);
-            if (outcome.Definition is not null)
-                Write(filePath, outcome.Definition);
-
-            return outcome.Result;
+            existing = TryRead(filePath);
+            if (existing is null)
+                throw new InvalidDataException($"Existing webhook route '{routeName}' could not be parsed.");
         }
+
+        var outcome = update(existing);
+        if (outcome.Definition is not null)
+            Write(filePath, outcome.Definition);
+
+        return outcome.Result;
     }
 
-    public bool Delete(string routeName)
+    public bool Delete(string routeName, CancellationToken cancellationToken)
     {
-        lock (_sync)
-        {
-            var filePath = GetPath(routeName);
-            using var routeLock = AcquireRouteLock(filePath, CancellationToken.None);
-            if (!File.Exists(filePath))
-                return false;
+        var filePath = GetPath(routeName);
+        using var routeLock = AcquireRouteLock(filePath, cancellationToken);
+        if (!File.Exists(filePath))
+            return false;
 
-            File.Delete(filePath);
-            return true;
-        }
+        File.Delete(filePath);
+        return true;
     }
 
     private WebhookRouteConfig? TryRead(string filePath)

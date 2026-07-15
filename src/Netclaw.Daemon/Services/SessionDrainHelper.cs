@@ -18,6 +18,9 @@ namespace Netclaw.Daemon.Services;
 /// </summary>
 internal static class SessionDrainHelper
 {
+    internal static readonly EventId SessionDrainAcknowledgedEvent =
+        new(1, nameof(SessionDrainAcknowledgedEvent));
+
     /// <summary>
     /// Queries the session manager for active sessions, sends <see cref="PrepareForDaemonRestart"/>
     /// to each in parallel, and waits for acknowledgement or cancellation.
@@ -59,7 +62,17 @@ internal static class SessionDrainHelper
                     timeout: Timeout.InfiniteTimeSpan,
                     cancellationToken: operationCancellationToken);
 
-                return new DrainOutcome(sessionId, ack.SessionId == sessionId);
+                var drained = ack.SessionId == sessionId;
+                if (drained)
+                {
+                    logger.LogDebug(
+                        SessionDrainAcknowledgedEvent,
+                        "Session {SessionId} acknowledged drain for {Reason}.",
+                        sessionId.Value,
+                        reason);
+                }
+
+                return new DrainOutcome(sessionId, drained);
             }
             catch (OperationCanceledException) when (!callerCancellationToken.IsCancellationRequested)
             {

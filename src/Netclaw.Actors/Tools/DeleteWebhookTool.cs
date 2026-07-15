@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DeleteWebhookTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -30,8 +30,15 @@ public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Pa
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");
 
-        return Task.FromResult(_store.Delete(routeName)
-            ? $"Webhook route '{routeName}' deleted."
-            : $"Webhook route '{routeName}' not found.");
+        try
+        {
+            return Task.FromResult(_store.Delete(routeName, ct)
+                ? $"Webhook route '{routeName}' deleted."
+                : $"Webhook route '{routeName}' not found.");
+        }
+        catch (TimeoutException ex)
+        {
+            return Task.FromResult($"Error: {ex.Message}");
+        }
     }
 }

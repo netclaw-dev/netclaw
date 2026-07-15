@@ -4,54 +4,54 @@
   "title": "Netclaw Webhook Route v1",
   "type": "object",
   "properties": {
-    "Enabled": {
+    "enabled": {
       "type": "boolean",
       "default": true
     },
-    "Verification": {
+    "verification": {
       "type": "object",
       "properties": {
-        "Kind": {
+        "kind": {
           "type": "string",
           "enum": ["Hmac", "HeaderSecret", "HmacTimestamped"],
           "default": "Hmac"
         },
-        "HmacAlgorithm": {
+        "hmacAlgorithm": {
           "type": "string",
           "enum": ["Sha256"],
           "default": "Sha256"
         },
-        "Secret": {
+        "secret": {
           "type": ["string", "null"]
         },
-        "SignatureHeaderName": {
+        "signatureHeaderName": {
           "type": ["string", "null"]
         },
-        "SignaturePrefix": {
+        "signaturePrefix": {
           "type": ["string", "null"]
         },
-        "SecretHeaderName": {
+        "secretHeaderName": {
           "type": ["string", "null"]
         },
-        "EventHeaderName": {
+        "eventHeaderName": {
           "type": ["string", "null"]
         },
-        "DeliveryIdHeaderName": {
+        "deliveryIdHeaderName": {
           "type": ["string", "null"]
         },
-        "ToleranceSeconds": {
+        "toleranceSeconds": {
           "type": ["integer", "null"],
           "default": 300
         },
-        "TimestampField": {
+        "timestampField": {
           "type": ["string", "null"],
           "default": "t"
         },
-        "SignatureField": {
+        "signatureField": {
           "type": ["string", "null"],
           "default": "v1"
         },
-        "SignedPayloadSeparator": {
+        "signedPayloadSeparator": {
           "type": ["string", "null"],
           "default": "."
         }
@@ -60,23 +60,23 @@
         {
           "if": {
             "properties": {
-              "Kind": { "const": "HmacTimestamped" }
+              "kind": { "const": "HmacTimestamped" }
             },
-            "required": ["Kind"]
+            "required": ["kind"]
           },
           "then": {
             "properties": {
-              "ToleranceSeconds": {
+              "toleranceSeconds": {
                 "type": ["integer", "null"],
                 "minimum": 1,
                 "maximum": 3600
               },
-              "TimestampField": {
+              "timestampField": {
                 "type": ["string", "null"],
                 "minLength": 1,
                 "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
               },
-              "SignatureField": {
+              "signatureField": {
                 "type": ["string", "null"],
                 "minLength": 1,
                 "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
@@ -86,56 +86,56 @@
         }
       ],
       "additionalProperties": false,
-      "required": ["Kind"]
+      "required": ["kind"]
     },
-    "Events": {
+    "events": {
       "type": "array",
       "items": { "type": "string" },
       "default": []
     },
-    "Audience": {
+    "audience": {
       "type": "string",
       "enum": ["Public", "Team", "Personal"],
       "default": "Public"
     },
-    "Prompt": {
+    "prompt": {
       "type": "string",
       "default": ""
     },
-    "NotifyInstructions": {
+    "notifyInstructions": {
       "type": "string",
       "default": ""
     },
-    "DeliveryRequired": {
+    "deliveryRequired": {
       "type": "boolean",
       "default": true
     },
-    "NotificationTarget": {
+    "notificationTarget": {
       "type": ["object", "null"],
       "properties": {
-        "Kind": {
+        "kind": {
           "type": "string",
           "enum": ["Slack"],
           "default": "Slack"
         },
-        "ChannelId": {
+        "channelId": {
           "type": ["string", "null"]
         }
       },
       "additionalProperties": false,
       "default": null
     },
-    "MaxBodyBytes": {
+    "maxBodyBytes": {
       "type": "integer",
       "minimum": 1,
       "default": 1048576
     },
-    "RateLimitPerMinute": {
+    "rateLimitPerMinute": {
       "type": "integer",
       "minimum": 1,
       "default": 30
     }
   },
-  "required": ["Prompt", "Verification"],
+  "required": ["prompt", "verification"],
   "additionalProperties": false
 }
