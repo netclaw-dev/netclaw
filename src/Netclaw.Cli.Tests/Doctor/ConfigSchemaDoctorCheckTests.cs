@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
+[Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
 public sealed class ConfigSchemaDoctorCheckTests
 {
     [Fact]
