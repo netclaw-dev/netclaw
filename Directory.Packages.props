@@ -10,7 +10,7 @@
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.3</MattermostNetVersion>
-    <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
+    <MicrosoftExtensionsAIVersion>10.8.0</MicrosoftExtensionsAIVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.10</MicrosoftAspNetCoreVersion>
     <SkiaSharpVersion>4.148.0</SkiaSharpVersion>
