@@ -134,8 +134,15 @@ public sealed class MemoryCurationConfig
     /// <summary>
     /// Wall-clock timeout, in seconds, for the curation LLM call. Bounds latency when a model
     /// ignores reasoning suppression and thinks at length regardless of the token cap above.
+    /// Curation is background quality work — success matters far more than latency — so this is
+    /// sized to let the 4096-token <see cref="LlmMaxOutputTokens"/> ceiling actually be reached on
+    /// real providers rather than to bound perceived latency. The July 2026 canary
+    /// (0.25.0-alpha.onnx.7) measured a 46% curation LLM failure rate (11/24 over 14 days), 100%
+    /// attributable to <c>curation_llm_timeout</c> at the previous 10-second default — zero parse
+    /// errors or exceptions among the failures — because generating a full merged-body reply
+    /// routinely took longer than that.
     /// </summary>
-    public int LlmTimeoutSeconds { get; set; } = 10;
+    public int LlmTimeoutSeconds { get; set; } = 60;
 }
 
 /// <summary>

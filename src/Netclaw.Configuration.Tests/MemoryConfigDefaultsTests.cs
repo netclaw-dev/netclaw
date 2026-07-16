@@ -74,10 +74,10 @@ public sealed class MemoryConfigDefaultsTests
     }
 
     [Fact]
-    public void Curation_llm_timeout_seconds_defaults_to_10()
+    public void Curation_llm_timeout_seconds_defaults_to_60()
     {
         var config = new MemoryConfig();
-        Assert.Equal(10, config.Curation.LlmTimeoutSeconds);
+        Assert.Equal(60, config.Curation.LlmTimeoutSeconds);
     }
 
     // ── MemoryRecallConfig (memory-core-redesign Slice 4, task 4.5) ──

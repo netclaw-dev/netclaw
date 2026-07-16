@@ -646,7 +646,10 @@ public sealed class MemoryCurationEvaluator
         }
         catch (OperationCanceledException)
         {
-            log.Warning("curation_llm_timeout anchor={0}", operation.AnchorCanonicalName);
+            log.Warning(
+                "curation_llm_timeout anchor={0} timeoutSeconds={1}",
+                operation.AnchorCanonicalName,
+                curationConfig.LlmTimeoutSeconds);
             return null;
         }
         catch (Exception ex)
