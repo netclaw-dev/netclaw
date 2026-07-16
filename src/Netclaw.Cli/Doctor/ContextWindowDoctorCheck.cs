@@ -43,7 +43,19 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
         if (root is null)
             return DoctorCheckResult.Pass("Context Window", "No config file to check.");
 
-        var resolvedModels = ModelConfigurationResolver.Resolve(_configuration).Selection;
+        ModelSelection resolvedModels;
+        try
+        {
+            resolvedModels = ModelConfigurationResolver.Resolve(_configuration).Selection;
+        }
+        catch (ModelConfigurationException ex)
+        {
+            return DoctorCheckResult.Error(
+                "Context Window",
+                $"Invalid model configuration: {ex.Message}",
+                "Fix the Models configuration in netclaw.json, then rerun `netclaw doctor`.");
+        }
+
         var main = resolvedModels.Main;
 
         var runtimeValidation = ValidateRuntimeConfiguration(root);

@@ -53,6 +53,38 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingNamedDefinition_ReturnsActionableError()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new
+            {
+                Definitions = new Dictionary<string, object>
+                {
+                    ["known"] = new
+                    {
+                        Provider = "my-ollama",
+                        ModelId = "qwen3:30b"
+                    }
+                },
+                Roles = new
+                {
+                    Main = "missing"
+                }
+            }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models:Roles:Main references unknown definition 'missing'.", result.Message);
+        Assert.Contains("Fix the Models configuration", result.Remediation);
+        Assert.DoesNotContain("doctor --fix", result.Remediation);
+    }
+
+    [Fact]
     public async Task MainModelWithoutProvider_ReturnsUnavailableWithoutDefaultProvider()
     {
         WriteConfig(new

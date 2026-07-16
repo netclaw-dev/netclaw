@@ -47,12 +47,10 @@ internal static class ModelCommand
 
     private static int RunList(NetclawPaths paths, TextWriter writer)
     {
-        if (!TryLoadModelSelection(paths, out var models))
+        if (!TryLoadModelSelection(paths, out var models, out var error))
         {
-            // Config present but unparseable — surface it rather than showing a corrupt config as
-            // "no models configured", which would send the operator down the wrong recovery path.
-            writer.WriteLine("Error: model configuration could not be parsed.");
-            writer.WriteLine("Run `netclaw doctor` to diagnose, or `netclaw doctor --fix` to repair it.");
+            writer.WriteLine($"Error: {error}");
+            writer.WriteLine("Fix the Models section in netclaw.json, then rerun `netclaw model list`.");
             return 1;
         }
 
@@ -507,7 +505,7 @@ internal static class ModelCommand
     /// <see cref="TryLoadModelSelection"/>.
     /// </summary>
     internal static ModelSelection? LoadModelSelection(NetclawPaths paths)
-        => TryLoadModelSelection(paths, out var models) ? models : null;
+        => TryLoadModelSelection(paths, out var models, out _) ? models : null;
 
     /// <summary>
     /// Attempts to load the model selection. Returns false when the config file is present but its
@@ -515,9 +513,13 @@ internal static class ModelCommand
     /// treating it as "no models". Returns true (with null <paramref name="models"/>) when no config
     /// file or Models section exists.
     /// </summary>
-    internal static bool TryLoadModelSelection(NetclawPaths paths, out ModelSelection? models)
+    internal static bool TryLoadModelSelection(
+        NetclawPaths paths,
+        out ModelSelection? models,
+        out string? error)
     {
         models = null;
+        error = null;
         if (!File.Exists(paths.NetclawConfigPath))
             return true;
 
@@ -532,8 +534,14 @@ internal static class ModelCommand
             models = ModelConfigurationResolver.Resolve(configuration).Selection;
             return true;
         }
+        catch (ModelConfigurationException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
+            error = "model configuration could not be parsed.";
             return false;
         }
     }

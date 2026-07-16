@@ -100,8 +100,9 @@ Behavior:
 - optional output: JSON for automation
 - exit code `0` for success
 - exit code `1` for validation, policy, or runtime failures
-- expected model-configuration migration failures are validation failures: print actionable
-  output, return exit code `1`, and do not create crash logs or emit stack traces
+- expected model-configuration failures, including migration and named-role resolution errors,
+  are validation failures: print actionable output, return exit code `1`, and do not create crash
+  logs or emit stack traces
 - exit code `2` for usage and argument errors
 
 ## Safety Rules

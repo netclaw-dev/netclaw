@@ -500,8 +500,6 @@ internal static class ModelEntryWriter
     }
 }
 
-internal sealed class ModelConfigurationException(string message) : Exception(message);
-
 /// <summary>
 /// An operator's intent for an overridable, operator-owned model attribute on <c>model set</c> —
 /// a modality set (<see cref="ModelModality"/>) or the context window (<see cref="int"/>). A plain

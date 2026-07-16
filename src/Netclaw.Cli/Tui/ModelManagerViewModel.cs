@@ -95,7 +95,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     public void Refresh()
     {
-        if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models))
+        if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models, out _))
         {
             Models = null;
             StatusMessage.Value = "Model configuration is invalid. Run `netclaw doctor` for details.";

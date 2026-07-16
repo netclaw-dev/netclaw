@@ -41,7 +41,7 @@ public static class ModelConfigurationResolver
         var hasNamed = hasDefinitions || hasRoles;
 
         if (hasLegacy && hasNamed)
-            throw new InvalidOperationException(
+            throw new ModelConfigurationException(
                 "Models configuration mixes legacy inline roles with named Definitions/Roles. " +
                 "Run `netclaw doctor --fix` after removing one representation.");
 
@@ -53,7 +53,7 @@ public static class ModelConfigurationResolver
         }
 
         if (!hasDefinitions || !hasRoles)
-            throw new InvalidOperationException(
+            throw new ModelConfigurationException(
                 "Named Models configuration requires both Definitions and Roles sections.");
 
         var duplicateDefinition = modelsSection.GetSection(nameof(NamedModelConfiguration.Definitions))
@@ -62,13 +62,13 @@ public static class ModelConfigurationResolver
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateDefinition is not null)
         {
-            throw new InvalidOperationException(
+            throw new ModelConfigurationException(
                 $"Models:Definitions contains duplicate case-insensitive name '{duplicateDefinition.Key}'.");
         }
 
         var named = modelsSection.Get<NamedModelConfiguration>() ?? new NamedModelConfiguration();
         if (named.Definitions.Count == 0)
-            throw new InvalidOperationException("Models:Definitions must contain at least one model definition.");
+            throw new ModelConfigurationException("Models:Definitions must contain at least one model definition.");
 
         var selection = new ModelSelection
         {
@@ -87,7 +87,7 @@ public static class ModelConfigurationResolver
         NamedModelConfiguration named, string role, string definitionName)
     {
         if (string.IsNullOrWhiteSpace(definitionName))
-            throw new InvalidOperationException($"Models:Roles:{role} must reference a model definition.");
+            throw new ModelConfigurationException($"Models:Roles:{role} must reference a model definition.");
 
         return ResolveDefinition(named, role, definitionName);
     }
@@ -105,7 +105,7 @@ public static class ModelConfigurationResolver
             string.Equals(pair.Key, definitionName, StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrEmpty(match.Key))
         {
-            throw new InvalidOperationException(
+            throw new ModelConfigurationException(
                 $"Models:Roles:{role} references unknown definition '{definitionName}'.");
         }
 
@@ -124,3 +124,8 @@ public static class ModelConfigurationResolver
 }
 
 public sealed record ModelConfigurationResolution(ModelSelection Selection, bool IsLegacy);
+
+/// <summary>
+/// Represents an invalid operator-authored model configuration that cannot be resolved safely.
+/// </summary>
+public sealed class ModelConfigurationException(string message) : InvalidOperationException(message);

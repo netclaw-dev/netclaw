@@ -78,5 +78,86 @@ if [[ "$json_status" -eq 1 \
 else
   fail "doctor --fix --format json: migration guard did not return structured validation output"
 fi
+
+log "Testing unresolved named model references fail cleanly..."
+cat >"$config_path" <<'JSON'
+{
+  "configVersion": 1,
+  "Providers": {
+    "local": {
+      "Type": "ollama",
+      "Endpoint": "http://localhost:11434"
+    }
+  },
+  "Models": {
+    "Definitions": {
+      "known": {
+        "Provider": "local",
+        "ModelId": "qwen3:30b"
+      }
+    },
+    "Roles": {
+      "Main": "missing"
+    }
+  }
+}
+JSON
+expected_config="${NETCLAW_HOME}/doctor-unresolved.expected.json"
+cp "$config_path" "$expected_config"
+crash_count_before="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+
+model_status=0
+model_output="$(run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" model list 2>&1)" || model_status=$?
+echo "$model_output"
+if [[ "$model_status" -eq 1
+      && "$model_output" == *"Models:Roles:Main references unknown definition 'missing'."*
+      && "$model_output" != *"could not be parsed"*
+      && "$model_output" != *"doctor --fix"*
+      && "$model_output" != *"Unhandled exception"*
+      && "$model_output" != *"Fatal error"* ]]; then
+  pass "model list: unresolved role reports the exact reference without autofix guidance"
+else
+  fail "model list: unresolved role was not reported cleanly"
+fi
+
+doctor_status=0
+doctor_output="$(run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" doctor 2>&1)" || doctor_status=$?
+echo "$doctor_output"
+if [[ "$doctor_status" -eq 1
+      && "$doctor_output" == *"Models:Roles:Main references unknown definition 'missing'."*
+      && "$doctor_output" != *"Unhandled exception"*
+      && "$doctor_output" != *"Fatal error"* ]]; then
+  pass "doctor: unresolved role exits 1 without crashing"
+else
+  fail "doctor: unresolved role did not return a clean validation failure"
+fi
+
+json_status=0
+json_output="$(run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" doctor --format json 2>&1)" || json_status=$?
+echo "$json_output"
+if [[ "$json_status" -eq 1
+      && "$json_output" == *'"exitCode": 1'*
+      && "$json_output" == *"Models:Roles:Main references unknown definition"*
+      && "$json_output" == *"missing"*
+      && "$json_output" != *"Unhandled exception"*
+      && "$json_output" != *"Fatal error"* ]]; then
+  pass "doctor --format json: unresolved role preserves the JSON error envelope"
+else
+  fail "doctor --format json: unresolved role was not structured cleanly"
+fi
+
+fix_status=0
+fix_output="$(run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" doctor --fix --yes 2>&1)" || fix_status=$?
+echo "$fix_output"
+crash_count_after="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$fix_status" -eq 1
+      && "$fix_output" == *"Models:Roles:Main references unknown definition 'missing'."*
+      && "$fix_output" != *"Unhandled exception"*
+      && "$fix_output" != *"Fatal error"*
+      && "$crash_count_after" == "$crash_count_before" ]] && cmp -s "$config_path" "$expected_config"; then
+  pass "doctor --fix: unresolved role exits 1 without guessing, crashing, or changing config"
+else
+  fail "doctor --fix: unresolved role handling was unsafe or crashed"
+fi
 summarize
 exit $?

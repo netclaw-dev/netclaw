@@ -35,18 +35,22 @@ options instead of adding provider-specific properties to `ProviderEntry`.
 
 ### Degraded mode: No-Op chat client
 
-When Netclaw starts without an explicitly configured main model/provider
-(no `Models.Roles.Main`, an unresolved definition, no `Providers`, or the selected definition
-points to a provider that is not configured), the daemon launches in
-**degraded mode** with a No-Op chat client. Bound defaults such as
-`local-ollama/qwen3:30b` do not count as operator configuration unless those
-fields are actually present in config. Every chat turn returns a fixed
-configuration banner beginning with `"No valid model configuration detected."`
-and listing recovery steps. If no provider is configured, send the operator
-through `netclaw init`; it configures both a provider and main model. If a
-provider already exists but the main model is missing or points to the wrong
-provider name, use `netclaw model`. Manual repair means editing `netclaw.json`
-/ `secrets.json` and restarting the daemon.
+When Netclaw starts without an explicitly configured main model/provider (no
+`Models` configuration, no `Providers`, or the selected definition points to a
+provider that is not configured), the daemon launches in **degraded mode** with
+a No-Op chat client. Bound defaults such as `local-ollama/qwen3:30b` do not
+count as operator configuration unless those fields are actually present in
+config. Every chat turn returns a fixed configuration banner beginning with
+`"No valid model configuration detected."` and listing recovery steps. If no
+provider is configured, send the operator through `netclaw init`; it configures
+both a provider and main model. If a provider already exists but the main model
+is missing or points to the wrong provider name, use `netclaw model`. Manual
+repair means editing `netclaw.json` / `secrets.json` and restarting the daemon.
+
+A role that names a definition absent from `Models.Definitions` is malformed
+configuration, not degraded mode. `netclaw model list` and `netclaw doctor`
+report the exact role and missing definition. Repair the role manually or use
+`netclaw model set`; `netclaw doctor --fix` does not guess a replacement.
 
 If the operator reports seeing that banner, do not troubleshoot model behavior;
 the daemon has no working provider. Direct them through the recovery steps and
@@ -103,9 +107,10 @@ definition, including adding a property the definition deliberately omits.
 To change a preserved value you must pass the corresponding flag (a plain
 re-set will not touch it). A legacy or hand-edited entry with an unreadable
 value does not block a re-set — `model set` migrates legacy inline roles to named
-definitions and repairs the selected entry while keeping the fields
-it can still read; `model list` reports an unparseable config instead of
-crashing, and `netclaw doctor --fix` repairs it.
+definitions and repairs the selected entry while keeping the fields it can
+still read. `model list` reports an unparseable config instead of crashing.
+`netclaw doctor --fix` applies only repairs it can derive safely; it does not
+invent missing named definitions or role assignments.
 
 ### Adding GitHub Copilot
 

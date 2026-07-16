@@ -59,7 +59,7 @@ public sealed class NamedModelConfigurationTests
             ["Models:Roles:Main"] = "vision",
         });
 
-        var exception = Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<ModelConfigurationException>(
             () => ModelConfigurationResolver.Resolve(configuration));
 
         Assert.Contains("mixes legacy", exception.Message);
@@ -75,7 +75,7 @@ public sealed class NamedModelConfigurationTests
             ["Models:Roles:Main"] = "missing",
         });
 
-        var exception = Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<ModelConfigurationException>(
             () => ModelConfigurationResolver.Resolve(configuration));
 
         Assert.Contains("unknown definition 'missing'", exception.Message);

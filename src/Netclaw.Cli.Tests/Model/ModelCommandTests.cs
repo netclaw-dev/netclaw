@@ -596,6 +596,39 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task List_MissingNamedDefinition_SurfacesResolverErrorWithoutAutofixGuidance()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["known"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "my-ollama",
+                        ["ModelId"] = "qwen3:30b"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object>
+                {
+                    ["Main"] = "missing"
+                }
+            }
+        });
+
+        var exitCode = await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
+
+        var output = _output.ToString();
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Models:Roles:Main references unknown definition 'missing'.", output);
+        Assert.Contains("Fix the Models section", output);
+        Assert.DoesNotContain("could not be parsed", output);
+        Assert.DoesNotContain("doctor --fix", output);
+    }
+
+    [Fact]
     public async Task Set_CorruptModalityButValidWindow_PreservesWindowEndToEnd()
     {
         // End-to-end regression for the full `model set` path: a re-set over a corrupt entry that
