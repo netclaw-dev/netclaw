@@ -439,6 +439,11 @@ public sealed class ModelCommandTests : IDisposable
     [InlineData("--input-modalities requires a value", "--input-modalities")]
     [InlineData("unknown argument '--input-modalites'", "--input-modalites", "Text")]
     [InlineData("invalid modalities", "--input-modalities", "3")]
+    [InlineData("invalid modalities", "--input-modalities", "1")]
+    [InlineData("invalid modalities", "--input-modalities", "2")]
+    [InlineData("invalid modalities", "--input-modalities", "4")]
+    [InlineData("invalid modalities", "--input-modalities", "8")]
+    [InlineData("invalid modalities", "--output-modalities", "1")]
     [InlineData("cannot be combined", "--context-window", "32768", "--clear-context-window")]
     public async Task Set_InvalidOptions_ReturnErrorWithoutWriting(
         string expectedError,

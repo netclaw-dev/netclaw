@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
@@ -306,11 +307,11 @@ internal static class ModelCommand
         var result = ModelModality.None;
         foreach (var token in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            // Enum.TryParse also accepts the underlying integer ("3" → Text|Image), but the contract
-            // advertised in the help text and error message is named flags only. Enum.IsDefined
-            // rejects a numeric token because its parsed value is not a single declared member, so a
-            // mistyped or scripted number is not silently coerced into a modality set.
-            if (!Enum.TryParse(token, ignoreCase: true, out ModelModality parsed)
+            // Enum.TryParse accepts underlying integers, including values that happen to be declared
+            // members ("1" → Text). The CLI contract is named flags only, so reject numeric tokens
+            // before parsing rather than relying on Enum.IsDefined to distinguish composites.
+            if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
+                || !Enum.TryParse(token, ignoreCase: true, out ModelModality parsed)
                 || !Enum.IsDefined(parsed)
                 || parsed == ModelModality.None)
                 return false;
