@@ -1,5 +1,25 @@
 # NetClaw Release Notes
 
+## 0.25.0-beta.5 (2026-07-16)
+
+### Features
+- **Timestamped HMAC verification for webhooks** — Webhook routes now verify request timestamps alongside HMAC signatures to prevent replay attacks, with configurable HMAC algorithm support ([#1660](https://github.com/netclaw-dev/netclaw/pull/1660))
+- **TSV support in content scanner** — Added `text/tab-separated-values` as a recognized MIME type, allowing TSV files to be scanned and processed by the content pipeline ([#1645](https://github.com/netclaw-dev/netclaw/pull/1645))
+
+### Bug Fixes
+- **Reminders rescan definitions before startup alerts** — Fixed: startup alerts could fire before reminder definitions were fully loaded, causing missed or duplicate reminders on restart ([#1653](https://github.com/netclaw-dev/netclaw/pull/1653))
+- **OpenAI client 2.12 compatibility** — Updated OpenAI provider plugin to work with the breaking API change in OpenAI SDK 2.12 (`OpenAIClientOptions` → `ResponsesClientOptions`) ([#1654](https://github.com/netclaw-dev/netclaw/pull/1654))
+
+### Improvements
+- **Tool execution pipeline refactoring** — Restructured the session tool execution pipeline with isolated invocation scope, composed execution pipeline, typed subagent context isolation, and proper lifecycle cleanup. Fixes subagent fatal spawn failures ([#1641](https://github.com/netclaw-dev/netclaw/pull/1641), [#1643](https://github.com/netclaw-dev/netclaw/pull/1643), [#1644](https://github.com/netclaw-dev/netclaw/pull/1644), [#1646](https://github.com/netclaw-dev/netclaw/pull/1646))
+
+### Dependency Updates
+- **Bump OpenAI client to 2.12** — Required for compatibility with the updated SDK API ([#1654](https://github.com/netclaw-dev/netclaw/pull/1654))
+- **Bump Microsoft.Extensions.AI** — 10.6.0 → 10.8.0 ([#1650](https://github.com/netclaw-dev/netclaw/pull/1650))
+- **Bump Microsoft.AspNetCore.DataProtection** — 10.0.9 → 10.0.10 ([#1657](https://github.com/netclaw-dev/netclaw/pull/1657))
+- **Bump Microsoft.NET.Test.Sdk** — 18.7.0 → 18.8.1 ([#1651](https://github.com/netclaw-dev/netclaw/pull/1651))
+- **Bump Mattermost.NET** — 5.0.0 → 5.0.3 ([#1626](https://github.com/netclaw-dev/netclaw/pull/1626))
+
 ## 0.25.0-beta.4 (2026-07-14)
 
 ### Features
