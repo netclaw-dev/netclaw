@@ -177,10 +177,29 @@ public sealed partial class DaemonManager
             process.Kill();
         }
 
-        // Wait up to 10 seconds for graceful exit.
-        if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(10), cancellationToken))
+        // Wait for graceful exit. DaemonConfig.GracefulShutdownBudget matches the daemon's own
+        // Akka CoordinatedShutdown "before-service-unbind" phase timeout — where session
+        // draining (SessionDrainHelper.DrainAsync) actually happens — so the CLI does not give
+        // up on a daemon that is still legitimately draining in-flight sessions (TurnLlmTimeout
+        // defaults to 3 minutes). See DaemonConfig.GracefulShutdownBudget remarks for the full
+        // layering this must respect: bounded drain < Akka phase timeout < this budget + the
+        // grace window below < systemd's TimeoutStopSec= (netclaw-dev/netclaw#1664, #1665).
+        var exitedWithinBudget = await WaitForExitAsync(process, DaemonConfig.GracefulShutdownBudget, cancellationToken);
+        var exitedDuringGraceWindow = false;
+        if (!exitedWithinBudget)
         {
-            // Timed out — hard cutoff.
+            // The daemon's own bounded drain (netclaw-dev/netclaw#1664) can time out at almost
+            // exactly this same budget boundary, and still needs to finish tearing down (actor
+            // system termination, PID file cleanup) afterward. Poll a short additional grace
+            // window before escalating to SIGKILL — production evidence (#1665) showed a
+            // daemon force-killed ~100ms from a clean exit because the CLI escalated the
+            // instant its budget elapsed, with no headroom at all.
+            exitedDuringGraceWindow = await WaitForExitAsync(process, DaemonConfig.CliForceKillGraceWindow, cancellationToken);
+        }
+
+        if (!exitedWithinBudget && !exitedDuringGraceWindow)
+        {
+            // Both the budget and the grace window elapsed — hard cutoff.
             string? killError = null;
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             {
@@ -203,7 +222,27 @@ public sealed partial class DaemonManager
         }
 
         CleanupPidFile();
-        return new DaemonResult(true, $"Daemon stopped (was PID {pid}).");
+
+        if (exitedWithinBudget)
+            return new DaemonResult(true, $"Daemon stopped (was PID {pid}).");
+
+        if (exitedDuringGraceWindow)
+        {
+            // Clean exit — no kill needed — but worth surfacing: the daemon used its full
+            // graceful-shutdown budget, which usually means a session was still mid-LLM-call
+            // at shutdown.
+            return new DaemonResult(true,
+                $"Daemon stopped (was PID {pid}); exited during the " +
+                $"{DaemonConfig.CliForceKillGraceWindow.TotalSeconds:F0}s grace window after the " +
+                $"{DaemonConfig.GracefulShutdownBudget.TotalSeconds:F0}s graceful-wait budget elapsed " +
+                "(no kill needed).");
+        }
+
+        return new DaemonResult(true,
+            $"Daemon stopped (was PID {pid}), but did not exit gracefully within " +
+            $"{DaemonConfig.CliForceKillBudget.TotalSeconds:F0}s (budget + grace window) and had to be " +
+            "force-killed. This usually means a session was still mid-LLM-call at shutdown; if it " +
+            "recurs, check for stuck sessions before stopping the daemon.");
     }
 
     /// <summary>
@@ -358,6 +397,13 @@ public sealed partial class DaemonManager
     /// The <c>-</c> prefix makes systemd tolerant of a missing env file: a deleted PATH
     /// file degrades tool resolution (which <c>SystemdUnitPathDoctorCheck</c> flags)
     /// rather than preventing the entire daemon from starting.
+    ///
+    /// <c>TimeoutStopSec=</c> is <see cref="DaemonConfig.SystemdTimeoutStopSec"/> — comfortably
+    /// longer than this <see cref="StopAsync"/>'s own graceful-wait-plus-grace budget
+    /// (<see cref="DaemonConfig.CliForceKillBudget"/>) so systemd never SIGKILLs the whole
+    /// cgroup out from under <c>ExecStop=</c> (<c>netclaw daemon stop</c>) while that command is
+    /// still legitimately waiting on the daemon's own shutdown (netclaw-dev/netclaw#1665).
+    /// Existing installs only pick this up after re-running <c>netclaw daemon install</c>.
     /// </summary>
     internal static string BuildDaemonUnitContent(string binaryPath, string cliBinaryPath, string environmentFilePath) => $"""
         [Unit]
@@ -368,6 +414,7 @@ public sealed partial class DaemonManager
         Type=simple
         ExecStart={binaryPath}
         ExecStop={cliBinaryPath} daemon stop
+        TimeoutStopSec={(int)DaemonConfig.SystemdTimeoutStopSec.TotalSeconds}
         Restart=always
         RestartSec=5
         Environment=DOTNET_ENVIRONMENT=Production
