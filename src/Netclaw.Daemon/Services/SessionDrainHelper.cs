@@ -100,9 +100,10 @@ internal static class SessionDrainHelper
         else
         {
             logger.LogWarning(
-                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out; timed-out sessions will recover from the last durable checkpoint.",
+                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out ({TimedOutSessionIds}); timed-out sessions will recover from the last durable checkpoint.",
                 drained.Length,
-                timedOut.Length);
+                timedOut.Length,
+                string.Join(", ", timedOut.Select(static id => id.Value)));
         }
 
         return new DrainResult(sessionIds, drained, timedOut);
