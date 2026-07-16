@@ -36,8 +36,14 @@ ollama_ensure_installed() {
   uname_s="$(uname -s)"
   case "$uname_s" in
     Linux)
-      echo "Installing ollama via official install script..."
-      curl -fsSL https://ollama.com/install.sh | sh
+      # The moving install.sh endpoint has served a stale tgz fallback during
+      # release rollouts. Pin both the installer and artifact version so a
+      # smoke run cannot fail because the latest release is only partially
+      # published.
+      local ollama_version="${OLLAMA_VERSION:-0.32.0}"
+      local installer_url="https://raw.githubusercontent.com/ollama/ollama/v${ollama_version}/scripts/install.sh"
+      echo "Installing Ollama ${ollama_version} via its release-pinned installer..."
+      curl -fsSL "$installer_url" | OLLAMA_VERSION="$ollama_version" sh
       ;;
     Darwin)
       if ! command -v brew >/dev/null 2>&1; then
