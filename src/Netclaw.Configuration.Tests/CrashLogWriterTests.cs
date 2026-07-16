@@ -32,7 +32,7 @@ public sealed class CrashLogWriterTests : IDisposable
             new InvalidOperationException("boom"), "CLI", errorWriter: errors);
 
         Assert.NotNull(crashPath);
-        Assert.Equal(Path.Combine(home, "logs"), Path.GetDirectoryName(crashPath));
+        Assert.Equal(Path.Join(home, "logs"), Path.GetDirectoryName(crashPath));
         Assert.True(File.Exists(crashPath));
         Assert.Contains(crashPath, errors.ToString(), StringComparison.Ordinal);
     }
@@ -52,13 +52,13 @@ public sealed class CrashLogWriterTests : IDisposable
         Assert.NotNull(crashPath);
         Assert.Equal(explicitLogs, Path.GetDirectoryName(crashPath));
         Assert.True(File.Exists(crashPath));
-        Assert.False(Directory.Exists(Path.Combine(home, "logs")));
+        Assert.False(Directory.Exists(Path.Join(home, "logs")));
         Assert.Contains(crashPath, errors.ToString(), StringComparison.Ordinal);
     }
 
     private string NewTempDirectory()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-crash-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Join(Path.GetTempPath(), "netclaw-crash-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         _tempDirectories.Add(path);
         return path;
