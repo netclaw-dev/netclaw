@@ -108,6 +108,15 @@ public sealed class DaemonPathEnvironmentFileTests
         Assert.DoesNotContain("Environment=PATH=", unit, StringComparison.Ordinal);
         Assert.Contains("ExecStart=/opt/netclaw/netclawd", unit, StringComparison.Ordinal);
         Assert.Contains("ExecStop=/opt/netclaw/netclaw daemon stop", unit, StringComparison.Ordinal);
+
+        // Producer/consumer contract (netclaw-dev/netclaw#1665): the generated unit's
+        // TimeoutStopSec= must track DaemonConfig.SystemdTimeoutStopSec, not a stale literal,
+        // so systemd never SIGKILLs the cgroup out from under a still-legitimately-waiting
+        // `netclaw daemon stop` (ExecStop=).
+        Assert.Contains(
+            $"TimeoutStopSec={(int)DaemonConfig.SystemdTimeoutStopSec.TotalSeconds}",
+            unit,
+            StringComparison.Ordinal);
     }
 
     [Fact]

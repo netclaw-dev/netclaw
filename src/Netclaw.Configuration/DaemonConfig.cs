@@ -21,6 +21,84 @@ public sealed record DaemonConfig
     public const int DefaultPort = 5199;
 
     /// <summary>
+    /// Worst-case time the daemon's graceful shutdown drain is allotted before something gives
+    /// up and forces termination. Sized to comfortably exceed <c>SessionConfig.TurnLlmTimeout</c>'s
+    /// default (3 minutes) so a session mid-LLM-call during shutdown can finish draining instead
+    /// of being interrupted.
+    ///
+    /// Single source of truth shared by every shutdown-timing surface that must stay in
+    /// lockstep (netclaw-dev/netclaw#1664, #1665):
+    ///   - Netclaw.Daemon's Akka <c>coordinated-shutdown.phases.before-service-unbind.timeout</c>
+    ///     HOCON override (see <c>DaemonShutdownConfiguration.BuildCoordinatedShutdownHocon</c>),
+    ///     where <c>SessionDrainHelper.DrainAsync</c> actually drains sessions
+    ///   - <see cref="BoundedDrainTimeout"/>, the deadline the daemon-stop CoordinatedShutdown
+    ///     task gives that same drain call — always strictly under this budget, so the drain
+    ///     finishes (timed out or not) before the phase timeout above abandons it outright
+    ///   - Netclaw.Daemon's generic-host <c>HostOptions.ShutdownTimeout</c>
+    ///   - <c>Netclaw.Cli.Daemon.DaemonManager</c>'s graceful-wait before force-kill in
+    ///     <c>netclaw daemon stop</c>, followed by <see cref="CliForceKillGraceWindow"/>
+    ///   - the generated systemd unit's <c>TimeoutStopSec=</c>
+    ///     (<see cref="SystemdTimeoutStopSec"/>; see <c>DaemonManager.BuildDaemonUnitContent</c>)
+    ///
+    /// #1664: the SIGTERM/daemon-stop drain previously waited unbounded
+    /// (<c>CancellationToken.None</c>), so a session parked on interactive tool approval — which
+    /// cannot ack within any budget — hung the call for the full phase timeout, leaking the
+    /// abandoned drain task. #1665: the CLI's force-kill wait equaled this exact budget with no
+    /// headroom, so whenever the drain legitimately used the full budget, the CLI guaranteed a
+    /// SIGKILL race the daemon could not win (evidence: a production daemon force-killed ~100ms
+    /// from a clean exit).
+    /// </summary>
+    public static readonly TimeSpan GracefulShutdownBudget = TimeSpan.FromSeconds(200);
+
+    /// <summary>
+    /// Safety margin subtracted from <see cref="GracefulShutdownBudget"/> to produce
+    /// <see cref="BoundedDrainTimeout"/>, so the daemon-stop session drain always finishes —
+    /// timed out or not — strictly before the Akka <c>before-service-unbind</c> phase timeout
+    /// itself fires and abandons the drain task.
+    /// </summary>
+    public static readonly TimeSpan DrainSafetyMargin = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Additional time <c>netclaw daemon stop</c> polls for process exit after
+    /// <see cref="GracefulShutdownBudget"/> elapses, before escalating to SIGKILL. Covers the
+    /// daemon's own post-drain teardown (actor system termination, PID file cleanup) so a
+    /// daemon that finishes right at the budget boundary is not killed out from under itself
+    /// (netclaw-dev/netclaw#1665).
+    /// </summary>
+    public static readonly TimeSpan CliForceKillGraceWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Headroom added on top of <see cref="GracefulShutdownBudget"/> for the systemd unit's
+    /// <c>TimeoutStopSec=</c> (<see cref="SystemdTimeoutStopSec"/>), so systemd never SIGKILLs
+    /// the whole cgroup out from under <c>ExecStop=</c> (<c>netclaw daemon stop</c>) while that
+    /// command is still legitimately waiting on the daemon's own bounded shutdown.
+    /// </summary>
+    public static readonly TimeSpan SystemdTeardownMargin = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The deadline the daemon-stop CoordinatedShutdown task gives
+    /// <c>SessionDrainHelper.DrainAsync</c>. Always strictly less than
+    /// <see cref="GracefulShutdownBudget"/> so the drain completes — as timed out if
+    /// necessary — before the Akka phase timeout fires.
+    /// </summary>
+    public static TimeSpan BoundedDrainTimeout => GracefulShutdownBudget - DrainSafetyMargin;
+
+    /// <summary>
+    /// Total time <c>netclaw daemon stop</c> allows before escalating to SIGKILL: the
+    /// graceful wait (matching the daemon's own Akka phase timeout) plus
+    /// <see cref="CliForceKillGraceWindow"/>.
+    /// </summary>
+    public static TimeSpan CliForceKillBudget => GracefulShutdownBudget + CliForceKillGraceWindow;
+
+    /// <summary>
+    /// The systemd unit's <c>TimeoutStopSec=</c> value: comfortably longer than
+    /// <see cref="CliForceKillBudget"/> so systemd never SIGKILLs the whole cgroup out from
+    /// under <c>ExecStop=</c> (<c>netclaw daemon stop</c>) while that command is still
+    /// legitimately waiting on the daemon's own shutdown.
+    /// </summary>
+    public static TimeSpan SystemdTimeoutStopSec => GracefulShutdownBudget + SystemdTeardownMargin;
+
+    /// <summary>
     /// IP address the daemon binds to. Defaults to loopback (<c>127.0.0.1</c>).
     /// </summary>
     public string Host { get; init; } = "127.0.0.1";
