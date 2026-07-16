@@ -24,10 +24,7 @@ public static class CrashLogWriter
 
         try
         {
-            var effectiveLogsDirectory = logsDirectory
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".netclaw", "logs");
+            var effectiveLogsDirectory = logsDirectory ?? new NetclawPaths().LogsDirectory;
 
             Directory.CreateDirectory(effectiveLogsDirectory);
 

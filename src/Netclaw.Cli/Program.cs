@@ -228,40 +228,56 @@ static async Task RunAsync(string[] args)
         var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
         var fixService = scope.ServiceProvider.GetRequiredService<DoctorFixService>();
 
-        DoctorFixPlan? fixPlan = null;
-        if (doctorOptions!.Fix)
+        try
         {
-            fixPlan = await fixService.BuildPlanAsync();
-            if (doctorOptions.Format is DoctorOutputFormat.Text)
-                WriteDoctorFixPlan(fixPlan, doctorOptions.DryRun);
-
-            if (fixPlan.HasChanges && !doctorOptions.DryRun)
+            DoctorFixPlan? fixPlan = null;
+            if (doctorOptions!.Fix)
             {
-                var shouldApply = doctorOptions.Yes || PromptForDoctorFixApply();
-                if (shouldApply)
-                    await fixService.ApplyAsync(fixPlan);
+                fixPlan = await fixService.BuildPlanAsync();
+                if (doctorOptions.Format is DoctorOutputFormat.Text)
+                    WriteDoctorFixPlan(fixPlan, doctorOptions.DryRun);
+
+                if (fixPlan.HasChanges && !doctorOptions.DryRun)
+                {
+                    var shouldApply = doctorOptions.Yes || PromptForDoctorFixApply();
+                    if (shouldApply)
+                        await fixService.ApplyAsync(fixPlan);
+                }
             }
+
+            var result = await runner.RunAsync();
+
+            if (doctorOptions.Format is DoctorOutputFormat.Json)
+                WriteDoctorJsonResult(result, fixPlan, doctorOptions);
+            else
+                WriteDoctorResult(result);
+
+            // Hint about --fix when there are issues and fix wasn't requested
+            if (!doctorOptions.Fix
+                && result.ExitCode != 0
+                && doctorOptions.Format is DoctorOutputFormat.Text)
+            {
+                fixPlan ??= await fixService.BuildPlanAsync();
+                if (fixPlan.HasChanges)
+                    Console.WriteLine("hint: Some issues may be auto-fixable. Run `netclaw doctor --fix --dry-run` to preview.");
+            }
+
+            Environment.ExitCode = result.ExitCode;
+            return;
         }
-
-        var result = await runner.RunAsync();
-
-        if (doctorOptions.Format is DoctorOutputFormat.Json)
-            WriteDoctorJsonResult(result, fixPlan, doctorOptions);
-        else
-            WriteDoctorResult(result);
-
-        // Hint about --fix when there are issues and fix wasn't requested
-        if (!doctorOptions.Fix
-            && result.ExitCode != 0
-            && doctorOptions.Format is DoctorOutputFormat.Text)
+        catch (ModelConfigurationException ex)
         {
-            fixPlan ??= await fixService.BuildPlanAsync();
-            if (fixPlan.HasChanges)
-                Console.WriteLine("hint: Some issues may be auto-fixable. Run `netclaw doctor --fix --dry-run` to preview.");
-        }
+            var failure = new DoctorRunResult(
+                [DoctorCheckResult.Error("model-configuration", ex.Message)],
+                ExitCode: 1);
+            if (doctorOptions!.Format is DoctorOutputFormat.Json)
+                WriteDoctorJsonResult(failure, fixPlan: null, doctorOptions);
+            else
+                Console.WriteLine($"Error: {ex.Message}");
 
-        Environment.ExitCode = result.ExitCode;
-        return;
+            Environment.ExitCode = 1;
+            return;
+        }
     }
 
     if (mode is "status")

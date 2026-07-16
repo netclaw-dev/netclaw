@@ -11,8 +11,8 @@ When something seems wrong with Netclaw itself:
 2. If doctor reports fixable issues, run `netclaw doctor --fix --dry-run` to
    preview auto-repairs (schema-driven: stale properties, enum coercion, missing defaults)
 3. Run `netclaw status` via `shell_execute` — live runtime state from daemon
-3. Check daemon logs at `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log`
-4. Check session logs at `~/.netclaw/logs/sessions/{sanitized-session-id}/session.log`
+3. Check daemon logs at `<NETCLAW_HOME>/logs/daemon-{yyyy-MM-dd}.log` (`NETCLAW_HOME` defaults to `~/.netclaw`)
+4. Check session logs at `<NETCLAW_HOME>/logs/sessions/{sanitized-session-id}/session.log`
 
 If `netclaw status` or `netclaw chat` prints `daemon not configured - please run
 netclaw init`, do not troubleshoot daemon reachability or model defaults. The
@@ -75,7 +75,7 @@ debugging a daemon-wide problem → read `daemon.log`.
 | No LLM responses | `netclaw doctor`; verify provider credentials |
 | Missing tools | `netclaw mcp list`; check MCP connection state |
 | Memory recall degraded | `netclaw status` memory section |
-| Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
+| Daemon won't start | crash logs at `<NETCLAW_HOME>/logs/crash-*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`) |
 | Docker daemon cannot create `/home/netclaw/.netclaw/*` | Official image entrypoint repairs writable bind mounts to UID/GID `1654:1654`; if bypassed or read-only, run `sudo chown -R 1654:1654 <host-data-dir>` or use a Docker named volume |
 | Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. Discord may also report `degraded` when Discord.Net says the socket is connected but the gateway is not ready, such as after a resumed session that Netclaw is replacing with a clean reconnect. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw`/`dotnet`/a user tool from the shell tool when the daemon runs as a systemd service | The systemd `--user` service does not inherit your login-shell `PATH`; `netclaw daemon install` captures it into `~/.netclaw/config/daemon.env`. Run `netclaw doctor` (the **Systemd Unit PATH** check flags a missing/stale/legacy env file), then `netclaw doctor --fix` to rehydrate `PATH` from your current shell (or re-run `netclaw daemon install`), and finally `systemctl --user restart netclaw`. Installed a new tool after install? Its dir won't be seen until you re-run one of those and restart. Per-directory managers (`mise`/`asdf`/`direnv`) are not captured. |

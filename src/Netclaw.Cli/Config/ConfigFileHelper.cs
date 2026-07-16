@@ -177,14 +177,7 @@ internal static class ConfigFileHelper
             || !oldModels.TryGetProperty("Main", out _))
             return;
 
-        var legacyEnvironmentOverride = ModelEntryWriter.FindLegacyEnvironmentOverride();
-        if (legacyEnvironmentOverride is not null)
-        {
-            throw new InvalidOperationException(
-                $"Cannot migrate Models while legacy environment override '{legacyEnvironmentOverride}' is set. " +
-                "Move model overrides to NETCLAW_Models__Definitions__<name>__* and " +
-                "NETCLAW_Models__Roles__* first.");
-        }
+        ModelEntryWriter.ThrowIfLegacyEnvironmentOverride();
 
         var backupPath = path + ".legacy-models.bak";
         if (!File.Exists(backupPath))

@@ -37,8 +37,22 @@ internal static class ModelEntryWriter
             return false;
         if (!modelsSection.Keys.Any(key => key is "Main" or "Fallback" or "Compaction"))
             return false;
+
+        ThrowIfLegacyEnvironmentOverride();
         EnsureNamedShape(modelsSection);
         return true;
+    }
+
+    internal static void ThrowIfLegacyEnvironmentOverride()
+    {
+        var legacyEnvironmentOverride = FindLegacyEnvironmentOverride();
+        if (legacyEnvironmentOverride is null)
+            return;
+
+        throw new ModelConfigurationException(
+            $"Cannot migrate Models while legacy environment override '{legacyEnvironmentOverride}' is set. " +
+            "Move model overrides to NETCLAW_Models__Definitions__<name>__* and " +
+            "NETCLAW_Models__Roles__* first.");
     }
 
     internal static bool ClearRole(Dictionary<string, object> modelsSection, string roleKey)
@@ -123,12 +137,12 @@ internal static class ModelEntryWriter
             key is "Main" or "Fallback" or "Compaction");
 
         if (hasNamed && hasLegacy)
-            throw new InvalidOperationException("Models configuration mixes legacy roles with Definitions/Roles.");
+            throw new ModelConfigurationException("Models configuration mixes legacy roles with Definitions/Roles.");
 
         if (hasNamed)
         {
             if (!modelsSection.ContainsKey("Definitions") || !modelsSection.ContainsKey("Roles"))
-                throw new InvalidOperationException("Named Models configuration requires Definitions and Roles.");
+                throw new ModelConfigurationException("Named Models configuration requires Definitions and Roles.");
 
             return (GetDictionary(modelsSection, "Definitions"), GetDictionary(modelsSection, "Roles"));
         }
@@ -146,7 +160,7 @@ internal static class ModelEntryWriter
             {
                 if (string.Equals(role, overwrittenRole, StringComparison.OrdinalIgnoreCase))
                     continue;
-                throw new InvalidOperationException(
+                throw new ModelConfigurationException(
                     $"Models:{role} must explicitly declare Provider and ModelId before migration.");
             }
 
@@ -154,12 +168,12 @@ internal static class ModelEntryWriter
             try
             {
                 model = ConfigFileHelper.DeserializeSection<ModelReference>(raw)
-                        ?? throw new InvalidOperationException($"Models:{role} could not be parsed.");
+                        ?? throw new ModelConfigurationException($"Models:{role} could not be parsed.");
             }
             catch (JsonException)
             {
                 model = ReadLegacyIdentity(raw)
-                        ?? throw new InvalidOperationException($"Models:{role} could not be repaired.");
+                        ?? throw new ModelConfigurationException($"Models:{role} could not be repaired.");
             }
             var existingName = FindDefinition(definitions, model.Provider, model.ModelId);
             if (existingName is not null)
@@ -167,7 +181,7 @@ internal static class ModelEntryWriter
                 var existing = ConfigFileHelper.DeserializeSection<ModelReference>(definitions[existingName])!;
                 if (!Equivalent(existing, model))
                 {
-                    throw new InvalidOperationException(
+                    throw new ModelConfigurationException(
                         $"Legacy model roles conflict for {model.Provider}/{model.ModelId}; " +
                         $"align their metadata before migration.");
                 }
@@ -219,7 +233,7 @@ internal static class ModelEntryWriter
             return dictionary;
         }
 
-        throw new InvalidOperationException($"Models:{key} must be an object.");
+        throw new ModelConfigurationException($"Models:{key} must be an object.");
     }
 
     private static string? FindDefinition(
@@ -485,6 +499,8 @@ internal static class ModelEntryWriter
         return entry;
     }
 }
+
+internal sealed class ModelConfigurationException(string message) : Exception(message);
 
 /// <summary>
 /// An operator's intent for an overridable, operator-owned model attribute on <c>model set</c> —

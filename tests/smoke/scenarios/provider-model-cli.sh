@@ -93,5 +93,90 @@ else
   pass "model clear: $ALT_MODEL cleared from fallback"
 fi
 
+log "Testing legacy migration failures are clean model errors..."
+config_path="${NETCLAW_HOME}/config/netclaw.json"
+cat >"$config_path" <<JSON
+{
+  "configVersion": 1,
+  "Providers": {
+    "local-ollama": {
+      "Type": "ollama",
+      "Endpoint": "${OLLAMA_ENDPOINT}"
+    }
+  },
+  "Models": {
+    "Main": {
+      "Provider": "local-ollama",
+      "ModelId": "${SMOKE_MODEL}"
+    }
+  }
+}
+JSON
+expected_config="${NETCLAW_HOME}/legacy-model.expected.json"
+cp "$config_path" "$expected_config"
+crash_count_before="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+migration_status=0
+migration_output="$(
+  NETCLAW_Models__Main__ContextWindow=65536 run_timed \
+    "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" model set main local-ollama "$ALT_MODEL" 2>&1
+)" || migration_status=$?
+echo "$migration_output"
+crash_count_after="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+new_crash_log="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' -newer "$expected_config" -print -quit 2>/dev/null)"
+if [[ "$migration_status" -eq 1 \
+      && "$migration_output" == Error:*"Cannot migrate Models"* \
+      && "$migration_output" != *"Unhandled exception"* \
+      && "$migration_output" != *"Fatal error"* \
+      && -z "$new_crash_log" \
+      && "$crash_count_after" == "$crash_count_before" \
+      && ! -e "${config_path}.legacy-models.bak" ]] \
+    && cmp -s "$config_path" "$expected_config"; then
+  pass "model set: legacy environment guard exits 1 without crash artefacts or config changes"
+else
+  fail "model set: legacy environment guard was not a clean validation failure"
+fi
+
+cat >"$config_path" <<JSON
+{
+  "configVersion": 1,
+  "Providers": {
+    "local-ollama": {
+      "Type": "ollama",
+      "Endpoint": "${OLLAMA_ENDPOINT}"
+    }
+  },
+  "Models": {
+    "Main": {
+      "Provider": "local-ollama",
+      "ModelId": "${SMOKE_MODEL}",
+      "ContextWindow": 32768
+    },
+    "Fallback": {
+      "Provider": "local-ollama",
+      "ModelId": "${SMOKE_MODEL}",
+      "ContextWindow": 65536
+    }
+  }
+}
+JSON
+cp "$config_path" "$expected_config"
+conflict_crash_count_before="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+conflict_status=0
+conflict_output="$(
+  run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" \
+    model set compaction local-ollama "$SMOKE_MODEL" 2>&1
+)" || conflict_status=$?
+echo "$conflict_output"
+conflict_crash_count_after="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$conflict_status" -eq 1 \
+      && "$conflict_output" == Error:*"Legacy model roles conflict"* \
+      && "$conflict_output" != *"Unhandled exception"* \
+      && "$conflict_output" != *"Fatal error"* \
+      && "$conflict_crash_count_after" == "$conflict_crash_count_before" ]] \
+    && cmp -s "$config_path" "$expected_config"; then
+  pass "model set: conflicting legacy roles exit 1 without changing config"
+else
+  fail "model set: conflicting legacy roles were not a clean validation failure"
+fi
 summarize
 exit $?

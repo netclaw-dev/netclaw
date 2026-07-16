@@ -5,12 +5,14 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
+[Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
 public sealed class DoctorFixServiceTests
 {
     // POSIX install dir: systemd units are always POSIX-style regardless of the host OS
@@ -281,6 +283,84 @@ public sealed class DoctorFixServiceTests
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(plan.Fixes, f => f.FilePath == paths.DaemonEnvironmentFilePath);
+    }
+
+    [Fact]
+    public async Task LegacyEnvironmentOverride_BlocksMigrationWithoutChangingConfig()
+    {
+        var paths = NewPaths();
+        const string config =
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Main": {
+                  "Provider": "vllm",
+                  "ModelId": "qwen-vl"
+                }
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, config, TestContext.Current.CancellationToken);
+        const string envVar = "NETCLAW_Models__Main__ContextWindow";
+        var previous = Environment.GetEnvironmentVariable(envVar);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(envVar, "65536");
+            var service = ConfigOnlyService(paths);
+
+            var exception = await Assert.ThrowsAsync<ModelConfigurationException>(
+                () => service.BuildPlanAsync(TestContext.Current.CancellationToken));
+
+            Assert.Contains(envVar, exception.Message, StringComparison.Ordinal);
+            Assert.Equal(config, await File.ReadAllTextAsync(
+                paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, previous);
+        }
+    }
+
+    [Fact]
+    public async Task LegacyEnvironmentOverride_DoesNotBlockAlreadyNamedModels()
+    {
+        var paths = NewPaths();
+        const string config =
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Definitions": {
+                  "main": {
+                    "Provider": "vllm",
+                    "ModelId": "qwen-vl"
+                  }
+                },
+                "Roles": {
+                  "Main": "main"
+                }
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, config, TestContext.Current.CancellationToken);
+        const string envVar = "NETCLAW_Models__Main__ContextWindow";
+        var previous = Environment.GetEnvironmentVariable(envVar);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(envVar, "65536");
+            var service = ConfigOnlyService(paths);
+
+            var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(plan.Fixes, fix => fix.FilePath == paths.NetclawConfigPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, previous);
+        }
     }
 
     private static NetclawPaths NewPaths()

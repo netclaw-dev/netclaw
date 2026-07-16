@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Model;
 
+[Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
 public sealed class ModelCommandTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -611,6 +612,115 @@ public sealed class ModelCommandTests : IDisposable
         var main = ReadActiveModel(config, "Main");
         Assert.Equal(32768, main.GetProperty("ContextWindow").GetInt32()); // valid clamp preserved
         Assert.False(main.TryGetProperty("InputModalities", out _));        // corrupt override dropped
+    }
+
+    [Fact]
+    public async Task Set_LegacyEnvironmentOverride_ReturnsErrorWithoutChangingConfig()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Main"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b"
+            }
+        };
+        WriteConfig(config);
+        var original = File.ReadAllText(_paths.NetclawConfigPath);
+        const string envVar = "NETCLAW_Models__Main__ContextWindow";
+        var previous = Environment.GetEnvironmentVariable(envVar);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(envVar, "65536");
+
+            var exitCode = await ModelCommand.RunAsync(
+                ["model", "set", "main", "my-ollama", "qwen3:8b"], _paths, output: _output);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains(
+                $"Error: Cannot migrate Models while legacy environment override '{envVar}' is set.",
+                _output.ToString(), StringComparison.Ordinal);
+            Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, previous);
+        }
+    }
+
+    [Fact]
+    public async Task Set_ConflictingLegacyRoles_ReturnsErrorWithoutChangingConfig()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Main"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b",
+                ["ContextWindow"] = 32768
+            },
+            ["Fallback"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b",
+                ["ContextWindow"] = 65536
+            }
+        };
+        WriteConfig(config);
+        var original = File.ReadAllText(_paths.NetclawConfigPath);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "compaction", "my-ollama", "qwen3:30b"], _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "Error: Legacy model roles conflict for my-ollama/qwen3:30b; align their metadata before migration.",
+            _output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Clear_LegacyEnvironmentOverride_ReturnsErrorWithoutChangingConfig()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Main"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:30b"
+            },
+            ["Fallback"] = new Dictionary<string, object>
+            {
+                ["Provider"] = "my-ollama",
+                ["ModelId"] = "qwen3:8b"
+            }
+        };
+        WriteConfig(config);
+        var original = File.ReadAllText(_paths.NetclawConfigPath);
+        const string envVar = "NETCLAW_Models__Fallback__ContextWindow";
+        var previous = Environment.GetEnvironmentVariable(envVar);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(envVar, "65536");
+
+            var exitCode = await ModelCommand.RunAsync(
+                ["model", "clear", "fallback"], _paths, output: _output);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains(
+                $"Error: Cannot migrate Models while legacy environment override '{envVar}' is set.",
+                _output.ToString(), StringComparison.Ordinal);
+            Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, previous);
+        }
     }
 
     private static Dictionary<string, object> WithMainEntry(Dictionary<string, object> main)

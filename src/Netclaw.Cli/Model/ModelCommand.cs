@@ -25,15 +25,23 @@ internal static class ModelCommand
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
-        return subcommand switch
+        try
         {
-            "list" => RunList(paths, writer),
-            "set" => await RunSetAsync(args, paths, probe, writer),
-            "discover" => await RunDiscoverAsync(args, paths, probe, writer),
-            "clear" => RunClear(args, paths, writer),
-            "help" or "-h" or "--help" => WriteHelp(writer),
-            _ => WriteHelp(writer)
-        };
+            return subcommand switch
+            {
+                "list" => RunList(paths, writer),
+                "set" => await RunSetAsync(args, paths, probe, writer),
+                "discover" => await RunDiscoverAsync(args, paths, probe, writer),
+                "clear" => RunClear(args, paths, writer),
+                "help" or "-h" or "--help" => WriteHelp(writer),
+                _ => WriteHelp(writer)
+            };
+        }
+        catch (ModelConfigurationException ex)
+        {
+            writer.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
     }
 
     private static int RunList(NetclawPaths paths, TextWriter writer)

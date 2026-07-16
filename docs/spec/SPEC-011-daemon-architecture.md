@@ -225,7 +225,8 @@ The daemon installs process-level exception handlers at startup for:
 - `AppDomain.CurrentDomain.UnhandledException`
 - `TaskScheduler.UnobservedTaskException`
 
-On either path, Netclaw writes a crash log under `~/.netclaw/logs/crash-*.log`
+On either path, Netclaw writes a crash log under `<NETCLAW_HOME>/logs/crash-*.log`;
+`NETCLAW_HOME` defaults to `~/.netclaw`
 with process diagnostics and the latest known session/turn context. When DI is
 available, the daemon also emits an operational alert with type
 `daemon.crashing` (category `DaemonCrashed`) so configured webhook targets can
