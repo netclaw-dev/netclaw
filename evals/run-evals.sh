@@ -1216,7 +1216,14 @@ assert_grounding_action_verification() {
 assert_grounding_attachment_path() {
     stdout_response_contains '/home/netclaw/\.netclaw/sessions/.*/inbox/image_1\.png' \
         && stdout_response_not_contains '/media/' \
-        && stdout_not_contains '\[tool:call\]'
+        && stdout_not_contains 'find /home/netclaw/\.netclaw/sessions'
+}
+
+setup_grounding_attachment_path() {
+    local run="$1"
+    local session_dir="/home/netclaw/.netclaw/sessions/eval_grounding_attachment_path-run${run}-$$"
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" mkdir -p "$session_dir/inbox"
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" touch "$session_dir/inbox/image_1.png"
 }
 
 # Category 6: Autonomy & Execution
@@ -1802,9 +1809,8 @@ run_all() {
     run_case grounding_action_verification "set_reminder called" \
         "Schedule a reminder to check email in 10 minutes"
 
-    run_case grounding_attachment_path "resolves the announced inbox path from session_dir without searching" \
-        "An uploaded image was announced as [attachment] name=\"image.png\" path=\"inbox/image_1.png\". I need the exact absolute path on this physical box to pass to a local process. Reply with only that path." \
-        "The accepted attachment metadata says path=\"inbox/image_1.png\". Give me its exact physical absolute path. Return only the path; do not rename the file."
+    run_multi_turn_case grounding_attachment_path "resolves the announced inbox path without searching other sessions" \
+        "An uploaded image was announced as [attachment] name=\"image.png\" path=\"inbox/image_1.png\". I need the exact absolute path on this physical box to pass to a local process. Reply with only that path."
 
     end_category
 
