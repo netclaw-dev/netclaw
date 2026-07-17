@@ -8,6 +8,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -223,7 +224,8 @@ public sealed class McpOAuthHeaderConflictTests : IDisposable
             oauthService,
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
+            NullLogger<McpClientManager>.Instance,
+            new ApplicationLifetime(NullLogger<ApplicationLifetime>.Instance));
     }
 
     private static HttpClient CreateDiscoveryClientThatReturnsOAuthHints()

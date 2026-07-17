@@ -24,6 +24,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpClientManager> _logger;
+    private readonly IHostApplicationLifetime _appLifetime;
     private readonly int _maxToolDescriptionChars;
     private readonly int _maxToolSchemaWarnChars;
 
@@ -33,6 +34,22 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private readonly ConcurrentDictionary<McpServerName, McpServerStatus> _statuses = new();
 
+    // Guards the memoized teardown Task below. Teardown can be reached from
+    // three independent callers (the ApplicationStopping hook, the host's
+    // IHostedService.StopAsync, and IDisposable.Dispose) and must run its real
+    // work exactly once; every caller after the first converges on the same
+    // Task instead of re-disposing already-disposed clients or racing them.
+    private readonly object _teardownGate = new();
+    private Task? _teardownTask;
+
+    // Set synchronously (before any await) the moment teardown begins, so a
+    // racing ConnectAsync/TryReconnectAsync call started on another thread can
+    // observe it immediately and bail out before touching the transport or
+    // spawning a process. Volatile, not Interlocked-guarded state, is
+    // sufficient here: the flag is only ever written once (inside
+    // _teardownGate) and is read-only everywhere else.
+    private volatile bool _stopping;
+
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry toolRegistry,
@@ -41,6 +58,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         ILogger<McpClientManager> logger,
+        IHostApplicationLifetime appLifetime,
         SessionConfig? sessionConfig = null)
     {
         _serverEntries = serverEntries;
@@ -50,12 +68,23 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _logger = logger;
+        _appLifetime = appLifetime;
         _maxToolDescriptionChars = sessionConfig?.Tuning.MaxToolDescriptionChars ?? 0;
         _maxToolSchemaWarnChars = sessionConfig?.Tuning.MaxToolSchemaWarnChars ?? 0;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // ApplicationStopping fires before any IHostedService.StopAsync runs —
+        // including AkkaHostedService's, which blocks on CoordinatedShutdown's
+        // full session-drain phase (up to DaemonConfig.BoundedDrainTimeout).
+        // Hooking here lets MCP child-process teardown start concurrently with
+        // session drain instead of waiting for it to finish first. StopAsync
+        // and Dispose route through the same memoized TeardownAsync() below as
+        // a backstop, so whichever of the three callers runs first does the
+        // real work and the others just await its completion.
+        _appLifetime.ApplicationStopping.Register(() => _ = TeardownAsync());
+
         foreach (var (name, entry) in _serverEntries)
         {
             var serverName = new McpServerName(name);
@@ -70,23 +99,47 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public Task StopAsync(CancellationToken cancellationToken) => TeardownAsync();
+
+    /// <summary>
+    /// Returns the single, memoized teardown operation for this manager's
+    /// lifetime, creating it on first call. Sets <see cref="_stopping"/>
+    /// synchronously (inside the lock, before <see cref="TeardownCoreAsync"/>
+    /// reaches its first await) so a racing reconnect call started on another
+    /// thread cannot slip a new client past this point.
+    /// </summary>
+    private Task TeardownAsync()
     {
-        foreach (var (name, client) in _clients)
+        lock (_teardownGate)
+        {
+            if (_teardownTask is not null)
+                return _teardownTask;
+
+            _stopping = true;
+            _teardownTask = TeardownCoreAsync();
+            return _teardownTask;
+        }
+    }
+
+    private async Task TeardownCoreAsync()
+    {
+        var disposals = _clients.ToArray().Select(async entry =>
         {
             try
             {
-                await client.DisposeAsync();
-                _logger.LogInformation("MCP client '{Name}' shut down", name.Value);
+                await entry.Value.DisposeAsync();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error shutting down MCP client '{Name}'", name.Value);
+                _logger.LogWarning(ex, "Error shutting down MCP client '{Name}'", entry.Key.Value);
             }
-        }
+        });
+
+        await Task.WhenAll(disposals);
 
         _clients.Clear();
         _sharedToolFunctions.Clear();
+        _logger.LogInformation("MCP clients shut down");
     }
 
     public McpClient? GetClient(McpServerName serverName)
@@ -109,6 +162,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     public async Task<bool> TryReconnectAsync(McpServerName serverName, CancellationToken ct = default)
     {
+        // Once teardown has begun there is no legitimate reason to reconnect —
+        // the daemon is exiting. This is the single choke point both the
+        // tool-call retry-after-failure path (InvokeSharedAsync) and
+        // McpReconnectionService's periodic poll go through, so gating here
+        // closes off both without touching either caller.
+        if (_stopping)
+            return false;
+
         if (!_serverEntries.TryGetValue(serverName.Value, out var entry) || !entry.Enabled)
             return false;
 
@@ -206,6 +267,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private async Task<bool> ConnectAsync(McpServerName name, McpServerEntry entry, CancellationToken ct)
     {
+        // Same shutdown guard as TryReconnectAsync: refuse to spawn a new
+        // child process once teardown has started. StartAsync's own initial
+        // connect loop always runs before _stopping can be set, so this only
+        // ever short-circuits reconnect-triggered calls.
+        if (_stopping)
+            return false;
+
         // Holds the client until ownership passes to _clients. If the connect
         // fails after the client — and its child process — is created but
         // before that handoff (e.g. ListToolsAsync throws), the finally
@@ -589,16 +657,19 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
+    // Routes through the same memoized teardown as StopAsync/ApplicationStopping
+    // rather than its own separate synchronous dispose pass, so all three
+    // entry points converge on one real disposal (graceful wait, then
+    // process-tree kill) instead of Dispose racing a weaker, synchronous-only
+    // teardown against the other two. Blocking here is safe: by the time the
+    // generic host disposes this singleton, StopAsync has already run and the
+    // memoized task is normally already complete, making this a synchronous
+    // no-op in the common case (the backstop case is a caller that only ever
+    // calls Dispose(), e.g. a test harness or a crash path that never reached
+    // StopAsync).
     public void Dispose()
     {
-        foreach (var client in _clients.Values)
-        {
-            try { (client as IDisposable)?.Dispose(); }
-            catch (Exception ex) { _logger.LogDebug(ex, "Error disposing MCP client during shutdown"); }
-        }
-
-        _clients.Clear();
-        _sharedToolFunctions.Clear();
+        TeardownAsync().GetAwaiter().GetResult();
     }
 }
 

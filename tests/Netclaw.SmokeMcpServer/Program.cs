@@ -20,13 +20,16 @@ using ModelContextProtocol.Server;
 //       echo(text)               -> text
 //       record-tasks(tasks, ref) -> a summary of the structured arguments
 //       process-info()           -> process ID and command-line arguments
+//       sleep(ms)                -> waits ms milliseconds, then "awake"
 //
 //     Determinism is the whole point: add(2, 2) is always 4, so a smoke
 //     scenario can hard-assert on the tool RESULT even though the
 //     surrounding LLM prose is random. `record-tasks` additionally gives
 //     netclaw's schema-driven argument coercion a tool with an
 //     array-of-objects parameter to exercise end to end (see
-//     SmokeMcpServerArgumentCoercionTests).
+//     SmokeMcpServerArgumentCoercionTests). `sleep` gives MCP teardown tests
+//     a way to hold a tool call in flight for a known duration (see
+//     McpShutdownTeardownTests).
 //
 //     CRITICAL: stdout is the MCP JSON-RPC protocol channel. Nothing
 //     other than protocol frames may be written to stdout. All
@@ -85,6 +88,22 @@ internal sealed class Program
     {
         var kinds = string.Join(",", tasks.Select(t => t is JsonElement je ? je.ValueKind.ToString() : "?"));
         return $"reference={reference} count={tasks.Length} kinds=[{kinds}]";
+    }
+
+    /// <summary>
+    /// Deterministic-duration tool used to hold a call in flight for teardown
+    /// tests: the caller knows exactly how long the server will keep the
+    /// request open, so a test can start this call, trigger client disposal
+    /// concurrently, and assert on how the in-flight call resolves without
+    /// racing on real elapsed time to decide whether it was "in flight."
+    /// </summary>
+    [McpServerTool(Name = "sleep")]
+    [Description("Sleeps for the given number of milliseconds, then returns 'awake'. Used to hold a call in flight for lifecycle tests.")]
+    public static async Task<string> Sleep(
+        [Description("Milliseconds to sleep before returning.")] int ms)
+    {
+        await Task.Delay(ms);
+        return "awake";
     }
 
     [McpServerTool(Name = "process-info")]
@@ -150,6 +169,7 @@ internal sealed class Program
             McpServerTool.Create(Echo, new McpServerToolCreateOptions { Name = "echo" }),
             McpServerTool.Create(RecordTasks, new McpServerToolCreateOptions { Name = "record-tasks" }),
             McpServerTool.Create(ProcessInfo, new McpServerToolCreateOptions { Name = "process-info" }),
+            McpServerTool.Create(Sleep, new McpServerToolCreateOptions { Name = "sleep" }),
         };
 
         var options = new McpServerOptions

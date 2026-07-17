@@ -121,3 +121,16 @@ JSON blob — so you can act on it directly:
 
 Both name the server explicitly (`server/tool`), so when two servers expose a
 same-named tool you can tell which one failed.
+
+### MCP teardown during daemon shutdown
+
+Once the daemon begins a graceful shutdown (SIGTERM or `netclaw daemon stop`),
+MCP client teardown starts immediately — concurrently with session drain,
+not strictly after it — and every configured server tears down at the same
+time (bounded by the slowest single server, not the sum). If your tool call
+is in flight when its server's client gets disposed, expect the same
+`Error: MCP tool 'server/tool' failed: <detail>` result described above,
+returned promptly rather than hanging until the process exits — this is
+expected end-of-life behavior, not a bug to retry around. Once shutdown has
+started, no MCP server reconnects for any reason (not the automatic
+reconnect above, not a background health check) — the daemon is exiting.

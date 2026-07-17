@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.Internal;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -24,18 +27,33 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
     private readonly HttpClient _pkceHttp;
     private readonly HttpClient _oauthHttp;
 
-    private McpSmokeHarness(McpClientManager manager, HttpClient pkceHttp, HttpClient oauthHttp)
+    private McpSmokeHarness(
+        McpClientManager manager,
+        ApplicationLifetime appLifetime,
+        HttpClient pkceHttp,
+        HttpClient oauthHttp)
     {
         Manager = manager;
+        AppLifetime = appLifetime;
         _pkceHttp = pkceHttp;
         _oauthHttp = oauthHttp;
     }
 
     public McpClientManager Manager { get; }
 
+    /// <summary>
+    /// The real <see cref="IHostApplicationLifetime"/> implementation backing
+    /// <see cref="Manager"/>. Tests call <see cref="ApplicationLifetime.StopApplication"/>
+    /// to fire <c>ApplicationStopping</c> synchronously, exactly as the
+    /// generic host does on SIGTERM/graceful stop, without needing a full
+    /// <see cref="IHost"/>.
+    /// </summary>
+    public ApplicationLifetime AppLifetime { get; }
+
     public static McpSmokeHarness Create(
         Dictionary<string, McpServerEntry> serverEntries,
-        ToolRegistry registry)
+        ToolRegistry registry,
+        ILogger<McpClientManager>? logger = null)
     {
         var pkceHttp = new HttpClient();
         var oauthHttp = new HttpClient();
@@ -46,6 +64,7 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             NullLogger<McpOAuthService>.Instance,
             new OAuthPkceService(pkceHttp),
             NullNotificationSink.Instance);
+        var appLifetime = new ApplicationLifetime(NullLogger<ApplicationLifetime>.Instance);
         var manager = new McpClientManager(
             serverEntries,
             registry,
@@ -53,8 +72,9 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             oauthService,
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
-        return new McpSmokeHarness(manager, pkceHttp, oauthHttp);
+            logger ?? NullLogger<McpClientManager>.Instance,
+            appLifetime);
+        return new McpSmokeHarness(manager, appLifetime, pkceHttp, oauthHttp);
     }
 
     public async ValueTask DisposeAsync()

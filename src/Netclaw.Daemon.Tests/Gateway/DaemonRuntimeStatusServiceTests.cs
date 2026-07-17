@@ -6,6 +6,7 @@
 using System.Net;
 using Microsoft.Extensions.AI;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
@@ -298,7 +299,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             oauthService,
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
+            NullLogger<McpClientManager>.Instance,
+            new ApplicationLifetime(NullLogger<ApplicationLifetime>.Instance));
 
         await manager.StartAsync(CancellationToken.None);
         try

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-12T17:20:55.7365203+00:00",
-  "updatedAt": "2026-06-10T19:44:08.3092383+00:00",
+  "updatedAt": "2026-07-16T16:54:31.2122436+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC",
   "entries": [
     {
@@ -30,24 +30,6 @@
       "codeSnippet": "<NoWarn>$(NoWarn);OPENAI001</NoWarn>",
       "message": "Adding warnings to NoWarn: OPENAI001",
       "baselinedAt": "2026-05-12T17:20:55.7420301+00:00"
-    },
-    {
-      "hash": "1a29ed65e4ed3efb",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
-      "lineNumber": 139,
-      "codeSnippet": "Task.Delay(50, ct)",
-      "message": "Test uses Task.Delay(50) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-05-12T17:20:55.7420338+00:00"
-    },
-    {
-      "hash": "fcb5e461d7f70a7c",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
-      "lineNumber": 154,
-      "codeSnippet": "Task.Delay(100, ct)",
-      "message": "Test uses Task.Delay(100) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-05-12T17:20:55.7420454+00:00"
     },
     {
       "hash": "6ea5c8bbead4b59c",
@@ -113,15 +95,6 @@
       "baselinedAt": "2026-05-12T17:20:55.7421146+00:00"
     },
     {
-      "hash": "c00fb5b6beafab8b",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Actors.Tests/SubAgents/SubAgentActorTests.cs",
-      "lineNumber": 459,
-      "codeSnippet": "Task.Delay(Delay, cancellationToken)",
-      "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-05-12T17:20:55.7421212+00:00"
-    },
-    {
       "hash": "b691cefe260611c6",
       "ruleId": "SW004",
       "filePath": "src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs",
@@ -174,6 +147,15 @@
       "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
       "message": "Test method 'IsApproved_git_tag_grant_matches_both_version_forms' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
       "baselinedAt": "2026-06-10T19:44:08.3092375+00:00"
+    },
+    {
+      "hash": "92870afae0455103",
+      "ruleId": "SW004",
+      "filePath": "tests/Netclaw.SmokeMcpServer/Program.cs",
+      "lineNumber": 105,
+      "codeSnippet": "Task.Delay(ms)",
+      "message": "Test uses Task.Delay(ms) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-16T16:54:31.2120133+00:00"
     }
   ]
 }

@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -88,7 +89,8 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             oauthService,
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
+            NullLogger<McpClientManager>.Instance,
+            new ApplicationLifetime(NullLogger<ApplicationLifetime>.Instance));
 
         builder.Services.AddSingleton(oauthService);
         builder.Services.AddSingleton(mcpManager);
