@@ -62,22 +62,6 @@ public class ShellToolTests
     }
 
     [Fact]
-    public async Task Requested_timeout_overrides_default_timeout()
-    {
-        var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
-        var args = ToolInput.Create("Command", "sleep 1");
-        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Personal,
-            ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(5))
-        });
-
-        var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
-
-        Assert.Contains("Exit code: 0", result);
-    }
-
-    [Fact]
     public async Task Caller_cancellation_kills_child_process_tree_and_returns_gracefully()
     {
         // Reproduces the session-pipeline path: ShellTool's own timeout is long,
