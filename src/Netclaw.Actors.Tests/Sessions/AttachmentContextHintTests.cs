@@ -25,6 +25,15 @@ public sealed class AttachmentContextHintTests
     }
 
     [Fact]
+    public void Hint_defines_the_announced_path_as_authoritative_and_session_relative()
+    {
+        Assert.Contains("path` is authoritative", SessionMessageAssembler.AttachmentContextHint, System.StringComparison.Ordinal);
+        Assert.Contains("relative to `session_dir`", SessionMessageAssembler.AttachmentContextHint, System.StringComparison.Ordinal);
+        Assert.Contains("collision-safe filename change", SessionMessageAssembler.AttachmentContextHint, System.StringComparison.Ordinal);
+        Assert.Contains("`{session_dir}/{path}`", SessionMessageAssembler.AttachmentContextHint, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Hint_documents_the_inlined_field_and_both_values()
     {
         Assert.Contains("inlined=\"true|false\"", SessionMessageAssembler.AttachmentContextHint, System.StringComparison.Ordinal);

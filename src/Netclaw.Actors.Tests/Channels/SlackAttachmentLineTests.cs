@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
+using Netclaw.Media;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -58,5 +60,72 @@ public sealed class SlackAttachmentLineTests
         Assert.DoesNotContain("\n", line, StringComparison.Ordinal);
         Assert.DoesNotContain("\r", line, StringComparison.Ordinal);
         Assert.StartsWith("[attachment]", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BuildAcceptedProjection_uses_final_collision_safe_live_inbox_path()
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-attachment-line-{Guid.NewGuid():N}");
+        var inboxDir = Path.Combine(sessionDir, SessionDirectoryHelper.InboxSubdirectory);
+        Directory.CreateDirectory(inboxDir);
+
+        try
+        {
+            await InboxWriter.SanitizeReserveAndWriteAsync(
+                inboxDir, "image.png", new byte[] { 1 }, TestContext.Current.CancellationToken);
+            var renamedPath = await InboxWriter.SanitizeReserveAndWriteAsync(
+                inboxDir, "image.png", new byte[] { 2 }, TestContext.Current.CancellationToken);
+
+            var projection = await AttachmentIngressFormatting.BuildAcceptedProjectionAsync(
+                renamedPath,
+                "image.png",
+                "image/png",
+                AttachmentCategory.Image,
+                inlineImages: true,
+                size: 1,
+                TestContext.Current.CancellationToken);
+
+            Assert.EndsWith("image_1.png", renamedPath, StringComparison.Ordinal);
+            Assert.Contains("path=\"inbox/image_1.png\"", projection.Line, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(sessionDir, "inbox", "image_1.png")));
+            Assert.NotNull(projection.InlineContent);
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BuildAcceptedProjection_uses_final_stable_historical_inbox_path()
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-historical-line-{Guid.NewGuid():N}");
+        var inboxDir = Path.Combine(sessionDir, SessionDirectoryHelper.InboxSubdirectory);
+        Directory.CreateDirectory(inboxDir);
+        var stagedPath = Path.Combine(sessionDir, "stage.tmp");
+        await File.WriteAllBytesAsync(stagedPath, [1, 2, 3], TestContext.Current.CancellationToken);
+
+        try
+        {
+            var historicalPath = HistoricalAttachmentInbox.PromoteOrReuse(
+                inboxDir, "image.png", "slack:F123", stagedPath);
+            var projection = await AttachmentIngressFormatting.BuildAcceptedProjectionAsync(
+                historicalPath,
+                "image.png",
+                "image/png",
+                AttachmentCategory.Image,
+                inlineImages: true,
+                size: 3,
+                TestContext.Current.CancellationToken);
+
+            var finalName = Path.GetFileName(historicalPath);
+            Assert.Matches("^image_hist_[0-9a-f]{16}\\.png$", finalName);
+            Assert.Contains($"path=\"inbox/{finalName}\"", projection.Line, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(sessionDir, "inbox", finalName)));
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
     }
 }
