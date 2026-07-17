@@ -1213,6 +1213,12 @@ assert_grounding_action_verification() {
     stdout_contains '\[tool:call\] set_reminder'
 }
 
+assert_grounding_attachment_path() {
+    stdout_response_contains '/home/netclaw/\.netclaw/sessions/.*/inbox/image_1\.png' \
+        && stdout_response_not_contains '/media/' \
+        && stdout_not_contains '\[tool:call\]'
+}
+
 # Category 6: Autonomy & Execution
 assert_autonomy_execute() {
     stdout_contains '\[tool:call\] shell_execute'
@@ -1795,6 +1801,10 @@ run_all() {
 
     run_case grounding_action_verification "set_reminder called" \
         "Schedule a reminder to check email in 10 minutes"
+
+    run_case grounding_attachment_path "resolves the announced inbox path from session_dir without searching" \
+        "An uploaded image was announced as [attachment] name=\"image.png\" path=\"inbox/image_1.png\". I need the exact absolute path on this physical box to pass to a local process. Reply with only that path." \
+        "The accepted attachment metadata says path=\"inbox/image_1.png\". Give me its exact physical absolute path. Return only the path; do not rename the file."
 
     end_category
 

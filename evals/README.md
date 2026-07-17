@@ -72,7 +72,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Skill Auto-Loading | 4 | Keyword matching triggers correct skills |
 | Memory Pipeline | 4 | Memory recall is active, identity-vs-memory routing is correct, explicit saves use memory tools, and automatic checkpointing still fires |
 | Tool Discovery & Use | 9 | Progressive tool discovery and invocation, including timestamped webhook configuration |
-| Grounding & Alignment | 3 | Uses tools to verify facts, admits uncertainty |
+| Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
 | Subagents | 2 | Delegates through `spawn_agent`, completes ambiguous work, and gives specialized subagent guidance precedence over a conflicting deployment playbook |
