@@ -249,6 +249,7 @@ try {
     } else {
         Fail "PATH: empty process PATH produced unexpected contents"
     }
+    $env:PATH = $OriginalProcessPath
 
     # 7c. Test -SkipShell flag
     Write-Host ""

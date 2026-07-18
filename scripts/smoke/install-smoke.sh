@@ -471,12 +471,13 @@ fi
 
 if run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/null \
     && run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/null; then
+  BASH_INSTALL_PHYSICAL=$(cd "$BASH_INSTALL" && pwd -P)
   bash_path=$(PATH="/usr/bin:/bin" HOME="$BASH_HOME" \
     bash --noprofile --rcfile "$BASH_RC" -i -c 'printf "%s" "$PATH"' 2>/dev/null)
-  assert_path_once "bash" "$bash_path" "$BASH_INSTALL"
+  assert_path_once "bash" "$bash_path" "$BASH_INSTALL_PHYSICAL"
   bash_empty_path=$(PATH="" HOME="$BASH_HOME" \
     /bin/bash --noprofile --rcfile "$BASH_RC" -i -c 'printf "%s" "$PATH"' 2>/dev/null)
-  if [ "$bash_empty_path" = "$BASH_INSTALL" ]; then
+  if [ "$bash_empty_path" = "$BASH_INSTALL_PHYSICAL" ]; then
     pass "bash: empty PATH does not introduce a current-directory entry"
   else
     fail "bash: empty PATH produced '$bash_empty_path'"
@@ -504,9 +505,10 @@ if command -v zsh >/dev/null 2>&1; then
   printf '# existing zsh config\n' > "$ZDOT_DIR/.zshrc"
   if ZDOTDIR="$ZDOT_DIR" run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null \
       && ZDOTDIR="$ZDOT_DIR" run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null; then
+    ZSH_INSTALL_PHYSICAL=$(cd "$ZSH_INSTALL" && pwd -P)
     zsh_path=$(PATH="/usr/bin:/bin" ZDOTDIR="$ZDOT_DIR" \
       zsh -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
-    assert_path_once "zsh" "$zsh_path" "$ZSH_INSTALL"
+    assert_path_once "zsh" "$zsh_path" "$ZSH_INSTALL_PHYSICAL"
     if [ ! -e "$ZSH_HOME/.zshrc" ]; then
       pass "zsh: ZDOTDIR is authoritative"
     else
@@ -528,9 +530,10 @@ if command -v fish >/dev/null 2>&1; then
       run_unix_installer "$(command -v fish)" "$FISH_HOME" "$FISH_INSTALL" >/dev/null \
       && XDG_CONFIG_HOME="$FISH_HOME/.config" \
       run_unix_installer "$(command -v fish)" "$FISH_HOME" "$FISH_INSTALL" >/dev/null; then
+    FISH_INSTALL_PHYSICAL=$(cd "$FISH_INSTALL" && pwd -P)
     fish_path=$(PATH="/usr/bin:/bin" fish --no-config -c \
       "source '$FISH_RC'; string join : -- \$PATH")
-    assert_path_once "fish" "$fish_path" "$FISH_INSTALL"
+    assert_path_once "fish" "$fish_path" "$FISH_INSTALL_PHYSICAL"
   else
     fail "fish: installer failed"
   fi
@@ -551,10 +554,11 @@ for mode in skip unknown; do
   fi
   manual_command=$(printf '%s\n' "$manual_out" | sed -n 's/^  \{0,4\}\(export PATH=.*\)$/\1/p' | head -1)
   if [ -n "$manual_command" ] && [ ! -e "$MANUAL_HOME/.netclaw/env" ]; then
+    MANUAL_INSTALL_PHYSICAL=$(cd "$MANUAL_INSTALL" && pwd -P)
     manual_path=$(PATH="/usr/bin:/bin" bash -c "$manual_command; printf '%s' \"\$PATH\"")
-    assert_path_once "$mode" "$manual_path" "$MANUAL_INSTALL"
+    assert_path_once "$mode" "$manual_path" "$MANUAL_INSTALL_PHYSICAL"
     manual_empty_path=$(PATH="" /bin/bash -c "$manual_command; printf '%s' \"\$PATH\"")
-    if [ "$manual_empty_path" = "$MANUAL_INSTALL" ]; then
+    if [ "$manual_empty_path" = "$MANUAL_INSTALL_PHYSICAL" ]; then
       pass "$mode: manual command preserves an empty PATH without adding current directory"
     else
       fail "$mode: manual command produced '$manual_empty_path' from an empty PATH"
