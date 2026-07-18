@@ -121,6 +121,19 @@ Wait+Screen@10s /Server default:/
 Sleep 500ms
 Screenshot "/tmp/shot-mcp-permissions-tool-grid.png"
 
+# ─── Exercise staged save with the default Enter action ─────────────
+# Change the audience, verify the dirty state appears, open confirmation,
+# and accept the visible default with Enter. This is the native regression
+# path for the confirmation flow that previously accepted only Y/N/Esc.
+Down
+Space
+Wait+Screen@5s /unsaved/
+Enter
+Wait+Screen@5s /Enter\/Y.*Save/
+Enter
+Wait+Screen@10s /Connected, 4 tools/
+
+
 # ─── Exit TUI ────────────────────────────────────────────────────────
 # Sleep 2s BEFORE Ctrl+Q — settle guard AFTER the Screenshot. VHS's
 # `Screenshot` does not write the PNG synchronously at this line: it hands the
