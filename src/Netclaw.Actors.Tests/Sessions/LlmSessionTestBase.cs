@@ -8,6 +8,7 @@ using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Reminders;
@@ -86,6 +87,8 @@ public abstract class LlmSessionTestBase : TestKit
         services.AddSingleton<ReminderHistoryStore>();
         services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         services.AddSingleton<IReminderChannelNotifier>(NullReminderChannelNotifier.Instance);
+        services.AddSingleton<SessionPipeline>();
+        services.AddSingleton<ISessionPipeline>(sp => sp.GetRequiredService<SessionPipeline>());
         ConfigureSessionServices(services);
         services.AddLlmSessionCompositeRecords();
     }
