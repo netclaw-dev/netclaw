@@ -125,7 +125,9 @@ try {
         latestPrerelease = $BetaVersion
         releases         = @($betaEntry, $stableEntry)
     }
-    $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $Serve "manifest.json") -Encoding utf8
+    # The fixture is ASCII-only. Windows PowerShell 5.1 writes a BOM for
+    # -Encoding UTF8 while PowerShell 7 does not, so use an identical encoding.
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $Serve "manifest.json") -Encoding ascii
 
     # 4. Serve the manifest + archives from localhost
     $python = Get-Command python3 -ErrorAction SilentlyContinue
