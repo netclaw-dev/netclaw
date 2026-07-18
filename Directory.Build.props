@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.25.0</VersionPrefix>
-    <VersionSuffix>beta.5</VersionSuffix>
+    <VersionSuffix></VersionSuffix>
     <PackageReleaseNotes>- Preserve Git working context across sessions and subagents — A bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context (#1630)
 - User-written AGENTS.md for application-specific agent guidance — Operators can author ~/.netclaw/identity/AGENTS.md, layered after Netclaw's embedded operating core and inherited by sub-agents (#1622)
 - Memory curation no longer overwrites existing documents on collision — Create-decision collisions now append new content instead of silently overwriting the existing document (#1637)
