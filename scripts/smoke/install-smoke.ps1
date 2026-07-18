@@ -29,6 +29,21 @@ $script:Fail = 0
 function Pass([string]$m) { Write-Host "PASS: $m"; $script:Pass++ }
 function Fail([string]$m) { Write-Host "FAIL: $m"; $script:Fail++ }
 
+function Invoke-CapturedPowerShell {
+    param([string[]]$Arguments)
+
+    # Windows PowerShell 5.1 promotes a native child's stderr to an error record.
+    # Rejection tests need to inspect that output and exit code without aborting.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & $PowerShellExecutable @Arguments 2>&1 | Out-String
+        [PSCustomObject]@{ Output = $output; ExitCode = $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Get-UserPathRegistryState {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
     if ($null -eq $key) { throw "Cannot open the current user's Environment registry key." }
@@ -175,9 +190,10 @@ try {
     Write-Host ""
     Write-Host "=== real install ==="
 
-    $invalidOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 `
-        -InstallDir (Join-Path $Work "invalid;path") -DryRun 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -and $invalidOut -match "cannot contain semicolons") {
+    $invalidResult = Invoke-CapturedPowerShell -Arguments @(
+        "-NoProfile", "-File", $InstallPs1,
+        "-InstallDir", (Join-Path $Work "invalid;path"), "-DryRun")
+    if ($invalidResult.ExitCode -ne 0 -and $invalidResult.Output -match "cannot contain semicolons") {
         Pass "PATH: unrepresentable Windows install directory rejected"
     } else {
         Fail "PATH: Windows install directory containing ';' was accepted"
@@ -269,11 +285,11 @@ try {
     $unsafePercentInstall = Join-Path $Work "%TEMP%\netclaw"
     Set-UserPathRegistryState $true $expandablePath ([Microsoft.Win32.RegistryValueKind]::ExpandString)
     $expandableStateBefore = Get-UserPathRegistryState
-    $unsafePercentOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 `
-        -InstallDir $unsafePercentInstall 2>&1 | Out-String
+    $unsafePercentResult = Invoke-CapturedPowerShell -Arguments @(
+        "-NoProfile", "-File", $InstallPs1, "-InstallDir", $unsafePercentInstall)
     $expandableStateAfter = Get-UserPathRegistryState
-    if ($LASTEXITCODE -ne 0 `
-        -and $unsafePercentOut -match "cannot be safely added to an expandable User PATH" `
+    if ($unsafePercentResult.ExitCode -ne 0 `
+        -and $unsafePercentResult.Output -match "cannot be safely added to an expandable User PATH" `
         -and $expandableStateAfter.Value -eq $expandableStateBefore.Value `
         -and $expandableStateAfter.Kind -eq $expandableStateBefore.Kind) {
         Pass "PATH: literal percent is rejected before mutating an expandable User PATH"
@@ -340,8 +356,10 @@ try {
     Assert-Resolves "-Version pin overrides -Channel"     $BetaVersion @("-Channel", "stable", "-Version", $BetaVersion)
 
     # An unknown channel must be rejected by the ValidateSet, not silently default.
-    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun -Channel bogus 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $invalidChannelResult = Invoke-CapturedPowerShell -Arguments @(
+        "-NoProfile", "-File", $InstallPs1, "-InstallDir", $shouldNotExist,
+        "-DryRun", "-Channel", "bogus")
+    if ($invalidChannelResult.ExitCode -ne 0) {
         Pass "channel: unknown value rejected"
     } else {
         Fail "channel: unknown value should fail (exit=$LASTEXITCODE)"
@@ -426,8 +444,6 @@ if ($script:Fail -gt 0) {
     exit 1
 }
 Write-Host "install smoke (ps1): PASSED"
-# Exit explicitly on the result, not on $LASTEXITCODE — the channel checks above run
-# a child PowerShell `-Channel bogus` invocation (which exits non-zero by design),
-# and without this the script
-# would fall off the end and inherit that non-zero code despite all assertions passing.
+# Deliberate rejection checks run child processes that exit nonzero, so return
+# the assertion result explicitly instead of inheriting a child's exit code.
 exit 0
