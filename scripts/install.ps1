@@ -33,6 +33,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Remove-TrailingDirectorySeparators {
+    param([string]$Path)
+
+    if ([string]::IsNullOrEmpty($Path)) {
+        return $Path
+    }
+
+    $root = [System.IO.Path]::GetPathRoot($Path)
+    if ($Path -eq $root) {
+        return $Path
+    }
+
+    $separators = [char[]]@(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar)
+    $trimmed = $Path.TrimEnd($separators)
+    if ([string]::IsNullOrEmpty($trimmed) -and -not [string]::IsNullOrEmpty($root)) {
+        return $root
+    }
+
+    return $trimmed
+}
+
 function Invoke-DownloadWithProgress {
     param(
         [string]$Uri,
@@ -269,13 +292,16 @@ try {
     Write-Host ""
 
     if (-not $SkipShell) {
-        $installDirNormalized = [System.IO.Path]::TrimEndingDirectorySeparator($InstallDir)
+        $installDirNormalized = Remove-TrailingDirectorySeparators $InstallDir
 
         # Read the raw registry value so an existing REG_EXPAND_SZ PATH keeps both
         # its %VAR% references and its registry type when we prepend Netclaw.
-        $userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+        # HKCU is writable by the current user and does not require elevation.
+        # CreateSubKey opens the normal existing key and also supports minimal
+        # profiles where the per-user Environment key has not been created yet.
+        $userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
         if ($null -eq $userEnvironmentKey) {
-            throw "Cannot open the current user's Environment registry key for PATH update."
+            throw "Cannot create or open the current user's Environment registry key for PATH update."
         }
 
         try {
@@ -304,12 +330,17 @@ try {
                 throw "The current user's PATH registry value has unsupported type $userPathKind."
             }
 
+            if ($userPathKind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString `
+                -and $installDirNormalized.Contains('%')) {
+                throw "InstallDir containing '%' cannot be safely added to an expandable User PATH. Choose a directory without '%' or rerun with -SkipShell."
+            }
+
             $userPathEntries = if ([string]::IsNullOrEmpty($userPath)) { @() } else {
                 $userPath -split ';' |
                     Where-Object { -not [string]::IsNullOrEmpty($_) } |
                     ForEach-Object {
                         $expandedEntry = [Environment]::ExpandEnvironmentVariables($_)
-                        [System.IO.Path]::TrimEndingDirectorySeparator($expandedEntry)
+                        Remove-TrailingDirectorySeparators $expandedEntry
                     }
             }
 
@@ -337,7 +368,7 @@ try {
         $processPathEntries = if ([string]::IsNullOrEmpty($processPath)) { @() } else {
             $processPath -split ';' |
                 Where-Object { -not [string]::IsNullOrEmpty($_) } |
-                ForEach-Object { [System.IO.Path]::TrimEndingDirectorySeparator($_) }
+                ForEach-Object { Remove-TrailingDirectorySeparators $_ }
         }
         if ($processPathEntries -notcontains $installDirNormalized) {
             $env:PATH = if ([string]::IsNullOrEmpty($processPath)) {

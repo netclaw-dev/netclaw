@@ -175,18 +175,23 @@ json_asset_field() {
     '
 }
 
+validate_install_dir_for_path() {
+    local install_dir="$1"
+
+    # PATH uses ':' as its entry separator, and startup files are line-oriented.
+    # These names cannot be represented without changing their meaning.
+    if [[ "$install_dir" == *:* || "$install_dir" == *$'\n'* || "$install_dir" == *$'\r'* ]]; then
+        echo "Error: INSTALL_DIR cannot contain ':', carriage returns, or newlines when used on PATH." >&2
+        return 1
+    fi
+}
+
 # ── Main ──
 check_deps
 
 RID=$(detect_platform)
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.netclaw/bin}"
-
-# PATH uses ':' as its entry separator, and startup files are line-oriented.
-# These names cannot be represented without changing their meaning.
-if [[ "$INSTALL_DIR" == *:* || "$INSTALL_DIR" == *$'\n'* || "$INSTALL_DIR" == *$'\r'* ]]; then
-    echo "Error: INSTALL_DIR cannot contain ':', carriage returns, or newlines when used on PATH." >&2
-    exit 1
-fi
+validate_install_dir_for_path "$INSTALL_DIR"
 
 echo "Netclaw installer"
 echo "  Platform: $RID"
@@ -287,11 +292,18 @@ download_component() {
         return 1
     fi
 
-    mkdir -p "$INSTALL_DIR"
     cp "$binary_path" "$INSTALL_DIR/$binary_name"
     chmod +x "$INSTALL_DIR/$binary_name"
     echo "  Installed $binary_name to $INSTALL_DIR/"
 }
+
+if [ "$DRY_RUN" = false ]; then
+    # Resolve symlinks before installing so the exact path persisted into shell
+    # startup files is the same path that passed delimiter validation.
+    mkdir -p "$INSTALL_DIR"
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
+    validate_install_dir_for_path "$INSTALL_DIR"
+fi
 
 # Download requested components
 SUCCESS=true
@@ -313,10 +325,6 @@ if [ "$DRY_RUN" = true ]; then
     echo "Dry run complete — nothing was installed."
     exit 0
 fi
-
-# The directory now exists. Persist its physical absolute path so a relative
-# invocation is not tied to the installer's current working directory.
-INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 
 # ── Persist UpdateChannel into config ──
 # Only runs when --channel was explicitly passed. Without this guard a plain
@@ -374,13 +382,21 @@ detect_shell() {
 }
 
 get_rc_file() {
-    local shell_name="$1"
+    local shell_name="$1" shell_path="$2"
     local os
     os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
     case "$shell_name" in
         zsh)
-            echo "${ZDOTDIR:-$HOME}/.zshrc"
+            local effective_zdotdir
+            # ZDOTDIR is often assigned without export in ~/.zshenv, so ask zsh
+            # for the value it actually uses rather than relying on Bash's env.
+            effective_zdotdir="$("$shell_path" -c "printf '%s' \"\${ZDOTDIR:-\$HOME}\"")" || return 1
+            if [[ -z "$effective_zdotdir" || "$effective_zdotdir" != /* || \
+                  "$effective_zdotdir" == *$'\n'* || "$effective_zdotdir" == *$'\r'* ]]; then
+                return 1
+            fi
+            echo "$effective_zdotdir/.zshrc"
             ;;
         bash)
             if [ "$os" = "darwin" ]; then
@@ -465,8 +481,8 @@ if [ "$SKIP_SHELL" = false ]; then
     echo "Setting up shell integration..."
 
     case "$SHELL_NAME" in
-        bash|zsh)
-            RC_FILE="$(get_rc_file "$SHELL_NAME")"
+        bash)
+            RC_FILE="$(get_rc_file "$SHELL_NAME" "${SHELL:-/bin/bash}")"
             write_posix_env_script
             modify_posix_rc_file "$RC_FILE"
             echo ""
@@ -474,6 +490,22 @@ if [ "$SKIP_SHELL" = false ]; then
             echo "To update this shell, run:"
             echo ""
             echo "  $SOURCE_LINE"
+            ;;
+        zsh)
+            if RC_FILE="$(get_rc_file "$SHELL_NAME" "${SHELL:-/bin/zsh}")"; then
+                write_posix_env_script
+                modify_posix_rc_file "$RC_FILE"
+                echo ""
+                echo "Installation complete! netclaw will be on PATH in new shells."
+                echo "To update this shell, run:"
+                echo ""
+                echo "  $SOURCE_LINE"
+            else
+                echo "  Could not safely resolve zsh's effective ZDOTDIR."
+                echo "  No shell profile was changed. Add this to the appropriate zsh profile:"
+                echo ""
+                echo "    $MANUAL_PATH_LINE"
+            fi
             ;;
         fish)
             write_fish_config
@@ -485,9 +517,9 @@ if [ "$SKIP_SHELL" = false ]; then
             ;;
         *)
             echo "  Shell '$SHELL_NAME' is not supported for automatic PATH setup."
-            echo "  No shell profile was changed. Add this to your shell profile:"
+            echo "  No shell profile was changed. Add this directory to PATH using your shell's syntax:"
             echo ""
-            echo "    $MANUAL_PATH_LINE"
+            echo "    $INSTALL_DIR"
             ;;
     esac
 else

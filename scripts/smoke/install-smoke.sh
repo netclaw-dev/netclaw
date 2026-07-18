@@ -201,6 +201,28 @@ else
   fail "PATH: Unix install directory containing ':' was accepted"
 fi
 
+PHYSICAL_INSTALL="$WORK/physical:install"
+SYMLINK_INSTALL="$WORK/safe-install-link"
+SYMLINK_HOME="$WORK/symlink-home"
+mkdir -p "$PHYSICAL_INSTALL" "$SYMLINK_HOME"
+ln -s "$PHYSICAL_INSTALL" "$SYMLINK_INSTALL"
+set +e
+symlink_path_out=$(HOME="$SYMLINK_HOME" SHELL="$(command -v bash)" \
+  INSTALL_DIR="$SYMLINK_INSTALL" MANIFEST_URL="$BASE_URL/manifest.json" \
+  bash "$INSTALL_SH" cli 2>&1)
+symlink_path_rc=$?
+set -e
+if [ "$symlink_path_rc" -ne 0 ] \
+    && echo "$symlink_path_out" | grep -q "cannot contain ':'" \
+    && [ ! -e "$SYMLINK_HOME/.netclaw/env" ] \
+    && [ ! -e "$SYMLINK_HOME/.bashrc" ] \
+    && [ ! -e "$PHYSICAL_INSTALL/netclaw" ]; then
+  pass "PATH: physical install path is validated before install or shell mutation"
+else
+  fail "PATH: unrepresentable symlink target was installed or persisted"
+  echo "$symlink_path_out" | indent
+fi
+
 # Exercise the dependency-free parser with a valid manifest whose asset fields
 # are in reverse order. A private mirror need not preserve JSON property order.
 NO_JQ_BIN="$WORK/no-jq-bin"
@@ -495,22 +517,23 @@ else
   fail "bash: installer failed"
 fi
 
-# Zsh: CI installs zsh on Linux and macOS provides it. Explicitly source the
-# selected ZDOTDIR file under zsh so a Bash-compatible false positive cannot pass.
+# Zsh: resolve a non-exported ZDOTDIR from .zshenv, then execute the selected
+# startup file under zsh so a Bash-compatible false positive cannot pass.
 if command -v zsh >/dev/null 2>&1; then
   ZSH_HOME="$WORK/shell-zsh"
   ZDOT_DIR="$ZSH_HOME/custom-zdotdir"
   ZSH_INSTALL="$ZSH_HOME/netclaw install's/bin"
   mkdir -p "$ZDOT_DIR"
+  printf "ZDOTDIR='%s'\n" "$ZDOT_DIR" > "$ZSH_HOME/.zshenv"
   printf '# existing zsh config\n' > "$ZDOT_DIR/.zshrc"
-  if ZDOTDIR="$ZDOT_DIR" run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null \
-      && ZDOTDIR="$ZDOT_DIR" run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null; then
+  if (unset ZDOTDIR; run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null) \
+      && (unset ZDOTDIR; run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null); then
     ZSH_INSTALL_PHYSICAL=$(cd "$ZSH_INSTALL" && pwd -P)
     zsh_path=$(PATH="/usr/bin:/bin" ZDOTDIR="$ZDOT_DIR" \
       zsh -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
     assert_path_once "zsh" "$zsh_path" "$ZSH_INSTALL_PHYSICAL"
     if [ ! -e "$ZSH_HOME/.zshrc" ]; then
-      pass "zsh: ZDOTDIR is authoritative"
+      pass "zsh: non-exported ZDOTDIR is authoritative"
     else
       fail "zsh: installer touched ~/.zshrc despite ZDOTDIR"
     fi
@@ -541,32 +564,40 @@ else
   echo "SKIP: fish executable not available"
 fi
 
-# Opt-out and unsupported shells must leave shell files alone and print a
-# self-contained command instead of referring to an env file that was not made.
-for mode in skip unknown; do
-  MANUAL_HOME="$WORK/shell-$mode"
-  MANUAL_INSTALL="$MANUAL_HOME/netclaw install's/bin"
-  mkdir -p "$MANUAL_HOME"
-  if [ "$mode" = "skip" ]; then
-    manual_out=$(run_unix_installer "$(command -v bash)" "$MANUAL_HOME" "$MANUAL_INSTALL" --skip-shell)
+# Opt-out under a supported shell must print a self-contained command instead
+# of referring to an env file that was not made.
+MANUAL_HOME="$WORK/shell-skip"
+MANUAL_INSTALL="$MANUAL_HOME/netclaw install's/bin"
+mkdir -p "$MANUAL_HOME"
+manual_out=$(run_unix_installer "$(command -v bash)" "$MANUAL_HOME" "$MANUAL_INSTALL" --skip-shell)
+manual_command=$(printf '%s\n' "$manual_out" | sed -n 's/^  \{0,4\}\(export PATH=.*\)$/\1/p' | head -1)
+if [ -n "$manual_command" ] && [ ! -e "$MANUAL_HOME/.netclaw/env" ]; then
+  MANUAL_INSTALL_PHYSICAL=$(cd "$MANUAL_INSTALL" && pwd -P)
+  manual_path=$(PATH="/usr/bin:/bin" bash -c "$manual_command; printf '%s' \"\$PATH\"")
+  assert_path_once "skip" "$manual_path" "$MANUAL_INSTALL_PHYSICAL"
+  manual_empty_path=$(PATH="" /bin/bash -c "$manual_command; printf '%s' \"\$PATH\"")
+  if [ "$manual_empty_path" = "$MANUAL_INSTALL_PHYSICAL" ]; then
+    pass "skip: manual command preserves an empty PATH without adding current directory"
   else
-    manual_out=$(run_unix_installer /bin/unknownshell "$MANUAL_HOME" "$MANUAL_INSTALL")
+    fail "skip: manual command produced '$manual_empty_path' from an empty PATH"
   fi
-  manual_command=$(printf '%s\n' "$manual_out" | sed -n 's/^  \{0,4\}\(export PATH=.*\)$/\1/p' | head -1)
-  if [ -n "$manual_command" ] && [ ! -e "$MANUAL_HOME/.netclaw/env" ]; then
-    MANUAL_INSTALL_PHYSICAL=$(cd "$MANUAL_INSTALL" && pwd -P)
-    manual_path=$(PATH="/usr/bin:/bin" bash -c "$manual_command; printf '%s' \"\$PATH\"")
-    assert_path_once "$mode" "$manual_path" "$MANUAL_INSTALL_PHYSICAL"
-    manual_empty_path=$(PATH="" /bin/bash -c "$manual_command; printf '%s' \"\$PATH\"")
-    if [ "$manual_empty_path" = "$MANUAL_INSTALL_PHYSICAL" ]; then
-      pass "$mode: manual command preserves an empty PATH without adding current directory"
-    else
-      fail "$mode: manual command produced '$manual_empty_path' from an empty PATH"
-    fi
-  else
-    fail "$mode: missing usable manual PATH command or created shell files"
-  fi
-done
+else
+  fail "skip: missing usable manual PATH command or created shell files"
+fi
+
+# Unsupported shells get shell-neutral guidance; emitting Bash syntax for an
+# arbitrary shell would make the suggested command actively misleading.
+UNKNOWN_HOME="$WORK/shell-unknown"
+UNKNOWN_INSTALL="$UNKNOWN_HOME/netclaw install's/bin"
+unknown_out=$(run_unix_installer /bin/unknownshell "$UNKNOWN_HOME" "$UNKNOWN_INSTALL")
+UNKNOWN_INSTALL_PHYSICAL=$(cd "$UNKNOWN_INSTALL" && pwd -P)
+if echo "$unknown_out" | grep -qF "$UNKNOWN_INSTALL_PHYSICAL" \
+    && ! echo "$unknown_out" | grep -q 'export PATH=' \
+    && [ ! -e "$UNKNOWN_HOME/.netclaw/env" ]; then
+  pass "unknown: guidance is shell-neutral and no shell files are created"
+else
+  fail "unknown: guidance is shell-specific or shell files were created"
+fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""

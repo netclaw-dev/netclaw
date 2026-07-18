@@ -198,6 +198,11 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke/install-smoke.ps1
 
+      - name: "install.ps1 Windows PowerShell 5.1 smoke test"
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/smoke/install-smoke.ps1
+
   semver-conformance:
     name: SemVer Conformance
     runs-on: ubuntu-latest

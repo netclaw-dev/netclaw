@@ -6,10 +6,17 @@
 # download -> checksum -> extract -> install path, plus -DryRun.
 #
 # Usage:    pwsh -File scripts/smoke/install-smoke.ps1
-# Requires: PowerShell 7+, python (for the local HTTP server).
+#           powershell.exe -File scripts/smoke/install-smoke.ps1
+# Requires: PowerShell 5.1+ and python (for the local HTTP server).
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$PowerShellExecutable = if ($PSVersionTable.PSEdition -eq "Desktop") {
+    (Get-Command powershell.exe).Source
+} else {
+    (Get-Command pwsh).Source
+}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot ".." "..")).Path
 $InstallPs1 = Join-Path $RepoRoot "scripts" "install.ps1"
@@ -51,8 +58,8 @@ function Set-UserPathRegistryState {
         [AllowNull()][Microsoft.Win32.RegistryValueKind]$Kind
     )
 
-    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
-    if ($null -eq $key) { throw "Cannot open the current user's Environment registry key for update." }
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    if ($null -eq $key) { throw "Cannot create or open the current user's Environment registry key for update." }
     try {
         if ($Exists) {
             $key.SetValue("Path", $Value, $Kind)
@@ -147,7 +154,7 @@ try {
     # 5. Dry-run check - resolves assets, installs nothing
     Write-Host "=== dry run ==="
     $dryDir = Join-Path $Work "dryrun-none"
-    $dryOut = & pwsh -NoProfile -File $InstallPs1 -InstallDir $dryDir -DryRun 2>&1 | Out-String
+    $dryOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $dryDir -DryRun 2>&1 | Out-String
     Write-Host ($dryOut.TrimEnd())
     if ($LASTEXITCODE -eq 0 `
         -and $dryOut -match 'DRY RUN: would install netclaw ' `
@@ -166,7 +173,7 @@ try {
     Write-Host ""
     Write-Host "=== real install ==="
 
-    $invalidOut = & pwsh -NoProfile -File $InstallPs1 `
+    $invalidOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 `
         -InstallDir (Join-Path $Work "invalid;path") -DryRun 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0 -and $invalidOut -match "cannot contain semicolons") {
         Pass "PATH: unrepresentable Windows install directory rejected"
@@ -242,6 +249,36 @@ try {
         Fail "PATH: expandable User entry or its registry type was rewritten"
     }
 
+    $literalPercentInstall = Join-Path $Work "%NETCLAW_LITERAL%\bin"
+    Set-UserPathRegistryState $true $existingUserEntry ([Microsoft.Win32.RegistryValueKind]::String)
+    $literalPercentOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 `
+        -InstallDir $literalPercentInstall 2>&1 | Out-String
+    $literalPercentState = Get-UserPathRegistryState
+    if ($LASTEXITCODE -eq 0 `
+        -and $literalPercentState.Kind -eq [Microsoft.Win32.RegistryValueKind]::String `
+        -and @($literalPercentState.Value -split ';')[0] -eq $literalPercentInstall) {
+        Pass "PATH: literal percent is preserved in a non-expanding User PATH"
+    } else {
+        Fail "PATH: literal percent was not preserved in a non-expanding User PATH"
+        Write-Host ($literalPercentOut.TrimEnd())
+    }
+
+    $expandablePath = "%SystemRoot%\System32"
+    $unsafePercentInstall = Join-Path $Work "%TEMP%\netclaw"
+    Set-UserPathRegistryState $true $expandablePath ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+    $expandableStateBefore = Get-UserPathRegistryState
+    $unsafePercentOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 `
+        -InstallDir $unsafePercentInstall 2>&1 | Out-String
+    $expandableStateAfter = Get-UserPathRegistryState
+    if ($LASTEXITCODE -ne 0 `
+        -and $unsafePercentOut -match "cannot be safely added to an expandable User PATH" `
+        -and $expandableStateAfter.Value -eq $expandableStateBefore.Value `
+        -and $expandableStateAfter.Kind -eq $expandableStateBefore.Kind) {
+        Pass "PATH: literal percent is rejected before mutating an expandable User PATH"
+    } else {
+        Fail "PATH: literal percent corrupted or changed an expandable User PATH"
+    }
+
     $env:PATH = ""
     & $InstallPs1 -InstallDir $installDir *>&1 | Out-Null
     if ($env:PATH -eq $installDir) {
@@ -257,7 +294,7 @@ try {
     $skipDir = Join-Path $Work "skip-install's"
     $skipUserPathBefore = Get-UserPathRegistryState
     $skipProcessPathBefore = $env:PATH
-    $skipOut = & pwsh -NoProfile -File $InstallPs1 -InstallDir $skipDir -SkipShell 2>&1 | Out-String
+    $skipOut = & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $skipDir -SkipShell 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) {
         Pass "-SkipShell: install completes without error"
     } else {
@@ -285,7 +322,7 @@ try {
     $shouldNotExist = Join-Path $Work "should-not-exist"
 
     function Assert-Resolves([string]$desc, [string]$want, [string[]]$extraArgs) {
-        $out = & pwsh -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun @extraArgs 2>&1 | Out-String
+        $out = & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun @extraArgs 2>&1 | Out-String
         $pattern = "(?m)^\s+Version:\s+$([regex]::Escape($want))\s*$"
         if ($LASTEXITCODE -eq 0 -and $out -match $pattern) {
             Pass "channel: $desc -> $want"
@@ -301,7 +338,7 @@ try {
     Assert-Resolves "-Version pin overrides -Channel"     $BetaVersion @("-Channel", "stable", "-Version", $BetaVersion)
 
     # An unknown channel must be rejected by the ValidateSet, not silently default.
-    & pwsh -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun -Channel bogus 2>&1 | Out-Null
+    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun -Channel bogus 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Pass "channel: unknown value rejected"
     } else {
@@ -315,7 +352,7 @@ try {
     $freshDir = Join-Path $Work "fresh-beta"
     $freshConfigDir = Join-Path $Work "fresh-beta-config"
     $env:NETCLAW_CONFIG_DIR = $freshConfigDir
-    & pwsh -NoProfile -File $InstallPs1 -InstallDir $freshDir -Channel beta -SkipShell 2>&1 | Out-Null
+    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $freshDir -Channel beta -SkipShell 2>&1 | Out-Null
     $freshConfig = Join-Path $freshConfigDir "netclaw.json"
     if ((Test-Path $freshConfig)) {
         $c = Get-Content -Raw $freshConfig | ConvertFrom-Json
@@ -334,7 +371,7 @@ try {
     New-Item -ItemType Directory -Path $existConfigDir -Force | Out-Null
     '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}' | Set-Content -Path (Join-Path $existConfigDir "netclaw.json") -Encoding UTF8
     $env:NETCLAW_CONFIG_DIR = $existConfigDir
-    & pwsh -NoProfile -File $InstallPs1 -InstallDir $existDir -Channel beta -SkipShell 2>&1 | Out-Null
+    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $existDir -Channel beta -SkipShell 2>&1 | Out-Null
     $c = Get-Content -Raw (Join-Path $existConfigDir "netclaw.json") | ConvertFrom-Json
     if ($c.Daemon.UpdateChannel -eq "beta" -and $c.Daemon.ExposureMode -eq "local") {
         Pass "config: -Channel beta patches existing config, preserves other Daemon keys"
@@ -348,7 +385,7 @@ try {
     New-Item -ItemType Directory -Path $noflagConfigDir -Force | Out-Null
     '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $noflagConfigDir "netclaw.json") -Encoding UTF8
     $env:NETCLAW_CONFIG_DIR = $noflagConfigDir
-    & pwsh -NoProfile -File $InstallPs1 -InstallDir $noflagDir -SkipShell 2>&1 | Out-Null
+    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $noflagDir -SkipShell 2>&1 | Out-Null
     $c = Get-Content -Raw (Join-Path $noflagConfigDir "netclaw.json") | ConvertFrom-Json
     if ($c.Daemon.UpdateChannel -eq "beta") {
         Pass "config: plain upgrade preserves existing beta channel"
@@ -362,7 +399,7 @@ try {
     New-Item -ItemType Directory -Path $downConfigDir -Force | Out-Null
     '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $downConfigDir "netclaw.json") -Encoding UTF8
     $env:NETCLAW_CONFIG_DIR = $downConfigDir
-    & pwsh -NoProfile -File $InstallPs1 -InstallDir $downDir -Channel stable -SkipShell 2>&1 | Out-Null
+    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $downDir -Channel stable -SkipShell 2>&1 | Out-Null
     $c = Get-Content -Raw (Join-Path $downConfigDir "netclaw.json") | ConvertFrom-Json
     if ($c.Daemon.UpdateChannel -eq "stable") {
         Pass "config: -Channel stable overwrites existing beta"
@@ -388,6 +425,7 @@ if ($script:Fail -gt 0) {
 }
 Write-Host "install smoke (ps1): PASSED"
 # Exit explicitly on the result, not on $LASTEXITCODE — the channel checks above run
-# `pwsh -Channel bogus` (which exits non-zero by design), and without this the script
+# a child PowerShell `-Channel bogus` invocation (which exits non-zero by design),
+# and without this the script
 # would fall off the end and inherit that non-zero code despite all assertions passing.
 exit 0
