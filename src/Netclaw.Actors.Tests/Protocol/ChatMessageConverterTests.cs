@@ -279,16 +279,17 @@ public class ChatMessageConverterTests
         using var tempDir = new TempSessionDir();
         // Real PNG, small enough to pass through the egress normalizer unchanged.
         var imageBytes = SmallPng();
+        const string announcedPath = "inbox/image_hist_0123456789abcdef.png";
         var contents = new List<AIContent>
         {
-            new TextContent("Check this image"),
+            new TextContent($"[attachment] name=\"image.png\" mime=\"image/png\" size={imageBytes.Length} path=\"{announcedPath}\" inlined=\"true\""),
             new DataContent(imageBytes, "image/png")
         };
         var ai = new AiChatMessage(AiChatRole.User, contents);
 
         var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
 
-        Assert.Equal("Check this image", msg.Content);
+        Assert.Contains($"path=\"{announcedPath}\"", msg.Content, StringComparison.Ordinal);
         Assert.Single(msg.MediaReferences);
         Assert.Equal("image/png", msg.MediaReferences[0].MimeType.Value);
         Assert.Equal((int)MediaModality.Image, msg.MediaReferences[0].Modality);
@@ -302,6 +303,7 @@ public class ChatMessageConverterTests
         var filePath = Path.Combine(tempDir.Path, "media", msg.MediaReferences[0].RelativePath);
         Assert.True(File.Exists(filePath));
         Assert.Equal(imageBytes, File.ReadAllBytes(filePath));
+        Assert.DoesNotContain(msg.MediaReferences[0].RelativePath, msg.Content, StringComparison.Ordinal);
     }
 
     [Fact]
