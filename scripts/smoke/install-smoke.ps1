@@ -18,8 +18,8 @@ $PowerShellExecutable = if ($PSVersionTable.PSEdition -eq "Desktop") {
     (Get-Command pwsh).Source
 }
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot ".." "..")).Path
-$InstallPs1 = Join-Path $RepoRoot "scripts" "install.ps1"
+$RepoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
+$InstallPs1 = Join-Path (Join-Path $RepoRoot "scripts") "install.ps1"
 $Version = "0.0.0"            # stable -> manifest.latest
 $BetaVersion = "0.0.1-beta1"  # prerelease -> manifest.latestPrerelease
 $Rid = "win-x64"
