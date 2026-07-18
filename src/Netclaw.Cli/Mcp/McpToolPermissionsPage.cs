@@ -25,6 +25,11 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private DynamicLayoutNode? _toolRowsNode;
     private ScrollableContainerNode? _toolScrollNode;
     private readonly CompositeDisposable _stepSubs = [];
+    private readonly TextNode _confirmSaveFooterNode = new TextNode(
+        "Save changes?  [Enter/Y] Save  [N] Discard  [Esc] Continue editing")
+        .WithForeground(Color.Yellow)
+        .Bold()
+        .NoWrap();
     private int _gridCursor;
     private bool _confirmingSave;
 
@@ -161,11 +166,11 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
         var serverDefault = ViewModel.GetServerDefault();
-        var accessMarker = serverAllowed ? "â" : " ";
+        var accessMarker = serverAllowed ? "\u2713" : " ";
 
         return Layouts.Vertical()
             .WithChild(ConfigSelectionRow.Create(
-                $"Audience: [â {audienceLabel,-8} â¶]",
+                $"Audience: [\u25c0 {audienceLabel,-8} \u25b6]",
                 _gridCursor == AudienceRow,
                 bold: true))
             .WithChild(ConfigSelectionRow.Create(
@@ -196,7 +201,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             var tool = tools[i];
             var toolName = new ToolName(tool);
             var granted = serverAllowed && ViewModel.IsToolGranted(toolName);
-            var marker = granted ? "â" : " ";
+            var marker = granted ? "\u2713" : " ";
             var paddedName = tool.PadRight(maxToolNameLen);
             var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(toolName);
             var modeBadge = $"[{effectiveMode}]";
@@ -246,8 +251,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         {
             if (_confirmingSave)
             {
-                return new TextNode("Save changes?  [Enter/Y] Save  [N] Discard  [Esc] Continue editing")
-                    .WithForeground(Color.Yellow).Bold().NoWrap();
+                return _confirmSaveFooterNode;
             }
 
             var hints = ViewModel.CurrentState.Value switch
@@ -279,6 +283,12 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .DisposeWith(Subscriptions);
 
         return _footerNode;
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        _confirmSaveFooterNode.Dispose();
     }
 
     private static LayoutNode BuildToolGridFooterWithStatus(string hints, string status, Color color)
