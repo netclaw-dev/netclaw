@@ -203,15 +203,16 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Oversized_tool_result_is_truncated_before_reentering_context_window()
+    public async Task Bounded_tool_result_reenters_context_window_with_configured_inline_budget()
     {
+        const string boundedResult = "head...tail\n\n[output truncated to 120 chars of 800]";
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent("call-long", "web_search",
                 new Dictionary<string, object?> { ["query"] = "huge" })
         ];
 
-        _fakeToolExecutor.Results["web_search"] = new string('x', 800);
+        _fakeToolExecutor.Results["web_search"] = boundedResult;
 
         var sessionId = new SessionId("test-channel/tool-truncate-test");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -230,22 +231,15 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
             Content = "Run huge tool"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var secondCall = await _fakeChatClient.WaitForCallAsync(2, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _fakeChatClient.CallCount);
-        Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count);
-
-        var secondCall = _fakeChatClient.ReceivedMessages[1];
+        Assert.Equal(120, _fakeToolExecutor.LastInlineOutputBudget);
         var toolMessage = secondCall.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.Tool);
         Assert.NotNull(toolMessage);
 
         var result = toolMessage!.Contents.OfType<FunctionResultContent>().Single().Result?.ToString();
-        Assert.NotNull(result);
-        Assert.Contains("truncated", result, StringComparison.OrdinalIgnoreCase);
-        Assert.True(result!.Length < 500); // windowed to the 120-char budget + steer (vs the raw 800)
+        Assert.Equal(boundedResult, result);
     }
 
     [Fact]
@@ -338,8 +332,11 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 internal sealed class FakeToolExecutor : IToolExecutor
 {
     private int _callCount;
+    private int _lastInlineOutputBudget;
 
     public int CallCount => _callCount;
+
+    public int LastInlineOutputBudget => Volatile.Read(ref _lastInlineOutputBudget);
 
     /// <summary>Tool name → result string.</summary>
     public Dictionary<string, string> Results { get; } = [];
@@ -355,9 +352,10 @@ internal sealed class FakeToolExecutor : IToolExecutor
         return Task.CompletedTask;
     }
 
-    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
+        Volatile.Write(ref _lastInlineOutputBudget, context.MaxInlineToolResultChars);
 
         if (FailForTools.Contains(toolCall.Name))
         {
@@ -365,14 +363,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         }
 
         var result = Results.GetValueOrDefault(toolCall.Name, $"[fake result for {toolCall.Name}]");
-        // Mirror DispatchingToolExecutor's post-processing so integration tests see
-        // the same redact + inline-bound + spill the real executor applies. The fake
-        // has no tool instance, so it uses the session content budget (per-tool
-        // verbose overrides are exercised in DispatchingToolExecutorTests).
-        result = Netclaw.Security.SecretOutputRedactor.Redact(result);
-        var budget = context.MaxInlineToolResultChars;
-        return await Netclaw.Actors.Tools.ToolOutputSpill.BoundAndSpillAsync(
-            result, toolCall.CallId, budget, context.Invocation, ct);
+        return Task.FromResult(result);
     }
 }
 
