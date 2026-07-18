@@ -1770,7 +1770,6 @@ internal sealed class FakeChatClient : IChatClient
     private readonly List<IReadOnlyList<ChatMessage>> _receivedMessages = [];
     private readonly List<IReadOnlyList<string>> _receivedToolNames = [];
     private readonly List<ChatOptions?> _receivedOptions = [];
-    private readonly Dictionary<int, TaskCompletionSource<IReadOnlyList<ChatMessage>>> _callObservers = [];
 
     /// <summary>Snapshot copy taken under <see cref="_recordingGate"/> so a test can safely
     /// enumerate / index / LINQ over it while actor threads keep appending.</summary>
@@ -1791,30 +1790,6 @@ internal sealed class FakeChatClient : IChatClient
     public IReadOnlyList<ChatOptions?> ReceivedOptions
     {
         get { lock (_recordingGate) { return _receivedOptions.ToArray(); } }
-    }
-
-    public Task<IReadOnlyList<ChatMessage>> WaitForCallAsync(
-        int callNumber,
-        CancellationToken cancellationToken)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(callNumber);
-
-        TaskCompletionSource<IReadOnlyList<ChatMessage>> observer;
-        lock (_recordingGate)
-        {
-            if (_receivedMessages.Count >= callNumber)
-            {
-                return Task.FromResult(_receivedMessages[callNumber - 1]);
-            }
-
-            if (!_callObservers.TryGetValue(callNumber, out observer!))
-            {
-                observer = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                _callObservers.Add(callNumber, observer);
-            }
-        }
-
-        return observer.Task.WaitAsync(cancellationToken);
     }
 
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
@@ -1914,12 +1889,11 @@ internal sealed class FakeChatClient : IChatClient
     {
         // Materialize the caller's own enumerables outside the lock — they are private to this
         // call and can be non-trivial to enumerate; only the shared-list appends need guarding.
-        IReadOnlyList<ChatMessage> messageList = messages.ToArray();
+        var messageList = messages.ToList();
         var toolNames = options?.Tools?
             .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
             .ToList()
             ?? [];
-        TaskCompletionSource<IReadOnlyList<ChatMessage>>? callObserver;
 
         lock (_recordingGate)
         {
@@ -1932,10 +1906,8 @@ internal sealed class FakeChatClient : IChatClient
             _receivedMessages.Add(messageList);
             _receivedOptions.Add(options);
             _receivedToolNames.Add(toolNames);
-            _callObservers.Remove(_receivedMessages.Count, out callObserver);
         }
         Interlocked.Increment(ref _callCount);
-        callObserver?.TrySetResult(messageList);
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
