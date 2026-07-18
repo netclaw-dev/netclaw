@@ -70,15 +70,29 @@ public sealed class MattermostApprovalPromptBuilderTests
     [Fact]
     public void BuildDecisionStatus_formats_known_keys()
     {
-        Assert.Contains(ApprovalOptionKeys.ApproveOnceLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveOnce));
-        Assert.Contains(ApprovalOptionKeys.ApproveAlwaysLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveAlways));
-        Assert.Contains(ApprovalOptionKeys.DenyLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.Deny));
+        var toolName = new Netclaw.Tools.ToolName("shell_execute");
+        Assert.Contains(ApprovalOptionKeys.ApproveOnceLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveOnce, toolName));
+        Assert.Contains(ApprovalOptionKeys.ApproveAlwaysLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveAlways, toolName));
+        Assert.Contains(ApprovalOptionKeys.DenyLabel, MattermostApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.Deny, toolName));
+    }
+
+    [Fact]
+    public void BuildDecisionStatus_uses_MCP_persistent_label()
+    {
+        var status = MattermostApprovalPromptBuilder.BuildDecisionStatus(
+            ApprovalOptionKeys.ApproveEverywhere,
+            new Netclaw.Tools.ToolName("Dropbox/upload"));
+
+        Assert.Contains(ApprovalOptionKeys.ApproveMcpToolLabel, status);
+        Assert.DoesNotContain(ApprovalOptionKeys.ApproveEverywhereLabel, status);
     }
 
     [Fact]
     public void BuildDecisionStatus_passes_through_unknown_key()
     {
-        var status = MattermostApprovalPromptBuilder.BuildDecisionStatus("custom_key");
+        var status = MattermostApprovalPromptBuilder.BuildDecisionStatus(
+            "custom_key",
+            new Netclaw.Tools.ToolName("shell_execute"));
         Assert.Contains("custom_key", status);
     }
 

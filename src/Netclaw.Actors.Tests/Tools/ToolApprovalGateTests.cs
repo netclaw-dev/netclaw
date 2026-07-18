@@ -590,6 +590,35 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public void Non_shell_tool_omits_directory_scoped_persistence_option()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Approval
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("file_read", "content");
+        var decision = policy.AuthorizeInvocation(tool, PersonalContext());
+
+        Assert.True(decision.NeedsApproval);
+        Assert.DoesNotContain(
+            decision.ApprovalContext!.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
+        Assert.Contains(
+            decision.ApprovalContext.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveEverywhere
+                      && option.Label == ApprovalOptionKeys.ApproveEverywhereLabel);
+    }
+
+    [Fact]
     public void Non_safe_list_tool_returns_requires_approval_when_interactive_unsupported()
     {
         var config = new ToolConfig();

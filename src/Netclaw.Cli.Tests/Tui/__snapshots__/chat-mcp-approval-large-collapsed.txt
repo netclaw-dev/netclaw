@@ -1,10 +1,10 @@
 ╭─Netclaw Chat─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │System: MCP tool approval required                                                                                    │
 │  Tool: Dropbox/upload                                                                                                │
-│Invocation: Dropbox/upload(destination_directory="/Finance/Board Pack/2026/Q3",                                       │
-│source_path="/home/operator/reports/2026/Q3/quarterly-results-final.pdf", access_token=***REDACTED***, contents=(89999│
-│chars, 2000 lines))                                                                                                   │
+│Invocation: Dropbox/upload(source_path="/home/operator/reports/2026/Q3/quarterly-results-final.pdf",                  │
+│destination_directory="/Finance/Board Pack/2026/Q3", contents=(89999 chars, 2000 lines), access_token=***REDACTED***) │
 │  Options: Once, This chat, Always allow this tool, Deny                                                              │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -30,7 +30,7 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─Input────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │MCP tool approval required: Dropbox/upload.                                                                           │
-│Invocation: Dropbox/upload(destination_directory="/Finance/Board Pack/2026/Q3", source_path="… [Ctrl+O to view full]  │
+│Invocation: Dropbox/upload(source_path="/home/operator/reports/2026/Q3/quarterly-results-fina… [Ctrl+O to view full]  │
 │Select an option and press Enter.                                                                                     │
 │1. Once                                                                                                               │
 │2. This chat                                                                                                          │

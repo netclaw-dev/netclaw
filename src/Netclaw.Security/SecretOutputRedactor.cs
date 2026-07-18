@@ -13,6 +13,7 @@ namespace Netclaw.Security;
 /// </summary>
 public static partial class SecretOutputRedactor
 {
+    private const int MaxSecretKeyChars = 512;
     private const string Redacted = "***REDACTED***";
 
     private static readonly string[] SecretKeyFragments =
@@ -30,6 +31,12 @@ public static partial class SecretOutputRedactor
 
     internal static bool IsSecretKey(string key)
     {
+        // A hostile MCP schema can supply arbitrarily large property names.
+        // Fail closed instead of allocating an equally large normalized key
+        // just to decide whether its value is safe to display.
+        if (key.Length > MaxSecretKeyChars)
+            return true;
+
         var normalized = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(key);
         return SecretKeyFragments.Any(fragment =>
             normalized.Contains(fragment, StringComparison.OrdinalIgnoreCase));

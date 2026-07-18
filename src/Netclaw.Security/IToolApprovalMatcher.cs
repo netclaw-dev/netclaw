@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections;
 using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration;
@@ -783,11 +784,19 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly McpApprovalMatcher Instance = new();
 
+    private const int MaxToolNameChars = 256;
+    private const int MaxArgumentNameChars = 160;
+    private const int MaxArguments = 24;
+    private const int MaxDisplayChars = 1_600;
+    private const int MaxNestedItems = 12;
+    private const int MaxNestedDepth = 3;
+    private const int MaxStructurePreviewChars = 360;
+    private const int MaxUrlParseChars = 4_096;
+    private const int MaxLineCountChars = 100_000;
     private const int StandardStringPreviewChars = 240;
     private const int LocatorStringPreviewChars = 1_000;
     private const int LocatorPreviewHeadChars = 600;
     private const int LocatorPreviewTailChars = 350;
-    private const int SmallStructurePreviewChars = 240;
     private const string Redacted = "***REDACTED***";
 
     private static DefaultApprovalMatcher Default => DefaultApprovalMatcher.Instance;
@@ -821,23 +830,51 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
+        var displayToolName = FormatToolName(toolName.Value);
         if (arguments is null || arguments.Count == 0)
-            return toolName.Value;
+            return displayToolName;
 
-        var parts = arguments
-            .OrderBy(static pair => ArgumentPriority(pair.Key))
-            .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
-            .Select(static pair => $"{pair.Key}={FormatArgument(pair.Key, pair.Value)}");
+        // MCP schemas may contain arbitrary property names and arbitrarily
+        // large collections. Sample before formatting so an approval prompt
+        // has a hard work and allocation ceiling even for a hostile server.
+        var sampled = arguments
+            .Take(MaxArguments)
+            .OrderBy(static pair => IsLocationLike(pair.Value) ? 0 : 1)
+            .ToList();
 
-        return $"{toolName.Value}({string.Join(", ", parts)})";
-    }
+        var display = new StringBuilder(Math.Min(MaxDisplayChars, displayToolName.Length + 256));
+        display.Append(displayToolName).Append('(');
+        var rendered = 0;
 
-    private static int ArgumentPriority(string key)
-    {
-        if (IsLocatorKey(key))
-            return 0;
+        foreach (var pair in sampled)
+        {
+            var part = $"{FormatArgumentName(pair.Key)}={FormatArgument(pair.Key, pair.Value)}";
+            var separatorChars = rendered == 0 ? 0 : 2;
+            if (display.Length + separatorChars + part.Length + 1 > MaxDisplayChars)
+                break;
 
-        return IsContentKey(key) ? 2 : 1;
+            if (separatorChars > 0)
+                display.Append(", ");
+
+            display.Append(part);
+            rendered++;
+        }
+
+        var omitted = arguments.Count - rendered;
+        if (omitted > 0)
+        {
+            var omission = $"… (+{omitted} arguments)";
+            var separator = rendered == 0 ? string.Empty : ", ";
+            var available = MaxDisplayChars - display.Length - 1;
+            if (separator.Length + omission.Length <= available)
+                display.Append(separator).Append(omission);
+            else if (available > 1)
+                display.Append('…');
+        }
+
+        display.Append(')');
+
+        return display.ToString();
     }
 
     private static string FormatArgument(string key, object? value)
@@ -847,6 +884,18 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
 
         if (value is byte[] bytes)
             return $"({bytes.Length} bytes)";
+
+        if (value is string text)
+            return FormatString(text);
+
+        if (value is IDictionary dictionary)
+            return $"({dictionary.Count} properties)";
+
+        if (value is ICollection collection)
+            return $"({collection.Count} items)";
+
+        if (value is IEnumerable)
+            return "(collection value)";
 
         JsonElement element;
         try
@@ -860,106 +909,230 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
             return $"({value?.GetType().Name ?? "unknown"} value unavailable)";
         }
 
-        return FormatJsonValue(key, element);
+        return FormatJsonValue(key, element, depth: 0);
     }
 
-    private static string FormatJsonValue(string key, JsonElement value)
+    private static string FormatJsonValue(string key, JsonElement value, int depth)
     {
         if (SecretOutputRedactor.IsSecretKey(key))
             return Redacted;
 
         return value.ValueKind switch
         {
-            JsonValueKind.String => FormatString(key, value.GetString() ?? string.Empty),
+            JsonValueKind.String => FormatString(value.GetString() ?? string.Empty),
             JsonValueKind.Number => value.GetRawText(),
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
             JsonValueKind.Null => "null",
             JsonValueKind.Undefined => "(undefined)",
-            JsonValueKind.Object => FormatObject(value),
-            JsonValueKind.Array => FormatArray(value),
+            JsonValueKind.Object => FormatObject(value, depth),
+            JsonValueKind.Array => FormatArray(value, depth),
             _ => "(unsupported value)"
         };
     }
 
-    private static string FormatString(string key, string value)
+    private static string FormatString(string value)
     {
-        var maxChars = IsLocatorKey(key) ? LocatorStringPreviewChars : StandardStringPreviewChars;
-        if (value.Length <= maxChars)
-            return SecretOutputRedactor.Redact(JsonSerializer.Serialize(value));
+        if (TrySanitizeAbsoluteUri(value, out var sanitizedUri))
+            return SerializeStringForDisplay(sanitizedUri);
 
-        if (IsLocatorKey(key))
-        {
-            var preview = value[..LocatorPreviewHeadChars]
-                          + $"…[{value.Length} chars]…"
-                          + value[^LocatorPreviewTailChars..];
-            return SecretOutputRedactor.Redact(JsonSerializer.Serialize(preview));
-        }
+        if (IsPathLike(value))
+            return FormatPath(value);
 
-        return $"({value.Length} chars, {CountLines(value)} lines)";
+        return FormatNonLocatorString(value);
     }
 
-    private static string FormatObject(JsonElement value)
+    private static string FormatPath(string value)
     {
-        var properties = value.EnumerateObject().ToList();
-        var rawLength = value.GetRawText().Length;
-        if (rawLength > SmallStructurePreviewChars)
-            return $"({properties.Count} properties, {rawLength} chars)";
+        if (value.Length <= LocatorStringPreviewChars)
+            return SerializeStringForDisplay(SecretOutputRedactor.Redact(value));
+
+        var preview = value[..LocatorPreviewHeadChars]
+                      + $"…[{value.Length} chars]…"
+                      + value[^LocatorPreviewTailChars..];
+        return SerializeStringForDisplay(SecretOutputRedactor.Redact(preview));
+    }
+
+    private static string FormatNonLocatorString(string value)
+    {
+        if (value.Length <= StandardStringPreviewChars)
+            return SerializeStringForDisplay(SecretOutputRedactor.Redact(value));
+
+        return $"({value.Length} chars, {CountLinesForDisplay(value)} lines)";
+    }
+
+    private static string FormatObject(JsonElement value, int depth)
+    {
+        if (depth >= MaxNestedDepth)
+            return "(nested object)";
+
+        var properties = value.EnumerateObject().Take(MaxNestedItems + 1).ToList();
+        if (properties.Count > MaxNestedItems)
+            return $"({MaxNestedItems}+ properties)";
 
         var parts = properties
             .OrderBy(static property => property.Name, StringComparer.Ordinal)
-            .Select(static property =>
-                $"{JsonSerializer.Serialize(property.Name)}:{FormatJsonValue(property.Name, property.Value)}");
-        return $"{{{string.Join(",", parts)}}}";
+            .Select(property =>
+                $"{SerializeStringForDisplay(BoundArgumentName(property.Name))}:{FormatJsonValue(property.Name, property.Value, depth + 1)}");
+        return BoundStructurePreview($"{{{string.Join(",", parts)}}}", properties.Count, "properties");
     }
 
-    private static string FormatArray(JsonElement value)
+    private static string FormatArray(JsonElement value, int depth)
     {
-        var items = value.EnumerateArray().ToList();
-        var rawLength = value.GetRawText().Length;
-        if (rawLength > SmallStructurePreviewChars)
-            return $"({items.Count} items, {rawLength} chars)";
+        if (depth >= MaxNestedDepth)
+            return "(nested array)";
 
-        return $"[{string.Join(",", items.Select(static item => FormatJsonValue(string.Empty, item)))}]";
+        var items = value.EnumerateArray().Take(MaxNestedItems + 1).ToList();
+        if (items.Count > MaxNestedItems)
+            return $"({MaxNestedItems}+ items)";
+
+        var preview = $"[{string.Join(",", items.Select(item => FormatJsonValue(string.Empty, item, depth + 1)))}]";
+        return BoundStructurePreview(preview, items.Count, "items");
     }
 
-    private static int CountLines(string value)
+    private static string BoundStructurePreview(string preview, int count, string unit)
+        => preview.Length <= MaxStructurePreviewChars ? preview : $"({count} {unit})";
+
+    private static string FormatArgumentName(string key)
     {
-        var lines = 1;
+        if (key.Length is > 0 and <= MaxArgumentNameChars && key.All(IsSafeArgumentNameChar))
+            return key;
+
+        // Approval displays are embedded in inline-code markup by the chat
+        // renderers. Encode every non-identifier code unit, including
+        // backticks, line breaks, ANSI controls, and bidi overrides, so an MCP
+        // schema cannot escape the invocation line or spoof prompt chrome.
+        var bounded = BoundArgumentName(key);
+        var escaped = new StringBuilder(bounded.Length + 2);
+        escaped.Append('"');
+        foreach (var ch in bounded)
+        {
+            if (IsSafeArgumentNameChar(ch))
+                escaped.Append(ch);
+            else
+                escaped.Append("\\u").Append(((int)ch).ToString("X4"));
+        }
+
+        return escaped.Append('"').ToString();
+    }
+
+    private static string BoundArgumentName(string key)
+        => key.Length <= MaxArgumentNameChars
+            ? key
+            : $"{key[..120]}…[{key.Length} chars]";
+
+    private static string FormatToolName(string toolName)
+    {
+        var bounded = toolName.Length <= MaxToolNameChars
+            ? toolName
+            : $"{toolName[..200]}…[{toolName.Length} chars]";
+        return EscapePresentationControls(bounded);
+    }
+
+    private static bool IsSafeArgumentNameChar(char ch)
+        => ch is >= 'a' and <= 'z'
+            or >= 'A' and <= 'Z'
+            or >= '0' and <= '9'
+            or '_' or '-' or '.';
+
+    private static string SerializeStringForDisplay(string value)
+    {
+        var serialized = JsonSerializer.Serialize(value);
+        return EscapePresentationControls(serialized);
+    }
+
+    private static string EscapePresentationControls(string value)
+    {
+        if (!value.Any(IsPresentationControl))
+            return value;
+
+        var escaped = new StringBuilder(value.Length);
         foreach (var ch in value)
         {
-            if (ch == '\n')
+            if (IsPresentationControl(ch))
+                escaped.Append("\\u").Append(((int)ch).ToString("X4"));
+            else
+                escaped.Append(ch);
+        }
+
+        return escaped.ToString();
+    }
+
+    private static bool IsPresentationControl(char ch)
+        => ch == '`' || char.IsControl(ch) || IsDirectionalOrLineControl(ch);
+
+    private static bool IsDirectionalOrLineControl(char ch)
+        => ch is '\u061C' or '\u200E' or '\u200F'
+            or >= '\u2028' and <= '\u202E'
+            or >= '\u2066' and <= '\u2069'
+            or '\uFEFF';
+
+    private static bool TrySanitizeAbsoluteUri(string value, out string sanitized)
+    {
+        sanitized = string.Empty;
+        if (value.Length > MaxUrlParseChars
+            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || string.IsNullOrEmpty(uri.Host))
+        {
+            return false;
+        }
+
+        try
+        {
+            var builder = new UriBuilder(uri)
+            {
+                UserName = string.Empty,
+                Password = string.Empty,
+                Query = string.IsNullOrEmpty(uri.Query) ? string.Empty : Redacted,
+                Fragment = string.IsNullOrEmpty(uri.Fragment) ? string.Empty : Redacted
+            };
+            sanitized = SecretOutputRedactor.Redact(builder.Uri.AbsoluteUri);
+            return true;
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathLike(string value)
+    {
+        if (value.Length == 0 || value.IndexOfAny(['\r', '\n']) >= 0)
+            return false;
+
+        return Path.IsPathRooted(value)
+               || value.StartsWith("~/", StringComparison.Ordinal)
+               || value.StartsWith("./", StringComparison.Ordinal)
+               || value.StartsWith("../", StringComparison.Ordinal)
+               || value.StartsWith("\\\\", StringComparison.Ordinal)
+               || value.Length >= 3 && char.IsAsciiLetter(value[0]) && value[1] == ':'
+                   && value[2] is '\\' or '/';
+    }
+
+    private static bool IsLocationLike(object? value)
+    {
+        var text = value switch
+        {
+            string stringValue => stringValue,
+            JsonElement { ValueKind: JsonValueKind.String } jsonValue => jsonValue.GetString(),
+            _ => null
+        };
+
+        return text is not null
+               && (IsPathLike(text) || TrySanitizeAbsoluteUri(text, out _));
+    }
+
+    private static string CountLinesForDisplay(string value)
+    {
+        var lines = 1;
+        var charsToInspect = Math.Min(value.Length, MaxLineCountChars);
+        for (var i = 0; i < charsToInspect; i++)
+        {
+            if (value[i] == '\n')
                 lines++;
         }
 
-        return lines;
+        return value.Length <= MaxLineCountChars ? lines.ToString() : $"{lines}+";
     }
 
-    private static bool IsLocatorKey(string key)
-    {
-        var normalized = ToolArgumentHelper.NormalizeKey(key);
-        return normalized.Contains("path", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("file", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("folder", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("directory", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("source", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("destination", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("target", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("url", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("uri", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsContentKey(string key)
-    {
-        var normalized = ToolArgumentHelper.NormalizeKey(key);
-        return normalized.Contains("content", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("body", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("text", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("message", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("payload", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("data", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("blob", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("document", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("memory", StringComparison.OrdinalIgnoreCase);
-    }
 }

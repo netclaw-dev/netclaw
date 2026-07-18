@@ -82,9 +82,9 @@ internal static class MattermostApprovalPromptBuilder
         return sb.ToString().TrimEnd();
     }
 
-    public static string BuildDecisionStatus(string selectedKey)
+    public static string BuildDecisionStatus(string selectedKey, ToolName toolName)
     {
-        var label = ApprovalOptionKeys.LabelFor(selectedKey);
+        var label = ApprovalOptionKeys.LabelFor(selectedKey, toolName.IsMcp);
         return $"Recorded approval decision: {label}.";
     }
 
