@@ -280,6 +280,55 @@ public sealed class DiscordApprovalPromptBuilderTests
         };
 
     [Fact]
+    public void Mcp_prompt_renders_invocation_without_shell_scope_chrome()
+    {
+        var request = V2Request(
+            "Dropbox/upload(destination_directory=\"/Finance/Q3\", contents=(90000 chars, 2000 lines))",
+            ["Dropbox/upload"],
+            cwd: null,
+            options:
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveMcpToolLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]) with
+        {
+            ToolName = new Netclaw.Tools.ToolName("Dropbox/upload")
+        };
+
+        var text = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonText, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.Contains("MCP tool approval required", text);
+        Assert.Contains("Invocation:", text);
+        Assert.Contains("Allow this MCP tool invocation?", text);
+        Assert.Contains("**Invocation:**", buttonText);
+        Assert.Contains(buttons, button => button.Label == ApprovalOptionKeys.ApproveMcpToolLabel);
+        Assert.DoesNotContain("no working directory", text);
+        Assert.DoesNotContain("Always anywhere", text);
+        Assert.DoesNotContain("• Dropbox/upload", text);
+    }
+
+    [Fact]
+    public void Mcp_resolution_describes_tool_scope_not_shell_location()
+    {
+        var request = V2Request("Dropbox/upload(path=\"/Finance/Q3\")", ["Dropbox/upload"], null, FullButtonRow()) with
+        {
+            ToolName = new Netclaw.Tools.ToolName("Dropbox/upload")
+        };
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request,
+            ApprovalOptionKeys.ApproveEverywhere,
+            "user-1");
+
+        Assert.Contains("MCP tool approval resolved", text);
+        Assert.Contains("Always allowed: Dropbox/upload", text);
+        Assert.DoesNotContain("anywhere", text);
+    }
+
+    [Fact]
     public void V2_single_verb_collapses_into_header()
     {
         var request = V2Request("git status", ["git status"], "/home/user/repos/foo", FullButtonRow());

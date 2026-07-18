@@ -85,8 +85,11 @@ internal sealed class PendingApprovalRequest
         RequesterSenderId = requesterSenderId;
         RequesterPrincipal = requesterPrincipal;
         OptionKeys = [.. optionKeys];
+        var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
         Options = OptionKeys
-            .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
+            .Select(key => new ToolInteractionOption(
+                new ApprovalOptionKey(key),
+                ApprovalOptionKeys.LabelFor(key, isMcpTool)))
             .ToArray();
         PromptPostId = promptPostId;
         ToolName = toolName;

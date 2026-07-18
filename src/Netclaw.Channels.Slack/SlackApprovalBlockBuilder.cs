@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Tools;
 using SlackNet.Blocks;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -28,13 +29,13 @@ internal static class SlackApprovalBlockBuilder
     {
         var lines = new List<string>
         {
-            ":lock: *Tool approval required*",
+            $":lock: *{ApprovalTitle(request.ToolName)}*",
             $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildApproveHeader(request)
         };
 
         var verbs = ResolveDisplayVerbs(request);
-        if (verbs.Count > 1)
+        if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
             foreach (var verb in verbs)
                 lines.Add($"  • `{verb}`");
@@ -59,11 +60,13 @@ internal static class SlackApprovalBlockBuilder
         {
             new SectionBlock
             {
-                Text = new Markdown(":lock: *Tool approval required*")
+                Text = new Markdown($":lock: *{ApprovalTitle(request.ToolName)}*")
             },
             new SectionBlock
             {
-                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`"),
+                Text = new Markdown(
+                    $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
+                    + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`"),
                 Expand = true
             },
             new SectionBlock
@@ -73,7 +76,7 @@ internal static class SlackApprovalBlockBuilder
         };
 
         var verbs = ResolveDisplayVerbs(request);
-        if (verbs.Count > 1)
+        if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
             var verbLines = verbs.Select(v => $"• `{EscapeMarkdown(v)}`");
             blocks.Add(new SectionBlock
@@ -134,7 +137,7 @@ internal static class SlackApprovalBlockBuilder
 
         return string.Join("\n", new[]
         {
-            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
+            $"{statusPrefix} *{ApprovalResolvedTitle(request.ToolName)}* by <@{EscapeMarkdown(senderId)}>",
             $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildResolutionLine(request, selectedKey)
         });
@@ -154,13 +157,13 @@ internal static class SlackApprovalBlockBuilder
         {
             new SectionBlock
             {
-                Text = new Markdown($"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>")
+                Text = new Markdown($"{statusPrefix} *{ApprovalResolvedTitle(request.ToolName)}* by <@{EscapeMarkdown(senderId)}>")
             },
             new SectionBlock
             {
                 Text = new Markdown(
                     $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
-                    + $"*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
+                    + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
                     + $"*{EscapeMarkdown(resolutionLine)}*"),
                 Expand = true
             }
@@ -208,7 +211,7 @@ internal static class SlackApprovalBlockBuilder
 
         var lines = new List<string>(3)
         {
-            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>"
+            $"{statusPrefix} *{ApprovalResolvedTitle(toolName)}* by <@{EscapeMarkdown(senderId)}>"
         };
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
@@ -217,7 +220,7 @@ internal static class SlackApprovalBlockBuilder
                 $"> `{toolName}`: `{ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars)}`");
         }
 
-        lines.Add(BuildGenericResolutionLine(selectedKey));
+        lines.Add(BuildGenericResolutionLine(selectedKey, IsMcpToolName(toolName)));
 
         return string.Join("\n", lines);
     }
@@ -241,7 +244,7 @@ internal static class SlackApprovalBlockBuilder
         {
             new SectionBlock
             {
-                Text = new Markdown($"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>")
+                Text = new Markdown($"{statusPrefix} *{ApprovalResolvedTitle(toolName)}* by <@{EscapeMarkdown(senderId)}>")
             }
         };
 
@@ -251,8 +254,8 @@ internal static class SlackApprovalBlockBuilder
             {
                 Text = new Markdown(
                     $"*Tool:* `{EscapeMarkdown(toolName)}`\n"
-                    + $"*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))}`\n"
-                    + $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*"),
+                    + $"*{RequestLabel(toolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))}`\n"
+                    + $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, IsMcpToolName(toolName)))}*"),
                 Expand = true
             });
         }
@@ -260,15 +263,24 @@ internal static class SlackApprovalBlockBuilder
         {
             blocks.Add(new SectionBlock
             {
-                Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*")
+                Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, isMcpTool: false))}*")
             });
         }
 
         return blocks;
     }
 
-    private static string BuildGenericResolutionLine(string selectedKey)
-        => selectedKey switch
+    private static string BuildGenericResolutionLine(string selectedKey, bool isMcpTool)
+        => isMcpTool
+            ? selectedKey switch
+            {
+                ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => "Always allowed this MCP tool",
+                ApprovalOptionKeys.ApproveSession => "Allowed this MCP tool for this chat",
+                ApprovalOptionKeys.ApproveOnce => "Allowed once",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            }
+            : selectedKey switch
         {
             ApprovalOptionKeys.ApproveAlways => "Saved: always here",
             ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
@@ -299,6 +311,9 @@ internal static class SlackApprovalBlockBuilder
     /// </remarks>
     private static string BuildApproveHeader(ToolInteractionRequest request)
     {
+        if (request.ToolName.IsMcp)
+            return "Allow this MCP tool invocation?";
+
         var verbs = ResolveDisplayVerbs(request);
         var location = ResolveHeaderLocation(request);
 
@@ -354,6 +369,18 @@ internal static class SlackApprovalBlockBuilder
     /// </summary>
     private static string BuildResolutionLine(ToolInteractionRequest request, string selectedKey)
     {
+        if (request.ToolName.IsMcp)
+        {
+            return selectedKey switch
+            {
+                ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => $"Always allowed: {request.ToolName}",
+                ApprovalOptionKeys.ApproveSession => $"Allowed for this chat: {request.ToolName}",
+                ApprovalOptionKeys.ApproveOnce => "Allowed once",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            };
+        }
+
         var verbs = string.Join(", ", ResolveDisplayVerbs(request));
         var location = ResolveHeaderLocation(request);
 
@@ -379,6 +406,24 @@ internal static class SlackApprovalBlockBuilder
         => request.CandidateVerbs.Count > 0
             ? request.CandidateVerbs
             : request.Patterns;
+
+    private static string ApprovalTitle(ToolName toolName)
+        => toolName.IsMcp ? "MCP tool approval required" : "Tool approval required";
+
+    private static string ApprovalResolvedTitle(ToolName toolName)
+        => toolName.IsMcp ? "MCP tool approval resolved" : "Tool approval resolved";
+
+    private static string ApprovalResolvedTitle(string? toolName)
+        => IsMcpToolName(toolName) ? "MCP tool approval resolved" : "Tool approval resolved";
+
+    private static string RequestLabel(ToolName toolName)
+        => toolName.IsMcp ? "Invocation" : "Request";
+
+    private static string RequestLabel(string toolName)
+        => new ToolName(toolName).IsMcp ? "Invocation" : "Request";
+
+    private static bool IsMcpToolName(string? toolName)
+        => !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
 
     private static void AppendAdoptedContextSummary(List<string> lines, ToolInteractionRequest request)
     {

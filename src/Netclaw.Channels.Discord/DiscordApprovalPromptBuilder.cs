@@ -6,6 +6,7 @@
 using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Discord;
@@ -25,13 +26,14 @@ internal static class DiscordApprovalPromptBuilder
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Netclaw approval required:");
+        sb.AppendLine(request.ToolName.IsMcp ? "MCP tool approval required:" : "Netclaw approval required:");
         sb.Append("Tool: ").AppendLine(request.ToolName.Value);
-        sb.Append("Action: ").AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
+        sb.Append(request.ToolName.IsMcp ? "Invocation: " : "Action: ")
+            .AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
         sb.AppendLine(BuildApproveHeader(request));
 
         var verbs = ResolveDisplayVerbs(request);
-        if (verbs.Count > 1)
+        if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
             foreach (var verb in verbs)
                 sb.Append("  • ").AppendLine(verb);
@@ -52,7 +54,9 @@ internal static class DiscordApprovalPromptBuilder
         ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(":lock: **Tool approval required**");
+        sb.Append(":lock: **")
+            .Append(request.ToolName.IsMcp ? "MCP tool approval required" : "Tool approval required")
+            .AppendLine("**");
         AppendToolSummary(sb, request);
 
         sb.AppendLine();
@@ -87,9 +91,12 @@ internal static class DiscordApprovalPromptBuilder
             : ":white_check_mark:";
 
         var sb = new StringBuilder();
-        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        sb.Append(statusEmoji)
+            .Append(request.ToolName.IsMcp ? " **MCP tool approval resolved**" : " **Tool approval resolved**")
+            .AppendLine();
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
+        sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
+            .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildResolutionLine(request, selectedKey)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 
@@ -126,24 +133,36 @@ internal static class DiscordApprovalPromptBuilder
             : ":white_check_mark:";
 
         var sb = new StringBuilder();
-        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
+        sb.Append(statusEmoji)
+            .Append(isMcpTool ? " **MCP tool approval resolved**" : " **Tool approval resolved**")
+            .AppendLine();
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
         {
             sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
-            sb.Append("**Action:** `")
+            sb.Append(isMcpTool ? "**Invocation:** `" : "**Action:** `")
                 .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
                 .AppendLine("`");
         }
 
-        sb.Append("**").Append(BuildGenericResolutionLine(selectedKey)).Append("**");
+        sb.Append("**").Append(BuildGenericResolutionLine(selectedKey, isMcpTool)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 
         return sb.ToString();
     }
 
-    private static string BuildGenericResolutionLine(string selectedKey)
-        => selectedKey switch
+    private static string BuildGenericResolutionLine(string selectedKey, bool isMcpTool)
+        => isMcpTool
+            ? selectedKey switch
+            {
+                ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => "Always allowed this MCP tool",
+                ApprovalOptionKeys.ApproveSession => "Allowed this MCP tool for this chat",
+                ApprovalOptionKeys.ApproveOnce => "Allowed once",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            }
+            : selectedKey switch
         {
             ApprovalOptionKeys.ApproveAlways => "Saved: always here",
             ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
@@ -156,11 +175,12 @@ internal static class DiscordApprovalPromptBuilder
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
+        sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
+            .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildApproveHeader(request)).AppendLine("**");
 
         var verbs = ResolveDisplayVerbs(request);
-        if (verbs.Count > 1)
+        if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
             foreach (var verb in verbs)
                 sb.Append("  • `").Append(verb).AppendLine("`");
@@ -180,6 +200,9 @@ internal static class DiscordApprovalPromptBuilder
     /// </summary>
     private static string BuildApproveHeader(ToolInteractionRequest request)
     {
+        if (request.ToolName.IsMcp)
+            return "Allow this MCP tool invocation?";
+
         var verbs = ResolveDisplayVerbs(request);
         var location = ResolveHeaderLocation(request);
 
@@ -195,6 +218,18 @@ internal static class DiscordApprovalPromptBuilder
     /// </summary>
     private static string BuildResolutionLine(ToolInteractionRequest request, string selectedKey)
     {
+        if (request.ToolName.IsMcp)
+        {
+            return selectedKey switch
+            {
+                ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => $"Always allowed: {request.ToolName}",
+                ApprovalOptionKeys.ApproveSession => $"Allowed for this chat: {request.ToolName}",
+                ApprovalOptionKeys.ApproveOnce => "Allowed once",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            };
+        }
+
         var verbs = string.Join(", ", ResolveDisplayVerbs(request));
         var location = ResolveHeaderLocation(request);
 

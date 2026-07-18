@@ -6,6 +6,7 @@
 using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Mattermost;
@@ -28,8 +29,8 @@ internal static class MattermostApprovalPromptBuilder
         MattermostCallbackActionStore? actionStore = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(":lock: **Tool approval required**");
-        AppendToolSummary(sb, request);
+        AppendApprovalTitle(sb, request);
+        AppendToolSummary(sb, request, includeApprovalQuestion: true);
         sb.AppendLine();
         sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
 
@@ -62,7 +63,7 @@ internal static class MattermostApprovalPromptBuilder
             .ToList();
 
         var attachment = new MattermostAttachment(
-            Fallback: $"Tool approval required — reply with {string.Join(", ", Enumerable.Range(0, actions.Count).Select(GetReplyLetter))}",
+            Fallback: $"{(request.ToolName.IsMcp ? "MCP tool approval required" : "Tool approval required")} — reply with {string.Join(", ", Enumerable.Range(0, actions.Count).Select(GetReplyLetter))}",
             Color: "#3AA3E3",
             Actions: actions);
 
@@ -72,8 +73,8 @@ internal static class MattermostApprovalPromptBuilder
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(":lock: **Tool approval required**");
-        AppendToolSummary(sb, request);
+        AppendApprovalTitle(sb, request);
+        AppendToolSummary(sb, request, includeApprovalQuestion: true);
 
         sb.AppendLine();
         sb.AppendLine("Reply with:");
@@ -95,11 +96,13 @@ internal static class MattermostApprovalPromptBuilder
         var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
-        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey);
+        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey, request.ToolName.IsMcp);
 
         var sb = new StringBuilder();
-        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
-        AppendToolSummary(sb, request);
+        sb.Append(statusEmoji)
+            .Append(request.ToolName.IsMcp ? " **MCP tool approval resolved**" : " **Tool approval resolved**")
+            .AppendLine();
+        AppendToolSummary(sb, request, includeApprovalQuestion: false);
 
         sb.Append("**Decision:** ").Append(decisionLabel);
         sb.Append(" (by @").Append(senderId).Append(')');
@@ -141,15 +144,18 @@ internal static class MattermostApprovalPromptBuilder
         var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
-        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey);
+        var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
+        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey, isMcpTool);
 
         var sb = new StringBuilder();
-        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        sb.Append(statusEmoji)
+            .Append(isMcpTool ? " **MCP tool approval resolved**" : " **Tool approval resolved**")
+            .AppendLine();
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
         {
             sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
-            sb.Append("**Action:** `")
+            sb.Append(isMcpTool ? "**Invocation:** `" : "**Action:** `")
                 .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
                 .AppendLine("`");
         }
@@ -166,12 +172,20 @@ internal static class MattermostApprovalPromptBuilder
             Text: resolvedText);
     }
 
-    private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
+    private static void AppendToolSummary(
+        StringBuilder sb,
+        ToolInteractionRequest request,
+        bool includeApprovalQuestion)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
+        sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
+            .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
 
-        if (request.Patterns.Count > 0)
+        if (request.ToolName.IsMcp && includeApprovalQuestion)
+        {
+            sb.AppendLine("**Allow this MCP tool invocation?**");
+        }
+        else if (request.Patterns.Count > 0)
         {
             if (request.Patterns.Count == 1)
             {
@@ -187,6 +201,11 @@ internal static class MattermostApprovalPromptBuilder
 
         AppendAdoptedContextSummary(sb, request);
     }
+
+    private static void AppendApprovalTitle(StringBuilder sb, ToolInteractionRequest request)
+        => sb.Append(":lock: **")
+            .Append(request.ToolName.IsMcp ? "MCP tool approval required" : "Tool approval required")
+            .AppendLine("**");
 
     private static void AppendAdoptedContextSummary(StringBuilder sb, ToolInteractionRequest request)
     {

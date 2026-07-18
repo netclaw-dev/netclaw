@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text;
+using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
@@ -771,4 +772,194 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
+}
+
+/// <summary>
+/// MCP approval matcher. Grant matching remains at the canonical tool-name
+/// level, while the display text includes a bounded, redacted preview of the
+/// server arguments so an operator can make an informed decision.
+/// </summary>
+public sealed class McpApprovalMatcher : IToolApprovalMatcher
+{
+    public static readonly McpApprovalMatcher Instance = new();
+
+    private const int StandardStringPreviewChars = 240;
+    private const int LocatorStringPreviewChars = 1_000;
+    private const int LocatorPreviewHeadChars = 600;
+    private const int LocatorPreviewTailChars = 350;
+    private const int SmallStructurePreviewChars = 240;
+    private const string Redacted = "***REDACTED***";
+
+    private static DefaultApprovalMatcher Default => DefaultApprovalMatcher.Instance;
+
+    public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
+        => Default.GetApprovalModeKey(toolName, arguments);
+
+    public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
+        => Default.IsFailClosedOnPersonal(toolName, arguments);
+
+    public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
+        => Default.ExtractPatterns(toolName, arguments);
+
+    public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
+        => Default.ExtractCandidateVerbs(toolName, arguments);
+
+    public IReadOnlyList<ApprovalCandidate> ExtractCandidates(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments)
+        => Default.ExtractCandidates(toolName, arguments);
+
+    public bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd)
+        => Default.IsApproved(toolName, arguments, approvedEntries, cwd);
+
+    public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => Default.IsMessy(toolName, arguments);
+
+    public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+            return toolName.Value;
+
+        var parts = arguments
+            .OrderBy(static pair => ArgumentPriority(pair.Key))
+            .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => $"{pair.Key}={FormatArgument(pair.Key, pair.Value)}");
+
+        return $"{toolName.Value}({string.Join(", ", parts)})";
+    }
+
+    private static int ArgumentPriority(string key)
+    {
+        if (IsLocatorKey(key))
+            return 0;
+
+        return IsContentKey(key) ? 2 : 1;
+    }
+
+    private static string FormatArgument(string key, object? value)
+    {
+        if (SecretOutputRedactor.IsSecretKey(key) || value is SensitiveString)
+            return Redacted;
+
+        if (value is byte[] bytes)
+            return $"({bytes.Length} bytes)";
+
+        JsonElement element;
+        try
+        {
+            element = value is JsonElement json
+                ? json
+                : JsonSerializer.SerializeToElement(value, value?.GetType() ?? typeof(object));
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            return $"({value?.GetType().Name ?? "unknown"} value unavailable)";
+        }
+
+        return FormatJsonValue(key, element);
+    }
+
+    private static string FormatJsonValue(string key, JsonElement value)
+    {
+        if (SecretOutputRedactor.IsSecretKey(key))
+            return Redacted;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => FormatString(key, value.GetString() ?? string.Empty),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => "null",
+            JsonValueKind.Undefined => "(undefined)",
+            JsonValueKind.Object => FormatObject(value),
+            JsonValueKind.Array => FormatArray(value),
+            _ => "(unsupported value)"
+        };
+    }
+
+    private static string FormatString(string key, string value)
+    {
+        var maxChars = IsLocatorKey(key) ? LocatorStringPreviewChars : StandardStringPreviewChars;
+        if (value.Length <= maxChars)
+            return SecretOutputRedactor.Redact(JsonSerializer.Serialize(value));
+
+        if (IsLocatorKey(key))
+        {
+            var preview = value[..LocatorPreviewHeadChars]
+                          + $"…[{value.Length} chars]…"
+                          + value[^LocatorPreviewTailChars..];
+            return SecretOutputRedactor.Redact(JsonSerializer.Serialize(preview));
+        }
+
+        return $"({value.Length} chars, {CountLines(value)} lines)";
+    }
+
+    private static string FormatObject(JsonElement value)
+    {
+        var properties = value.EnumerateObject().ToList();
+        var rawLength = value.GetRawText().Length;
+        if (rawLength > SmallStructurePreviewChars)
+            return $"({properties.Count} properties, {rawLength} chars)";
+
+        var parts = properties
+            .OrderBy(static property => property.Name, StringComparer.Ordinal)
+            .Select(static property =>
+                $"{JsonSerializer.Serialize(property.Name)}:{FormatJsonValue(property.Name, property.Value)}");
+        return $"{{{string.Join(",", parts)}}}";
+    }
+
+    private static string FormatArray(JsonElement value)
+    {
+        var items = value.EnumerateArray().ToList();
+        var rawLength = value.GetRawText().Length;
+        if (rawLength > SmallStructurePreviewChars)
+            return $"({items.Count} items, {rawLength} chars)";
+
+        return $"[{string.Join(",", items.Select(static item => FormatJsonValue(string.Empty, item)))}]";
+    }
+
+    private static int CountLines(string value)
+    {
+        var lines = 1;
+        foreach (var ch in value)
+        {
+            if (ch == '\n')
+                lines++;
+        }
+
+        return lines;
+    }
+
+    private static bool IsLocatorKey(string key)
+    {
+        var normalized = ToolArgumentHelper.NormalizeKey(key);
+        return normalized.Contains("path", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("file", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("folder", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("directory", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("source", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("destination", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("target", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("url", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("uri", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsContentKey(string key)
+    {
+        var normalized = ToolArgumentHelper.NormalizeKey(key);
+        return normalized.Contains("content", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("body", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("text", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("message", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("payload", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("data", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("blob", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("document", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("memory", StringComparison.OrdinalIgnoreCase);
+    }
 }

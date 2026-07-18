@@ -1835,8 +1835,11 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             RequesterSenderId = requesterSenderId;
             RequesterPrincipal = requesterPrincipal;
             OptionKeys = [.. optionKeys];
+            var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
             Options = OptionKeys
-                .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
+                .Select(key => new ToolInteractionOption(
+                    new ApprovalOptionKey(key),
+                    ApprovalOptionKeys.LabelFor(key, isMcpTool)))
                 .ToArray();
             PromptMessageTs = promptMessageTs;
             ToolName = toolName;

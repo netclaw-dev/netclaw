@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.33.0"
+  version: "2.34.0"
 ---
 
 # Netclaw Operations
@@ -114,6 +114,15 @@ or MCP tools by capability before concluding a tool doesn't exist. Full guidance
 `skill_read_resource('netclaw-operations', 'references/tools.md')`.
 
 ## Approval Prompts
+
+MCP approval prompts show a bounded, redacted preview of the call arguments.
+Source and destination paths, filenames, directories, and URLs appear first so
+the operator can verify what will move where. Large content, message bodies,
+binary data, and nested collections are summarized by size instead of dumped
+into chat; secret-like fields and token-shaped values are always redacted. MCP
+grants are tool-wide rather than directory-scoped, so these prompts omit the
+misleading `Always here` option and label the persistent choice `Always allow
+this tool` rather than the shell-oriented `Always anywhere`.
 
 Approvals are typed `(verb, directory)` pairs in `tool-approvals.json`:
 

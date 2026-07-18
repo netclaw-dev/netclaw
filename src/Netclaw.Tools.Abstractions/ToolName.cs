@@ -12,6 +12,13 @@ namespace Netclaw.Tools;
 /// </summary>
 public readonly record struct ToolName(string Value)
 {
+    /// <summary>
+    /// MCP tools use the canonical operator-facing <c>{server}/{tool}</c>
+    /// identity. First-party tool names never contain the separator.
+    /// </summary>
+    public bool IsMcp => !string.IsNullOrEmpty(Value)
+                         && Value.IndexOf('/', StringComparison.Ordinal) > 0;
+
     public static explicit operator ToolName(string value) => new(value);
 
     public override string ToString() => Value;

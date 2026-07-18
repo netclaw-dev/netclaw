@@ -356,6 +356,53 @@ public sealed class MattermostApprovalPromptBuilderTests
         };
 
     [Fact]
+    public void Mcp_prompt_renders_invocation_without_shell_patterns()
+    {
+        var request = CreateStandardRequest() with
+        {
+            ToolName = new Netclaw.Tools.ToolName("Dropbox/upload"),
+            DisplayText = "Dropbox/upload(destination_directory=\"/Finance/Q3\", contents=(90000 chars, 2000 lines))",
+            Patterns = ["Dropbox/upload"],
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveMcpToolLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+        var text = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
+
+        Assert.Contains("MCP tool approval required", text);
+        Assert.Contains("**Invocation:**", text);
+        Assert.Contains("Allow this MCP tool invocation?", text);
+        Assert.Contains(ApprovalOptionKeys.ApproveMcpToolLabel, text);
+        Assert.DoesNotContain("**Pattern", text);
+        Assert.DoesNotContain("Always anywhere", text);
+    }
+
+    [Fact]
+    public void Mcp_resolution_uses_contextual_persistent_grant_label()
+    {
+        var request = CreateStandardRequest() with
+        {
+            ToolName = new Netclaw.Tools.ToolName("Dropbox/upload"),
+            DisplayText = "Dropbox/upload(path=\"/Finance/Q3\")"
+        };
+
+        var text = MattermostApprovalPromptBuilder.BuildResolvedPromptText(
+            request,
+            ApprovalOptionKeys.ApproveEverywhere,
+            "user-1");
+
+        Assert.Contains("MCP tool approval resolved", text);
+        Assert.Contains($"**Decision:** {ApprovalOptionKeys.ApproveMcpToolLabel}", text);
+        Assert.DoesNotContain("Allow this MCP tool invocation?", text);
+        Assert.DoesNotContain("Always anywhere", text);
+    }
+
+    [Fact]
     public void Oversized_command_keeps_prompt_under_Mattermost_cap()
     {
         // Mattermost's hard message cap is 16K, but approval prompts

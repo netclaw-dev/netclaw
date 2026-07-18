@@ -43,6 +43,7 @@ public static class ApprovalOptionKeys
     public const string ApproveSessionLabel = "This chat";
     public const string ApproveAlwaysLabel = "Always here";
     public const string ApproveEverywhereLabel = "Always anywhere";
+    public const string ApproveMcpToolLabel = "Always allow this tool";
     public const string DenyLabel = "Deny";
 
     /// <summary>
@@ -67,12 +68,19 @@ public static class ApprovalOptionKeys
     /// Maps an approval option key to its short human-readable label. Returns
     /// the key unchanged when it is not a recognized option.
     /// </summary>
-    public static string LabelFor(string optionKey) => optionKey switch
+    public static string LabelFor(string optionKey) => LabelFor(optionKey, isMcpTool: false);
+
+    /// <summary>
+    /// Maps an approval option key to its context-aware label. MCP grants are
+    /// tool-scoped rather than directory-scoped, so the global persistence key
+    /// is rendered as "Always allow this tool" instead of "Always anywhere".
+    /// </summary>
+    public static string LabelFor(string optionKey, bool isMcpTool) => optionKey switch
     {
         ApproveOnce => ApproveOnceLabel,
         ApproveSession => ApproveSessionLabel,
         ApproveAlways => ApproveAlwaysLabel,
-        ApproveEverywhere => ApproveEverywhereLabel,
+        ApproveEverywhere => isMcpTool ? ApproveMcpToolLabel : ApproveEverywhereLabel,
         Deny => DenyLabel,
         _ => optionKey
     };

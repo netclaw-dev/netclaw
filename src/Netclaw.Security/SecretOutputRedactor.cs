@@ -15,6 +15,26 @@ public static partial class SecretOutputRedactor
 {
     private const string Redacted = "***REDACTED***";
 
+    private static readonly string[] SecretKeyFragments =
+    [
+        "apikey",
+        "token",
+        "secret",
+        "password",
+        "authorization",
+        "credential",
+        "privatekey",
+        "signingkey",
+        "connectionstring"
+    ];
+
+    internal static bool IsSecretKey(string key)
+    {
+        var normalized = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(key);
+        return SecretKeyFragments.Any(fragment =>
+            normalized.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+    }
+
     public static bool ContainsSecretLikeContent(string output)
     {
         if (string.IsNullOrEmpty(output))

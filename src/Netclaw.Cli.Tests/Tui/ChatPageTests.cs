@@ -4,10 +4,14 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Netclaw.Security;
+using Netclaw.Tools;
 using Termina;
 using Termina.Hosting;
 using Termina.Input;
@@ -325,9 +329,89 @@ public sealed class ChatPageTests
         WriteSnapshot("chat-approval-expanded.txt", expanded);
     }
 
-    private async Task<string> CaptureFrameAsync(bool expand)
+    [Fact]
+    public async Task LargeMcpApproval_RenderedFrameSnapshot()
     {
-        var (terminal, app, _) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
+        var content = string.Join('\n', Enumerable.Repeat("large memorizer payload that must not render", 2_000));
+        var function = AIFunctionFactory.Create(
+            (string contents, string source_path, string destination_directory, string access_token) => "uploaded",
+            "upload",
+            "Upload a file to Dropbox");
+        var tool = new McpToolAdapter(function, "Dropbox", "upload");
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.AllowedMcpServers.Add("Dropbox");
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["Dropbox"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+        var executionContext = new ToolExecutionContext(
+            new ToolRunScope
+            {
+                Session = new ToolSessionScope.Bound("test-session", null),
+                Audience = TrustAudience.Personal,
+                InlineOutputBudget = InlineOutputBudget.Default,
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
+            },
+            ToolExecutionTimeout.Default);
+        var decision = policy.AuthorizeInvocation(
+            tool,
+            executionContext,
+            new Dictionary<string, object?>
+            {
+                ["contents"] = content,
+                ["source_path"] = "/home/operator/reports/2026/Q3/quarterly-results-final.pdf",
+                ["destination_directory"] = "/Finance/Board Pack/2026/Q3",
+                ["access_token"] = "must-never-render",
+                ["_rationale"] = "Upload the requested board report"
+            });
+        var approvalContext = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var approval = BuildApproval(approvalContext.DisplayText, approvalContext.ToolName) with
+        {
+            Patterns = approvalContext.Patterns,
+            CandidateVerbs = approvalContext.CandidateVerbs,
+            Options = approvalContext.Options
+                .Select(option => new ToolInteractionOption(option.Key, option.Label))
+                .ToArray()
+        };
+
+        var collapsed = await CaptureFrameAsync(approval, expand: false);
+        var expanded = await CaptureFrameAsync(approval, expand: true);
+
+        WriteSnapshot("chat-mcp-approval-large-collapsed.txt", collapsed);
+        WriteSnapshot("chat-mcp-approval-large-expanded.txt", expanded);
+
+        Assert.Contains("/Finance/Board Pack/2026/Q3", expanded);
+        Assert.Contains("quarterly-results-final.pdf", expanded);
+        Assert.Contains(content.Length.ToString(), expanded);
+        Assert.Contains("chars, 2000 lines", expanded);
+        Assert.Contains("MCP tool approval required", expanded);
+        Assert.Contains("Invocation:", expanded);
+        Assert.Contains(ApprovalOptionKeys.ApproveMcpToolLabel, expanded);
+        Assert.DoesNotContain("Patterns:", expanded);
+        Assert.DoesNotContain(ApprovalOptionKeys.ApproveEverywhereLabel, expanded);
+        Assert.DoesNotContain("large memorizer payload", expanded);
+        Assert.DoesNotContain("must-never-render", collapsed);
+        Assert.DoesNotContain("must-never-render", expanded);
+        Assert.DoesNotContain("_rationale", expanded);
+        Assert.DoesNotContain("Upload the requested board report", expanded);
+    }
+
+    private async Task<string> CaptureFrameAsync(bool expand)
+        => await CaptureFrameAsync(BuildApproval(LongShellBody), expand);
+
+    private async Task<string> CaptureFrameAsync(ToolInteractionRequest approval, bool expand)
+    {
+        var (terminal, app, _) = CreateHeadlessApp(approval, out var input);
         if (expand)
             input.EnqueueKey(ConsoleKey.O, false, false, true);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -363,7 +447,7 @@ public sealed class ChatPageTests
         File.WriteAllText(Path.Combine(targetDir, filename), content);
     }
 
-    private static ToolInteractionRequest BuildApproval(string displayText)
+    private static ToolInteractionRequest BuildApproval(string displayText, string toolName = "shell_execute")
     {
         return new ToolInteractionRequest
         {
@@ -371,7 +455,7 @@ public sealed class ChatPageTests
             TimestampMs = 0,
             Kind = "approval",
             CallId = new Netclaw.Tools.ToolCallId("test-call"),
-            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             Patterns = ["cd"],
             CandidateVerbs = ["cd"],

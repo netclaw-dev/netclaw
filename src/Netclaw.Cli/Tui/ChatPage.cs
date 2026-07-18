@@ -462,9 +462,17 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
             case ToolInteractionRequest msg:
                 RemoveThinkingSpinner();
-                _chatHistory.AppendLine($"System: Approval required for {msg.ToolName}", Color.Yellow);
-                _chatHistory.AppendLine($"  {msg.DisplayText}", Color.White);
-                if (msg.Patterns.Count > 0)
+                _chatHistory.AppendLine(
+                    msg.ToolName.IsMcp
+                        ? "System: MCP tool approval required"
+                        : $"System: Approval required for {msg.ToolName}",
+                    Color.Yellow);
+                if (msg.ToolName.IsMcp)
+                    _chatHistory.AppendLine($"  Tool: {msg.ToolName}", Color.BrightBlack);
+                _chatHistory.AppendLine(
+                    msg.ToolName.IsMcp ? $"  Invocation: {msg.DisplayText}" : $"  {msg.DisplayText}",
+                    Color.White);
+                if (!msg.ToolName.IsMcp && msg.Patterns.Count > 0)
                     _chatHistory.AppendLine($"  Patterns: {string.Join(", ", msg.Patterns)}", Color.BrightBlack);
                 _chatHistory.AppendLine($"  Options: {string.Join(", ", msg.Options.Select(o => o.Label))}", Color.Yellow);
                 _chatHistory.ScrollToBottom();

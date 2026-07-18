@@ -288,7 +288,9 @@ public partial class ChatViewModel : ReactiveViewModel
         if (CurrentInteraction is not { } interaction)
             return "Approval required";
 
-        return $"Approval required for {interaction.ToolName}.";
+        return interaction.ToolName.IsMcp
+            ? $"MCP tool approval required: {interaction.ToolName}."
+            : $"Approval required for {interaction.ToolName}.";
     }
 
     /// <summary>
@@ -305,11 +307,12 @@ public partial class ChatViewModel : ReactiveViewModel
         if (CurrentInteraction is not { } interaction)
             return string.Empty;
 
-        var patterns = interaction.Patterns.Count > 0
+        var patterns = !interaction.ToolName.IsMcp && interaction.Patterns.Count > 0
             ? $" Patterns: {string.Join(", ", interaction.Patterns)}"
             : string.Empty;
 
-        var fullBody = $"{interaction.DisplayText}{patterns}";
+        var prefix = interaction.ToolName.IsMcp ? "Invocation: " : string.Empty;
+        var fullBody = $"{prefix}{interaction.DisplayText}{patterns}";
 
         if (IsApprovalDetailVisible.Value)
             return Netclaw.Channels.ApprovalDisplayTextFormatter.Truncate(fullBody, MaxExpandedApprovalBodyChars);

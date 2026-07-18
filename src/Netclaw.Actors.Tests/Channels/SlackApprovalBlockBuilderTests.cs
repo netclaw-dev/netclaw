@@ -79,6 +79,55 @@ public sealed class SlackApprovalBlockBuilderTests
     }
 
     [Fact]
+    public void Mcp_prompt_renders_invocation_without_shell_scope_chrome()
+    {
+        var request = Request(
+            "Dropbox/upload(destination_directory=\"/Finance/Q3\", contents=(90000 chars, 2000 lines))",
+            ["Dropbox/upload"],
+            cwd: null,
+            options:
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveMcpToolLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]) with
+        {
+            ToolName = new ToolName("Dropbox/upload")
+        };
+
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+        var blocks = string.Join('\n', SlackApprovalBlockBuilder.BuildApprovalBlocks(request)
+            .OfType<SectionBlock>()
+            .Select(block => block.Text is Markdown markdown ? markdown.Text : string.Empty));
+
+        Assert.Contains("MCP tool approval required", text);
+        Assert.Contains("Allow this MCP tool invocation?", text);
+        Assert.Contains("*Invocation:*", blocks);
+        Assert.DoesNotContain("no working directory", text);
+        Assert.DoesNotContain("Always anywhere", text);
+        Assert.DoesNotContain("• `Dropbox/upload`", text);
+    }
+
+    [Fact]
+    public void Mcp_resolution_describes_tool_scope_not_shell_location()
+    {
+        var request = Request("Dropbox/upload(path=\"/Finance/Q3\")", ["Dropbox/upload"], null, FullButtonRow()) with
+        {
+            ToolName = new ToolName("Dropbox/upload")
+        };
+
+        var text = SlackApprovalBlockBuilder.BuildResolvedApprovalText(
+            request,
+            ApprovalOptionKeys.ApproveEverywhere,
+            "U123");
+
+        Assert.Contains("MCP tool approval resolved", text);
+        Assert.Contains("Always allowed: Dropbox/upload", text);
+        Assert.DoesNotContain("anywhere", text);
+    }
+
+    [Fact]
     public void Messy_command_emits_complex_command_hint()
     {
         var request = Request(

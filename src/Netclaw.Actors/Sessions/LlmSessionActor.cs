@@ -3901,7 +3901,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ];
 
         var options = optionKeys
-            .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
+            .Select(key => new ToolInteractionOption(
+                new ApprovalOptionKey(key),
+                ApprovalOptionKeys.LabelFor(key, new ToolName(pending.ToolName).IsMcp)))
             .ToArray();
 
         if (!ToolInteractionResponseParser.TryParseApprovalResponse(msg.Text, options, out var selectedKey)
