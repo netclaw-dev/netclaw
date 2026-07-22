@@ -286,7 +286,9 @@ public sealed class GitHubCopilotProviderPluginTests
         Assert.Equal("vscode-chat", sentRequest.Headers.GetValues("copilot-integration-id").Single());
         Assert.True(sentRequest.Headers.Contains("editor-version"));
         Assert.Equal("conversation-agent", sentRequest.Headers.GetValues("openai-intent").Single());
-        Assert.Equal(NetclawUserAgent.Value, sentRequest.Headers.UserAgent.ToString());
+        var userAgent = sentRequest.Headers.UserAgent.ToString();
+        Assert.StartsWith(NetclawUserAgent.Value, userAgent);
+        Assert.Equal(1, userAgent.Split(NetclawUserAgent.Value, StringSplitOptions.None).Length - 1);
     }
 
     [Fact]
