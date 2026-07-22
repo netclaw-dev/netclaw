@@ -1,0 +1,270 @@
+# mcp-oauth Specification
+
+## ADDED Requirements
+
+### Requirement: OAuth protocol ownership belongs to the MCP SDK
+
+The system SHALL delegate MCP OAuth protocol operations — protected-resource
+and authorization-server discovery, authorization-server selection, dynamic
+client registration, PKCE generation and validation, authorization-code
+exchange, refresh-token redemption, and bearer-token injection — to the MCP
+C# SDK. Netclaw SHALL NOT implement these protocol operations and SHALL NOT
+maintain a separate OAuth metadata cache as a runtime dependency.
+
+#### Scenario: Startup with bound cached tokens requires no metadata cache
+
+- **GIVEN** secrets.json contains a valid token set bound to the configured HTTP MCP resource identity
+- **AND** no `mcp-oauth-metadata.json` file exists
+- **WHEN** the daemon connects to that server
+- **THEN** the SDK-provided OAuth support is installed on the connection
+- **AND** the cached tokens are used or refreshed by the SDK
+- **AND** the connection reaches `Connected` without interactive authorization
+
+#### Scenario: Netclaw performs no direct token-endpoint calls
+
+- **GIVEN** a configured HTTP MCP server with OAuth in use
+- **WHEN** tokens are acquired or refreshed during any flow
+- **THEN** every token-endpoint request originates from the MCP SDK
+- **AND** no Netclaw-owned code constructs discovery, registration, authorization, or token requests
+
+#### Scenario: Legacy metadata files are ignored, not deleted
+
+- **GIVEN** a pre-existing `mcp-oauth-metadata.json` file from an earlier version
+- **WHEN** the daemon starts
+- **THEN** the file is not read on any runtime code path
+- **AND** the file is not automatically deleted
+
+### Requirement: Interactive authorization is brokered, not implemented
+
+Explicit authorization (`netclaw mcp auth <name>`) SHALL retain its existing
+CLI and HTTP surface. The daemon SHALL broker the SDK-generated authorization
+URL to the operator and complete the SDK's redirect delegate from the local
+callback endpoint. Flow state values SHALL be cryptographically opaque,
+one-time, bound to a single server and flow, and SHALL expire after a bounded
+lifetime of five minutes measured via `TimeProvider`. Netclaw SHALL validate
+the callback state itself — the SDK neither generates nor validates the OAuth
+state parameter. Concurrent redirect-delegate invocations for one flow SHALL
+coalesce onto the same pending authorization URL and code. At most one
+interactive flow SHALL be active per server; concurrent start requests SHALL
+coalesce onto that flow. The daemon SHALL own the flow and candidate lifetime
+independently of the HTTP start and callback request cancellation tokens, and
+SHALL cancel them on expiry or daemon shutdown. The lifetime SHALL match the
+existing five-minute CLI and TUI polling timeout.
+
+#### Scenario: Explicit authorization end to end
+
+- **GIVEN** a configured HTTP MCP server requiring OAuth
+- **WHEN** the operator starts explicit authorization
+- **THEN** the daemon creates a pending flow and an unpublished candidate connection
+- **AND** the SDK performs discovery, registration if needed, and PKCE, and supplies the authorization URL through its redirect delegate
+- **AND** the CLI receives that URL through the existing start response and polls the existing status endpoint
+- **AND** the callback completes the flow, the SDK exchanges the code, and the candidate is published only after initialization (including tool listing) succeeds
+- **AND** polling reports `Completed` only after that publication succeeds
+
+#### Scenario: Concurrent starts share one flow
+
+- **GIVEN** an interactive authorization flow is active for a server
+- **WHEN** another start request arrives for the same server
+- **THEN** both callers receive the same state and authorization URL
+- **AND** only one candidate connection and one credential update can result
+
+#### Scenario: Invalid, reused, or expired state fails visibly
+
+- **WHEN** the callback receives a state value that is missing, mismatched, already completed, or older than the flow lifetime
+- **THEN** the callback fails with a safe `text/html` error response
+- **AND** no token exchange is attempted for that request
+- **AND** any pending flow for a different state value is unaffected
+
+#### Scenario: Failed authorization preserves prior state
+
+- **GIVEN** a server with an existing published connection and stored credentials
+- **WHEN** an explicit authorization attempt fails or is cancelled
+- **THEN** only the candidate connection is disposed
+- **AND** the previously published connection remains live
+- **AND** the previously stored credentials remain intact
+
+#### Scenario: Existing valid token does not suppress explicit reauthorization
+
+- **GIVEN** a server with a currently valid stored access token
+- **WHEN** the operator starts explicit authorization
+- **THEN** the SDK authorization path is entered without first deleting the stored credentials
+
+#### Scenario: Closing the browser tab does not cancel the exchange
+
+- **GIVEN** a pending flow whose callback request has delivered a valid code
+- **WHEN** the browser connection closes before token exchange completes
+- **THEN** the token exchange and candidate publication continue to completion
+
+#### Scenario: Start request cancellation does not own the candidate
+
+- **GIVEN** the start endpoint has returned an authorization URL
+- **WHEN** its HTTP request cancellation token is cancelled
+- **THEN** the daemon-owned flow and candidate remain active until completion, expiry, explicit cancellation, or daemon shutdown
+
+#### Scenario: Concurrent challenges reuse one pending flow
+
+- **GIVEN** a pending interactive flow for a server
+- **WHEN** the SDK invokes the redirect delegate concurrently from parallel transport requests
+- **THEN** both invocations observe the same pending flow and authorization URL
+- **AND** the operator is prompted at most once
+
+#### Scenario: A cancelled exchange requires fresh authorization
+
+- **GIVEN** a delivered authorization code whose token exchange is cancelled or fails
+- **WHEN** the flow terminates
+- **THEN** the flow is marked failed and the one-time code is not reused
+- **AND** a subsequent attempt starts a new authorization rather than retrying the exchange
+
+### Requirement: Durable credential persistence precedes publication
+
+The system SHALL treat secrets.json as the durable authority for MCP OAuth
+credentials. Token state SHALL be published to memory only after durable
+persistence succeeds, and a persistence failure SHALL propagate through the
+SDK token-cache boundary and fail the connection visibly. Credentials acquired
+by an unpublished interactive candidate SHALL first persist as a pending record
+bound to that flow and SHALL become the active record only when candidate tool
+listing and publication succeed. Failed or expired candidates SHALL remove
+their pending record without changing the active record. When a token
+response omits a refresh token, the system SHALL retain the previous refresh
+token. The effective client ID — and client secret, when issued — from
+dynamic client registration SHALL be stored with the token record and
+supplied to the SDK's OAuth options on subsequent connections. The record
+SHALL also contain the normalized configured MCP resource identity used when
+the credentials were obtained. Before returning cached credentials to the SDK,
+Netclaw SHALL compare that binding with the current configured resource and
+SHALL withhold the credentials when they differ. The canonical identity SHALL
+be the absolute configured endpoint URI after `System.Uri` normalization, with
+scheme and host normalized, default port normalized, fragment removed, and path
+and query retained.
+
+#### Scenario: Persistence failure is loud
+
+- **GIVEN** durable persistence of a rotated token set fails
+- **WHEN** the SDK stores tokens through the token-cache boundary
+- **THEN** the store operation reports failure to the SDK
+- **AND** the in-memory token view is not advanced
+- **AND** the connection attempt fails with an actionable error
+
+#### Scenario: Failed candidate does not replace active credentials
+
+- **GIVEN** a server has active durable credentials and a published connection
+- **AND** an explicit authorization candidate durably stores replacement credentials as pending
+- **WHEN** candidate initialization or tool listing fails before publication
+- **THEN** the pending credentials are discarded
+- **AND** the prior active credential record remains authoritative and unchanged
+
+#### Scenario: Omitted refresh token is retained
+
+- **GIVEN** a stored token set containing a refresh token
+- **WHEN** a token response returns a new access token without a refresh token
+- **THEN** the persisted record keeps the previous refresh token
+
+#### Scenario: Registered client identity survives restart
+
+- **GIVEN** a token set persisted with a client ID (and client secret, when issued) from dynamic client registration
+- **WHEN** the daemon restarts and reconnects to that server
+- **THEN** the SDK OAuth options are seeded with the persisted client ID and any persisted client secret
+- **AND** no re-registration occurs while the stored registration remains valid
+
+#### Scenario: Repointed profile cannot reuse old credentials
+
+- **GIVEN** stored credentials are bound to one configured MCP resource identity
+- **WHEN** the same server profile name is changed to a different resource identity
+- **THEN** the old token set, dynamically registered client ID, and client secret are not supplied to the SDK connection for the new resource
+- **AND** the server reports `AwaitingAuth` for the new identity
+- **AND** the old durable record remains intact until replacement credentials are stored successfully
+
+#### Scenario: Legacy unbound credentials fail closed
+
+- **GIVEN** a stored credential record has no canonical configured resource binding
+- **WHEN** the daemon loads the server after upgrade
+- **THEN** no token, dynamically registered client ID, or client secret from that record is supplied to the SDK
+- **AND** the server reports `AwaitingAuth` with `netclaw mcp auth <name>` as the remedy
+- **AND** Netclaw does not silently bind the legacy record to the current profile
+
+#### Scenario: Revoked dynamic registration can be replaced explicitly
+
+- **GIVEN** credentials contain a dynamically registered client identity that the authorization server rejects as `invalid_client`
+- **WHEN** the operator runs explicit authorization
+- **THEN** Netclaw retries the candidate flow once with the stored dynamic client identity withheld so the SDK can perform new dynamic registration
+- **AND** the prior active credentials remain unchanged until the replacement candidate is published
+- **BUT** an explicitly configured static client ID is never discarded or replaced automatically
+
+### Requirement: Callback identity derives from daemon configuration
+
+The OAuth redirect URI SHALL be
+`http://127.0.0.1:{DaemonConfig.Port}/api/mcp/oauth/callback`, derived from
+the configured daemon port. The system SHALL NOT hard-code the port and SHALL
+NOT derive the callback host from an incoming request's Host header.
+
+#### Scenario: Non-default port is used consistently
+
+- **GIVEN** the daemon is configured with a non-default port
+- **WHEN** dynamic client registration and authorization occur
+- **THEN** the registered and requested redirect URIs both use the configured port
+- **AND** the local callback succeeds without manual URL correction
+
+### Requirement: Startup and reconnect never block on interactive authorization
+
+Every configured HTTP MCP transport SHALL be created with SDK OAuth support
+whose non-interactive redirect delegate returns no authorization code. OAuth
+support SHALL remain dormant for servers that are unauthenticated or
+satisfied by operator-configured headers, and operator-provided headers SHALL
+remain authoritative. When interactive authorization is required, the
+connection SHALL report `AwaitingAuth` and direct the operator to
+`netclaw mcp auth <name>` instead of opening a browser or waiting for input.
+
+#### Scenario: Static header authentication is unchanged
+
+- **GIVEN** a server authenticated by operator-configured headers
+- **WHEN** the daemon connects
+- **THEN** the configured headers are sent unmodified
+- **AND** no OAuth challenge handling alters the request
+- **AND** the connection succeeds as before
+
+#### Scenario: Unauthenticated server is unchanged
+
+- **GIVEN** a configured HTTP MCP server that requires no authentication
+- **WHEN** the daemon connects
+- **THEN** the connection succeeds without any OAuth activity
+
+#### Scenario: OAuth-required server awaits the operator
+
+- **GIVEN** a server that answers with an OAuth challenge and no usable stored credentials
+- **WHEN** the daemon starts or reconnects
+- **THEN** no browser is opened and startup does not block
+- **AND** the server's status is `AwaitingAuth`
+- **AND** the operator-facing alert names `netclaw mcp auth <name>` as the remediation
+
+### Requirement: OAuth failures produce actionable diagnostics
+
+Authenticated OAuth API endpoints SHALL return a structured error response for
+discovery, registration rejection, credential persistence, and connection
+initialization failures. The anonymous browser callback SHALL retain its
+existing `text/html` response and SHALL render a safe actionable error for
+callback validation or code-exchange failures. The daemon SHALL log the full
+exception with provider and server context. No client-facing JSON or HTML SHALL
+contain tokens, authorization codes, PKCE verifiers, or secret values. The CLI
+SHALL parse structured responses when present, SHALL fall back to the HTTP
+status and reason when the body is empty or malformed, and SHALL NOT print a
+blank error.
+
+#### Scenario: Registration rejection surfaces a reason
+
+- **GIVEN** a provider that advertises dynamic client registration but rejects it with HTTP 403 and no body
+- **WHEN** the operator runs explicit authorization
+- **THEN** the CLI displays the failing operation and the HTTP status
+- **AND** the daemon log contains the full response context
+
+#### Scenario: Bodyless daemon error still yields CLI output
+
+- **GIVEN** the daemon returns an error status with an empty or malformed body
+- **WHEN** the CLI reports the failure
+- **THEN** the CLI prints the HTTP status and reason phrase rather than a blank error line
+
+#### Scenario: Callback validation failure remains browser-safe HTML
+
+- **GIVEN** the anonymous callback receives invalid or expired state
+- **WHEN** it reports the failure to the browser
+- **THEN** the response content type is `text/html`
+- **AND** the rendered message contains no code, token, verifier, or secret value
