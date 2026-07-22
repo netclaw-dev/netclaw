@@ -18,6 +18,7 @@ namespace Netclaw.Providers.GitHubCopilot;
 public sealed class GitHubCopilotDescriptor(
     HttpClient httpClient, CopilotTokenExchanger tokenExchanger) : IProviderDescriptor
 {
+    private readonly GitHubCopilotModelCatalog _modelCatalog = new();
 
     // The public Copilot API host. Standard/individual tokens are valid here;
     // org and GHE-data-residency tokens are valid only at the host reported in
@@ -93,66 +94,8 @@ public sealed class GitHubCopilotDescriptor(
                 []);
         }
 
-        CopilotToken copilot;
-        try
-        {
-            copilot = await tokenExchanger.GetTokenAsync(entry, ct);
-        }
-        catch (CopilotAuthExpiredException)
-        {
-            return new ProviderProbeResult(false,
-                "GitHub Copilot authorization expired. Re-authenticate by running "
-                + "'netclaw provider remove <name>' then "
-                + "'netclaw provider add <name> github-copilot --auth oauth-device'.",
-                []);
-        }
-        catch (HttpRequestException ex)
-        {
-            return new ProviderProbeResult(false,
-                $"GitHub Copilot token exchange failed: {ex.Message}",
-                []);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return new ProviderProbeResult(false,
-                $"GitHub Copilot token exchange failed: {ex.Message}",
-                []);
-        }
-
-        // Probe /models at the host the token is valid at (endpoints.api). For
-        // GHE data residency this is the tenant host, not api.githubcopilot.com;
-        // probing the wrong host is what let a broken GHE provider report healthy
-        // at setup (issue #1550). A deliberate custom endpoint override wins. If
-        // we are meant to follow the token's host but the exchange reported none,
-        // surface that — never silently probe a guessed default host.
-        string probeEndpoint;
-        if (HasCustomEndpointOverride(entry.Endpoint))
-        {
-            probeEndpoint = entry.Endpoint!;
-        }
-        else if (copilot.ApiBase is { } apiBase)
-        {
-            probeEndpoint = apiBase.ToString();
-        }
-        else
-        {
-            return new ProviderProbeResult(false,
-                "GitHub Copilot token exchange did not return an API host "
-                + "(endpoints.api); cannot determine where to reach the Copilot API. "
-                + "Re-authenticate the provider, or set an explicit endpoint to "
-                + "override the host.",
-                []);
-        }
-
-        var modelsResult = await ProbeHelpers.ExecuteProbeAsync(
-            httpClient,
-            "GitHub Copilot",
-            DefaultEndpoint,
-            ModelListingPath,
-            probeEndpoint,
-            ApplyCopilotRequestHeaders(copilot.Token.Value),
-            ParseCopilotModels,
-            ct);
+        var discovery = await DiscoverModelCatalogAsync(entry, ct).ConfigureAwait(false);
+        var modelsResult = discovery.Result;
 
         if (!modelsResult.Success)
         {
@@ -172,6 +115,85 @@ public sealed class GitHubCopilotDescriptor(
         return modelsResult;
     }
 
+    internal async Task<GitHubCopilotModelCapability> ResolveModelCapabilityAsync(
+        ProviderEntry entry, string modelId)
+    {
+        var discovery = await DiscoverModelCatalogAsync(entry, CancellationToken.None).ConfigureAwait(false);
+        if (!discovery.Result.Success || discovery.ApiEndpoint is null)
+        {
+            throw new InvalidOperationException(
+                $"GitHub Copilot model capability discovery failed: {discovery.Result.ErrorMessage}");
+        }
+
+        var capability = _modelCatalog.Find(discovery.ApiEndpoint, modelId);
+        if (capability is not null)
+            return capability;
+
+        var availableModels = discovery.Capabilities
+            .Select(capability => capability.ModelId)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .Select(id => $"- {id}");
+        throw new InvalidOperationException(
+            $"GitHub Copilot model '{modelId}' is not available to the authenticated account.\n\n"
+            + "Available models:\n" + string.Join('\n', availableModels));
+    }
+
+    private async Task<ModelCatalogDiscovery> DiscoverModelCatalogAsync(
+        ProviderEntry entry, CancellationToken ct)
+    {
+        CopilotToken copilot;
+        try
+        {
+            copilot = await tokenExchanger.GetTokenAsync(entry, ct).ConfigureAwait(false);
+        }
+        catch (CopilotAuthExpiredException)
+        {
+            return ModelCatalogDiscovery.Fail(
+                "GitHub Copilot authorization expired. Re-authenticate by running "
+                + "'netclaw provider remove <name>' then "
+                + "'netclaw provider add <name> github-copilot --auth oauth-device'.");
+        }
+        catch (HttpRequestException ex)
+        {
+            return ModelCatalogDiscovery.Fail($"GitHub Copilot token exchange failed: {ex.Message}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ModelCatalogDiscovery.Fail($"GitHub Copilot token exchange failed: {ex.Message}");
+        }
+
+        Uri? apiEndpoint = HasCustomEndpointOverride(entry.Endpoint)
+            ? new Uri(entry.Endpoint!)
+            : copilot.ApiBase;
+        if (apiEndpoint is null)
+        {
+            return ModelCatalogDiscovery.Fail(
+                "GitHub Copilot token exchange did not return an API host "
+                + "(endpoints.api); cannot determine where to reach the Copilot API. "
+                + "Re-authenticate the provider, or set an explicit endpoint to override the host.");
+        }
+
+        IReadOnlyList<GitHubCopilotModelCapability>? capabilities = null;
+        var result = await ProbeHelpers.ExecuteProbeAsync(
+            httpClient,
+            "GitHub Copilot",
+            DefaultEndpoint,
+            ModelListingPath,
+            apiEndpoint.ToString(),
+            ApplyCopilotRequestHeaders(copilot.Token.Value),
+            json =>
+            {
+                capabilities = ParseCopilotModelCapabilities(json);
+                return ProjectProbeResult(capabilities);
+            },
+            ct).ConfigureAwait(false);
+
+        if (result.Success && capabilities is not null)
+            _modelCatalog.Store(apiEndpoint, capabilities);
+
+        return new ModelCatalogDiscovery(result, apiEndpoint, capabilities ?? []);
+    }
+
     private static Action<HttpRequestMessage> ApplyCopilotRequestHeaders(string copilotToken) =>
         request =>
         {
@@ -181,12 +203,17 @@ public sealed class GitHubCopilotDescriptor(
             request.Headers.TryAddWithoutValidation("openai-intent", "conversation-agent");
         };
 
-    // Filters the Copilot /models payload to chat-capable entries the
-    // server marks as picker-eligible. Falls back to the curated list when
-    // every entry is filtered out so callers never see a zero-model success.
+    // One parser feeds both the picker projection and the provider-local runtime
+    // catalog. capabilities.type filters non-chat models but is not treated as
+    // proof that /chat/completions is supported.
     internal static ProviderProbeResult ParseCopilotModels(string json)
     {
-        var models = new List<DiscoveredModel>();
+        return ProjectProbeResult(ParseCopilotModelCapabilities(json));
+    }
+
+    internal static IReadOnlyList<GitHubCopilotModelCapability> ParseCopilotModelCapabilities(string json)
+    {
+        var models = new List<GitHubCopilotModelCapability>();
         using var doc = JsonDocument.Parse(json);
 
         if (doc.RootElement.TryGetProperty("data", out var data)
@@ -213,15 +240,45 @@ public sealed class GitHubCopilotDescriptor(
                     continue;
                 }
 
-                models.Add(new DiscoveredModel { ModelId = new(id) });
+                var endpoints = entry.TryGetProperty("supported_endpoints", out var endpointsProp)
+                    && endpointsProp.ValueKind == JsonValueKind.Array
+                    ? endpointsProp.EnumerateArray()
+                        .Where(endpoint => endpoint.ValueKind == JsonValueKind.String)
+                        .Select(endpoint => endpoint.GetString())
+                        .Where(endpoint => !string.IsNullOrWhiteSpace(endpoint))
+                        .Select(endpoint => endpoint!)
+                        .ToArray()
+                    : [];
+
+                models.Add(new GitHubCopilotModelCapability(
+                    id,
+                    endpoints.Any(endpoint => string.Equals(endpoint, "/responses", StringComparison.OrdinalIgnoreCase)),
+                    endpoints.Any(endpoint => string.Equals(endpoint, "/chat/completions", StringComparison.OrdinalIgnoreCase)),
+                    endpoints));
             }
         }
 
+        return models;
+    }
+
+    private static ProviderProbeResult ProjectProbeResult(
+        IReadOnlyList<GitHubCopilotModelCapability> models)
+    {
         return models.Count == 0
             ? new ProviderProbeResult(true,
                 "GitHub Copilot /models returned no chat-capable entries; "
                 + "using curated fallback.",
                 CuratedModels)
-            : new ProviderProbeResult(true, null, models);
+            : new ProviderProbeResult(true, null,
+                models.Select(model => new DiscoveredModel { ModelId = new(model.ModelId) }).ToArray());
+    }
+
+    private sealed record ModelCatalogDiscovery(
+        ProviderProbeResult Result,
+        Uri? ApiEndpoint,
+        IReadOnlyList<GitHubCopilotModelCapability> Capabilities)
+    {
+        public static ModelCatalogDiscovery Fail(string error) =>
+            new(new ProviderProbeResult(false, error, []), null, []);
     }
 }
