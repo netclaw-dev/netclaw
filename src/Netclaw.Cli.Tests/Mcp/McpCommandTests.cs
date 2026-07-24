@@ -540,6 +540,68 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal(string.Empty, output.ToString());
     }
 
+    [Fact]
+    public async Task Auth_ParsesStructuredBodylessDcrFailure()
+    {
+        await McpCommand.RunAsync(
+            ["mcp", "add", "--transport", "http", "oauth", "https://mcp.example/mcp"],
+            _paths,
+            output: _output);
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/oauth/start/oauth" => new HttpResponseMessage(HttpStatusCode.BadGateway)
+            {
+                Content = new StringContent(
+                    "{\"error\":\"MCP OAuth dynamic client registration failed: HTTP 403 Forbidden.\",\"operation\":\"dynamic client registration\",\"status\":403}",
+                    Encoding.UTF8,
+                    "application/json"),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var output = new StringWriter();
+
+        var exitCode = await McpCommand.RunAsync(["mcp", "auth", "oauth"], _paths, daemonApi, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("dynamic client registration", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("HTTP 403 Forbidden", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"error\"", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Auth_EmptyErrorBodyFallsBackToHttpStatusAndReason()
+    {
+        await McpCommand.RunAsync(
+            ["mcp", "add", "--transport", "http", "oauth", "https://mcp.example/mcp"],
+            _paths,
+            output: _output);
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/oauth/start/oauth" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var output = new StringWriter();
+
+        var exitCode = await McpCommand.RunAsync(["mcp", "auth", "oauth"], _paths, daemonApi, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("HTTP 403 Forbidden", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Error: \n", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadMcpError_MalformedBodyFallsBackToHttpStatusAndReason()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("not-json", Encoding.UTF8, "text/plain"),
+        };
+
+        var message = await McpCommand.ReadMcpErrorAsync(response);
+
+        Assert.Equal("HTTP 502 Bad Gateway", message);
+    }
+
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));

@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration.Secrets;
@@ -18,6 +21,9 @@ namespace Netclaw.Configuration;
 /// </summary>
 public static class SecretsFileWriter
 {
+    private static readonly TimeSpan SecretsLockTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SecretsLockPollInterval = TimeSpan.FromMilliseconds(50);
+
     private static readonly JsonSerializerOptions DefaultJsonOptions = new()
     {
         WriteIndented = true,
@@ -28,6 +34,49 @@ public static class SecretsFileWriter
     /// On Linux/macOS, the file is set to owner-only read/write (chmod 600).
     /// </summary>
     public static void Write(string secretsPath, string json, ISecretsProtector? protector = null)
+    {
+        using var secretsLock = AcquireSecretsLock(secretsPath, CancellationToken.None);
+        WriteUnlocked(secretsPath, json, protector);
+    }
+
+    /// <summary>
+    /// Read the latest secrets document and replace it while holding a path-scoped interprocess lock.
+    /// Returning a null updated root leaves the file unchanged.
+    /// </summary>
+    public static TResult Update<TResult>(
+        string secretsPath,
+        Func<JsonObject, bool, (JsonObject? UpdatedRoot, TResult Result)> update,
+        JsonSerializerOptions? options = null,
+        ISecretsProtector? protector = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        using var secretsLock = AcquireSecretsLock(secretsPath, cancellationToken);
+        var fileExists = File.Exists(secretsPath);
+        var root = fileExists
+            ? ReadUnlocked(secretsPath, protector)
+            : [];
+
+        var outcome = update(root, fileExists);
+        if (outcome.UpdatedRoot is not null)
+            WriteUnlocked(secretsPath, outcome.UpdatedRoot.ToJsonString(options ?? DefaultJsonOptions), protector);
+
+        return outcome.Result;
+    }
+
+    private static JsonObject ReadUnlocked(string secretsPath, ISecretsProtector? protector)
+    {
+        var json = File.ReadAllText(secretsPath);
+        if (protector is not null)
+            json = DecryptJsonLeaves(json, protector);
+
+        var node = JsonNode.Parse(json);
+        return node as JsonObject
+               ?? throw new InvalidDataException($"Secrets file '{secretsPath}' must contain a JSON object.");
+    }
+
+    private static void WriteUnlocked(string secretsPath, string json, ISecretsProtector? protector)
     {
         if (protector is not null)
             json = EncryptJsonLeaves(json, protector);
@@ -207,4 +256,118 @@ public static class SecretsFileWriter
     /// Set owner-only permissions (chmod 600) on Unix. No-op on Windows.
     /// </summary>
     internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
+
+    private static IDisposable AcquireSecretsLock(string secretsPath, CancellationToken cancellationToken)
+    {
+        var canonicalPath = GetCanonicalLockPath(secretsPath);
+        var lockIdentity = OperatingSystem.IsWindows()
+            ? canonicalPath.ToUpperInvariant()
+            : canonicalPath;
+        var lockId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lockIdentity)));
+        var lockScope = OperatingSystem.IsWindows() ? @"Global\" : string.Empty;
+        var mutex = new Mutex(initiallyOwned: false, $"{lockScope}netclaw-secrets-file-{lockId}");
+        var ownsMutex = false;
+
+        try
+        {
+            try
+            {
+                ownsMutex = WaitForMutex(mutex, cancellationToken);
+            }
+            catch (AbandonedMutexException)
+            {
+                ownsMutex = true;
+                // A killed writer may leave only a sibling temp file; the destination remains atomic.
+                DeleteAbandonedTempFiles(canonicalPath);
+            }
+
+            if (!ownsMutex)
+                throw new TimeoutException($"Timed out waiting to update secrets file '{secretsPath}'.");
+
+            return new SecretsLock(mutex);
+        }
+        catch
+        {
+            if (ownsMutex)
+                mutex.ReleaseMutex();
+            mutex.Dispose();
+            throw;
+        }
+    }
+
+    private static bool WaitForMutex(Mutex mutex, CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.CanBeCanceled)
+            return mutex.WaitOne(SecretsLockTimeout);
+
+        var startedAt = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (mutex.WaitOne(TimeSpan.Zero))
+                return true;
+
+            var remaining = SecretsLockTimeout - Stopwatch.GetElapsedTime(startedAt);
+            if (remaining <= TimeSpan.Zero)
+                return false;
+
+            var wait = remaining < SecretsLockPollInterval ? remaining : SecretsLockPollInterval;
+            if (cancellationToken.WaitHandle.WaitOne(wait))
+                cancellationToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    private static string GetCanonicalLockPath(string filePath)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var directoryPath = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException("Secrets path has no parent directory.");
+        return Path.Combine(GetCanonicalDirectoryPath(directoryPath), Path.GetFileName(fullPath));
+    }
+
+    private static string GetCanonicalDirectoryPath(string directoryPath)
+    {
+        var fullPath = Path.GetFullPath(directoryPath);
+        var root = Path.GetPathRoot(fullPath)
+            ?? throw new InvalidOperationException("Secrets path has no root directory.");
+        var current = root;
+        var relativeDirectory = Path.GetRelativePath(root, fullPath);
+        foreach (var segment in relativeDirectory.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            var nextPath = Path.Combine(current, segment);
+            if (!Directory.Exists(nextPath))
+            {
+                current = nextPath;
+                continue;
+            }
+
+            var directory = new DirectoryInfo(nextPath);
+            var target = directory.ResolveLinkTarget(returnFinalTarget: true);
+            current = target is null
+                ? directory.FullName
+                : GetCanonicalDirectoryPath(target.FullName);
+        }
+
+        return current;
+    }
+
+    private static void DeleteAbandonedTempFiles(string filePath)
+    {
+        var directory = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException("Secrets path has no parent directory.");
+        var fileName = Path.GetFileName(filePath);
+        foreach (var tempPath in Directory.EnumerateFiles(directory, $"{fileName}.tmp-*"))
+            File.Delete(tempPath);
+    }
+
+    private sealed class SecretsLock(Mutex mutex) : IDisposable
+    {
+        public void Dispose()
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
 }

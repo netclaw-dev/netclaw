@@ -40,6 +40,8 @@ parts: one owner per concern, not a more complete second OAuth implementation.
   handoff only: opaque one-time state, bounded flow lifetime via
   `TimeProvider`) and `McpOAuthCredentialStore` (durable per-server token
   sets plus the DCR-issued client ID; supplies SDK `ITokenCache` adapters).
+  One SDK redirect delegate owns each flow's PKCE/code exchange; concurrent
+  delegates observe authorization in progress but never reuse its code.
 - **Durable credentials**: in-memory token state publishes only after durable
   persistence succeeds; persistence failure propagates through
   `ITokenCache.StoreTokensAsync` and fails the connection visibly. A token
@@ -60,7 +62,8 @@ parts: one owner per concern, not a more complete second OAuth implementation.
   `McpErrorResponse`; the daemon logs full context while the client receives
   a safe actionable message. The browser callback retains safe HTML responses.
   The CLI falls back to HTTP status when the body is empty and never prints a
-  blank error line. Connection status distinguishes `AwaitingAuth`,
+  blank error line. Terminal failures that occur after start are carried in the
+  authenticated status response. Connection status distinguishes `AwaitingAuth`,
   `AuthFailed`, `Unreachable`, and `Connected`.
 
 No breaking changes to the external CLI/API surface: `netclaw mcp auth`,
@@ -101,6 +104,11 @@ existing behavior.
   `src/Netclaw.Configuration/NetclawPaths.cs` (metadata path removal),
   `src/Netclaw.Cli` MCP auth/status commands. Expected net-negative
   production LOC.
+- **.NET source compatibility**: removes the public
+  `McpOAuthServerMetadata` cache type and `NetclawPaths.McpOAuthMetadataPath`
+  property. These represented a runtime cache that no longer exists; external
+  source consumers must stop reading or constructing MCP OAuth metadata. The
+  CLI and HTTP contracts remain unchanged.
 - **Dependencies**: ModelContextProtocol.Core stays pinned at 1.4.1. A later
   official SDK release containing upstream fixes csharp-sdk#1595 (refresh
   single-flight) and csharp-sdk#1658 (cold-start client identity) is tracked

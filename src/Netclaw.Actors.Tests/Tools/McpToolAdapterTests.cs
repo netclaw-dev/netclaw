@@ -169,6 +169,23 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithContext_CallerCancellationPropagates()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var fakeTool = AIFunctionFactory.Create(() => "unused", "navigate_page");
+        var invoker = new RecordingMcpToolInvoker("ignored")
+        {
+            Failure = new OperationCanceledException(cancellation.Token)
+        };
+        var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
+        var context = TestToolExecutionContext.CreateBound("chan/thread", null, TrustAudience.Personal);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => adapter.ExecuteAsync(ToolInput.Empty(), context, cancellation.Token));
+    }
+
+    [Fact]
     public void ClampDescription_ExactlyAtLimit_PreservedAsIs()
     {
         var description = new string('a', 2048);

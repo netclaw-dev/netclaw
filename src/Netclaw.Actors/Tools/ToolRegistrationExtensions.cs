@@ -137,6 +137,30 @@ public static class ToolRegistrationExtensions
         int maxSchemaWarnChars = 0,
         ILogger? logger = null)
     {
+        var adapters = PrepareMcpTools(
+            serverName,
+            tools.Cast<AIFunction>().ToList(),
+            grantCategory,
+            invoker,
+            maxDescriptionChars,
+            maxSchemaWarnChars,
+            logger);
+
+        foreach (var adapter in adapters)
+            registry.Register(adapter);
+
+        return registry;
+    }
+
+    public static IReadOnlyList<McpToolAdapter> PrepareMcpTools(
+        string serverName,
+        IReadOnlyList<AIFunction> tools,
+        string? grantCategory,
+        IMcpToolInvoker? invoker,
+        int maxDescriptionChars,
+        int maxSchemaWarnChars,
+        ILogger? logger)
+    {
         var adapters = new List<McpToolAdapter>(tools.Count);
         foreach (var tool in tools)
         {
@@ -150,22 +174,21 @@ public static class ToolRegistrationExtensions
                 logger);
             adapters.Add(adapter);
 
-            if (maxSchemaWarnChars > 0 && adapter.ParameterSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+            if (maxSchemaWarnChars <= 0
+                || adapter.ParameterSchema.ValueKind == System.Text.Json.JsonValueKind.Undefined)
+                continue;
+
+            var schemaChars = adapter.ParameterSchema.GetRawText().Length;
+            if (schemaChars > maxSchemaWarnChars)
             {
-                var schemaChars = adapter.ParameterSchema.GetRawText().Length;
-                if (schemaChars > maxSchemaWarnChars)
-                {
-                    logger?.LogWarning(
-                        "MCP tool '{ServerName}/{ToolName}' has an oversized schema ({SchemaChars} chars, threshold {Threshold}). " +
-                        "This wastes context window budget when the tool is loaded. Consider asking the MCP server author to reduce schema verbosity.",
-                        serverName, tool.Name, schemaChars, maxSchemaWarnChars);
-                }
+                logger?.LogWarning(
+                    "MCP tool '{ServerName}/{ToolName}' has an oversized schema ({SchemaChars} chars, threshold {Threshold}). " +
+                    "This wastes context window budget when the tool is loaded. Consider asking the MCP server author to reduce schema verbosity.",
+                    serverName, tool.Name, schemaChars, maxSchemaWarnChars);
             }
         }
 
-        foreach (var adapter in adapters)
-            registry.Register(adapter);
-
-        return registry;
+        return adapters;
     }
+
 }

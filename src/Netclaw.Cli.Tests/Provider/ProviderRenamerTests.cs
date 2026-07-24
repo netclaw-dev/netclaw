@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -145,6 +147,164 @@ public sealed class ProviderRenamerTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Contains("my-vllm-b", result.ErrorMessage!);
+    }
+
+    [Fact]
+    public void Rename_CollidesWithExistingSecretProvider_ReturnsErrorAndLeavesConfigUnchanged()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old" },
+                ["lab-a100"] = new Dictionary<string, object> { ["ApiKey"] = "sk-new" }
+            }
+        });
+
+        var result = ProviderRenamer.Rename(_paths, "my-vllm", "lab-a100");
+
+        Assert.False(result.Success);
+        Assert.Contains("lab-a100", result.ErrorMessage!);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var providers = config.RootElement.GetProperty("Providers");
+        Assert.True(providers.TryGetProperty("my-vllm", out _));
+        Assert.False(providers.TryGetProperty("lab-a100", out _));
+    }
+
+    [Fact]
+    public void Rename_SecretsReadFailure_ThrowsAndLeavesConfigUnchanged()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+        File.WriteAllText(_paths.SecretsPath, "{not-json");
+
+        Assert.ThrowsAny<JsonException>(() => ProviderRenamer.Rename(_paths, "my-vllm", "lab-a100"));
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var providers = config.RootElement.GetProperty("Providers");
+        Assert.True(providers.TryGetProperty("my-vllm", out _));
+        Assert.False(providers.TryGetProperty("lab-a100", out _));
+    }
+
+    [Fact]
+    public void Rename_ConfigWriteFailure_ThrowsAndLeavesSecretsUnchanged()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old" }
+            }
+        });
+        var originalConfig = File.ReadAllText(_paths.NetclawConfigPath);
+        var originalSecrets = File.ReadAllText(_paths.SecretsPath);
+
+        Assert.Throws<InvalidOperationException>(() => ProviderRenamer.Rename(
+            _paths,
+            "my-vllm",
+            "lab-a100",
+            static (_, _) => throw new InvalidOperationException("config write failed"),
+            static (path, text) => AtomicFile.WriteAllText(path, text),
+            secretsProtector: null));
+
+        Assert.Equal(originalConfig, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(originalSecrets, File.ReadAllText(_paths.SecretsPath));
+        AssertProviderState(_paths.NetclawConfigPath, oldNamePresent: true, newNamePresent: false);
+        AssertProviderState(_paths.SecretsPath, oldNamePresent: true, newNamePresent: false);
+    }
+
+    [Fact]
+    public void Rename_SecretsWriteFailure_RestoresOriginalConfigAndLeavesSecretsUnchanged()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old" }
+            }
+        });
+        var originalConfig = File.ReadAllText(_paths.NetclawConfigPath);
+        var originalSecrets = File.ReadAllText(_paths.SecretsPath);
+
+        Assert.Throws<InvalidOperationException>(() => ProviderRenamer.Rename(
+            _paths,
+            "my-vllm",
+            "lab-a100",
+            ConfigFileHelper.WriteConfigFile,
+            static (path, text) => AtomicFile.WriteAllText(path, text),
+            new ThrowingProtectSecretsProtector()));
+
+        Assert.Equal(originalConfig, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(originalSecrets, File.ReadAllText(_paths.SecretsPath));
+        AssertProviderState(_paths.NetclawConfigPath, oldNamePresent: true, newNamePresent: false);
+        AssertProviderState(_paths.SecretsPath, oldNamePresent: true, newNamePresent: false);
+    }
+
+    [Fact]
+    public void Rename_SecretsWriteFailureAndRestoreFailure_ThrowsWithBothErrors()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old" }
+            }
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => ProviderRenamer.Rename(
+            _paths,
+            "my-vllm",
+            "lab-a100",
+            ConfigFileHelper.WriteConfigFile,
+            static (_, _) => throw new InvalidOperationException("restore failed"),
+            new ThrowingProtectSecretsProtector()));
+
+        var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+        Assert.Contains(aggregate.InnerExceptions, ex => ex.Message.Contains("secrets write failed", StringComparison.Ordinal));
+        Assert.Contains(aggregate.InnerExceptions, ex => ex.Message.Contains("restore failed", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -305,5 +465,20 @@ public sealed class ProviderRenamerTests : IDisposable
     {
         File.WriteAllText(_paths.SecretsPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static void AssertProviderState(string path, bool oldNamePresent, bool newNamePresent)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var providers = document.RootElement.GetProperty("Providers");
+        Assert.Equal(oldNamePresent, providers.TryGetProperty("my-vllm", out _));
+        Assert.Equal(newNamePresent, providers.TryGetProperty("lab-a100", out _));
+    }
+
+    private sealed class ThrowingProtectSecretsProtector : ISecretsProtector
+    {
+        public string Protect(string plaintext) => throw new InvalidOperationException("secrets write failed");
+
+        public string Unprotect(string ciphertext) => ciphertext;
     }
 }

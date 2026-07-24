@@ -72,9 +72,11 @@ internal static class PairCommand
             }
 
             // Persist token to secrets.json (encrypted at rest).
-            var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
-            secrets["DeviceToken"] = result.Token;
-            ConfigFileHelper.WriteSecretsFile(paths, secrets);
+            ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) =>
+            {
+                secrets["DeviceToken"] = result.Token;
+                return true;
+            });
 
             // Persist the local client's preferred daemon endpoint separately from
             // daemon-owned netclaw.json.

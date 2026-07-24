@@ -28,16 +28,42 @@ public sealed record McpServerSummary(string ServerName, string Description, int
 public sealed class ToolRegistry
 {
     private readonly List<ToolRegistration> _tools = [];
+    private readonly object _sync = new();
 
     public void Register(INetclawTool tool)
     {
-        _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+        lock (_sync)
+            _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
     }
 
     public void Replace(INetclawTool tool)
     {
-        _tools.RemoveAll(t => string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal));
-        Register(tool);
+        lock (_sync)
+        {
+            _tools.RemoveAll(t => string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal));
+            _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+        }
+    }
+
+    public void PublishMcpServerTools(
+        string serverName,
+        IReadOnlyList<McpToolAdapter> tools,
+        Action publishSnapshot)
+    {
+        ArgumentNullException.ThrowIfNull(publishSnapshot);
+
+        lock (_sync)
+        {
+            _tools.RemoveAll(t => t.Tool is McpToolAdapter mcp
+                                  && string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase));
+            foreach (var tool in tools)
+                _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+
+            // Registry readers use this same lock. Publishing the manager
+            // snapshot here makes its volatile write the linearization point:
+            // readers can observe either the old pair or the new pair, not a mix.
+            publishSnapshot();
+        }
     }
 
     /// <summary>
@@ -45,16 +71,17 @@ public sealed class ToolRegistry
     /// </summary>
     public void Register(AITool tool, string grantCategory)
     {
-        _tools.Add(new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory));
+        lock (_sync)
+            _tools.Add(new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory));
     }
 
     /// <summary>All registered tools as AITool for ChatOptions.Tools.</summary>
     public IReadOnlyList<AITool> GetAllTools() =>
-        _tools.Select(t => t.Tool.ToAITool()).ToList();
+        GetRegistrationsSnapshot().Select(t => t.Tool.ToAITool()).ToList();
 
     /// <summary>Only tools whose grant category is in the allowed set.</summary>
     public IReadOnlyList<AITool> GetToolsForGrants(IReadOnlySet<string> grantedCategories) =>
-        _tools
+        GetRegistrationsSnapshot()
             .Where(t => grantedCategories.Contains(t.GrantCategory))
             .Select(t => t.Tool.ToAITool())
             .ToList();
@@ -93,12 +120,15 @@ public sealed class ToolRegistry
 
     private ToolRegistration? FindRegistration(string name)
     {
-        var direct = _tools.FirstOrDefault(t => t.Tool.Name == name);
-        if (direct is not null)
-            return direct;
-        return _tools.FirstOrDefault(t =>
-            t.Tool is McpToolAdapter mcp
-            && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal));
+        lock (_sync)
+        {
+            var direct = _tools.FirstOrDefault(t => t.Tool.Name == name);
+            if (direct is not null)
+                return direct;
+            return _tools.FirstOrDefault(t =>
+                t.Tool is McpToolAdapter mcp
+                && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal));
+        }
     }
 
     /// <summary>
@@ -106,7 +136,7 @@ public sealed class ToolRegistry
     /// All non-MCP tools are always loaded; MCP tools use dynamic discovery via search_tools.
     /// </summary>
     public IReadOnlyList<AITool> GetAlwaysLoadedTools() =>
-        _tools
+        GetRegistrationsSnapshot()
             .Where(t => t.Tool is not McpToolAdapter)
             .Select(t => t.Tool.ToAITool())
             .ToList();
@@ -114,7 +144,7 @@ public sealed class ToolRegistry
     /// <summary>
     /// Returns all registered tool registrations (for search and dynamic loading).
     /// </summary>
-    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => _tools;
+    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => GetRegistrationsSnapshot();
 
     /// <summary>
     /// Returns tools discovered from one MCP server.
@@ -124,7 +154,7 @@ public sealed class ToolRegistry
         if (string.IsNullOrWhiteSpace(serverName.Value) || maxResults <= 0)
             return [];
 
-        return _tools
+        return GetRegistrationsSnapshot()
             .Where(t => t.Tool is McpToolAdapter mcp
                         && string.Equals(mcp.ServerName, serverName.Value, StringComparison.OrdinalIgnoreCase))
             .Select(t => t.Tool)
@@ -138,7 +168,7 @@ public sealed class ToolRegistry
     /// </summary>
     public IReadOnlyList<McpServerSummary> GetMcpServerSummaries()
     {
-        return _tools
+        return GetRegistrationsSnapshot()
             .Select(t => t.Tool)
             .OfType<McpToolAdapter>()
             .GroupBy(t => t.ServerName, StringComparer.OrdinalIgnoreCase)
@@ -164,7 +194,7 @@ public sealed class ToolRegistry
         if (queryParts.Count == 0)
             return [];
 
-        return _tools
+        return GetRegistrationsSnapshot()
             .Where(t =>
             {
                 // Apply server filter if specified
@@ -199,7 +229,7 @@ public sealed class ToolRegistry
         if (string.IsNullOrWhiteSpace(normalizedQuery))
             return [];
 
-        var candidates = _tools
+        var candidates = GetRegistrationsSnapshot()
             .Where(t => PassesServerFilter(t.Tool, serverFilter))
             .Select(t => t.Tool)
             .ToList();
@@ -227,10 +257,11 @@ public sealed class ToolRegistry
     /// </summary>
     public string GenerateCompressedIndex()
     {
-        if (_tools.Count == 0)
+        var registrations = GetRegistrationsSnapshot();
+        if (registrations.Count == 0)
             return string.Empty;
 
-        return BuildCompressedIndex(_tools);
+        return BuildCompressedIndex(registrations);
     }
 
     /// <summary>
@@ -239,7 +270,7 @@ public sealed class ToolRegistry
     /// </summary>
     public string GenerateCompressedIndex(TrustAudience audience, ToolAccessPolicy policy)
     {
-        var visible = _tools
+        var visible = GetRegistrationsSnapshot()
             .Where(t => policy.IsToolExposed(t.Tool, audience))
             .ToList();
 
@@ -426,6 +457,12 @@ public sealed class ToolRegistry
         }
 
         return d[rows - 1, cols - 1];
+    }
+
+    private IReadOnlyList<ToolRegistration> GetRegistrationsSnapshot()
+    {
+        lock (_sync)
+            return _tools.ToList();
     }
 
     /// <summary>

@@ -428,7 +428,7 @@ internal static class ProviderCommand
             return 1;
         }
 
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
+        var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
 
         var removed = false;
         var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
@@ -438,12 +438,13 @@ internal static class ProviderCommand
             removed = true;
         }
 
-        var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
-        if (secretProviders?.Remove(name) == true)
+        var removedSecrets = ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) =>
         {
-            ConfigFileHelper.WriteSecretsFile(paths, secrets);
-            removed = true;
-        }
+            var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+            var removedSecret = secretProviders?.Remove(name) == true;
+            return (removedSecret, removedSecret);
+        });
+        removed |= removedSecrets;
 
         if (removed)
         {

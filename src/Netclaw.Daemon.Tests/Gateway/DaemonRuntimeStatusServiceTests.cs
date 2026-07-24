@@ -14,6 +14,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
@@ -283,22 +284,26 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             }
         };
 
-        var pkceService = new OAuthPkceService(new HttpClient());
-        var oauthService = new McpOAuthService(
-            new HttpClient(),
-            new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
+        paths.EnsureDirectoriesExist();
+        var credentials = new McpOAuthCredentialStore(
+            paths,
             TimeProvider.System,
-            NullLogger<McpOAuthService>.Instance,
-            pkceService,
-            NullNotificationSink.Instance);
+            new NullSecretsProtector(),
+            NullLogger<McpOAuthCredentialStore>.Instance);
+        using var flowBroker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),
             new ToolConfig(),
-            oauthService,
+            credentials,
+            flowBroker,
+            new DaemonConfig(),
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
+            new McpClientRuntime(),
+            NullLogger<McpClientManager>.Instance,
+            new SessionConfig());
 
         await manager.StartAsync(CancellationToken.None);
         try
@@ -325,11 +330,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     [Fact]
     public async Task IncludesAuthRequiredAndAuthFailedMcpConnectorStatuses()
     {
-        var authRequired = McpClientManager.CreateAwaitingAuthStatus(new McpServerName("textforge"));
+        var errorAt = DateTimeOffset.Parse("2026-07-22T12:00:00Z");
+        var authRequired = McpClientManager.CreateAwaitingAuthStatus(
+            new McpServerName("textforge"), errorAt);
         var authFailed = McpClientManager.CreateAuthFailedStatus(
             new McpServerName("notion"),
             new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Unauthorized", null, HttpStatusCode.Unauthorized),
-            oauthManaged: true);
+            oauthManaged: true,
+            errorAt);
 
         var connectors = new[]
         {

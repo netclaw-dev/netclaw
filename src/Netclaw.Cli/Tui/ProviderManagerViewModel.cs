@@ -692,13 +692,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         if (!string.IsNullOrWhiteSpace(FixApiKey))
         {
-            var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
-            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-            secretProviders[name] = new Dictionary<string, object>
+            ConfigFileHelper.UpdateSecretsFile(_paths, (secrets, _) =>
             {
-                ["ApiKey"] = FixApiKey
-            };
-            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+                secretProviders[name] = new Dictionary<string, object>
+                {
+                    ["ApiKey"] = FixApiKey
+                };
+                return true;
+            });
         }
 
         if (FixEndpoint is not null && DetailProvider.Entry is not null
@@ -757,15 +759,17 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return;
         }
 
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
+        var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
 
         var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
         if (providers?.Remove(RemoveProviderName) == true)
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
-        var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
-        if (secretProviders?.Remove(RemoveProviderName) == true)
-            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+        ConfigFileHelper.UpdateSecretsFile(_paths, (secrets, _) =>
+        {
+            var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+            return secretProviders?.Remove(RemoveProviderName) == true;
+        });
 
         StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. Restart daemon for changes to take effect.";
         RemoveProviderName = null;

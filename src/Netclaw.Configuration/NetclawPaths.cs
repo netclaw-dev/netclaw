@@ -123,7 +123,6 @@ public sealed class NetclawPaths
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
     public string LockFilePath => Path.Combine(BasePath, "netclaw.lock");
     public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
-    public string McpOAuthMetadataPath => Path.Combine(ConfigDirectory, "mcp-oauth-metadata.json");
     public string KeysDirectory => Path.Combine(BasePath, "keys");
 
     public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)

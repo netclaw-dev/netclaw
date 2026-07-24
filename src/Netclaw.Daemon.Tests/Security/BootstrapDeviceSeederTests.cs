@@ -96,4 +96,79 @@ public sealed class BootstrapDeviceSeederTests : IDisposable
         Assert.False(seeded);
         Assert.Empty(await _deviceRegistry.ListAsync(TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task EnsureSeededAsync_rolls_back_device_when_token_transaction_does_not_commit()
+    {
+        File.WriteAllText(_paths.SecretsPath, """{"Other":"ENC:trigger"}""");
+        var seeder = new BootstrapDeviceSeeder(
+            _paths,
+            _deviceRegistry,
+            _bootstrapStateStore,
+            _time,
+            NullLogger<BootstrapDeviceSeeder>.Instance,
+            new DeviceTokenAppearsDuringPrecheckProtector(_paths));
+
+        var seeded = await seeder.EnsureSeededAsync(
+            new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(seeded);
+        Assert.Empty(await _deviceRegistry.ListAsync(TestContext.Current.CancellationToken));
+
+        File.Delete(_paths.SecretsPath);
+        var retrySeeded = await _sut.EnsureSeededAsync(
+            new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(retrySeeded);
+        Assert.Single(await _deviceRegistry.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task EnsureSeededAsync_rolls_back_device_when_token_persistence_throws()
+    {
+        var seeder = new BootstrapDeviceSeeder(
+            _paths,
+            _deviceRegistry,
+            _bootstrapStateStore,
+            _time,
+            NullLogger<BootstrapDeviceSeeder>.Instance,
+            new ThrowingProtectSecretsProtector());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => seeder.EnsureSeededAsync(
+            new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy },
+            TestContext.Current.CancellationToken));
+
+        Assert.Empty(await _deviceRegistry.ListAsync(TestContext.Current.CancellationToken));
+
+        var retrySeeded = await _sut.EnsureSeededAsync(
+            new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(retrySeeded);
+        Assert.Single(await _deviceRegistry.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    private sealed class DeviceTokenAppearsDuringPrecheckProtector(NetclawPaths paths) : ISecretsProtector
+    {
+        private int _writesRemaining = 1;
+
+        public string Protect(string plaintext) => $"ENC:{plaintext}";
+
+        public string Unprotect(string ciphertext)
+        {
+            if (Interlocked.Exchange(ref _writesRemaining, 0) == 1)
+                File.WriteAllText(paths.SecretsPath, """{"DeviceToken":"winner"}""");
+
+            return ciphertext;
+        }
+    }
+
+    private sealed class ThrowingProtectSecretsProtector : ISecretsProtector
+    {
+        public string Protect(string plaintext) => throw new InvalidOperationException("secret persistence failed");
+
+        public string Unprotect(string ciphertext) => ciphertext;
+    }
 }

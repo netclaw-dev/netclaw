@@ -115,7 +115,7 @@ public sealed class SensitiveStringTypeConverter : TypeConverter
 
 /// <summary>
 /// System.Text.Json converter for <see cref="SensitiveString"/>. Used by code paths
-/// that deserialize via STJ (e.g., <c>McpOAuthService.LoadTokensFromDisk</c>)
+/// that deserialize via STJ (for example, the MCP OAuth credential store)
 /// rather than M.E.Configuration binding.
 /// </summary>
 public sealed class SensitiveStringJsonConverter : JsonConverter<SensitiveString>

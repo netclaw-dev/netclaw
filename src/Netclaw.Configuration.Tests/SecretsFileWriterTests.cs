@@ -3,7 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -145,5 +148,225 @@ public sealed class SecretsFileWriterTests : IDisposable
         var (encrypted, plaintext) = SecretsFileWriter.CountEncryptionStatus("{}");
         Assert.Equal(0, encrypted);
         Assert.Equal(0, plaintext);
+    }
+
+    [Fact]
+    public async Task Update_serializes_cross_section_mutations_and_second_writer_observes_committed_state()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        var protector = SecretsProtection.CreateProtector(paths);
+        SecretsFileWriter.Write(_secretsPath,
+            """
+            {
+              "Slack": {
+                "BotToken": "xoxb-existing"
+              }
+            }
+            """,
+            protector);
+
+        var secondSecretsPath = _secretsPath;
+        string? aliasPath = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            aliasPath = $"{_dir.Path}-alias";
+            Directory.CreateSymbolicLink(aliasPath, _dir.Path);
+            secondSecretsPath = Path.Combine(aliasPath, "secrets.json");
+        }
+
+        using var firstEntered = new ManualResetEventSlim();
+        using var secondStarted = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        string? secondObservedBraveKey = null;
+
+        try
+        {
+            var first = Task.Run(() => SecretsFileWriter.Update<bool>(
+                _secretsPath,
+                (root, _) =>
+                {
+                    firstEntered.Set();
+                    Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+                    Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+
+                    root["Search"] = new JsonObject
+                    {
+                        ["BraveApiKey"] = "brave-key"
+                    };
+                    return (root, true);
+                },
+                protector: protector,
+                cancellationToken: cancellationToken), cancellationToken);
+
+            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+
+            var second = Task.Run(() =>
+            {
+                secondStarted.Set();
+                return SecretsFileWriter.Update<bool>(
+                    secondSecretsPath,
+                    (root, _) =>
+                    {
+                        secondObservedBraveKey = root["Search"]?["BraveApiKey"]?.GetValue<string>();
+                        root["McpOAuthTokens"] = new JsonObject
+                        {
+                            ["memorizer"] = new JsonObject
+                            {
+                                ["AccessToken"] = "rotated-access-token"
+                            }
+                        };
+                        return (root, true);
+                    },
+                    protector: protector,
+                    cancellationToken: cancellationToken);
+            }, cancellationToken);
+
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            releaseFirst.Set();
+            await Task.WhenAll(first, second);
+
+            Assert.Equal("brave-key", secondObservedBraveKey);
+
+            var decrypted = SecretsFileWriter.DecryptJsonLeaves(File.ReadAllText(_secretsPath), protector);
+            using var doc = JsonDocument.Parse(decrypted);
+            Assert.Equal("xoxb-existing", doc.RootElement.GetProperty("Slack").GetProperty("BotToken").GetString());
+            Assert.Equal("brave-key", doc.RootElement.GetProperty("Search").GetProperty("BraveApiKey").GetString());
+            Assert.Equal("rotated-access-token",
+                doc.RootElement.GetProperty("McpOAuthTokens").GetProperty("memorizer").GetProperty("AccessToken").GetString());
+            Assert.DoesNotContain("xoxb-existing", File.ReadAllText(_secretsPath), StringComparison.Ordinal);
+            Assert.DoesNotContain("rotated-access-token", File.ReadAllText(_secretsPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseFirst.Set();
+            if (aliasPath is not null)
+                Directory.Delete(aliasPath);
+        }
+    }
+
+    [Fact]
+    public async Task Update_serializes_cross_process_mutations_and_observes_committed_state()
+    {
+        SecretsFileWriter.Write(_secretsPath, """{"Initial":"keep"}""");
+        using var child = StartSecretsLockProbe(_secretsPath, "from-child");
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        Assert.Equal("entered", await ReadRequiredStdoutLineAsync(child, cancellationToken));
+
+        string? parentObservedChild = null;
+        using var parentStarted = new ManualResetEventSlim();
+        var parent = Task.Run(() =>
+        {
+            parentStarted.Set();
+            return SecretsFileWriter.Update<bool>(
+                _secretsPath,
+                (root, _) =>
+                {
+                    parentObservedChild = root["Child"]?.GetValue<string>();
+                    root["Parent"] = "from-parent";
+                    return (root, true);
+                },
+                cancellationToken: cancellationToken);
+        }, cancellationToken);
+
+        Assert.True(parentStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+        await child.StandardInput.WriteLineAsync("release");
+        await child.StandardInput.FlushAsync(cancellationToken);
+
+        Assert.Equal("committed", await ReadRequiredStdoutLineAsync(child, cancellationToken));
+        await child.WaitForExitAsync(cancellationToken);
+        Assert.Equal(0, child.ExitCode);
+        Assert.True(await parent.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+
+        Assert.Equal("from-child", parentObservedChild);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_secretsPath));
+        Assert.Equal("keep", doc.RootElement.GetProperty("Initial").GetString());
+        Assert.Equal("from-child", doc.RootElement.GetProperty("Child").GetString());
+        Assert.Equal("from-parent", doc.RootElement.GetProperty("Parent").GetString());
+    }
+
+    [Fact]
+    public void Update_when_file_replacement_fails_propagates_and_keeps_previous_content()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        SecretsFileWriter.Write(_secretsPath, """{"Existing":"keep"}""");
+        var before = File.ReadAllText(_secretsPath);
+        var originalMode = File.GetUnixFileMode(_dir.Path);
+
+        try
+        {
+            File.SetUnixFileMode(_dir.Path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            Assert.ThrowsAny<Exception>(() => SecretsFileWriter.Update<bool>(
+                _secretsPath,
+                (root, _) =>
+                {
+                    root["Existing"] = "lost";
+                    return (root, true);
+                },
+                cancellationToken: TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            File.SetUnixFileMode(_dir.Path, originalMode);
+        }
+
+        Assert.Equal(before, File.ReadAllText(_secretsPath));
+    }
+
+    private static Process StartSecretsLockProbe(string secretsPath, string childValue)
+    {
+        var info = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        info.ArgumentList.Add(LocateSecretsLockProbeDll());
+        info.ArgumentList.Add(secretsPath);
+        info.ArgumentList.Add(childValue);
+
+        return Process.Start(info)
+               ?? throw new InvalidOperationException("Failed to start secrets lock probe.");
+    }
+
+    private static async Task<string> ReadRequiredStdoutLineAsync(Process process, CancellationToken cancellationToken)
+    {
+        var line = await process.StandardOutput
+            .ReadLineAsync(cancellationToken)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+        if (line is not null)
+            return line;
+
+        var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+        throw new InvalidOperationException($"Secrets lock probe exited before writing a line. stderr: {stderr}");
+    }
+
+    private static string LocateSecretsLockProbeDll()
+    {
+        var repo = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "Netclaw.slnx")))
+            repo = repo.Parent;
+        Assert.NotNull(repo);
+
+        var projectDir = Path.Combine(repo!.FullName, "tests", "Netclaw.SecretsLockProbe");
+        var binMarker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}";
+        var dll = Directory
+            .EnumerateFiles(projectDir, "Netclaw.SecretsLockProbe.dll", SearchOption.AllDirectories)
+            .Where(p => p.Contains(binMarker, StringComparison.Ordinal))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        Assert.True(dll is not null,
+            $"Netclaw.SecretsLockProbe.dll not found under {projectDir}/bin - is the project built?");
+        return dll!;
     }
 }

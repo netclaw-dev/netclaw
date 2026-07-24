@@ -43,8 +43,10 @@ callback endpoint. Flow state values SHALL be cryptographically opaque,
 one-time, bound to a single server and flow, and SHALL expire after a bounded
 lifetime of five minutes measured via `TimeProvider`. Netclaw SHALL validate
 the callback state itself — the SDK neither generates nor validates the OAuth
-state parameter. Concurrent redirect-delegate invocations for one flow SHALL
-coalesce onto the same pending authorization URL and code. At most one
+state parameter. The first redirect-delegate invocation for a flow SHALL own
+the authorization URL, callback code, and PKCE exchange. Concurrent delegate
+invocations SHALL observe that authorization is already in progress and SHALL
+NOT receive or reuse the owner's authorization code. At most one
 interactive flow SHALL be active per server; concurrent start requests SHALL
 coalesce onto that flow. The daemon SHALL own the flow and candidate lifetime
 independently of the HTTP start and callback request cancellation tokens, and
@@ -105,8 +107,9 @@ existing five-minute CLI and TUI polling timeout.
 
 - **GIVEN** a pending interactive flow for a server
 - **WHEN** the SDK invokes the redirect delegate concurrently from parallel transport requests
-- **THEN** both invocations observe the same pending flow and authorization URL
-- **AND** the operator is prompted at most once
+- **THEN** one invocation owns the authorization URL and callback code
+- **AND** every other invocation observes authorization in progress without prompting
+- **AND** no authorization code is returned to more than one SDK invocation
 
 #### Scenario: A cancelled exchange requires fresh authorization
 
@@ -186,7 +189,8 @@ and query retained.
 
 - **GIVEN** credentials contain a dynamically registered client identity that the authorization server rejects as `invalid_client`
 - **WHEN** the operator runs explicit authorization
-- **THEN** Netclaw retries the candidate flow once with the stored dynamic client identity withheld so the SDK can perform new dynamic registration
+- **THEN** that flow fails visibly and records the stored dynamic identity as rejected
+- **AND** the next explicit authorization attempt withholds the rejected identity so the SDK can perform new dynamic registration with a new authorization URL
 - **AND** the prior active credentials remain unchanged until the replacement candidate is published
 - **BUT** an explicitly configured static client ID is never discarded or replaced automatically
 
@@ -206,11 +210,12 @@ NOT derive the callback host from an incoming request's Host header.
 
 ### Requirement: Startup and reconnect never block on interactive authorization
 
-Every configured HTTP MCP transport SHALL be created with SDK OAuth support
-whose non-interactive redirect delegate returns no authorization code. OAuth
-support SHALL remain dormant for servers that are unauthenticated or
-satisfied by operator-configured headers, and operator-provided headers SHALL
-remain authoritative. When interactive authorization is required, the
+The system SHALL create every configured HTTP MCP transport without an
+operator-configured `Authorization` header with SDK OAuth support whose
+non-interactive redirect delegate returns no authorization code. A configured
+`Authorization` header SHALL suppress SDK OAuth so the SDK cannot replace it
+after a challenge. OAuth support SHALL remain dormant for unauthenticated
+servers, and all operator-provided headers SHALL remain authoritative. When interactive authorization is required, the
 connection SHALL report `AwaitingAuth` and direct the operator to
 `netclaw mcp auth <name>` instead of opening a browser or waiting for input.
 
@@ -219,7 +224,7 @@ connection SHALL report `AwaitingAuth` and direct the operator to
 - **GIVEN** a server authenticated by operator-configured headers
 - **WHEN** the daemon connects
 - **THEN** the configured headers are sent unmodified
-- **AND** no OAuth challenge handling alters the request
+- **AND** a configured `Authorization` header disables SDK OAuth challenge handling for that transport
 - **AND** the connection succeeds as before
 
 #### Scenario: Unauthenticated server is unchanged
@@ -247,7 +252,9 @@ exception with provider and server context. No client-facing JSON or HTML SHALL
 contain tokens, authorization codes, PKCE verifiers, or secret values. The CLI
 SHALL parse structured responses when present, SHALL fall back to the HTTP
 status and reason when the body is empty or malformed, and SHALL NOT print a
-blank error.
+blank error. The authenticated OAuth status response SHALL carry an optional
+structured error for terminal failures that occur after the start response has
+already returned.
 
 #### Scenario: Registration rejection surfaces a reason
 
@@ -261,6 +268,13 @@ blank error.
 - **GIVEN** the daemon returns an error status with an empty or malformed body
 - **WHEN** the CLI reports the failure
 - **THEN** the CLI prints the HTTP status and reason phrase rather than a blank error line
+
+#### Scenario: Late candidate failure is available through status
+
+- **GIVEN** an authorization start response has already returned successfully
+- **WHEN** credential persistence, code exchange, or candidate initialization later fails
+- **THEN** the authenticated status response reports `Failed`
+- **AND** it includes a safe structured error naming the failed operation
 
 #### Scenario: Callback validation failure remains browser-safe HTML
 

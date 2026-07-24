@@ -233,10 +233,11 @@ as active and removes it after its flow lifetime. Ordinary refresh on a publishe
 connection continues to update the active record persist-before-publish.
 
 If an authorization server rejects a stored dynamically registered identity as
-`invalid_client`, explicit authorization may retry once with that stored dynamic
-identity withheld, allowing the SDK to perform DCR again. This recovery never
-discards an explicitly configured static client ID and never replaces the active
-record until the new candidate publishes.
+`invalid_client`, the current flow fails visibly and records that dynamic
+identity as rejected. The next explicit authorization attempt withholds it,
+allowing the SDK to perform DCR with a new URL and PKCE verifier. This recovery
+never discards an explicitly configured static client ID and never replaces the
+active record until the new candidate publishes.
 
 Decompilation of the shipped 1.4.1 assembly confirms the necessity: the
 provider's `_clientId` is an in-memory field never read back from the token
@@ -341,9 +342,12 @@ Deriving the port from config fixes defect 7 for any non-default local port.
   Netclaw owns state validation and CSRF protection end-to-end.
 - The provider contains no synchronization, and the transport's POST and
   GET/SSE paths can challenge concurrently through one provider instance. The
-  broker's delegate therefore coalesces concurrent invocations for one flow
-  onto the same pending authorization-URL and code tasks, so parallel
-  challenges cannot issue duplicate operator prompts.
+  broker therefore elects the first redirect-delegate invocation as the flow
+  owner. It alone publishes the authorization URL, waits for the callback code,
+  and returns that code to its SDK invocation. Concurrent delegates observe the
+  same flow as authorization-in-progress and do not prompt, but they fail their
+  request with a classified in-progress result rather than reusing the owner's
+  code with a different PKCE verifier.
 - The SDK imposes no timeout on the delegate; the broker bounds its own wait
   (the five-minute flow lifetime) and honors the SDK-passed cancellation token.
   Cancellation between code delivery and exchange completion consumes the
@@ -352,6 +356,9 @@ Deriving the port from config fixes defect 7 for any non-default local port.
 - OAuth triggers lazily on the first 401/403 challenge, not eagerly at
   connect, and configured scopes are a fallback: scopes advertised via
   `WWW-Authenticate` or protected-resource metadata take precedence in 1.4.1.
+  When an operator configures an `Authorization` header, Netclaw does not attach
+  SDK OAuth to that transport because SDK 1.4.1 would replace the header after a
+  challenge; the explicit operator credential remains authoritative.
 
 ### D8. Failure modes, recovery, and diagnostics
 
@@ -373,6 +380,9 @@ Deriving the port from config fixes defect 7 for any non-default local port.
   nor HTML exposes a token, code, verifier, or secret. The CLI parses
   `McpErrorResponse`, falls back to HTTP status/reason on an empty or malformed
   body, and never prints a blank error line.
+- The authenticated status response carries an optional `McpErrorResponse` for
+  terminal credential-storage, code-exchange, or candidate-initialization
+  failures that occur after the start response has already returned.
 - Connection status distinguishes `AwaitingAuth` (interaction required),
   `AuthFailed` (credentials/refresh rejected), `Unreachable` (transport), and
   `Connected` (published usable generation). An expired access token with no

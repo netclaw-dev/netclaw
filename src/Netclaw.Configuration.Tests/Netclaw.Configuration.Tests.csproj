@@ -28,6 +28,8 @@
     <ProjectReference Include="../Netclaw.Media/Netclaw.Media.csproj" />
     <ProjectReference Include="../Netclaw.Providers/Netclaw.Providers.csproj" />
     <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
+    <ProjectReference Include="../../tests/Netclaw.SecretsLockProbe/Netclaw.SecretsLockProbe.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

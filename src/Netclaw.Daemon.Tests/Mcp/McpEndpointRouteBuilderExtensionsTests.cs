@@ -6,7 +6,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
-using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
@@ -19,9 +18,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Security;
-using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -44,15 +43,13 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
 
     /// <summary>
     /// Creates a test host wired with real <see cref="McpEndpointRouteBuilderExtensions.MapMcpEndpoints"/>.
-    /// Constructs a real <see cref="McpOAuthService"/> over a <see cref="FakeHttpMessageHandler"/>
-    /// so tests can exercise OAuth state transitions without a live server.
+    /// Uses the production flow broker and credential store with a manager whose
+    /// network path remains dormant unless a test supplies a pending broker flow.
     /// </summary>
     private async Task<WebApplication> CreateAppAsync(
         bool spoofLoopback,
-        Func<HttpRequestMessage, HttpResponseMessage>? discoveryHandler = null,
-        Func<HttpRequestMessage, HttpResponseMessage>? tokenHandler = null,
         Dictionary<string, McpServerEntry>? mcpServers = null,
-        IMcpReconnectable? reconnectable = null)
+        McpOAuthFlowBroker? flowBroker = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -66,18 +63,12 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
 
         var servers = mcpServers ?? [];
 
-        // Construct a real McpOAuthService over fake HTTP handlers
-        var discoveryClient = new HttpClient(
-            new FakeHttpMessageHandler(discoveryHandler ?? DefaultDiscoveryHandler));
-        var pkceService = new OAuthPkceService(
-            new HttpClient(new FakeHttpMessageHandler(tokenHandler ?? DefaultTokenHandler)));
-        var oauthService = new McpOAuthService(
-            discoveryClient,
+        var credentialStore = new McpOAuthCredentialStore(
             paths,
             TimeProvider.System,
-            NullLogger<McpOAuthService>.Instance,
-            pkceService,
-            NullNotificationSink.Instance);
+            new NullSecretsProtector(),
+            NullLogger<McpOAuthCredentialStore>.Instance);
+        flowBroker ??= new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
 
         // Minimal McpClientManager with empty state
         var toolRegistry = new ToolRegistry();
@@ -85,16 +76,20 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             servers,
             toolRegistry,
             new ToolConfig(),
-            oauthService,
+            credentialStore,
+            flowBroker,
+            new DaemonConfig(),
             NullNotificationSink.Instance,
             TimeProvider.System,
-            NullLogger<McpClientManager>.Instance);
+            new McpClientRuntime(),
+            NullLogger<McpClientManager>.Instance,
+            new SessionConfig());
 
-        builder.Services.AddSingleton(oauthService);
+        builder.Services.AddSingleton(credentialStore);
+        builder.Services.AddSingleton(flowBroker);
         builder.Services.AddSingleton(mcpManager);
         builder.Services.AddSingleton<McpClientManager>(mcpManager);
         builder.Services.AddSingleton(servers);
-        builder.Services.AddSingleton<IMcpReconnectable>(reconnectable ?? new NoOpReconnectable());
         builder.Services.AddSingleton<ILogger<McpClientManager>>(NullLogger<McpClientManager>.Instance);
 
         var app = builder.Build();
@@ -148,10 +143,12 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         // No Authorization header — proves AllowAnonymous is wired
         var response = await client.GetAsync("/api/mcp/oauth/callback", ct);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
         var html = await response.Content.ReadAsStringAsync(ct);
         Assert.Contains("Authorization failed", html);
+        Assert.DoesNotContain("abc", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("unknown-state", html, StringComparison.Ordinal);
         Assert.Contains("Missing code or state parameter", html);
     }
 
@@ -162,10 +159,9 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         await using var app = await CreateAppAsync(spoofLoopback: false);
         var client = app.GetTestClient();
 
-        // Unknown state triggers CompleteAuthorizationAsync to throw InvalidOperationException
         var response = await client.GetAsync("/api/mcp/oauth/callback?code=abc&state=unknown-state", ct);
 
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
         var html = await response.Content.ReadAsStringAsync(ct);
         Assert.Contains("Authorization failed", html);
@@ -241,6 +237,32 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStatuses_includes_lastErrorAt_for_connection_failure()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var servers = new Dictionary<string, McpServerEntry>
+        {
+            ["broken"] = new()
+            {
+                Enabled = true,
+                Transport = "stdio",
+                Command = "definitely-not-a-real-command",
+            },
+        };
+        await using var app = await CreateAppAsync(spoofLoopback: true, mcpServers: servers);
+        var manager = app.Services.GetRequiredService<McpClientManager>();
+        await manager.StartAsync(ct);
+
+        var response = await app.GetTestClient().GetAsync("/api/mcp/statuses", ct);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Unreachable", body.GetProperty("broken").GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.String, body.GetProperty("broken").GetProperty("lastErrorAt").ValueKind);
+        await manager.StopAsync(ct);
+    }
+
+    [Fact]
     public async Task GetTools_returns_200_with_empty_array_for_unknown_server()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -283,6 +305,33 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.True(body.TryGetProperty("status", out _));
     }
 
+    [Fact]
+    public async Task OAuthStatusByNameAndStateIncludeSameSafeStructuredTerminalError()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var broker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var flow = broker.StartOrJoin(new McpServerName("failed-server")).Flow;
+        broker.Fail(flow, new McpErrorResponse(
+            "MCP OAuth dynamic client registration failed: HTTP 403 Forbidden.",
+            "dynamic client registration",
+            403));
+        await using var app = await CreateAppAsync(spoofLoopback: true, flowBroker: broker);
+
+        var client = app.GetTestClient();
+        var response = await client.GetAsync(
+            $"/api/mcp/oauth/status-by-state/{flow.State}", ct);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        var byNameResponse = await client.GetAsync("/api/mcp/oauth/status/failed-server", ct);
+        var byName = await byNameResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
+
+        Assert.Equal("Failed", body.GetProperty("status").GetString());
+        Assert.Equal(403, body.GetProperty("error").GetProperty("status").GetInt32());
+        Assert.Equal(
+            "dynamic client registration",
+            body.GetProperty("error").GetProperty("operation").GetString());
+        Assert.Equal(body.GetRawText(), byName.GetRawText());
+    }
+
     // ─── Happy-path: oauth/start then callback ─────────────────────────────────
 
     [Fact]
@@ -300,7 +349,17 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             }
         };
 
-        await using var app = await CreateAppAsync(spoofLoopback: true, mcpServers: servers);
+        using var broker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var pending = broker.StartOrJoin(new McpServerName("test-mcp")).Flow;
+        var expectedUrl = new Uri("https://auth.example.com/authorize?client_id=test-client");
+        var owner = pending.HandleAuthorizationRedirectAsync(
+            expectedUrl,
+            new Uri("http://127.0.0.1:5199/api/mcp/oauth/callback"),
+            ct);
+        await using var app = await CreateAppAsync(
+            spoofLoopback: true,
+            mcpServers: servers,
+            flowBroker: broker);
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/mcp/oauth/start/test-mcp", null, ct);
@@ -311,10 +370,13 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.True(body.TryGetProperty("state", out var stateProp));
         Assert.False(string.IsNullOrWhiteSpace(urlProp.GetString()));
         Assert.False(string.IsNullOrWhiteSpace(stateProp.GetString()));
+        Assert.Equal(expectedUrl.ToString(), urlProp.GetString());
+        broker.Fail(pending, new McpErrorResponse("test cleanup"));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await owner);
     }
 
     [Fact]
-    public async Task Callback_happy_path_returns_success_html_and_triggers_reconnect()
+    public async Task Callback_happy_path_returns_success_html_after_owner_exchange_completes()
     {
         var ct = TestContext.Current.CancellationToken;
         var servers = new Dictionary<string, McpServerEntry>
@@ -328,106 +390,58 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             }
         };
 
-        var reconnectable = new TrackingReconnectable();
-
+        using var broker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var flow = broker.StartOrJoin(new McpServerName("test-mcp")).Flow;
+        var owner = flow.HandleAuthorizationRedirectAsync(
+            new Uri("https://auth.example.com/authorize"),
+            new Uri("http://127.0.0.1:5199/api/mcp/oauth/callback"),
+            ct);
         await using var app = await CreateAppAsync(
             spoofLoopback: true,
             mcpServers: servers,
-            reconnectable: reconnectable);
+            flowBroker: broker);
         var client = app.GetTestClient();
 
-        // Start the OAuth flow to get a valid state token
-        var startResponse = await client.PostAsync("/api/mcp/oauth/start/test-mcp", null, ct);
-        Assert.Equal(HttpStatusCode.OK, startResponse.StatusCode);
-
-        var startBody = await startResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
-        var state = startBody.GetProperty("state").GetString()!;
-
         // Complete via callback — no Authorization header (AllowAnonymous)
-        var callbackResponse = await client.GetAsync(
-            $"/api/mcp/oauth/callback?code=test-code&state={state}", ct);
+        var callback = client.GetAsync(
+            $"/api/mcp/oauth/callback?code=test-code&state={flow.State}", ct);
+        Assert.Equal("test-code", await owner);
+        broker.BeginCommit(flow);
+        broker.Complete(flow);
+        var callbackResponse = await callback;
 
         Assert.Equal(HttpStatusCode.OK, callbackResponse.StatusCode);
         var html = await callbackResponse.Content.ReadAsStringAsync(ct);
         Assert.Contains("Authorization complete", html);
-
-        // Wait until the fire-and-forget reconnect task signals completion.
-        // TrackingReconnectable.ReconnectCalled is set before TCS is signalled so
-        // the assertion below is race-free.
-        await reconnectable.ReconnectCalledTask.WaitAsync(ct);
-        Assert.True(reconnectable.WasReconnectCalled, "TryReconnectAsync should have been called post-OAuth");
     }
 
-    // ─── Default fake HTTP handlers ───────────────────────────────────────────
-
-    private static HttpResponseMessage DefaultDiscoveryHandler(HttpRequestMessage request)
+    [Fact]
+    public async Task Callback_exchange_failure_returns_safe_html_without_code()
     {
-        var uri = request.RequestUri!.ToString();
-        return uri switch
-        {
-            "https://mcp.example.com/" or "https://mcp.example.com" =>
-                new HttpResponseMessage(HttpStatusCode.Unauthorized),
-            "https://mcp.example.com/.well-known/oauth-protected-resource" =>
-                JsonResponse(new
-                {
-                    authorization_servers = new[] { "https://auth.example.com" },
-                    resource = "https://mcp.example.com/resource"
-                }),
-            "https://auth.example.com/.well-known/oauth-authorization-server" =>
-                JsonResponse(new
-                {
-                    authorization_endpoint = "https://auth.example.com/authorize",
-                    token_endpoint = "https://auth.example.com/token"
-                }),
-            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
-        };
+        var ct = TestContext.Current.CancellationToken;
+        using var broker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var flow = broker.StartOrJoin(new McpServerName("test-mcp")).Flow;
+        var owner = flow.HandleAuthorizationRedirectAsync(
+            new Uri("https://auth.example.com/authorize"),
+            new Uri("http://127.0.0.1:5199/api/mcp/oauth/callback"),
+            ct);
+        await using var app = await CreateAppAsync(spoofLoopback: true, flowBroker: broker);
+        var callback = app.GetTestClient().GetAsync(
+            $"/api/mcp/oauth/callback?code=sensitive-code&state={flow.State}", ct);
+        Assert.Equal("sensitive-code", await owner);
+        broker.Fail(flow, new McpErrorResponse(
+            "MCP OAuth authorization code exchange failed: HTTP 403 Forbidden.",
+            "authorization code exchange",
+            403));
+
+        var response = await callback;
+        var html = await response.Content.ReadAsStringAsync(ct);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("authorization code exchange failed", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sensitive-code", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(flow.State, html, StringComparison.Ordinal);
     }
 
-    private static HttpResponseMessage DefaultTokenHandler(HttpRequestMessage request) =>
-        JsonResponse(new
-        {
-            access_token = "test-access-token",
-            refresh_token = "test-refresh-token",
-            expires_in = 3600
-        });
-
-    private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK) =>
-        new(status)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
-        };
-
-    // ─── Fakes ────────────────────────────────────────────────────────────────
-
-    private sealed class NoOpReconnectable : IMcpReconnectable
-    {
-        public IReadOnlyDictionary<McpServerName, McpServerStatus> GetServerStatuses() =>
-            new Dictionary<McpServerName, McpServerStatus>();
-
-        public Task<bool> TryReconnectAsync(McpServerName serverName, CancellationToken ct = default) =>
-            Task.FromResult(false);
-    }
-
-    private sealed class TrackingReconnectable : IMcpReconnectable
-    {
-        private readonly TaskCompletionSource _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public bool WasReconnectCalled { get; private set; }
-
-        /// <summary>
-        /// Completes when <see cref="TryReconnectAsync"/> has been called.
-        /// Use this instead of Task.Delay to synchronize with the fire-and-forget reconnect.
-        /// </summary>
-        public Task ReconnectCalledTask => _tcs.Task;
-
-        public IReadOnlyDictionary<McpServerName, McpServerStatus> GetServerStatuses() =>
-            new Dictionary<McpServerName, McpServerStatus>();
-
-        public Task<bool> TryReconnectAsync(McpServerName serverName, CancellationToken ct = default)
-        {
-            WasReconnectCalled = true;
-            _tcs.TrySetResult();
-            return Task.FromResult(true);
-        }
-    }
 }

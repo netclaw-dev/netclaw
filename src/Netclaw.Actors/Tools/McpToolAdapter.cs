@@ -122,6 +122,10 @@ public sealed class McpToolAdapter : INetclawTool
             var coerced = McpSchemaSanitizer.CoerceArguments(normalized, _rawSchema);
             return await _invoker.InvokeAsync(ServerName, _toolName, coerced, context, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return $"Error: MCP tool '{Name}' failed: {ex.Message}";
@@ -143,6 +147,10 @@ public sealed class McpToolAdapter : INetclawTool
                 : null;
             var result = await func.InvokeAsync(aiArgs, ct);
             return McpToolResultFormatter.Format(result, Name);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
