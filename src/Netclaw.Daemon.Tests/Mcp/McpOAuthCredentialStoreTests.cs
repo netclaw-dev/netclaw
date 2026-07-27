@@ -65,7 +65,13 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", true);
         await candidate.StoreTokensAsync(Tokens("not-published", null), CancellationToken.None);
 
-        Assert.ThrowsAny<IOException>(() => store.Publish(candidate, CancellationToken.None));
+        // A directory standing where the file should be surfaces as IOException on Unix and
+        // UnauthorizedAccessException on Windows, and the latter derives from SystemException
+        // rather than IOException. Either way the replace failed, which is what this asserts.
+        var failure = Assert.ThrowsAny<Exception>(() => store.Publish(candidate, CancellationToken.None));
+        Assert.True(
+            failure is IOException or UnauthorizedAccessException,
+            $"Expected a file-access failure, got {failure.GetType().FullName}: {failure.Message}");
 
         Assert.Null(store.GetActiveForTests(ServerName));
         Assert.False(candidate.Published);
