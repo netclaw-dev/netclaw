@@ -69,7 +69,7 @@ cannot delegate: client lifecycle and durable local state.
 - Persist per-server token sets plus the DCR-issued client ID durably before
   publishing them in memory; bind them to the configured MCP resource identity;
   fail the connection loudly on persistence failure or binding mismatch.
-- Serialize `secrets.json` read/modify/write with a cross-process lock so
+- Serialize `secrets.json` read/modify/write with a path-scoped lock so
   concurrent writers to different sections cannot lose each other's update.
 - Derive the callback URI from `DaemonConfig.Port`.
 - Return structured, actionable OAuth diagnostics; never print a blank error.
@@ -193,9 +193,12 @@ encryption, and `AtomicFile` replacement with permission hardening.
 
 **Amended during implementation:** the lock is in-process rather than a named
 cross-process mutex, and its key resolves only the immediate parent directory's
-symlink rather than every path segment. The daemon is the sole runtime writer
-and the CLI writes while it is stopped, so cross-process contention is a
-separate, pre-existing concern. Caller migration is limited to the credential
+symlink rather than every path segment. Nothing enforces that the CLI writes only
+while the daemon is stopped, so a `netclaw secrets set` issued against a live
+daemon can still lose against a concurrent token refresh — the same hazard as
+before this change, when every caller performed an unlocked read-modify-write.
+Closing it needs a cross-process lock *and* the remaining callers moved onto the
+transaction; both are deferred together rather than half-done. Caller migration is limited to the credential
 store and the two TUI save paths that were overwriting daemon-written
 `McpOAuthTokens`; the remaining CLI and provider callers, and transactional
 rollback for `ProviderRenamer` and `BootstrapDeviceSeeder`, move to their own

@@ -256,9 +256,15 @@ public static class SecretsFileWriter
     internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
 
     /// <summary>
-    /// Serializes read-modify-write against one secrets file within this process. The daemon
-    /// is the only writer at runtime, and the CLI writes while it is stopped, so a
-    /// cross-process lock buys nothing that this does not already cover.
+    /// Serializes read-modify-write against one secrets file <em>within this process</em>.
+    ///
+    /// This does NOT serialize against another process. Nothing stops `netclaw secrets set`
+    /// or `netclaw provider add` from running while the daemon is live, and those paths still
+    /// write the file without taking this gate, so a CLI write can still lose against a
+    /// concurrent daemon token refresh. That hazard predates this type — every caller was an
+    /// unlocked read-modify-write before it existed — and closing it needs both a
+    /// cross-process lock and the remaining callers moved onto <see cref="Update"/>. Both are
+    /// deferred; do not read this gate as covering them.
     /// </summary>
     private static IDisposable AcquireSecretsLock(string secretsPath, CancellationToken cancellationToken)
     {

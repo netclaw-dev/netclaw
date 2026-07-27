@@ -8,7 +8,7 @@ never `Thread.Sleep` or `Task.Delay` in orchestration.
 
 ## 1. PR 1 — Connection snapshot and generation model
 
-- [x] 1.1 Define an immutable per-server connection snapshot type carrying the `McpClient`, its function/tool map, a monotonically increasing generation number, status metadata (including the `TimeProvider`-derived last error timestamp), and invocation lease state. Done when the published data is read-only and one lease owner can retire and drain the generation safely.
+- [x] 1.1 Define an immutable per-server connection snapshot type carrying the `McpClient`, its function/tool map, a monotonically increasing generation number, and status metadata (including the `TimeProvider`-derived last error timestamp). Done when the published data is read-only. Invocation lease state is deferred with the drain work.
 - [x] 1.2 Replace `McpClientManager`'s separate client and tool dictionaries with one published snapshot reference per server. Done when no code path reads the client and its tools as independent dictionaries.
 - [x] 1.3 Update `ToolRegistry` and status reporting to read from the same snapshot so connection state, tool count, and error info always change together. Done when a single lifecycle operation is the only writer of all three.
 
@@ -17,14 +17,14 @@ never `Thread.Sleep` or `Task.Delay` in orchestration.
 - [x] 2.1 Add a per-server async lifecycle gate guarding create, publish, replace, and teardown. Done when every lifecycle transition for a server passes through one gate.
 - [x] 2.2 Implement coalescing reconnect: capture the observed generation, enter the gate, re-read the published snapshot, and if a newer healthy generation already exists, reuse it and return. Done when concurrent reconnects that observed the same generation converge on one winner.
 - [x] 2.3 Build the candidate without removing the published connection; initialize it fully (`ListToolsAsync` plus function-map construction) before publication; on init failure dispose only the candidate and keep the published connection. Done when a failed candidate leaves the prior generation serving.
-- [x] 2.4 Publish the candidate atomically as the next generation, retire the replaced generation so it accepts no new invocation leases, and dispose it exactly once after its final in-flight lease ends. Done when no routine replacement interrupts an in-flight invocation and no generation is leaked or double-disposed.
-- [x] 2.5 Serialize shutdown: `StopAsync` enters each server's gate, marks shutdown, rejects new leases and reconnects, allows a bounded invocation drain, cancels any remainder with the daemon shutdown token, then removes and disposes the snapshot. Done when no connection can be published after shutdown starts and no client is disposed while its invocation is still executing.
+- [x] 2.4 Publish the candidate atomically as the next generation and dispose the replaced generation exactly once. Done when no generation is leaked or double-disposed. Disposal happens as soon as the replacement publishes, so an in-flight invocation on the replaced client is cancelled rather than drained; draining is deferred.
+- [x] 2.5 Serialize shutdown: `StopAsync` enters each server's gate, marks shutdown, rejects new reconnects, then removes and disposes the snapshot. Done when no connection can be published after shutdown starts. The bounded invocation drain is deferred, so a call in flight at shutdown is cancelled.
 
 ## 3. PR 1 — Invocation classification
 
 - [x] 3.1 Format tool-declared and application MCP errors as tool results with no teardown or reconnect. Done when a tool-declared error returns a result and leaves the connection published.
 - [x] 3.2 Propagate caller-token `OperationCanceledException` and unknown application exceptions with no teardown or retry. Done when cancellation reaches the caller and the shared connection stays live.
-- [x] 3.3 Classify transport/session failures, return the failed invocation as an error without replay, release its snapshot lease, and only then request or await at most one coalesced reconnect for later calls. Done when an ambiguous failure never invokes the remote tool a second time and reconnect cannot wait on the caller's own lease.
+- [x] 3.3 Classify transport/session failures, return the failed invocation as an error without replay, and only then request or await at most one coalesced reconnect for later calls. Done when an ambiguous failure never invokes the remote tool a second time.
 
 ## 4. PR 1 — Lifecycle and concurrency tests
 
@@ -33,9 +33,9 @@ never `Thread.Sleep` or `Task.Delay` in orchestration.
 - [x] 4.3 Disposal-accounting test: instrument the fake client's dispose count to prove no client is leaked or disposed more than once across reconnects.
 - [x] 4.4 Non-teardown test: caller cancellation and tool-declared/application errors neither reconnect nor dispose the healthy shared connection.
 - [x] 4.5 Shutdown-vs-reconnect race test: with a reconnect in flight, shutdown begins; assert no connection is published after shutdown starts and every created client is disposed.
-- [x] 4.6 Invocation-vs-replacement race test: hold a tool call on the prior generation while publishing a replacement; assert the call completes, the prior generation is not disposed early, and it is disposed exactly once after release.
-- [x] 4.7 Self-reconnect drain test: a lease-holding invocation fails with a classified transport error and triggers reconnect; assert it releases its lease before awaiting replacement, returns without deadlock, and is not replayed.
-- [x] 4.8 Shutdown-with-active-invocation test: hold a lease through shutdown, assert new leases are rejected, bounded drain occurs, cancellation releases the invocation, and disposal happens only after release.
+- [ ] 4.6 Invocation-vs-replacement race test: hold a tool call on the prior generation while publishing a replacement; assert the call completes, the prior generation is not disposed early, and it is disposed exactly once after release. **Deferred** with the drain work — replacement currently disposes immediately, and `ReplacementDisposesTheRetiredClientAndDisposeWithoutStopClearsPublishedState` pins that behavior instead.
+- [x] 4.7 Self-reconnect test: an invocation fails with a classified transport error and triggers reconnect; assert it returns without deadlock and is not replayed. Covered by `TransportFailure_ReconnectsForLaterCallsAndDoesNotReplay`; the lease-release assertion is deferred with the drain work.
+- [ ] 4.8 Shutdown-with-active-invocation test: hold a lease through shutdown, assert new leases are rejected, bounded drain occurs, cancellation releases the invocation, and disposal happens only after release. **Deferred** with the drain work.
 
 ## 5. PR 1 — Issue tracking
 
@@ -49,9 +49,9 @@ never `Thread.Sleep` or `Task.Delay` in orchestration.
 
 ## 7. PR 2 — Transactional secrets
 
-- [x] 7.1 Add a path-scoped, cross-process-locked read/decrypt/mutate/encrypt/replace transaction to `SecretsFileWriter`, reusing the `WebhookRouteStore` named-mutex / SHA-256 path-hash pattern. Preserve existing encryption and file-permission hardening; whole-file `Write` participates in the same path lock. Done when canonical path resolution derives the lock identity and that lock spans the latest read through atomic replacement.
-- [x] 7.2 Migrate every secrets.json read-modify-write caller onto the transaction using owned field mutations applied to the latest document under the lock. Long-lived config editors and wizards replay contribution actions instead of writing snapshots captured before the lock. Done when no caller does an unlocked or stale-snapshot read-modify-write against secrets.json.
-- [x] 7.3 Concurrent cross-section preservation tests: two writers updating different sections both survive, unrelated sections are preserved, a second cross-process writer observes the first's committed state before mutating, and a config editor opened before an MCP refresh cannot overwrite the refreshed token when saving another section.
+- [x] 7.1 Add a path-scoped, in-process-locked read/decrypt/mutate/encrypt/replace transaction to `SecretsFileWriter`. Preserve existing encryption and file-permission hardening; whole-file `Write` participates in the same path lock. Done when canonical path resolution derives the lock identity — resolving a symlinked parent so two spellings share a lock — and that lock spans the latest read through atomic replacement. Cross-process locking is deferred with the remaining caller migration.
+- [ ] 7.2 Migrate every secrets.json read-modify-write caller onto the transaction using owned field mutations applied to the latest document under the lock. **Partially delivered**: the credential store and the long-lived config editor and wizard replay contribution actions instead of writing pre-lock snapshots, which is what stopped the TUI overwriting daemon-written `McpOAuthTokens`. The CLI and provider callers (`SecretsCommand`, `PairCommand`, `ProviderCommand`, `ProviderManagerViewModel`, `ExposureModeStepViewModel`, `ProviderCredentialWriter`, `OAuthTokenPersistence`) still do unlocked read-modify-write, as they did before this change; **deferred** with cross-process locking.
+- [x] 7.3 Concurrent cross-section preservation tests: two writers updating different sections both survive, unrelated sections are preserved, a second writer reaching the file through a symlinked directory observes the first's committed state before mutating, and a config editor opened before an MCP refresh cannot overwrite the refreshed token when saving another section.
 - [x] 7.4 Loud-failure tests: a replacement/disk failure propagates to the caller, the prior file content stays intact, and no caller-visible state reports the update as persisted.
 
 ## 8. PR 2 — Credential store and persist-before-publish
