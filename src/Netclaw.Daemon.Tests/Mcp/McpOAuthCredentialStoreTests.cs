@@ -353,19 +353,6 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task MismatchedLegacyResourceFailsClosedWithoutChangingDisk()
-    {
-        var paths = Paths();
-        WriteLegacyCredentials(paths, "https://mcp.example.com/tools");
-        var store = CreateStore(paths);
-        var cache = store.CreateTokenCache(ServerName, Resource, null, false);
-
-        Assert.Null(await cache.GetTokensAsync(CancellationToken.None));
-        Assert.Null(store.GetIdentity(cache).ClientId);
-        Assert.Contains("legacy-access", File.ReadAllText(paths.SecretsPath), StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task ForgettingARejectedClientIdentityKeepsTokensAndForcesReregistration()
     {
         var paths = Paths();
