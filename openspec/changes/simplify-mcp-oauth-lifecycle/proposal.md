@@ -21,40 +21,57 @@ parts: one owner per concern, not a more complete second OAuth implementation.
   MCP client creation, publication, replacement, and disposal. Immutable
   per-server connection snapshots with monotonic generations; concurrent
   reconnects coalesce by observed generation; candidates initialize fully
-  before atomically replacing the sole published generation; replaced
-  generations drain in-flight calls before disposal; teardown is serialized.
-  Strengthens PRD-006 `MCP-009` under concurrency.
+  before atomically replacing the sole published generation; teardown is
+  serialized. A replaced client is disposed once its replacement is published,
+  so an invocation still in flight is cancelled rather than drained — draining
+  is deferred to the separate client-lifecycle change. Strengthens PRD-006
+  `MCP-009` under concurrency.
 - **Failure classification**: reconnect narrows to classified
   transport/session failures and restores service for later calls without
   replaying an ambiguously failed invocation. Caller cancellation and
   tool-declared/application errors propagate without teardown or reconnect.
   Revises the reconnection behavior of PRD-006 `MCP-008` (graceful
   degradation).
-- **OAuth ownership**: OAuth discovery, DCR, PKCE, authorization-code
-  exchange, refresh, and bearer injection delegate to the MCP C# SDK
-  (ModelContextProtocol.Core 1.4.1 `ClientOAuthOptions`, `ITokenCache`,
-  `AuthorizationRedirectDelegate`). Netclaw's manual protocol implementation
-  in `McpOAuthService` and the `mcp-oauth-metadata.json` runtime dependency
-  are **removed**. Existing metadata files are ignored, not deleted.
+- **OAuth ownership**: PKCE, authorization-code exchange, refresh, and bearer
+  injection delegate to the MCP C# SDK (ModelContextProtocol.Core 1.4.1
+  `ClientOAuthOptions`, `ITokenCache`, `AuthorizationRedirectDelegate`).
+  Netclaw's manual protocol implementation in `McpOAuthService` and the
+  `mcp-oauth-metadata.json` runtime dependency are **removed**. Existing
+  metadata files are ignored, not deleted.
+- **Client registration stays Netclaw's**: `McpOAuthClientRegistrar` performs
+  protected-resource discovery and RFC 7591 registration, because the SDK
+  hard-codes `token_endpoint_auth_method: "client_secret_post"` and never reads
+  the authorization server's advertised `token_endpoint_auth_methods_supported`
+  (csharp-sdk#1611, unfixed in 1.4.1, every 2.0 prerelease, and `main`; PR #1615
+  covers only the token request). Servers accepting public clients only — such
+  as TextForge, which advertises `["none"]` — reject the SDK's registration with
+  `400 invalid_client_metadata`, making SDK-driven registration impossible
+  against them. Netclaw registers with exactly the method the SDK will later
+  select for the token request, so the two cannot diverge, and seeds
+  `ClientOAuthOptions.ClientId` so the SDK's registration path never runs. A
+  missing or failing `registration_endpoint` yields an actionable error naming
+  `OAuthClientId`.
 - **New narrow components**: `McpOAuthFlowBroker` (interactive browser
   handoff only: opaque one-time state, bounded flow lifetime via
   `TimeProvider`) and `McpOAuthCredentialStore` (durable per-server token
   sets plus the DCR-issued client ID; supplies SDK `ITokenCache` adapters).
   One SDK redirect delegate owns each flow's PKCE/code exchange; concurrent
   delegates observe authorization in progress but never reuse its code.
-- **Durable credentials**: in-memory token state publishes only after durable
-  persistence succeeds; persistence failure propagates through
-  `ITokenCache.StoreTokensAsync` and fails the connection visibly. A token
+- **Durable credentials**: active token state changes only after durable
+  persistence succeeds; persistence failure fails the connection visibly. A token
   response that omits `refresh_token` retains the prior refresh token. Stored
   credentials are bound to the configured MCP resource identity and withheld
-  after that identity changes. Explicit authorization writes a durable pending
-  record and promotes it only when the candidate connection publishes, so later
-  initialization failure cannot replace the last working record.
-- **Transactional secrets**: `SecretsFileWriter` gains a path-scoped,
-  cross-process-locked read/decrypt/mutate/encrypt/replace transaction
-  (reusing the established `WebhookRouteStore` named-mutex pattern). All
-  secrets.json read-modify-write callers migrate; concurrent updates to
-  different sections cannot lose either update.
+  after that identity changes. Explicit authorization keeps credentials local to
+  the unpublished candidate and commits them once after initialization succeeds,
+  so failure cannot replace the last working record.
+- **Transactional secrets**: `SecretsFileWriter` gains a path-scoped
+  read/decrypt/mutate/encrypt/replace transaction so concurrent updates to
+  different sections cannot lose either update. The lock is in-process and its
+  key resolves a symlinked config directory, so two spellings of one file share
+  it. The credential store and the TUI config/wizard save paths adopt it — the
+  TUI paths because they were overwriting daemon-written `McpOAuthTokens`.
+  Migrating the remaining CLI and provider callers, and any cross-process
+  locking, is deferred to a separate change.
 - **Callback URI**: derived from `DaemonConfig.Port`
   (`http://127.0.0.1:{port}/api/mcp/oauth/callback`) instead of hard-coded
   5199. Never derived from a request Host header.
@@ -75,20 +92,21 @@ existing behavior.
 
 ### New Capabilities
 
-- `mcp-oauth`: SDK-delegated OAuth authorization for HTTP MCP servers —
-  ownership boundaries, interactive browser-flow brokering, durable
-  credential and client-registration persistence, callback identity, and
-  actionable OAuth failure diagnostics.
+- `mcp-oauth`: OAuth authorization for HTTP MCP servers — SDK-delegated PKCE,
+  exchange, and refresh with Netclaw-owned client registration, plus ownership
+  boundaries, interactive browser-flow brokering, durable credential and
+  client-registration persistence, callback identity, and actionable OAuth
+  failure diagnostics.
 - `transactional-secrets`: serialized, atomic mutation of secrets.json —
-  cross-process locking, preservation of unrelated secret sections under
-  concurrent writers, and loud persistence failure.
+  preservation of unrelated secret sections under concurrent writers and loud
+  persistence failure.
 
 ### Modified Capabilities
 
 - `netclaw-mcp`:
   - "Configured MCP server has daemon-bound client ownership" — strengthened
     to hold under concurrent reconnects via generation-aware coalescing,
-    atomic publication, and in-flight-call draining.
+    and atomic publication.
   - "Graceful degradation" — reconnection narrowed to classified
     transport/session failures without automatic invocation replay;
     cancellation and tool-declared errors excluded.
@@ -102,8 +120,13 @@ existing behavior.
   — largely deleted, `McpTokenCacheAdapter`, `McpEndpointRouteBuilderExtensions`,
   `McpReconnectionService`), `src/Netclaw.Configuration/SecretsFileWriter.cs`,
   `src/Netclaw.Configuration/NetclawPaths.cs` (metadata path removal),
-  `src/Netclaw.Cli` MCP auth/status commands. Expected net-negative
-  production LOC.
+  `src/Netclaw.Cli` MCP auth/status commands. Measured outcome: MCP production
+  code moves from 1370 lines on `dev` (manager 618 + `McpOAuthService` 663 +
+  `McpTokenCacheAdapter` 89) to 2488 (manager 1256 + credential store 604 +
+  flow broker 386 + registrar 242). The increase is the diagnostics taxonomy
+  (#1475), durable client identity, resource binding with legacy migration, and
+  candidate-then-publish — none of which `dev` had. Net-negative production LOC
+  was predicted and not achieved.
 - **.NET source compatibility**: removes the public
   `McpOAuthServerMetadata` cache type and `NetclawPaths.McpOAuthMetadataPath`
   property. These represented a runtime cache that no longer exists; external
@@ -138,25 +161,28 @@ existing behavior.
   daemon rather than an HTTP request.
 - Persisted OAuth credentials are bound to the configured resource identity;
   changing a profile endpoint requires authorization for the new identity.
-- Legacy credential records without that binding fail closed with actionable
-  reauthorization guidance rather than being silently trusted for the current
-  profile. This is an operator-visible security migration, not an API shape
-  change.
+- Legacy credential records are migrated onto the configured endpoint when they
+  describe the same resource, so upgrading never invalidates a credential the
+  previous release was successfully using. Equivalence tolerates a trailing
+  slash, path case, and a bare-origin resource indicator; scheme, host, port,
+  and query must agree, and origin-to-path narrowing is accepted while a
+  path-scoped credential is never widened to a sibling path. Records that fail
+  that test fail closed with actionable reauthorization guidance, and the
+  rejected binding is logged next to the configured one.
 - Operators see actionable status (`AwaitingAuth` → run
   `netclaw mcp auth <name>`) instead of generic connection errors.
 
 ### In scope (MVP)
 
-- Generation-aware client lifecycle, coalesced reconnects, and safe draining
-  of replaced generations.
+- Generation-aware client lifecycle and coalesced reconnects.
 - SDK-delegated OAuth with browser-flow broker and credential store.
 - Transactional secrets mutation and caller migration.
 - Configurable local callback port; structured diagnostics.
 - Compatibility bridge: persisting the DCR client ID beside the token set and
   seeding `ClientOAuthOptions.ClientId` from it (stable SDK 1.4.1's
   `TokenContainer` carries no registration fields).
-- Durable pending credentials for explicit authorization, promoted only with
-  successful candidate publication.
+- Candidate-local credentials for explicit authorization, committed once to
+  the sole durable active record immediately before successful publication.
 
 ### Out of scope
 
@@ -165,6 +191,14 @@ existing behavior.
 - Vendored or preview SDK; the official SDK upgrade is a separate follow-up.
 - Remote/public callback URL design (#297).
 - Serializing all MCP tool calls.
+- Draining in-flight invocations before disposing a replaced or shutting-down
+  client. `dev` did not drain either, so this is a non-improvement rather than a
+  regression, but it is a deliberate gap: a tool call in flight when the daemon
+  stops is cancelled. Tracked with the separate client-lifecycle change.
+- Migrating the remaining secrets.json callers (`SecretsCommand`, `PairCommand`,
+  `ProviderCommand`, `ProviderManagerViewModel`, `ExposureModeStepViewModel`,
+  `ProviderCredentialWriter`, `OAuthTokenPersistence`) and transactional
+  rollback for `ProviderRenamer` and `BootstrapDeviceSeeder`.
 - Attributing past provider incidents to these defects without traces.
 
 ## Source PRDs

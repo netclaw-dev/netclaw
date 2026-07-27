@@ -48,34 +48,4 @@ public sealed class McpOAuthTokenSet
 
     /// <summary>Canonical configured endpoint identity bound to these credentials.</summary>
     public string? ResourceIdentity { get; set; }
-
-    /// <summary>
-    /// Ownership epoch used to reject writes from retired connections and stale processes.
-    /// </summary>
-    public string? CredentialEpoch { get; set; }
-}
-
-/// <summary>Flow-scoped credentials that are not yet active.</summary>
-public sealed class McpOAuthPendingCredential
-{
-    public string FlowId { get; set; } = null!;
-
-    public DateTimeOffset ExpiresAt { get; set; }
-
-    public McpOAuthTokenSet Credentials { get; set; } = null!;
-}
-
-/// <summary>Per-server durable active and pending OAuth state.</summary>
-public sealed class McpOAuthCredentialEnvelope
-{
-    public McpOAuthTokenSet? Active { get; set; }
-
-    public McpOAuthPendingCredential? Pending { get; set; }
-
-    /// <summary>
-    /// A dynamic identity rejected as invalid_client. Explicit flows continue
-    /// withholding it until another dynamic identity is captured or a
-    /// replacement credential set publishes.
-    /// </summary>
-    public string? RejectedDynamicClientId { get; set; }
 }

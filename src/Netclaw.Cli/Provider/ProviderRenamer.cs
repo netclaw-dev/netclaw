@@ -3,11 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Provider;
 
@@ -51,33 +49,16 @@ internal static class ProviderRenamer
     /// </list>
     /// </remarks>
     public static RenameResult Rename(NetclawPaths paths, string oldName, string newName)
-        => Rename(
-            paths,
-            oldName,
-            newName,
-            ConfigFileHelper.WriteConfigFile,
-            static (path, text) => AtomicFile.WriteAllText(path, text),
-            secretsProtector: null);
-
-    internal static RenameResult Rename(
-        NetclawPaths paths,
-        string oldName,
-        string newName,
-        Action<string, Dictionary<string, object>> writeConfigFile,
-        Action<string, string> restoreConfigFile,
-        ISecretsProtector? secretsProtector)
     {
         var trimmed = newName?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(trimmed))
             return RenameResult.Fail("Provider name cannot be empty.");
 
-        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
+        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
 
         var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
         if (providers is null || !providers.ContainsKey(oldName))
             return RenameResult.Fail($"Provider '{oldName}' not found.");
-
-        var originalConfigText = File.ReadAllText(paths.NetclawConfigPath);
 
         // Collision check: walk both config and secrets dictionaries. A key
         // that case-insensitive-equals oldName is the entry we're renaming and
@@ -86,80 +67,26 @@ internal static class ProviderRenamer
         if (HasCollision(providers, oldName, trimmed))
             return RenameResult.Fail($"A provider named '{trimmed}' already exists.");
 
+        var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+        if (secretProviders is not null && HasCollision(secretProviders, oldName, trimmed))
+            return RenameResult.Fail($"A provider named '{trimmed}' already exists in secrets.");
+
         var entry = providers[oldName];
         providers.Remove(oldName);
         providers[trimmed] = entry;
 
         var reassigned = CascadeRenameModelRoles(config, oldName, trimmed);
-        var configWritten = false;
 
-        RenameSecretsResult secretsResult;
-        try
+        ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
+
+        if (secretProviders is not null && secretProviders.TryGetValue(oldName, out var secretEntry))
         {
-            secretsResult = ConfigFileHelper.UpdateSecretsFile(paths, (latestSecrets, _) =>
-            {
-                var latestSecretProviders = ConfigFileHelper.GetSectionOrNull(latestSecrets, "Providers");
-                if (latestSecretProviders is null)
-                {
-                    writeConfigFile(paths.NetclawConfigPath, config);
-                    configWritten = true;
-                    return (false, RenameSecretsResult.NoOldName);
-                }
-
-                if (HasCollision(latestSecretProviders, oldName, trimmed))
-                    return (false, RenameSecretsResult.Collision);
-
-                if (!latestSecretProviders.TryGetValue(oldName, out var secretEntry))
-                {
-                    writeConfigFile(paths.NetclawConfigPath, config);
-                    configWritten = true;
-                    return (false, RenameSecretsResult.NoOldName);
-                }
-
-                writeConfigFile(paths.NetclawConfigPath, config);
-                configWritten = true;
-                latestSecretProviders.Remove(oldName);
-                latestSecretProviders[trimmed] = secretEntry;
-                return (true, RenameSecretsResult.Renamed);
-            }, secretsProtector);
+            secretProviders.Remove(oldName);
+            secretProviders[trimmed] = secretEntry;
+            ConfigFileHelper.WriteSecretsFile(paths, secrets);
         }
-        catch (Exception ex) when (configWritten)
-        {
-            RestoreOriginalConfigAndThrow(paths.NetclawConfigPath, originalConfigText, restoreConfigFile, ex);
-            throw;
-        }
-
-        if (secretsResult is RenameSecretsResult.Collision)
-            return RenameResult.Fail($"A provider named '{trimmed}' already exists in secrets.");
 
         return RenameResult.Ok(reassigned);
-    }
-
-    private static void RestoreOriginalConfigAndThrow(
-        string configPath,
-        string originalConfigText,
-        Action<string, string> restoreConfigFile,
-        Exception renameException)
-    {
-        try
-        {
-            restoreConfigFile(configPath, originalConfigText);
-        }
-        catch (Exception restoreException)
-        {
-            throw new InvalidOperationException(
-                "Provider rename failed after writing netclaw.json, then failed to restore the original netclaw.json.",
-                new AggregateException(renameException, restoreException));
-        }
-
-        ExceptionDispatchInfo.Capture(renameException).Throw();
-    }
-
-    private enum RenameSecretsResult
-    {
-        NoOldName,
-        Renamed,
-        Collision,
     }
 
     private static List<string> CascadeRenameModelRoles(

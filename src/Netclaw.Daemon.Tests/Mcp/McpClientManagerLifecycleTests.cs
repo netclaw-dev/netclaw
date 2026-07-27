@@ -200,38 +200,7 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task Replacement_DrainsPriorGenerationBeforeDisposal()
-    {
-        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseInvocation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var runtime = new ControlledMcpClientRuntime();
-        var initial = runtime.Enqueue(new ClientPlan("run")
-        {
-            Invoke = async (_, ct) =>
-            {
-                invocationEntered.TrySetResult();
-                await releaseInvocation.Task.WaitAsync(ct);
-                return "completed on old generation";
-            },
-        });
-        var replacement = runtime.Enqueue(new ClientPlan("run"));
-        await using var harness = CreateHarness(runtime);
-        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-
-        var invocation = InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
-        await invocationEntered.Task;
-        Assert.True(await harness.Manager.TryReconnectAsync(ServerName, TestContext.Current.CancellationToken));
-
-        Assert.Equal(0, initial.DisposeCount);
-        Assert.Same(replacement.Client, harness.Manager.GetSnapshot(ServerName)?.Client);
-        releaseInvocation.SetResult();
-        Assert.Equal("completed on old generation", await invocation);
-        await initial.Disposed.Task;
-        Assert.Equal(1, initial.DisposeCount);
-    }
-
-    [Fact]
-    public async Task TransportFailure_ReleasesLeaseBeforeReconnectAndDoesNotReplay()
+    public async Task TransportFailure_ReconnectsForLaterCallsAndDoesNotReplay()
     {
         var runtime = new ControlledMcpClientRuntime();
         var initial = runtime.Enqueue(new ClientPlan("run")
@@ -254,106 +223,7 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task ShutdownWithActiveInvocation_BoundsDrainThenCancelsAndDisposesAfterRelease()
-    {
-        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var invocationCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holdInvocation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var runtime = new ControlledMcpClientRuntime();
-        var active = runtime.Enqueue(new ClientPlan("run")
-        {
-            Invoke = async (_, ct) =>
-            {
-                invocationEntered.TrySetResult();
-                try
-                {
-                    await holdInvocation.Task.WaitAsync(ct);
-                    return "unreachable";
-                }
-                catch (OperationCanceledException)
-                {
-                    invocationCancelled.TrySetResult();
-                    throw;
-                }
-            },
-        });
-        var time = new FakeTimeProvider(InitialTime);
-        await using var harness = CreateHarness(runtime, time);
-        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-
-        var invocation = InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
-        await invocationEntered.Task;
-        var stop = harness.Manager.StopAsync(TestContext.Current.CancellationToken);
-
-        Assert.True(harness.Manager.IsStopping);
-        Assert.Equal(0, active.DisposeCount);
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
-        Assert.False(stop.IsCompleted);
-
-        time.Advance(McpClientManager.ShutdownDrainTimeout);
-        await invocationCancelled.Task;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation);
-        await stop;
-        await active.Disposed.Task;
-
-        Assert.Equal(1, active.DisposeCount);
-        Assert.Null(harness.Manager.GetSnapshot(ServerName));
-        Assert.Empty(harness.Registry.GetToolsForServer(ServerName, int.MaxValue));
-    }
-
-    [Fact]
-    public async Task ReplacementThenShutdown_WaitsForRetiredGenerationAndCancelsItsInvocation()
-    {
-        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var invocationCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holdInvocation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var runtime = new ControlledMcpClientRuntime();
-        var retired = runtime.Enqueue(new ClientPlan("old_tool")
-        {
-            Invoke = async (_, ct) =>
-            {
-                invocationEntered.TrySetResult();
-                try
-                {
-                    await holdInvocation.Task.WaitAsync(ct);
-                    return "unreachable";
-                }
-                catch (OperationCanceledException)
-                {
-                    invocationCancelled.TrySetResult();
-                    throw;
-                }
-            },
-        });
-        var current = runtime.Enqueue(new ClientPlan("new_tool"));
-        var time = new FakeTimeProvider(InitialTime);
-        await using var harness = CreateHarness(runtime, time);
-        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-
-        var invocation = InvokeAsync(harness.Manager, "old_tool", TestContext.Current.CancellationToken);
-        await invocationEntered.Task;
-        Assert.True(await harness.Manager.TryReconnectAsync(ServerName, TestContext.Current.CancellationToken));
-        AssertPublishedTools(harness, "new_tool");
-        Assert.Equal(0, retired.DisposeCount);
-
-        var stop = harness.Manager.StopAsync(TestContext.Current.CancellationToken);
-        Assert.Null(harness.Manager.GetSnapshot(ServerName));
-        Assert.Empty(harness.Registry.GetToolsForServer(ServerName, int.MaxValue));
-        Assert.False(stop.IsCompleted);
-
-        time.Advance(McpClientManager.ShutdownDrainTimeout);
-        await invocationCancelled.Task;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation);
-        await stop;
-
-        await Task.WhenAll(retired.Disposed.Task, current.Disposed.Task);
-        Assert.Equal(1, retired.DisposeCount);
-        Assert.Equal(1, current.DisposeCount);
-    }
-
-    [Fact]
-    public async Task CandidateInitializationAndDisposalFailure_AreBothSurfacedAndPriorToolsRemainPublished()
+    public async Task CandidateInitializationAndDisposalFailures_AreLoudAndPriorToolsRemainPublished()
     {
         var runtime = new ControlledMcpClientRuntime();
         var initial = runtime.Enqueue(new ClientPlan("old_tool"));
@@ -373,82 +243,6 @@ public sealed class McpClientManagerLifecycleTests
         AssertPublishedTools(harness, "old_tool");
         Assert.Equal(0, initial.DisposeCount);
         Assert.Equal(1, candidate.DisposeCount);
-    }
-
-    [Fact]
-    public async Task RetiredClientDisposalFailure_IsPreservedUntilShutdownAndRegistryIsRemoved()
-    {
-        var runtime = new ControlledMcpClientRuntime();
-        var retired = runtime.Enqueue(new ClientPlan("old_tool")
-        {
-            DisposeFailure = new IOException("retired dispose failed"),
-        });
-        var current = runtime.Enqueue(new ClientPlan("new_tool"));
-        var harness = CreateHarness(runtime);
-        try
-        {
-            await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-            Assert.True(await harness.Manager.TryReconnectAsync(ServerName, TestContext.Current.CancellationToken));
-            await retired.Disposed.Task;
-            AssertPublishedTools(harness, "new_tool");
-
-            var failure = await Assert.ThrowsAsync<IOException>(
-                () => harness.Manager.StopAsync(TestContext.Current.CancellationToken));
-            harness.MarkStopFailureObserved();
-
-            Assert.Equal("retired dispose failed", failure.Message);
-            Assert.Null(harness.Manager.GetSnapshot(ServerName));
-            Assert.Empty(harness.Registry.GetToolsForServer(ServerName, int.MaxValue));
-            Assert.Equal(1, retired.DisposeCount);
-            Assert.Equal(1, current.DisposeCount);
-        }
-        finally
-        {
-            await harness.DisposeAsync();
-        }
-    }
-
-    [Fact]
-    public async Task RepeatedReconnects_PruneSuccessfulOwnersButRetainDisposalFailureForShutdown()
-    {
-        const int replacementCount = 25;
-        var runtime = new ControlledMcpClientRuntime();
-        var faulted = runtime.Enqueue(new ClientPlan("tool_0")
-        {
-            DisposeFailure = new IOException("retained disposal failure"),
-        });
-        var replacements = Enumerable.Range(1, replacementCount)
-            .Select(index => runtime.Enqueue(new ClientPlan($"tool_{index}")))
-            .ToList();
-        var harness = CreateHarness(runtime);
-        harness.MarkStopFailureObserved();
-        try
-        {
-            await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-
-            for (var index = 1; index <= replacementCount; index++)
-            {
-                Assert.True(await harness.Manager.TryReconnectAsync(
-                    ServerName,
-                    TestContext.Current.CancellationToken));
-                Assert.Equal(2, harness.Manager.GetTrackedOwnerCount(ServerName));
-            }
-
-            Assert.Equal(1, faulted.DisposeCount);
-            Assert.All(replacements.Take(replacementCount - 1), plan => Assert.Equal(1, plan.DisposeCount));
-            Assert.Equal(0, replacements[^1].DisposeCount);
-
-            var failure = await Assert.ThrowsAsync<IOException>(
-                () => harness.Manager.StopAsync(TestContext.Current.CancellationToken));
-
-            Assert.Equal("retained disposal failure", failure.Message);
-            Assert.Equal(1, replacements[^1].DisposeCount);
-            Assert.Equal(0, harness.Manager.GetTrackedOwnerCount(ServerName));
-        }
-        finally
-        {
-            await harness.DisposeAsync();
-        }
     }
 
     [Fact]
@@ -480,48 +274,28 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task DisposeWithoutStop_CleansCurrentAndRetiredOwnersAfterReplacement()
+    public async Task ReplacementDisposesTheRetiredClientAndDisposeWithoutStopClearsPublishedState()
     {
-        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var invocationCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holdInvocation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runtime = new ControlledMcpClientRuntime();
-        var retired = runtime.Enqueue(new ClientPlan("old_tool")
-        {
-            Invoke = async (_, ct) =>
-            {
-                invocationEntered.TrySetResult();
-                try
-                {
-                    await holdInvocation.Task.WaitAsync(ct);
-                    return "unreachable";
-                }
-                catch (OperationCanceledException)
-                {
-                    invocationCancelled.TrySetResult();
-                    throw;
-                }
-            },
-        });
+        var retired = runtime.Enqueue(new ClientPlan("old_tool"));
         var current = runtime.Enqueue(new ClientPlan("new_tool"));
         var harness = CreateHarness(runtime);
         try
         {
             await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
-            var invocation = InvokeAsync(harness.Manager, "old_tool", TestContext.Current.CancellationToken);
-            await invocationEntered.Task;
             Assert.True(await harness.Manager.TryReconnectAsync(ServerName, TestContext.Current.CancellationToken));
-            Assert.Equal(0, retired.DisposeCount);
+
+            // The replaced client is disposed as soon as its replacement is published.
+            // Waiting for in-flight calls to drain first belongs to the separate
+            // client-lifecycle work, not to this one.
+            await retired.Disposed.Task;
+            Assert.Equal(1, retired.DisposeCount);
+            AssertPublishedTools(harness, "new_tool");
 
             harness.DisposeManagerWithoutStop();
 
             Assert.Null(harness.Manager.GetSnapshot(ServerName));
             Assert.Empty(harness.Registry.GetToolsForServer(ServerName, int.MaxValue));
-            await invocationCancelled.Task;
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation);
-            await Task.WhenAll(retired.Disposed.Task, current.Disposed.Task);
-            Assert.Equal(1, retired.DisposeCount);
-            Assert.Equal(1, current.DisposeCount);
         }
         finally
         {
@@ -658,6 +432,7 @@ public sealed class McpClientManagerLifecycleTests
                 Registry,
                 new ToolConfig(),
                 credentials,
+                McpOAuthTestDoubles.UnusedRegistrar(),
                 _flowBroker,
                 new DaemonConfig(),
                 notificationSink,

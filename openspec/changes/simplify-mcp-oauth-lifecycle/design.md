@@ -87,13 +87,27 @@ cannot delegate: client lifecycle and durable local state.
 
 ### D1. The SDK owns the OAuth protocol; Netclaw stops re-implementing it
 
-**Decision:** OAuth discovery, authorization-server selection, DCR, PKCE,
-authorization-code exchange, bearer injection, and refresh delegate entirely to
-the SDK via `ClientOAuthOptions`, `ITokenCache`,
-`AuthorizationRedirectDelegate`, and `DynamicClientRegistrationOptions.ResponseDelegate`.
-`McpOAuthService`'s protocol code — metadata probing/parsing, DCR HTTP,
-authorization-URL construction, code exchange, refresh redemption,
-`GetValidTokenAsync`, and the metadata cache — is deleted.
+**Decision:** Authorization-server selection, PKCE, authorization-code exchange,
+bearer injection, and refresh delegate entirely to the SDK via
+`ClientOAuthOptions`, `ITokenCache`, and `AuthorizationRedirectDelegate`.
+`McpOAuthService`'s protocol code — authorization-URL construction, code
+exchange, refresh redemption, `GetValidTokenAsync`, and the metadata cache — is
+deleted.
+
+**Amended during implementation:** DCR does *not* delegate to the SDK.
+`ClientOAuthProvider.PerformDynamicClientRegistrationAsync` hard-codes
+`TokenEndpointAuthMethod = "client_secret_post"` and reads
+`token_endpoint_auth_methods_supported` only afterwards, for the token request.
+Against a server advertising `["none"]` the registration is rejected with
+`400 invalid_client_metadata`, and 1.4.1 exposes no hook to change the body —
+`DynamicClientRegistrationOptions` has four properties and its `ResponseDelegate`
+fires only on success. This is csharp-sdk#1611, open since 2026-05-29 and unfixed
+in 1.4.1, every 2.0 prerelease, and `main`; PR #1615 addresses only the token
+request. `dev`'s own 40-line registration sent `"none"` and worked, as does the
+TypeScript SDK, which negotiates from the advertised list. So
+`McpOAuthClientRegistrar` retains protected-resource discovery and registration,
+registering with the same method the SDK will later select, and seeds
+`ClientOAuthOptions.ClientId` so the SDK's registration path never runs.
 
 **Rationale:** One protocol implementation cannot drift from itself. 1.4.1
 already exposes every hook the interactive and non-interactive flows need, and
@@ -173,11 +187,19 @@ an MCP-level operation through the SDK, not redeem a refresh token directly.
 ### D4. Transactional mutation extends `SecretsFileWriter`; no OAuth-specific store
 
 **Decision:** Add a path-scoped transactional update to `SecretsFileWriter` that
-derives a lock identity from the canonical path, then holds one cross-process
-lock across read, leaf decryption, JSON parse, the caller's mutation,
-serialization, encryption, and `AtomicFile` replacement with permission hardening. Reuse the named-mutex /
-SHA-256 path-hash pattern already proven in `WebhookRouteStore`. Migrate every
-current `secrets.json` read/modify/write caller onto this boundary. Callers pass
+derives a lock identity from the canonical path, then holds one lock across
+read, leaf decryption, JSON parse, the caller's mutation, serialization,
+encryption, and `AtomicFile` replacement with permission hardening.
+
+**Amended during implementation:** the lock is in-process rather than a named
+cross-process mutex, and its key resolves only the immediate parent directory's
+symlink rather than every path segment. The daemon is the sole runtime writer
+and the CLI writes while it is stopped, so cross-process contention is a
+separate, pre-existing concern. Caller migration is limited to the credential
+store and the two TUI save paths that were overwriting daemon-written
+`McpOAuthTokens`; the remaining CLI and provider callers, and transactional
+rollback for `ProviderRenamer` and `BootstrapDeviceSeeder`, move to their own
+change. Callers pass
 owned field mutations that execute against the latest document read under the
 lock; they do not pass a whole-file snapshot captured before the lock. Long-lived
 editors retain their contribution actions and replay those actions inside the
@@ -224,18 +246,26 @@ This check happens before the SDK can inject an old bearer token into a request
 to the changed endpoint. Netclaw does not silently stamp a binding onto a legacy
 record because the profile may have changed before upgrade.
 
-An explicit authorization candidate uses a flow-scoped token-cache view. SDK
-stores write a durable pending record rather than replacing the active record.
-After tool listing succeeds, the lifecycle gate atomically promotes that pending
-record and publishes the candidate; candidate failure or expiry removes only the
-pending record. A crash may leave a pending record, but startup never treats it
-as active and removes it after its flow lifetime. Ordinary refresh on a published
-connection continues to update the active record persist-before-publish.
+An explicit authorization candidate uses a flow-scoped token cache that starts
+without an access token. SDK stores remain local to that unpublished candidate.
+After tool listing succeeds, the lifecycle gate writes the complete replacement
+to the sole durable active record, transfers cache ownership, and publishes the
+candidate. Candidate failure or expiry discards the local cache without a durable
+cleanup path. A crash after the durable write but before runtime publication
+leaves a complete active record for the next startup. Ordinary refresh on a
+published connection continues to update the active record persist-before-return.
 
 If an authorization server rejects a stored dynamically registered identity as
-`invalid_client`, the current flow fails visibly and records that dynamic
-identity as rejected. The next explicit authorization attempt withholds it,
-allowing the SDK to perform DCR with a new URL and PKCE verifier. This recovery
+`invalid_client`, the current flow fails visibly and the rejected client
+identity is discarded from the durable record while its tokens are left intact.
+The next explicit authorization registers a new client, because an absent client
+ID is already the registrar's trigger.
+
+**Amended during implementation:** an earlier design persisted a
+`RejectedDynamicClientId` marker instead of discarding the identity. That is a
+latch: it survives restart, has to be cleared explicitly, and against a server
+that cannot complete registration it makes every later attempt fail the same
+way. Discarding needs no extra persisted field and self-heals. This recovery
 never discards an explicitly configured static client ID and never replaces the
 active record until the new candidate publishes.
 
@@ -267,12 +297,12 @@ acceptable — no second file exists solely to preserve an incomplete flow.
 
 ### D6. Explicit reauthorization withholds the access token instead of deleting credentials
 
-**Decision:** `netclaw mcp auth <name>` runs against a cache view that does not
-return the existing access token, which forces the SDK down the authorization
-path — while the durable token set and refresh token stay intact until the new
-tokens are stored. The interactive candidate is unpublished until success;
-failure or cancellation disposes only the candidate and leaves the previous
-connection and credentials untouched.
+**Decision:** `netclaw mcp auth <name>` runs against a candidate-local cache that
+does not return the existing access token, which forces the SDK down the
+authorization path. The durable token set and refresh token stay intact until
+the candidate initializes and commits once. Failure or cancellation disposes
+only the unpublished candidate and leaves the previous connection and
+credentials untouched.
 
 **Rationale:** An operator re-authorizing must not lose working credentials if
 the new flow fails or is abandoned. Deleting durable state first to "force" the
@@ -364,13 +394,13 @@ Deriving the port from config fixes defect 7 for any non-default local port.
 
 **Decision:** Persistence and diagnostics follow a strict fail-loud ordering.
 
-- `StoreTokensAsync` constructs the complete replacement record, persists it
-  transactionally, updates the applicable singleton in-memory view, then returns
-  success. Published-connection refresh updates the active record; explicit
-  authorization updates a flow-scoped pending record that is promoted only with
-  candidate publication. If persistence fails, neither view is advanced and the
-  failure propagates — the connection fails visibly rather than continuing on
-  an in-memory-only rotated token.
+- Published-connection `StoreTokensAsync` constructs the complete replacement
+  record, persists it transactionally, updates the active in-memory view, then
+  returns success. Ordinary startup and reconnect candidates do the same because
+  refresh may already have rotated remote state. An explicit authorization candidate keeps SDK writes local
+  until initialization succeeds, then commits the complete record once before
+  publication. If that commit fails, active state is unchanged and the failure
+  propagates visibly.
 - A token response that omits `refresh_token` retains the prior refresh token.
 - Authenticated OAuth API endpoints return a structured `McpErrorResponse` for
   discovery, DCR rejection, credential persistence, and connection init. The
@@ -393,10 +423,14 @@ Recovery paths: a failed candidate leaves the prior generation serving; a
 rejected refresh surfaces `AuthFailed` and directs the operator to
 `netclaw mcp auth <name>`; a disk failure fails the store call and the
 connection, keeping the last active durable record authoritative; `StopAsync`
-enters each server's gate, marks shutdown, rejects new leases and reconnects,
-allows active invocations a bounded drain period, cancels any remainder with the
-daemon shutdown token, then removes and disposes the snapshot so state
-publication cannot race shutdown.
+enters each server's gate, marks shutdown, rejects new reconnects, then removes
+and disposes the snapshot so state publication cannot race shutdown.
+
+**Amended during implementation:** invocation leases and the bounded drain are
+deferred to the separate client-lifecycle change. A replaced or shutting-down
+client is disposed once its replacement is published, so an invocation still in
+flight is cancelled rather than drained. `dev` behaved the same way, so this is a
+non-improvement rather than a regression, but it is a deliberate gap.
 
 **Rationale:** Persist-before-publish is the only ordering that keeps disk and
 memory from disagreeing across a restart. The status taxonomy turns defect 8's

@@ -792,6 +792,10 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<ISecretsProtector>(),
         sp.GetRequiredService<ILogger<McpOAuthCredentialStore>>()));
+    services.AddHttpClient("McpOAuth").AddNetclawHeaders("mcp-oauth");
+    services.AddSingleton(sp => new McpOAuthClientRegistrar(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("McpOAuth"),
+        sp.GetRequiredService<ILogger<McpOAuthClientRegistrar>>()));
     services.AddSingleton(sp => new McpOAuthFlowBroker(
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));

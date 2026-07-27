@@ -359,12 +359,12 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
 
     private static void WriteLocalDeviceTokenValue(NetclawPaths paths, string rawToken)
     {
-        ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) =>
-        {
-            secrets["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-            secrets["DeviceToken"] = rawToken;
-            return true;
-        });
+        var secrets = File.Exists(paths.SecretsPath)
+            ? ConfigFileHelper.LoadJsonDict(paths.SecretsPath)
+            : new Dictionary<string, object>();
+        secrets["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+        secrets["DeviceToken"] = rawToken;
+        ConfigFileHelper.WriteSecretsFile(paths, secrets);
     }
 
     private static List<PairedDevice> ReadPairedDevices(NetclawPaths paths)

@@ -51,6 +51,18 @@ internal static class SecretsCommand
         var keyPath = args[2];
         var value = args[3];
 
+        // Load existing secrets or start fresh
+        JsonObject root;
+        if (File.Exists(paths.SecretsPath))
+        {
+            var existing = File.ReadAllText(paths.SecretsPath);
+            root = JsonNode.Parse(existing)?.AsObject() ?? [];
+        }
+        else
+        {
+            root = [];
+        }
+
         string[] segments;
         try
         {
@@ -62,16 +74,12 @@ internal static class SecretsCommand
             return 1;
         }
 
+        SecretsJsonUpdater.UpsertValue(root, segments, value);
+
+        // Write with encryption — the protector encrypts all plaintext leaves
         var protector = SecretsProtection.CreateProtector(paths);
-        SecretsFileWriter.Update(
-            paths.SecretsPath,
-            (root, _) =>
-            {
-                SecretsJsonUpdater.UpsertValue(root, segments, value);
-                return (root, true);
-            },
-            JsonDefaults.Indented,
-            protector);
+        var json = root.ToJsonString(JsonDefaults.Indented);
+        SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
         writer.WriteLine($"Set {string.Join('.', segments)} (encrypted).");
         return 0;

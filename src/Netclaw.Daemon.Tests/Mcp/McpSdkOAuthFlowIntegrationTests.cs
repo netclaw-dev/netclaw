@@ -38,138 +38,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     private static readonly Uri RedirectUri = new("http://127.0.0.1:5199/api/mcp/oauth/callback");
 
     [Fact]
-    public async Task SdkRedirectDelegateFlow_PerformsDiscoveryDcrPkceExchangeAndStoresTokens()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(1));
-        var ct = timeout.Token;
-
-        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
-        var tokenCache = new RecordingTokenCache();
-        var broker = OperatorPromptBroker.Authorizing(server, "netclaw-broker-state");
-        DynamicClientRegistrationResponse? dcrResponse = null;
-
-        var oauth = new ClientOAuthOptions
-        {
-            RedirectUri = RedirectUri,
-            AdditionalAuthorizationParameters = new Dictionary<string, string>
-            {
-                ["state"] = broker.State,
-            },
-            AuthorizationRedirectDelegate = broker.HandleAuthorizationAsync,
-            TokenCache = tokenCache,
-            DynamicClientRegistration = new DynamicClientRegistrationOptions
-            {
-                ClientName = "netclaw-oauth-spike",
-                ResponseDelegate = (response, _) =>
-                {
-                    dcrResponse = response;
-                    return Task.CompletedTask;
-                },
-            },
-        };
-
-        await using var client = await CreateClientAsync(server, oauth, ct);
-        var tools = await client.ListToolsAsync(cancellationToken: ct);
-
-        Assert.Contains(tools, tool => tool.Name == "oauth_probe");
-
-        Assert.Equal(1, server.ProtectedResourceDiscoveryCount);
-        Assert.Equal(1, server.AuthorizationServerDiscoveryCount);
-        Assert.Equal(1, server.UnauthorizedMcpChallengeCount);
-        Assert.True(server.AuthorizedMcpRequestCount >= 1);
-
-        var registration = Assert.Single(server.DynamicClientRegistrations);
-        Assert.Contains(RedirectUri.ToString(), registration.RedirectUris);
-        Assert.Equal("client_secret_post", registration.RequestedTokenEndpointAuthMethod);
-        Assert.Equal("fake.read fake.write", registration.Scope);
-        Assert.NotNull(dcrResponse);
-        Assert.Equal(registration.ClientId, dcrResponse!.ClientId);
-        Assert.Equal(registration.ClientSecret, dcrResponse.ClientSecret);
-
-        var authorization = Assert.Single(server.AuthorizationRequests);
-        Assert.Equal(registration.ClientId, authorization.ClientId);
-        Assert.Equal(RedirectUri.ToString(), authorization.RedirectUri);
-        Assert.Equal(server.McpEndpoint.ToString(), authorization.Resource);
-        Assert.Equal("fake.read fake.write", authorization.Scope);
-        Assert.Equal(broker.State, authorization.State);
-        Assert.Equal("S256", authorization.CodeChallengeMethod);
-        Assert.False(string.IsNullOrWhiteSpace(authorization.CodeChallenge));
-
-        Assert.Equal(1, broker.DelegateInvocationCount);
-        Assert.Equal(1, broker.OperatorPromptCount);
-        Assert.Equal(broker.State, broker.ReturnedState);
-        Assert.Equal(authorization.Code, broker.ReturnedCode);
-        Assert.NotNull(broker.DeliveredAuthorizationUrl);
-        Assert.Equal(broker.State, GetQueryValue(broker.DeliveredAuthorizationUrl!, "state"));
-        Assert.Equal(authorization.CodeChallenge, GetQueryValue(broker.DeliveredAuthorizationUrl!, "code_challenge"));
-        Assert.Equal("S256", GetQueryValue(broker.DeliveredAuthorizationUrl!, "code_challenge_method"));
-
-        var tokenRequest = Assert.Single(server.TokenRequests);
-        Assert.Equal(authorization.Code, tokenRequest.Code);
-        Assert.Equal(registration.ClientId, tokenRequest.ClientId);
-        Assert.Equal(registration.ClientSecret, tokenRequest.ClientSecret);
-        Assert.Equal(RedirectUri.ToString(), tokenRequest.RedirectUri);
-        Assert.Equal(server.McpEndpoint.ToString(), tokenRequest.Resource);
-        Assert.True(tokenRequest.PkceVerified);
-
-        var storedTokens = tokenCache.StoredTokens;
-        var stored = Assert.Single(storedTokens);
-        Assert.Equal(tokenRequest.IssuedAccessToken, stored.AccessToken);
-        Assert.Equal(tokenRequest.IssuedRefreshToken, stored.RefreshToken);
-        Assert.Equal("Bearer", stored.TokenType);
-        Assert.Equal("fake.read fake.write", stored.Scope);
-        Assert.Equal(3600, stored.ExpiresIn);
-    }
-
-    [Fact]
-    public async Task ProductionFlowFollowerFailsClassifiedWhileOwnerCompletesWithOneCodeExchange()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
-        using var flowBroker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
-        var flow = flowBroker.StartOrJoin(new McpServerName("production-flow")).Flow;
-        var tokenCache = new RecordingTokenCache();
-        var oauth = new ClientOAuthOptions
-        {
-            RedirectUri = RedirectUri,
-            AdditionalAuthorizationParameters = new Dictionary<string, string>
-            {
-                ["state"] = flow.State,
-            },
-            AuthorizationRedirectDelegate = flow.HandleAuthorizationRedirectAsync,
-            TokenCache = tokenCache,
-            DynamicClientRegistration = new DynamicClientRegistrationOptions
-            {
-                ClientName = "netclaw-production-flow-test",
-            },
-        };
-
-        var owner = CreateClientAsync(server, oauth, ct);
-        var authorizationUrl = await flow.WaitForAuthorizationUrlAsync(ct);
-        var follower = CreateClientAsync(server, oauth, ct);
-
-        var followerError = await CaptureExceptionAsync(follower);
-        Assert.True(ContainsException<McpOAuthAuthorizationInProgressException>(followerError));
-        Assert.False(owner.IsCompleted);
-        Assert.Empty(server.TokenRequests);
-
-        var authorization = await server.AuthorizeAsync(authorizationUrl, RedirectUri, ct);
-        flow.DeliverCode(authorization.Code);
-        await using var ownerClient = await owner;
-        var tools = await ownerClient.ListToolsAsync(cancellationToken: ct);
-        flowBroker.BeginCommit(flow);
-        flowBroker.Complete(flow);
-
-        Assert.Contains(tools, tool => tool.Name == "oauth_probe");
-        var tokenRequest = Assert.Single(server.TokenRequests);
-        Assert.Equal(authorization.Code, tokenRequest.Code);
-        Assert.True(tokenRequest.PkceVerified);
-        Assert.Single(tokenCache.StoredTokens);
-        Assert.Equal(McpOAuthFlowStatus.Completed, flowBroker.GetStatusByState(flow.State).Status);
-    }
-
-    [Fact]
     public async Task ManagerExplicitAuthorization_PublishesOnlyAfterSdkExchangeAndToolListing()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -192,11 +60,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             $"{terminal.Error?.Error} :: {harness.Manager.GetServerStatuses()[harness.ServerName].ErrorMessage} :: {harness.Logger.LastException}");
         Assert.Equal(McpConnectionState.Connected, harness.Manager.GetServerStatuses()[harness.ServerName].State);
         Assert.Contains("oauth_probe", harness.Manager.GetToolNames(harness.ServerName));
-        var active = harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active;
+        var active = harness.Credentials.GetActiveForTests(harness.ServerName);
         Assert.NotNull(active);
         Assert.Equal("client-1", active!.ClientId);
         Assert.Equal("secret-client-1", active.ClientSecret?.Value);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending);
         Assert.Equal("http://127.0.0.1:7331/api/mcp/oauth/callback", server.DynamicClientRegistrations.Single().RedirectUris.Single());
 
         await harness.Runtime.LastHttpOptions!.OAuth!.TokenCache!.StoreTokensAsync(
@@ -211,8 +78,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             ct);
         Assert.Equal(
             "refresh-after-publication",
-            harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active?.AccessToken.Value);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending);
+            harness.Credentials.GetActiveForTests(harness.ServerName)?.AccessToken.Value);
     }
 
     [Fact]
@@ -252,8 +118,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         await using var harness = CreateManagerHarness(server, directory.Path);
         server.FailNextTokenExchange();
         var firstStart = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
-        var firstOperation = Assert.IsAssignableFrom<Task>(
-            harness.Manager.GetInteractiveAuthorizationTask(harness.ServerName));
         var firstAuthorization = await server.AuthorizeAsync(
             new Uri(firstStart.AuthorizationUrl),
             RedirectUri,
@@ -263,7 +127,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         Assert.Equal(
             McpOAuthFlowStatus.Failed,
             (await firstFlow.WaitForTerminalAsync(ct)).Status);
-        await firstOperation.WaitAsync(ct);
 
         var secondStart = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
         var secondAuthorization = await server.AuthorizeAsync(
@@ -309,7 +172,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     }
 
     [Fact]
-    public async Task RuntimeFlowExpiryRemovesDurablePendingCredentialsWithoutRestart()
+    public async Task RuntimeFlowExpiryDiscardsCandidateCredentials()
     {
         var ct = TestContext.Current.CancellationToken;
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
@@ -319,45 +182,16 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         var barrier = new InitializationBarrier();
         harness.Runtime.InitializationBarrier = barrier;
         var started = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
-        var operation = Assert.IsAssignableFrom<Task>(
-            harness.Manager.GetInteractiveAuthorizationTask(harness.ServerName));
         var authorization = await server.AuthorizeAsync(new Uri(started.AuthorizationUrl), RedirectUri, ct);
         var flow = harness.Broker.GetForCallback(started.State);
         flow.DeliverCode(authorization.Code);
         await barrier.Reached.Task.WaitAsync(ct);
-        Assert.Equal(started.State, harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending?.FlowId);
+        Assert.Null(harness.Credentials.GetActiveForTests(harness.ServerName));
 
         time.Advance(McpOAuthFlowBroker.FlowLifetime);
-        await operation.WaitAsync(ct);
-
         Assert.Equal(McpOAuthFlowStatus.Failed, harness.Broker.GetStatusByState(started.State).Status);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending);
+        Assert.Null(harness.Credentials.GetActiveForTests(harness.ServerName));
         barrier.Release.TrySetResult(true);
-    }
-
-    [Fact]
-    public async Task FailedToolListingRemovesPendingAndPreservesActiveCredentials()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
-        using var directory = new DisposableTempDir();
-        await using (var first = CreateManagerHarness(server, directory.Path))
-        {
-            await CompleteManagerAuthorizationAsync(server, first, ct);
-        }
-
-        await using var failing = CreateManagerHarness(server, directory.Path, failToolListing: true);
-        var oldAccess = failing.Credentials.GetEnvelopeForTests(failing.ServerName).Active!.AccessToken.Value;
-        var started = await failing.Manager.StartAuthorizationAsync(failing.ServerName, ct);
-        var authorization = await server.AuthorizeAsync(new Uri(started.AuthorizationUrl), RedirectUri, ct);
-        var flow = failing.Broker.GetForCallback(started.State);
-        flow.DeliverCode(authorization.Code);
-
-        var terminal = await flow.WaitForTerminalAsync(ct);
-
-        Assert.Equal(McpOAuthFlowStatus.Failed, terminal.Status);
-        Assert.Equal(oldAccess, failing.Credentials.GetEnvelopeForTests(failing.ServerName).Active?.AccessToken.Value);
-        Assert.Null(failing.Credentials.GetEnvelopeForTests(failing.ServerName).Pending);
     }
 
     [Fact]
@@ -369,7 +203,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         await using var harness = CreateManagerHarness(server, directory.Path);
         await CompleteManagerAuthorizationAsync(server, harness, ct);
         var published = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(harness.ServerName));
-        var active = harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active!;
+        var active = harness.Credentials.GetActiveForTests(harness.ServerName)!;
         harness.Runtime.FailNextToolListing();
 
         var started = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
@@ -379,61 +213,17 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         var terminal = await flow.WaitForTerminalAsync(ct);
 
         var retained = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(harness.ServerName));
-        var retainedCredentials = harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active;
+        var retainedCredentials = harness.Credentials.GetActiveForTests(harness.ServerName);
         Assert.Equal(McpOAuthFlowStatus.Failed, terminal.Status);
         Assert.Same(published.Client, retained.Client);
         Assert.Equal(published.Generation, retained.Generation);
         Assert.Equal(published.ToolFunctions.Keys, retained.ToolFunctions.Keys);
         Assert.Equal(active.AccessToken.Value, retainedCredentials?.AccessToken.Value);
         Assert.Equal(active.RefreshToken?.Value, retainedCredentials?.RefreshToken?.Value);
-        Assert.Equal(active.CredentialEpoch, retainedCredentials?.CredentialEpoch);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending);
     }
 
     [Fact]
-    public async Task PendingStoreConflictReportsCredentialPersistenceTerminalError()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
-        using var directory = new DisposableTempDir();
-        await using var harness = CreateManagerHarness(server, directory.Path);
-        var started = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
-        var competingContext = harness.Credentials.CreateContext(
-            harness.ServerName,
-            server.McpEndpoint.ToString(),
-            null,
-            true);
-        var competingCache = harness.Credentials.CreateTokenCache(
-            harness.ServerName,
-            server.McpEndpoint.ToString(),
-            competingContext,
-            McpOAuthCredentialTarget.Pending,
-            "competing-flow",
-            TimeProvider.System.GetUtcNow().AddMinutes(5),
-            true);
-        await competingCache.StoreTokensAsync(
-            new TokenContainer
-            {
-                AccessToken = "competing-access",
-                RefreshToken = "competing-refresh",
-                TokenType = "Bearer",
-                ObtainedAt = TimeProvider.System.GetUtcNow(),
-                ExpiresIn = 3600,
-            },
-            ct);
-        var authorization = await server.AuthorizeAsync(new Uri(started.AuthorizationUrl), RedirectUri, ct);
-        var flow = harness.Broker.GetForCallback(started.State);
-        flow.DeliverCode(authorization.Code);
-
-        var terminal = await flow.WaitForTerminalAsync(ct);
-
-        Assert.Equal(McpOAuthFlowStatus.Failed, terminal.Status);
-        Assert.Equal("credential persistence", terminal.Error?.Operation);
-        Assert.DoesNotContain("competing-flow", terminal.Error?.Error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task PromotionEpochConflictReportsCredentialPersistenceTerminalError()
+    public async Task ExplicitAuthorizationSupersedesActiveRefreshThatFinishesFirst()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var server = await FakeOAuthMcpServer.StartAsync(ct);
@@ -468,12 +258,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
         var terminal = await flow.WaitForTerminalAsync(ct);
 
-        Assert.Equal(McpOAuthFlowStatus.Failed, terminal.Status);
-        Assert.Equal("credential persistence", terminal.Error?.Operation);
-        Assert.Equal(
+        Assert.Equal(McpOAuthFlowStatus.Completed, terminal.Status);
+        Assert.NotEqual(
             "active-rotated-during-flow",
-            harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active?.AccessToken.Value);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Pending);
+            harness.Credentials.GetActiveForTests(harness.ServerName)?.AccessToken.Value);
     }
 
     [Fact]
@@ -498,7 +286,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     }
 
     [Fact]
-    public async Task InvalidClientMarkerSurvivesFailedReplacementAndForcesAnotherFreshDcr()
+    public async Task RejectedClientIdentityIsDiscardedSoTheNextAuthorizationRegistersAfresh()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var server = await FakeOAuthMcpServer.StartAsync(ct);
@@ -508,44 +296,31 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             await CompleteManagerAuthorizationAsync(server, first, ct);
         }
 
+        // The provider drops the registration behind our back.
         server.RejectClient("client-1");
         await using var harness = CreateManagerHarness(server, directory.Path);
         var rejectedStart = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
         var rejectedAuthorization = await server.AuthorizeAsync(new Uri(rejectedStart.AuthorizationUrl), RedirectUri, ct);
         var rejectedFlow = harness.Broker.GetForCallback(rejectedStart.State);
         rejectedFlow.DeliverCode(rejectedAuthorization.Code);
-        var rejectedTerminal = await rejectedFlow.WaitForTerminalAsync(ct);
 
-        Assert.Equal(McpOAuthFlowStatus.Failed, rejectedTerminal.Status);
-        Assert.Equal(
-            "client-1",
-            harness.Credentials.GetEnvelopeForTests(harness.ServerName).RejectedDynamicClientId);
+        Assert.Equal(McpOAuthFlowStatus.Failed, (await rejectedFlow.WaitForTerminalAsync(ct)).Status);
+
+        // The dead identity is discarded rather than marked, so recovery needs no extra
+        // persisted state and survives a restart the same way.
+        Assert.Null(harness.Credentials.GetActiveForTests(harness.ServerName)?.ClientId);
 
         var replacementStart = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
-
         Assert.Contains("client_id=client-2", replacementStart.AuthorizationUrl, StringComparison.Ordinal);
         Assert.Equal(2, server.DynamicClientRegistrations.Count);
-        Assert.Equal(
-            "client-1",
-            harness.Credentials.GetEnvelopeForTests(harness.ServerName).RejectedDynamicClientId);
 
-        server.RejectClient("client-2");
         var replacementAuthorization = await server.AuthorizeAsync(
-            new Uri(replacementStart.AuthorizationUrl),
-            RedirectUri,
-            ct);
+            new Uri(replacementStart.AuthorizationUrl), RedirectUri, ct);
         var replacementFlow = harness.Broker.GetForCallback(replacementStart.State);
         replacementFlow.DeliverCode(replacementAuthorization.Code);
-        Assert.Equal(
-            McpOAuthFlowStatus.Failed,
-            (await replacementFlow.WaitForTerminalAsync(ct)).Status);
-        Assert.Equal(
-            "client-1",
-            harness.Credentials.GetEnvelopeForTests(harness.ServerName).RejectedDynamicClientId);
 
-        var thirdStart = await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct);
-        Assert.Contains("client_id=client-3", thirdStart.AuthorizationUrl, StringComparison.Ordinal);
-        Assert.Equal(3, server.DynamicClientRegistrations.Count);
+        Assert.Equal(McpOAuthFlowStatus.Completed, (await replacementFlow.WaitForTerminalAsync(ct)).Status);
+        Assert.Equal("client-2", harness.Credentials.GetActiveForTests(harness.ServerName)?.ClientId);
     }
 
     [Fact]
@@ -570,7 +345,40 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             repointed.Manager.GetServerStatuses()[repointed.ServerName].State);
         Assert.Equal(
             server.McpEndpoint.ToString(),
-            repointed.Credentials.GetEnvelopeForTests(repointed.ServerName).Active?.ResourceIdentity);
+            repointed.Credentials.GetActiveForTests(repointed.ServerName)?.ResourceIdentity);
+    }
+
+    [Fact]
+    public async Task ExactLegacyResourceMatchReconnectsWithoutReregistration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        server.AcceptBearer("legacy-access");
+        using var directory = new DisposableTempDir();
+        var paths = new NetclawPaths(directory.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.SecretsPath, $$"""
+            {
+              "McpOAuthTokens": {
+                "fake-oauth": {
+                  "AccessToken": "legacy-access",
+                  "RefreshToken": "legacy-refresh",
+                  "ClientId": "legacy-client",
+                  "McpServerUrl": "{{server.McpEndpoint}}"
+                }
+              }
+            }
+            """);
+        await using var harness = CreateManagerHarness(server, directory.Path);
+
+        await harness.Manager.StartAsync(ct);
+
+        Assert.Equal(McpConnectionState.Connected, harness.Manager.GetServerStatuses()[harness.ServerName].State);
+        Assert.Equal("legacy-client", harness.Runtime.LastHttpOptions?.OAuth?.ClientId);
+        Assert.Empty(server.DynamicClientRegistrations);
+        Assert.Equal(
+            McpOAuthCredentialStore.CanonicalizeResource(server.McpEndpoint.ToString()),
+            harness.Credentials.GetActiveForTests(harness.ServerName)?.ResourceIdentity);
     }
 
     [Fact]
@@ -599,7 +407,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         Assert.Equal(
             McpConnectionState.AwaitingAuth,
             harness.Manager.GetServerStatuses()[harness.ServerName].State);
-        Assert.Null(harness.Credentials.GetEnvelopeForTests(harness.ServerName).Active?.ResourceIdentity);
+        Assert.Null(harness.Credentials.GetActiveForTests(harness.ServerName)?.ResourceIdentity);
         Assert.Contains("legacy-access", File.ReadAllText(paths.SecretsPath), StringComparison.Ordinal);
     }
 
@@ -616,11 +424,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             {
               "McpOAuthTokens": {
                 "fake-oauth": {
-                  "Active": {
-                    "AccessToken": "expired-access",
-                    "ExpiresAt": "2020-01-01T00:00:00+00:00",
-                    "ResourceIdentity": "{{canonical}}"
-                  }
+                  "AccessToken": "expired-access",
+                  "ExpiresAt": "2020-01-01T00:00:00+00:00",
+                  "ResourceIdentity": "{{canonical}}"
                 }
               }
             }
@@ -738,23 +544,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     }
 
     [Fact]
-    public async Task BodylessDcr403ProducesStructuredTerminalError()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var server = await FakeOAuthMcpServer.StartAsync(ct, rejectDcrWithoutBody: true);
-        using var directory = new DisposableTempDir();
-        await using var harness = CreateManagerHarness(server, directory.Path);
-
-        var error = await Assert.ThrowsAsync<McpOAuthOperationException>(async () =>
-            await harness.Manager.StartAuthorizationAsync(harness.ServerName, ct));
-
-        Assert.Equal("dynamic client registration", error.Error.Operation);
-        Assert.Contains("403", error.Error.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain("token", error.Error.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("403", harness.Logger.LastMessage, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task ProviderBodySecretsStayInDaemonLogAndOutOfPublicOAuthErrors()
     {
         const string providerBody = "code=oauth-code access_token=token-value client_secret=secret-value";
@@ -822,6 +611,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             new ToolRegistry(),
             new ToolConfig(),
             credentials,
+            McpOAuthTestDoubles.RegistrarFor(server.CreateHttpClient()),
             broker,
             new DaemonConfig { Port = port },
             NullNotificationSink.Instance,
@@ -864,8 +654,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     {
         public Exception? LastException { get; private set; }
 
-        public string? LastMessage { get; private set; }
-
         public List<Exception> Exceptions { get; } = [];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -879,7 +667,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            LastMessage = formatter(state, exception);
             if (exception is not null)
             {
                 LastException = exception;
@@ -952,66 +739,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private static async Task<McpClient> CreateClientAsync(
-        FakeOAuthMcpServer server,
-        ClientOAuthOptions oauth,
-        CancellationToken ct)
-    {
-        var transport = new HttpClientTransport(new HttpClientTransportOptions
-        {
-            Endpoint = server.McpEndpoint,
-            Name = "fake-oauth-mcp",
-            TransportMode = HttpTransportMode.StreamableHttp,
-            OAuth = oauth,
-        }, server.CreateHttpClient(), ownsHttpClient: true);
-
-        try
-        {
-            return await McpClient.CreateAsync(transport, new McpClientOptions
-            {
-                ClientInfo = new Implementation
-                {
-                    Name = "netclaw-oauth-spike",
-                    Version = "1.0.0",
-                },
-            }, cancellationToken: ct);
-        }
-        catch
-        {
-            await transport.DisposeAsync();
-            throw;
-        }
-    }
-
-    private static async Task<Exception?> CaptureExceptionAsync(Task task)
-    {
-        try
-        {
-            await task;
-            return null;
-        }
-        catch (Exception ex)
-        {
-            return ex;
-        }
-    }
-
-    private static bool ContainsException<TException>(Exception? exception)
-        where TException : Exception
-    {
-        while (exception is not null)
-        {
-            if (exception is TException)
-                return true;
-            exception = exception.InnerException;
-        }
-
-        return false;
-    }
-
-    private static string? GetQueryValue(Uri uri, string name)
-        => ParseQuery(uri.Query).GetValueOrDefault(name);
-
     private static IReadOnlyDictionary<string, string> ParseQuery(string query)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1024,120 +751,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         }
 
         return result;
-    }
-
-    private sealed class OperatorPromptBroker
-    {
-        private readonly FakeOAuthMcpServer _server;
-        private readonly object _sync = new();
-        private Task<BrowserAuthorizationResult>? _authorizationTask;
-        private int _delegateInvocationCount;
-        private int _operatorPromptCount;
-
-        private OperatorPromptBroker(FakeOAuthMcpServer server, string state)
-        {
-            _server = server;
-            State = state;
-        }
-
-        public string State { get; }
-
-        public int DelegateInvocationCount => Volatile.Read(ref _delegateInvocationCount);
-
-        public int OperatorPromptCount => Volatile.Read(ref _operatorPromptCount);
-
-        public Uri? DeliveredAuthorizationUrl { get; private set; }
-
-        public string? ReturnedCode { get; private set; }
-
-        public string? ReturnedState { get; private set; }
-
-        public static OperatorPromptBroker Authorizing(FakeOAuthMcpServer server, string state)
-            => new(server, state);
-
-        public async Task<string?> HandleAuthorizationAsync(
-            Uri authorizationUri,
-            Uri redirectUri,
-            CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _delegateInvocationCount);
-
-            Task<BrowserAuthorizationResult> authorizationTask;
-            lock (_sync)
-            {
-                if (_authorizationTask is null)
-                {
-                    PublishPrompt(authorizationUri);
-                    _authorizationTask = _server.AuthorizeAsync(authorizationUri, redirectUri, cancellationToken);
-                }
-
-                authorizationTask = _authorizationTask;
-            }
-
-            var result = await authorizationTask.WaitAsync(cancellationToken);
-            ReturnedCode = result.Code;
-            ReturnedState = result.State;
-            return result.Code;
-        }
-
-        private void PublishPrompt(Uri authorizationUri)
-        {
-            lock (_sync)
-            {
-                if (DeliveredAuthorizationUrl is not null)
-                    return;
-
-                DeliveredAuthorizationUrl = authorizationUri;
-                Interlocked.Increment(ref _operatorPromptCount);
-            }
-        }
-    }
-
-    private sealed class RecordingTokenCache : ITokenCache
-    {
-        private readonly List<TokenContainer> _storedTokens = [];
-        private readonly object _sync = new();
-        private TokenContainer? _current;
-
-        public IReadOnlyList<TokenContainer> StoredTokens
-        {
-            get
-            {
-                lock (_sync)
-                    return _storedTokens.Select(Clone).ToList();
-            }
-        }
-
-        public ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            lock (_sync)
-                return new ValueTask<TokenContainer?>(_current is null ? null : Clone(_current));
-        }
-
-        public ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var clone = Clone(tokens);
-            lock (_sync)
-            {
-                _current = clone;
-                _storedTokens.Add(Clone(tokens));
-            }
-
-            return default;
-        }
-
-        private static TokenContainer Clone(TokenContainer tokens)
-            => new()
-            {
-                AccessToken = tokens.AccessToken,
-                RefreshToken = tokens.RefreshToken,
-                ExpiresIn = tokens.ExpiresIn,
-                ObtainedAt = tokens.ObtainedAt,
-                Scope = tokens.Scope,
-                TokenType = tokens.TokenType,
-            };
     }
 
     private sealed class FakeOAuthMcpServer : IAsyncDisposable
@@ -1172,6 +785,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         public IReadOnlyDictionary<string, string> LastMcpHeaders => _state.LastMcpHeaders;
 
         public void RejectClient(string clientId) => _state.RejectClient(clientId);
+
+        public void AcceptBearer(string token) => _state.AcceptBearer(token);
 
         public void FailNextTokenExchange() => _state.FailNextTokenExchange();
 

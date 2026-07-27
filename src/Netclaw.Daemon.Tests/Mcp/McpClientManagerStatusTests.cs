@@ -115,11 +115,11 @@ public sealed class McpClientManagerStatusTests
     }
 
     [Fact]
-    public void WrappedStaleCredentialEpochIsClassifiedAsCredentialPersistence()
+    public void WrappedRetiredCredentialWriterIsClassifiedAsCredentialPersistence()
     {
         var exception = new InvalidOperationException(
             "SDK token cache callback failed.",
-            new McpOAuthStaleCredentialEpochException("Pending credentials changed."));
+            new McpOAuthRetiredCredentialWriterException("The prior connection no longer owns credentials."));
 
         var error = McpClientManager.CreateSafeOAuthError(exception, "connection initialization");
 
@@ -127,6 +127,20 @@ public sealed class McpClientManagerStatusTests
         Assert.Equal(
             "MCP OAuth credential persistence failed. Check daemon logs for details.",
             error.Error);
-        Assert.DoesNotContain("Pending credentials changed", error.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("prior connection", error.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DynamicRegistrationBadRequestIsNotMisreportedAsOuterUnauthorizedChallenge()
+    {
+        var exception = new InvalidOperationException(
+            "Failed to handle unauthorized response with 'Bearer' scheme. " +
+            "Dynamic client registration failed with status BadRequest: invalid_client_metadata");
+
+        var error = McpClientManager.CreateSafeOAuthError(exception, "connection initialization");
+
+        Assert.Equal("dynamic client registration", error.Operation);
+        Assert.Equal(400, error.Status);
+        Assert.Contains("HTTP 400 BadRequest", error.Error, StringComparison.Ordinal);
     }
 }

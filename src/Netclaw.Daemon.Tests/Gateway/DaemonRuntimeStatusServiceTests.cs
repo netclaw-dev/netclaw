@@ -18,6 +18,7 @@ using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
@@ -297,6 +298,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             new ToolRegistry(),
             new ToolConfig(),
             credentials,
+            McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,
             new DaemonConfig(),
             NullNotificationSink.Instance,

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.36.0"
+  version: "2.38.0"
 ---
 
 # Netclaw Operations
@@ -116,12 +116,20 @@ or MCP tools by capability before concluding a tool doesn't exist. Full guidance
 
 ## MCP OAuth
 
-For HTTP/SSE MCP servers, the Model Context Protocol .NET SDK owns OAuth
-discovery, dynamic client registration (DCR), PKCE, authorization-code exchange,
-token refresh, and the related HTTP calls. Netclaw presents the SDK's
-authorization URL, brokers the browser callback, and durably stores the SDK token
-cache. Do not fetch metadata or token endpoints by hand, build PKCE requests, or
-create or repair `mcp-oauth-metadata.json`; legacy metadata files are ignored.
+For HTTP/SSE MCP servers, the Model Context Protocol .NET SDK owns PKCE,
+authorization-code exchange, token refresh, and the related HTTP calls. Netclaw
+owns protected-resource discovery and dynamic client registration (DCR),
+presents the authorization URL, brokers the browser callback, and durably stores
+active credentials. Do not fetch metadata or token endpoints by hand, build PKCE
+requests, or create or repair `mcp-oauth-metadata.json`; legacy metadata files
+are ignored.
+
+Netclaw registers rather than letting the SDK do it because the SDK hard-codes
+`token_endpoint_auth_method: "client_secret_post"` and ignores what the
+authorization server advertises, which fails against servers that accept public
+clients only. Netclaw registers with the method the server advertises first.
+Registration happens only during `netclaw mcp auth <name>`, never on a
+background reconnect.
 
 ### Authorize a server
 
@@ -134,9 +142,10 @@ netclaw mcp auth <name>
 The command starts an unpublished client candidate, opens the authorization URL
 when possible, always prints it, and waits up to five minutes. Complete the
 browser flow normally. If the callback cannot reach this machine, paste the full
-redirect URL into the command. Netclaw publishes the candidate only after the SDK
-exchanges the code, credentials persist, the client connects, and tool discovery
-succeeds. A failed replacement does not displace an existing healthy connection.
+redirect URL into the command. Netclaw keeps exchanged credentials local to the
+candidate, then commits them once and publishes the client only after tool
+discovery succeeds. A failed replacement does not alter durable credentials or
+displace an existing healthy connection.
 
 The SDK redirect URI is
 `http://127.0.0.1:{Daemon.Port}/api/mcp/oauth/callback`. If the provider requires
@@ -152,9 +161,23 @@ OAuth credentials are bound to the server's canonical configured resource
 identity. If the same profile name is pointed at another resource, Netclaw
 withholds its old tokens and dynamically registered client credentials, reports
 `AwaitingAuth`, and preserves the old durable record until replacement succeeds.
-A legacy token record without a resource binding is also preserved but never
-silently bound; reauthorize it. An explicitly configured static OAuth client ID
-remains authoritative.
+
+A token record written before resource binding existed is migrated in place when
+its legacy resource describes the configured endpoint, so upgrading does not
+force reauthorization. A trailing slash, path case, and a bare-origin resource
+indicator all still match; a different scheme, host, port, query, or sibling path
+does not, and those report `AwaitingAuth` with both bindings written to the
+daemon log. An explicitly configured static OAuth client ID remains
+authoritative.
+
+If a server rejects the stored client identity as `invalid_client` — usually
+because the registration was deleted on their side — Netclaw discards that
+identity, keeps the tokens, and registers a new client on the next
+`netclaw mcp auth <name>`. No manual cleanup is needed.
+
+If a server's authorization server publishes no `registration_endpoint`, or
+rejects registration, the error names the remedy: register a client manually
+with that provider and set it with `netclaw mcp add --client-id <id> ...`.
 
 ### Read connection states
 
@@ -186,7 +209,7 @@ logs for full server context; operator-facing errors omit authorization codes,
 tokens, PKCE data, and client secrets.
 
 Credential persistence fails loudly. If the durable secrets write fails,
-authorization fails, the shared cache does not advance, and the candidate is not
+authorization fails, active credentials do not change, and the candidate is not
 published. Fix the filesystem or secrets-store error shown in daemon logs, then
 run `netclaw mcp auth <name>` again; browser success alone does not mean the MCP
 connection is ready.

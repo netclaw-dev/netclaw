@@ -21,7 +21,6 @@ internal sealed class McpOAuthFlowBroker : IDisposable
     internal static readonly TimeSpan FlowLifetime = TimeSpan.FromMinutes(5);
 
     private readonly object _sync = new();
-    private readonly Dictionary<McpServerName, McpOAuthFlow> _activeByServer = [];
     private readonly Dictionary<McpServerName, McpOAuthFlow> _latestByServer = [];
     private readonly Dictionary<string, McpOAuthFlow> _byState = new(StringComparer.Ordinal);
     private readonly TimeProvider _timeProvider;
@@ -40,7 +39,7 @@ internal sealed class McpOAuthFlowBroker : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             PruneTombstones();
-            if (_activeByServer.TryGetValue(serverName, out var active) && !active.IsTerminal)
+            if (_latestByServer.TryGetValue(serverName, out var active) && !active.IsTerminal)
                 return new McpOAuthFlowStart(active, false);
 
             var state = CreateOpaqueState();
@@ -51,7 +50,6 @@ internal sealed class McpOAuthFlowBroker : IDisposable
                 _timeProvider,
                 _daemonCancellation,
                 OnFlowExpired);
-            _activeByServer[serverName] = flow;
             _latestByServer[serverName] = flow;
             _byState[state] = flow;
             return new McpOAuthFlowStart(flow, true);
@@ -61,7 +59,12 @@ internal sealed class McpOAuthFlowBroker : IDisposable
     public bool TryGetActive(McpServerName serverName, out McpOAuthFlow? flow)
     {
         lock (_sync)
-            return _activeByServer.TryGetValue(serverName, out flow);
+        {
+            if (_latestByServer.TryGetValue(serverName, out flow) && !flow.IsTerminal)
+                return true;
+            flow = null;
+            return false;
+        }
     }
 
     public McpOAuthFlowStatus GetStatus(McpServerName serverName)
@@ -102,7 +105,6 @@ internal sealed class McpOAuthFlowBroker : IDisposable
                 flow.Fail(new McpErrorResponse(
                     "Authorization expired. Start a new MCP authorization attempt.",
                     "callback validation"));
-                RemoveActive(flow);
                 throw new McpOAuthCallbackException("The authorization state has expired.");
             }
 
@@ -113,22 +115,18 @@ internal sealed class McpOAuthFlowBroker : IDisposable
     }
 
     public void Complete(McpOAuthFlow flow)
-    {
-        flow.Complete();
-        lock (_sync)
-            RemoveActive(flow);
-    }
+        => flow.Complete();
 
     /// <summary>
     /// Claims the unexpired flow for the non-cancellable commit sequence:
-    /// durable promotion, cache activation, publication, then completion.
+    /// durable credential commit, cache publication, then completion.
     /// </summary>
     public void BeginCommit(McpOAuthFlow flow)
     {
         lock (_sync)
         {
             var now = _timeProvider.GetUtcNow();
-            if (!_activeByServer.TryGetValue(flow.ServerName, out var active)
+            if (!_latestByServer.TryGetValue(flow.ServerName, out var active)
                 || !ReferenceEquals(active, flow)
                 || !flow.TryBeginCommit(now))
             {
@@ -137,7 +135,6 @@ internal sealed class McpOAuthFlowBroker : IDisposable
                     flow.Fail(new McpErrorResponse(
                         "Authorization expired before credentials could publish. Start a new attempt.",
                         "credential commit"));
-                    RemoveActive(flow);
                 }
 
                 throw new McpOAuthOperationException(new McpErrorResponse(
@@ -148,11 +145,7 @@ internal sealed class McpOAuthFlowBroker : IDisposable
     }
 
     public void Fail(McpOAuthFlow flow, McpErrorResponse error)
-    {
-        flow.Fail(error);
-        lock (_sync)
-            RemoveActive(flow);
-    }
+        => flow.Fail(error);
 
     public void Dispose()
     {
@@ -162,8 +155,7 @@ internal sealed class McpOAuthFlowBroker : IDisposable
             if (_disposed)
                 return;
             _disposed = true;
-            flows = _byState.Values.Distinct().ToList();
-            _activeByServer.Clear();
+            flows = _byState.Values.ToList();
             _latestByServer.Clear();
             _byState.Clear();
         }
@@ -184,15 +176,7 @@ internal sealed class McpOAuthFlowBroker : IDisposable
             flow.Fail(new McpErrorResponse(
                 "Authorization expired. Start a new MCP authorization attempt.",
                 "authorization timeout"));
-            RemoveActive(flow);
         }
-    }
-
-    private void RemoveActive(McpOAuthFlow flow)
-    {
-        if (_activeByServer.TryGetValue(flow.ServerName, out var current)
-            && ReferenceEquals(current, flow))
-            _activeByServer.Remove(flow.ServerName);
     }
 
     private void PruneTombstones()
@@ -276,11 +260,11 @@ internal sealed class McpOAuthFlow : IDisposable
         }
     }
 
-    public async Task<Uri> WaitForAuthorizationUrlAsync(CancellationToken requestCancellation)
-        => await _authorizationUrl.Task.WaitAsync(requestCancellation);
+    public Task<Uri> WaitForAuthorizationUrlAsync(CancellationToken requestCancellation)
+        => _authorizationUrl.Task.WaitAsync(requestCancellation);
 
-    public async Task<McpOAuthFlowTerminal> WaitForTerminalAsync(CancellationToken requestCancellation)
-        => await _terminal.Task.WaitAsync(requestCancellation);
+    public Task<McpOAuthFlowTerminal> WaitForTerminalAsync(CancellationToken requestCancellation)
+        => _terminal.Task.WaitAsync(requestCancellation);
 
     public async Task<string?> HandleAuthorizationRedirectAsync(
         Uri authorizationUri,

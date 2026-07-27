@@ -21,12 +21,11 @@ namespace Netclaw.Daemon.Mcp;
 
 internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker, IMcpReconnectable
 {
-    internal static readonly TimeSpan ShutdownDrainTimeout = TimeSpan.FromSeconds(10);
-
     private readonly Dictionary<string, McpServerEntry> _serverEntries;
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolConfig _toolConfig;
     private readonly McpOAuthCredentialStore _credentialStore;
+    private readonly McpOAuthClientRegistrar _registrar;
     private readonly McpOAuthFlowBroker _flowBroker;
     private readonly DaemonConfig _daemonConfig;
     private readonly IOperationalNotificationSink _notificationSink;
@@ -47,6 +46,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         ToolRegistry toolRegistry,
         ToolConfig toolConfig,
         McpOAuthCredentialStore credentialStore,
+        McpOAuthClientRegistrar registrar,
         McpOAuthFlowBroker flowBroker,
         DaemonConfig daemonConfig,
         IOperationalNotificationSink notificationSink,
@@ -59,6 +59,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _toolRegistry = toolRegistry;
         _toolConfig = toolConfig;
         _credentialStore = credentialStore;
+        _registrar = registrar;
         _flowBroker = flowBroker;
         _daemonConfig = daemonConfig;
         _notificationSink = notificationSink;
@@ -163,12 +164,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     internal McpServerSnapshot? GetSnapshot(McpServerName serverName)
         => _servers.GetValueOrDefault(serverName)?.Snapshot;
 
-    internal int GetTrackedOwnerCount(McpServerName serverName)
-        => _servers.GetValueOrDefault(serverName)?.TrackedOwnerCount ?? 0;
-
-    internal Task? GetInteractiveAuthorizationTask(McpServerName serverName)
-        => _servers.GetValueOrDefault(serverName)?.InteractiveAuthorization;
-
     public async Task<bool> TryReconnectAsync(McpServerName serverName, CancellationToken ct = default)
     {
         if (!_serverEntries.TryGetValue(serverName.Value, out var entry) || !entry.Enabled)
@@ -204,21 +199,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (!_servers.TryGetValue(serverName, out var lifecycle))
             throw new InvalidOperationException($"MCP server '{serverName.Value}' is not tracked by the daemon.");
 
-        if (lifecycle.InteractiveAuthorization is { IsCompleted: false }
-            && !_flowBroker.TryGetActive(serverName, out _))
-        {
-            throw new McpOAuthOperationException(new McpErrorResponse(
-                "The previous authorization attempt is finishing. Retry after its terminal status is available.",
-                "authorization start"));
-        }
-
         var started = _flowBroker.StartOrJoin(serverName);
         if (started.Created)
-        {
-            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lifecycle.SetInteractiveAuthorization(completion.Task);
-            _ = RunExplicitAuthorizationAsync(lifecycle, entry, started.Flow, completion);
-        }
+            _ = RunExplicitAuthorizationAsync(lifecycle, entry, started.Flow);
 
         var authorizationUrl = await started.Flow.WaitForAuthorizationUrlAsync(requestCancellation);
         return new McpOAuthStartResponse(authorizationUrl.ToString(), started.Flow.State);
@@ -242,16 +225,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         IDictionary<string, object?>? arguments,
         CancellationToken ct)
     {
-        var lease = TryAcquireInvocationLease(serverName, out var snapshot);
-        if (lease is null || snapshot is null)
+        var snapshot = TryGetConnectedSnapshot(serverName);
+        if (snapshot is null)
         {
-            var reconnected = await TryReconnectAsync(serverName, ct);
-            if (!reconnected)
+            if (!await TryReconnectAsync(serverName, ct))
                 throw CreateUnavailableException(serverName, toolName);
 
-            lease = TryAcquireInvocationLease(serverName, out snapshot);
-            if (lease is null || snapshot is null)
-                throw CreateUnavailableException(serverName, toolName);
+            snapshot = TryGetConnectedSnapshot(serverName)
+                       ?? throw CreateUnavailableException(serverName, toolName);
         }
 
         Exception? transportFailure = null;
@@ -260,13 +241,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             if (!snapshot.ToolFunctions.TryGetValue(toolName.Value, out var function))
                 throw CreateUnavailableException(serverName, toolName);
 
-            using var invocationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                ct, lease.InvocationCancellation);
             return await InvokeFunctionAsync(
                 function,
                 $"{serverName.Value}/{toolName.Value}",
                 arguments,
-                invocationCancellation.Token);
+                ct);
         }
         catch (OperationCanceledException)
         {
@@ -280,37 +259,23 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             transportFailure = ex;
         }
-        finally
-        {
-            lease.Dispose();
-        }
 
-        // The failed call may have completed remotely. Release its lease first,
-        // reconnect only for later calls, and never replay this invocation.
+        // The failed call may have completed remotely. Reconnect only for later calls,
+        // and never replay this invocation.
         await ReconnectAfterTransportFailureAsync(serverName, snapshot, transportFailure!);
         ExceptionDispatchInfo.Capture(transportFailure!).Throw();
         throw new InvalidOperationException("Unreachable exception propagation path.");
     }
 
-    private McpInvocationLease? TryAcquireInvocationLease(
-        McpServerName serverName,
-        out McpServerSnapshot? snapshot)
+    private McpServerSnapshot? TryGetConnectedSnapshot(McpServerName serverName)
     {
         lock (_shutdownSync)
         {
-            snapshot = null;
             if (_stopping || !_servers.TryGetValue(serverName, out var lifecycle))
                 return null;
 
             var current = lifecycle.Snapshot;
-            if (current is null || !current.IsConnected || current.LeaseOwner is null)
-                return null;
-
-            if (!current.LeaseOwner.TryAcquire(out var lease))
-                return null;
-
-            snapshot = current;
-            return lease;
+            return current is not null && current.IsConnected ? current : null;
         }
     }
 
@@ -358,7 +323,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (IsStopping)
             return false;
 
-        if (lifecycle.InteractiveAuthorization is { IsCompleted: false })
+        if (_flowBroker.TryGetActive(observed.Name, out _))
             return observed.IsConnected;
 
         using var candidateCancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -388,7 +353,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             if (!ReferenceEquals(current, observed))
                 return current.Generation > observed.Generation && current.IsConnected;
 
-            if (lifecycle.InteractiveAuthorization is { IsCompleted: false })
+            if (_flowBroker.TryGetActive(current.Name, out _))
                 return current.IsConnected;
 
             return await BuildAndPublishCandidateAsync(
@@ -414,13 +379,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpOAuthFlow? authorizationFlow)
     {
         McpClient? candidate = null;
-        McpOAuthClientContext? oauthContext = null;
-        Exception? primaryFailure = null;
+        McpOAuthTokenCache? oauthCache = null;
+        Exception? candidateFailure = null;
         try
         {
             var created = await CreateClientAsync(current.Name, entry, authorizationFlow, ct);
             candidate = created.Client;
-            oauthContext = created.OAuthContext;
+            oauthCache = created.OAuthCache;
 
             var initialization = await _clientRuntime.InitializeAsync(candidate, ct);
             var tools = initialization.Tools;
@@ -449,50 +414,35 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 if (_stopping)
                     return false;
                 if (authorizationFlow is null
-                    && lifecycle.InteractiveAuthorization is { IsCompleted: false })
+                    && _flowBroker.TryGetActive(current.Name, out _))
                     return current.IsConnected;
 
                 if (authorizationFlow is not null)
                 {
                     _flowBroker.BeginCommit(authorizationFlow);
-                    if (oauthContext is null)
-                        throw new InvalidOperationException("Interactive OAuth candidate has no credential context.");
-                    _credentialStore.PromotePending(
-                        current.Name,
-                        oauthContext,
-                        authorizationFlow.State,
-                        CancellationToken.None);
-                }
-                else if (oauthContext is not null)
-                {
-                    _credentialStore.ClaimActiveEpoch(current.Name, oauthContext, ct);
+                    if (oauthCache is null)
+                        throw new InvalidOperationException("Interactive OAuth candidate has no token cache.");
                 }
 
-                var leaseOwner = new McpInvocationLeaseOwner(
-                    candidate,
-                    _clientRuntime,
-                    current.Name,
-                    _logger);
+                if (oauthCache is not null)
+                    _credentialStore.Publish(oauthCache, CancellationToken.None);
+
                 replacement = new McpServerSnapshot(
                     current.Name,
                     candidate,
                     functions,
                     checked(current.Generation + 1),
-                    connectedStatus,
-                    leaseOwner);
+                    connectedStatus);
                 _toolRegistry.PublishMcpServerTools(
                     current.Name.Value,
                     publishedTools,
-                    () =>
-                    {
-                        lifecycle.Track(leaseOwner);
-                        lifecycle.Publish(replacement);
-                    });
+                    () => lifecycle.Publish(replacement));
                 candidate = null;
+                oauthCache = null;
             }
 
-            if (current.LeaseOwner is not null)
-                _ = lifecycle.Retire(current.LeaseOwner);
+            if (current.Client is not null)
+                await DisposeReplacedAsync(current.Name, current.Client);
             _logger.LogInformation(
                 "MCP server '{Name}' connected as generation {Generation} ({ToolCount} tools)",
                 current.Name.Value,
@@ -504,17 +454,17 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
         catch (OperationCanceledException ex) when (_lifetimeCancellation.IsCancellationRequested)
         {
-            primaryFailure = ex;
+            candidateFailure = ex;
             return false;
         }
         catch (OperationCanceledException ex)
         {
-            primaryFailure = ex;
+            candidateFailure = ex;
             throw;
         }
         catch (Exception ex)
         {
-            primaryFailure = ex;
+            candidateFailure = ex;
             var now = _timeProvider.GetUtcNow();
             var hasOAuthRuntimeHints = HasOAuthRuntimeHints(current.Name, entry);
             var credentialStateRequiresAuthorization = hasOAuthRuntimeHints
@@ -548,14 +498,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             if (authorizationFlow is not null)
             {
-                if (IsInvalidClientFailure(ex))
-                {
-                    _credentialStore.MarkDynamicIdentityRejected(
-                        current.Name,
-                        entry.Url!,
-                        entry.OAuthClientId,
-                        CancellationToken.None);
-                }
+                // The server says this client id is not one of its own. Keeping it would
+                // make every future authorization attempt fail the same way.
+                if (entry.OAuthClientId is null && IsInvalidClientFailure(ex))
+                    _credentialStore.ForgetClientIdentity(current.Name, entry.Url!, CancellationToken.None);
 
                 var error = CreateSafeOAuthError(ex, "connection initialization");
                 _logger.LogError(ex,
@@ -563,10 +509,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     current.Name.Value,
                     error.Operation,
                     error.Status);
-                _credentialStore.RemovePending(
-                    current.Name,
-                    authorizationFlow.State,
-                    CancellationToken.None);
                 _flowBroker.Fail(authorizationFlow, error);
             }
 
@@ -574,6 +516,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
         finally
         {
+            if (oauthCache is not null)
+                _credentialStore.Discard(oauthCache);
             if (candidate is not null)
             {
                 try
@@ -582,54 +526,27 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 }
                 catch (Exception disposalFailure)
                 {
-                    var surfacedFailure = primaryFailure is null
-                        ? disposalFailure
-                        : new AggregateException(
-                            $"MCP candidate '{current.Name.Value}' initialization and disposal both failed.",
-                            primaryFailure,
-                            disposalFailure);
-                    if (!IsStopping)
-                    {
-                        var failureStatus = CreateUnreachableStatus(
-                            current.Name,
-                            surfacedFailure,
-                            _timeProvider.GetUtcNow());
-                        lifecycle.Publish(WithFailureStatus(current, failureStatus));
-                    }
-
                     _logger.LogError(disposalFailure,
                         "Error disposing unpublished MCP client '{Name}'",
                         current.Name.Value);
-                    ExceptionDispatchInfo.Capture(surfacedFailure).Throw();
-                    throw new InvalidOperationException("Unreachable exception propagation path.");
+                    if (candidateFailure is not null)
+                    {
+                        throw new AggregateException(
+                            "MCP candidate initialization and disposal both failed.",
+                            candidateFailure,
+                            disposalFailure);
+                    }
+                    throw;
                 }
             }
 
-            if (authorizationFlow is not null
-                && _flowBroker.GetStatusByState(authorizationFlow.State).Status is not McpOAuthFlowStatus.Completed)
-            {
-                try
-                {
-                    _credentialStore.RemovePending(
-                        current.Name,
-                        authorizationFlow.State,
-                        CancellationToken.None);
-                }
-                catch (Exception cleanupFailure)
-                {
-                    _logger.LogError(cleanupFailure,
-                        "Failed to remove pending OAuth credentials for MCP server '{Name}'",
-                        current.Name.Value);
-                }
-            }
         }
     }
 
     private async Task RunExplicitAuthorizationAsync(
         McpServerLifecycle lifecycle,
         McpServerEntry entry,
-        McpOAuthFlow flow,
-        TaskCompletionSource<bool> completion)
+        McpOAuthFlow flow)
     {
         try
         {
@@ -640,19 +557,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             try
             {
                 if (IsStopping || lifecycle.Snapshot is not { } current)
-                {
-                    completion.TrySetResult(false);
                     return;
-                }
 
-                var result = await BuildAndPublishCandidateAsync(
+                await BuildAndPublishCandidateAsync(
                     lifecycle,
                     entry,
                     current,
                     cancellation.Token,
                     null,
                     flow);
-                completion.TrySetResult(result);
             }
             finally
             {
@@ -665,20 +578,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 "Authorization was cancelled or expired. Start a new MCP authorization attempt.",
                 "authorization exchange");
             _logger.LogWarning(ex, "Explicit MCP OAuth flow was cancelled for '{Name}'", flow.ServerName.Value);
-            _credentialStore.RemovePending(flow.ServerName, flow.State, CancellationToken.None);
             _flowBroker.Fail(flow, error);
-            completion.TrySetResult(false);
         }
         catch (Exception ex)
         {
             var error = CreateSafeOAuthError(ex, "connection initialization");
             _logger.LogError(ex, "Explicit MCP OAuth flow failed for '{Name}'", flow.ServerName.Value);
             _flowBroker.Fail(flow, error);
-            completion.TrySetResult(false);
-        }
-        finally
-        {
-            lifecycle.ClearInteractiveAuthorization(completion.Task);
         }
     }
 
@@ -704,45 +610,18 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         await lifecycle.Gate.WaitAsync(CancellationToken.None);
         try
         {
-            var snapshot = lifecycle.Snapshot;
-            var owners = lifecycle.RetireAll(snapshot?.LeaseOwner);
+            var client = lifecycle.Snapshot?.Client;
             _toolRegistry.PublishMcpServerTools(
                 serverName.Value,
                 [],
                 () => lifecycle.Publish(null));
 
-            if (owners.Count == 0)
+            if (client is null)
                 return;
 
-            using var cancellationRegistration = shutdownCancellation.Register(
-                static state =>
-                {
-                    foreach (var owner in (IReadOnlyList<McpInvocationLeaseOwner>)state!)
-                        owner.CancelInvocations();
-                },
-                owners);
-
-            var drained = Task.WhenAll(owners.Select(owner => owner.Drained));
-            if (!drained.IsCompleted)
-            {
-                var timeout = Task.Delay(ShutdownDrainTimeout, _timeProvider, CancellationToken.None);
-                if (await Task.WhenAny(drained, timeout) != drained)
-                {
-                    foreach (var owner in owners)
-                        owner.CancelInvocations();
-                }
-            }
-
-            await drained;
-            try
-            {
-                await Task.WhenAll(owners.Select(owner => owner.Disposal));
-            }
-            finally
-            {
-                lifecycle.Forget(owners);
-            }
-
+            // An invocation still in flight is cancelled by the client going away rather
+            // than drained. Draining lives in the separate client-lifecycle work.
+            await _clientRuntime.DisposeAsync(client);
             _logger.LogInformation("MCP client '{Name}' shut down", serverName.Value);
         }
         finally
@@ -755,6 +634,20 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         await _clientRuntime.DisposeAsync(candidate);
         _logger.LogDebug("Unpublished MCP client '{Name}' disposed", name.Value);
+    }
+
+    private async Task DisposeReplacedAsync(McpServerName name, McpClient replaced)
+    {
+        try
+        {
+            await _clientRuntime.DisposeAsync(replaced);
+        }
+        catch (Exception ex)
+        {
+            // The replacement is already published and serving; a failed disposal of the
+            // old client leaks a connection but must not fail the reconnect.
+            _logger.LogError(ex, "Error disposing replaced MCP client '{Name}'", name.Value);
+        }
     }
 
     private async Task<string> InvokeFunctionAsync(
@@ -781,35 +674,61 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpOAuthFlow? authorizationFlow,
         CancellationToken ct)
     {
-        McpOAuthClientContext? oauthContext = null;
+        McpOAuthTokenCache? oauthCache = null;
         if (entry.Transport is not "stdio" && !HasConfiguredAuthorizationHeader(entry))
         {
-            oauthContext = _credentialStore.CreateContext(
+            oauthCache = _credentialStore.CreateTokenCache(
                 name,
                 entry.Url!,
                 entry.OAuthClientId,
                 authorizationFlow is not null);
         }
 
-        var transport = CreateTransport(name, entry, oauthContext, authorizationFlow);
-        var client = await _clientRuntime.CreateAsync(transport, new McpClientOptions
+        try
         {
-            ClientInfo = new()
+            // Register only while explicitly authorizing. A background reconnect with no
+            // stored identity belongs to a server nobody has authorized yet, and it would
+            // fail at the redirect delegate regardless — registering there would create
+            // client records for servers the operator never opted into.
+            if (oauthCache is not null
+                && authorizationFlow is not null
+                && _credentialStore.GetIdentity(oauthCache).ClientId is null)
             {
-                Name = "netclaw",
-                Title = "Netclaw",
-                Version = BuildInfo.Version,
-                WebsiteUrl = "https://netclaw.dev",
-                Description = "Open-source autonomous operations agent built on Akka.NET",
-            },
-        }, ct);
-        return new McpClientCandidate(client, oauthContext);
+                var registered = await _registrar.TryRegisterAsync(
+                    name,
+                    entry.Url!,
+                    BuildRedirectUri(),
+                    ct);
+                if (registered is not null)
+                    _credentialStore.AdoptClientIdentity(oauthCache, registered);
+            }
+
+            var transport = CreateTransport(name, entry, oauthCache, authorizationFlow);
+            var client = await _clientRuntime.CreateAsync(transport, new McpClientOptions
+            {
+                ClientInfo = new()
+                {
+                    Name = "netclaw",
+                    Title = "Netclaw",
+                    Version = BuildInfo.Version,
+                    WebsiteUrl = "https://netclaw.dev",
+                    Description = "Open-source autonomous operations agent built on Akka.NET",
+                },
+            }, ct);
+            return new McpClientCandidate(client, oauthCache);
+        }
+        catch
+        {
+            if (oauthCache is not null)
+                _credentialStore.Discard(oauthCache);
+            throw;
+        }
     }
 
     private IClientTransport CreateTransport(
         McpServerName serverName,
         McpServerEntry entry,
-        McpOAuthClientContext? oauthContext,
+        McpOAuthTokenCache? oauthCache,
         McpOAuthFlow? authorizationFlow)
     {
         if (entry.Transport is "stdio")
@@ -834,7 +753,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         var oauth = HasConfiguredAuthorizationHeader(entry)
             ? null
-            : BuildOAuthOptions(serverName, entry, oauthContext!, authorizationFlow);
+            : BuildOAuthOptions(entry, oauthCache!, authorizationFlow);
         return _clientRuntime.CreateHttpTransport(new HttpClientTransportOptions
         {
             Endpoint = new Uri(entry.Url!),
@@ -848,52 +767,34 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     }
 
     private ClientOAuthOptions BuildOAuthOptions(
-        McpServerName serverName,
         McpServerEntry entry,
-        McpOAuthClientContext context,
+        McpOAuthTokenCache cache,
         McpOAuthFlow? authorizationFlow)
     {
-        var identity = context.SnapshotIdentity();
-        var redirectUri = new Uri(
-            $"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
-        var target = authorizationFlow is null
-            ? McpOAuthCredentialTarget.Active
-            : McpOAuthCredentialTarget.Pending;
+        var identity = _credentialStore.GetIdentity(cache);
         return new ClientOAuthOptions
         {
-            RedirectUri = redirectUri,
+            RedirectUri = BuildRedirectUri(),
             ClientId = entry.OAuthClientId ?? identity.ClientId,
             ClientSecret = entry.OAuthClientId is null ? identity.ClientSecret : null,
             Scopes = ParseScopes(entry.OAuthScope),
-            TokenCache = _credentialStore.CreateTokenCache(
-                serverName,
-                entry.Url!,
-                context,
-                target,
-                authorizationFlow?.State,
-                authorizationFlow?.ExpiresAt,
-                withholdAccessToken: authorizationFlow is not null),
+            TokenCache = cache,
             AuthorizationRedirectDelegate = authorizationFlow is null
                 ? static (_, _, _) => Task.FromResult<string?>(null)
                 : authorizationFlow.HandleAuthorizationRedirectAsync,
             AdditionalAuthorizationParameters = authorizationFlow is null
                 ? new Dictionary<string, string>()
                 : new Dictionary<string, string> { ["state"] = authorizationFlow.State },
-            DynamicClientRegistration = new DynamicClientRegistrationOptions
-            {
-                ClientName = "netclaw",
-                ResponseDelegate = (response, cancellationToken) =>
-                {
-                    _credentialStore.CaptureDynamicRegistration(
-                        serverName,
-                        context,
-                        response,
-                        cancellationToken);
-                    return Task.CompletedTask;
-                },
-            },
+
+            // DynamicClientRegistration is deliberately left unset. McpOAuthClientRegistrar
+            // owns registration because the SDK hard-codes client_secret_post and cannot
+            // register against public-client-only servers (csharp-sdk#1611). A non-null
+            // ClientId here short-circuits the SDK's registration path entirely.
         };
     }
+
+    private Uri BuildRedirectUri()
+        => new($"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
 
     private bool HasOAuthRuntimeHints(McpServerName serverName, McpServerEntry entry)
         => entry.Transport is not "stdio" && !HasConfiguredAuthorizationHeader(entry);
@@ -1077,7 +978,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var status = FindHttpStatus(ex);
         var exceptions = EnumerateExceptionTree(ex).ToArray();
         var operation = exceptions.Any(candidate =>
-                            candidate is McpOAuthStaleCredentialEpochException
+                            candidate is McpOAuthRetiredCredentialWriterException
                                 or IOException
                                 or UnauthorizedAccessException
                             || candidate.Message.Contains("secrets", StringComparison.OrdinalIgnoreCase))
@@ -1124,6 +1025,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         if (ex is HttpRequestException { StatusCode: { } status })
             return status;
+        foreach (var candidate in Enum.GetValues<HttpStatusCode>())
+        {
+            if (ex.Message.Contains($"status {candidate}", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains($"HTTP {(int)candidate}", StringComparison.OrdinalIgnoreCase))
+                return candidate;
+        }
         if (ex.Message.Contains("403", StringComparison.Ordinal)
             || ex.Message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
             return HttpStatusCode.Forbidden;
@@ -1236,13 +1143,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             foreach (var (serverName, lifecycle) in _servers)
             {
-                var owners = lifecycle.RetireAll(lifecycle.Snapshot?.LeaseOwner);
                 _toolRegistry.PublishMcpServerTools(
                     serverName.Value,
                     [],
                     () => lifecycle.Publish(null));
-                foreach (var owner in owners)
-                    owner.CancelInvocations();
             }
         }
 
@@ -1305,103 +1209,17 @@ internal sealed record McpClientInitialization(
 
 internal sealed record McpClientCandidate(
     McpClient Client,
-    McpOAuthClientContext? OAuthContext);
+    McpOAuthTokenCache? OAuthCache);
 
 internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
 {
     private McpServerSnapshot? _snapshot = initialSnapshot;
-    private Task<bool>? _interactiveAuthorization;
-    private readonly List<McpInvocationLeaseOwner> _owners = [];
-    private readonly object _ownersSync = new();
 
     public SemaphoreSlim Gate { get; } = new(1, 1);
 
     public McpServerSnapshot? Snapshot => Volatile.Read(ref _snapshot);
 
-    public Task<bool>? InteractiveAuthorization => Volatile.Read(ref _interactiveAuthorization);
-
-    public int TrackedOwnerCount
-    {
-        get
-        {
-            lock (_ownersSync)
-                return _owners.Count;
-        }
-    }
-
     public void Publish(McpServerSnapshot? snapshot) => Volatile.Write(ref _snapshot, snapshot);
-
-    public void SetInteractiveAuthorization(Task<bool> authorization)
-    {
-        while (true)
-        {
-            var current = Volatile.Read(ref _interactiveAuthorization);
-            if (current is not null && !current.IsCompleted)
-                throw new InvalidOperationException("An interactive authorization operation is already active.");
-            if (Interlocked.CompareExchange(ref _interactiveAuthorization, authorization, current) == current)
-                return;
-        }
-    }
-
-    public void ClearInteractiveAuthorization(Task<bool> authorization)
-        => Interlocked.CompareExchange(ref _interactiveAuthorization, null, authorization);
-
-    public void Track(McpInvocationLeaseOwner owner)
-    {
-        var added = false;
-        lock (_ownersSync)
-        {
-            if (!_owners.Contains(owner))
-            {
-                _owners.Add(owner);
-                added = true;
-            }
-        }
-
-        if (!added)
-            return;
-
-        owner.RegisterSuccessfulDisposal(RemoveSuccessfullyDisposed);
-    }
-
-    public Task Retire(McpInvocationLeaseOwner owner)
-    {
-        Track(owner);
-        return owner.Retire();
-    }
-
-    public IReadOnlyList<McpInvocationLeaseOwner> RetireAll(McpInvocationLeaseOwner? current)
-    {
-        List<McpInvocationLeaseOwner> owners;
-        lock (_ownersSync)
-        {
-            if (current is not null && !_owners.Contains(current))
-                _owners.Add(current);
-
-            owners = _owners.ToList();
-        }
-
-        foreach (var owner in owners)
-            _ = owner.Retire();
-
-        return owners;
-    }
-
-    private void RemoveSuccessfullyDisposed(McpInvocationLeaseOwner owner)
-    {
-        lock (_ownersSync)
-            _owners.Remove(owner);
-    }
-
-    public void Forget(IReadOnlyList<McpInvocationLeaseOwner> owners)
-    {
-        lock (_ownersSync)
-        {
-            foreach (var owner in owners)
-                _owners.Remove(owner);
-        }
-    }
-
 }
 
 internal sealed record McpServerSnapshot(
@@ -1409,191 +1227,16 @@ internal sealed record McpServerSnapshot(
     McpClient? Client,
     IReadOnlyDictionary<string, AIFunction> ToolFunctions,
     long Generation,
-    McpServerStatus Status,
-    McpInvocationLeaseOwner? LeaseOwner)
+    McpServerStatus Status)
 {
     private static readonly IReadOnlyDictionary<string, AIFunction> EmptyFunctions =
         new ReadOnlyDictionary<string, AIFunction>(new Dictionary<string, AIFunction>());
 
     public bool IsConnected
-        => Client is not null
-           && LeaseOwner is not null
-           && Status.State is McpConnectionState.Connected;
+        => Client is not null && Status.State is McpConnectionState.Connected;
 
     public static McpServerSnapshot WithoutConnection(McpServerStatus status, long generation = 0)
-        => new(status.Name, null, EmptyFunctions, generation, status, null);
-}
-
-internal sealed class McpInvocationLeaseOwner
-{
-    private readonly object _sync = new();
-    private readonly McpClient _client;
-    private readonly IMcpClientRuntime _runtime;
-    private readonly McpServerName _serverName;
-    private readonly ILogger _logger;
-    private readonly CancellationTokenSource _invocationCancellation = new();
-    private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int _activeLeases;
-    private bool _retired;
-    private bool _disposeStarted;
-    private bool _disposedSuccessfully;
-    private Action<McpInvocationLeaseOwner>? _successfulDisposal;
-
-    public McpInvocationLeaseOwner(
-        McpClient client,
-        IMcpClientRuntime runtime,
-        McpServerName serverName,
-        ILogger logger)
-    {
-        _client = client;
-        _runtime = runtime;
-        _serverName = serverName;
-        _logger = logger;
-    }
-
-    public Task Drained => _drained.Task;
-
-    public Task Disposal => _disposed.Task;
-
-    public void RegisterSuccessfulDisposal(Action<McpInvocationLeaseOwner> callback)
-    {
-        ArgumentNullException.ThrowIfNull(callback);
-        var invokeNow = false;
-        lock (_sync)
-        {
-            if (_disposedSuccessfully)
-                invokeNow = true;
-            else
-                _successfulDisposal += callback;
-        }
-
-        if (invokeNow)
-            callback(this);
-    }
-
-    public bool TryAcquire(out McpInvocationLease? lease)
-    {
-        lock (_sync)
-        {
-            if (_retired)
-            {
-                lease = null;
-                return false;
-            }
-
-            checked { _activeLeases++; }
-            lease = new McpInvocationLease(this, _invocationCancellation.Token);
-            return true;
-        }
-    }
-
-    public Task Retire()
-    {
-        var startDispose = false;
-        lock (_sync)
-        {
-            if (!_retired)
-                _retired = true;
-
-            if (_activeLeases == 0)
-            {
-                _drained.TrySetResult();
-                if (!_disposeStarted)
-                {
-                    _disposeStarted = true;
-                    startDispose = true;
-                }
-            }
-        }
-
-        if (startDispose)
-            _ = DisposeClientAsync();
-
-        return _disposed.Task;
-    }
-
-    public void CancelInvocations()
-    {
-        try
-        {
-            _invocationCancellation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            _logger.LogDebug(
-                "Invocation cancellation for retired MCP client '{Name}' raced completed disposal",
-                _serverName.Value);
-        }
-    }
-
-    internal void Release()
-    {
-        var startDispose = false;
-        lock (_sync)
-        {
-            if (_activeLeases <= 0)
-                throw new InvalidOperationException("MCP invocation lease released more than once.");
-
-            _activeLeases--;
-            if (_retired && _activeLeases == 0)
-            {
-                _drained.TrySetResult();
-                if (!_disposeStarted)
-                {
-                    _disposeStarted = true;
-                    startDispose = true;
-                }
-            }
-        }
-
-        if (startDispose)
-            _ = DisposeClientAsync();
-    }
-
-    private async Task DisposeClientAsync()
-    {
-        try
-        {
-            await _runtime.DisposeAsync(_client);
-            Action<McpInvocationLeaseOwner>? successfulDisposal;
-            lock (_sync)
-            {
-                _disposedSuccessfully = true;
-                successfulDisposal = _successfulDisposal;
-                _successfulDisposal = null;
-            }
-
-            successfulDisposal?.Invoke(this);
-            _disposed.TrySetResult();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Error disposing retired MCP client '{Name}'",
-                _serverName.Value);
-            _disposed.TrySetException(ex);
-        }
-        finally
-        {
-            _invocationCancellation.Dispose();
-        }
-    }
-}
-
-internal sealed class McpInvocationLease : IDisposable
-{
-    private McpInvocationLeaseOwner? _owner;
-
-    public McpInvocationLease(McpInvocationLeaseOwner owner, CancellationToken invocationCancellation)
-    {
-        _owner = owner;
-        InvocationCancellation = invocationCancellation;
-    }
-
-    public CancellationToken InvocationCancellation { get; }
-
-    public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release();
+        => new(status.Name, null, EmptyFunctions, generation, status);
 }
 
 internal enum McpConnectionState

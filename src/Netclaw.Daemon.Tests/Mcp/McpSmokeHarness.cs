@@ -48,6 +48,7 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             registry,
             new ToolConfig(),
             credentials,
+            McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,
             new DaemonConfig(),
             NullNotificationSink.Instance,

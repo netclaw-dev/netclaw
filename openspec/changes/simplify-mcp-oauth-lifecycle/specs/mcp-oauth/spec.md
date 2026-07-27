@@ -2,14 +2,45 @@
 
 ## ADDED Requirements
 
-### Requirement: OAuth protocol ownership belongs to the MCP SDK
+### Requirement: OAuth protocol ownership belongs to the MCP SDK, except client registration
 
-The system SHALL delegate MCP OAuth protocol operations — protected-resource
-and authorization-server discovery, authorization-server selection, dynamic
-client registration, PKCE generation and validation, authorization-code
-exchange, refresh-token redemption, and bearer-token injection — to the MCP
-C# SDK. Netclaw SHALL NOT implement these protocol operations and SHALL NOT
-maintain a separate OAuth metadata cache as a runtime dependency.
+The system SHALL delegate MCP OAuth protocol operations — authorization-server
+selection, PKCE generation and validation, authorization-code exchange,
+refresh-token redemption, and bearer-token injection — to the MCP C# SDK.
+Netclaw SHALL NOT implement those protocol operations and SHALL NOT maintain a
+separate OAuth metadata cache as a runtime dependency.
+
+Netclaw SHALL own protected-resource discovery and RFC 7591 dynamic client
+registration, because the SDK hard-codes
+`token_endpoint_auth_method: "client_secret_post"` in its registration request
+and never consults the authorization server's advertised
+`token_endpoint_auth_methods_supported`, which makes registration impossible
+against a server that accepts public clients only. Netclaw SHALL register with
+the same method the SDK selects for the token request — the first entry of
+`token_endpoint_auth_methods_supported`, defaulting to `client_secret_post` when
+the server advertises none — so the registered method and the method used at the
+token endpoint cannot diverge. Netclaw SHALL seed `ClientOAuthOptions.ClientId`
+from the durable record so the SDK's registration path never executes.
+
+Registration SHALL occur only during explicit authorization. A server that
+advertises no protected-resource metadata SHALL be treated as requiring no
+OAuth. A missing or failing `registration_endpoint` SHALL produce an
+operator-facing error naming `OAuthClientId` as the remedy.
+
+#### Scenario: A public-client-only server is registered as a public client
+
+- **GIVEN** an authorization server advertising `token_endpoint_auth_methods_supported: ["none"]`
+- **WHEN** the operator runs explicit authorization
+- **THEN** the registration request carries `token_endpoint_auth_method: "none"`
+- **AND** the SDK issues no registration request of its own
+- **AND** the token request authenticates as a public client
+
+#### Scenario: A server without dynamic registration names the remedy
+
+- **GIVEN** an authorization server that publishes no `registration_endpoint`, or whose registration endpoint rejects the request
+- **WHEN** the operator runs explicit authorization
+- **THEN** the failure names `OAuthClientId` as the way to supply a manually registered client
+- **AND** the provider's response body reaches the daemon log but not the operator-facing message
 
 #### Scenario: Startup with bound cached tokens requires no metadata cache
 
@@ -25,7 +56,7 @@ maintain a separate OAuth metadata cache as a runtime dependency.
 - **GIVEN** a configured HTTP MCP server with OAuth in use
 - **WHEN** tokens are acquired or refreshed during any flow
 - **THEN** every token-endpoint request originates from the MCP SDK
-- **AND** no Netclaw-owned code constructs discovery, registration, authorization, or token requests
+- **AND** no Netclaw-owned code constructs authorization or token requests
 
 #### Scenario: Legacy metadata files are ignored, not deleted
 
@@ -120,16 +151,19 @@ existing five-minute CLI and TUI polling timeout.
 
 ### Requirement: Durable credential persistence precedes publication
 
-The system SHALL treat secrets.json as the durable authority for MCP OAuth
-credentials. Token state SHALL be published to memory only after durable
-persistence succeeds, and a persistence failure SHALL propagate through the
-SDK token-cache boundary and fail the connection visibly. Credentials acquired
-by an unpublished interactive candidate SHALL first persist as a pending record
-bound to that flow and SHALL become the active record only when candidate tool
-listing and publication succeed. Failed or expired candidates SHALL remove
-their pending record without changing the active record. When a token
-response omits a refresh token, the system SHALL retain the previous refresh
-token. The effective client ID — and client secret, when issued — from
+The system SHALL treat secrets.json as the durable authority for active MCP
+OAuth credentials. Published-connection token updates SHALL persist before the
+SDK store call returns. Token rotations acquired by an ordinary startup or
+reconnect candidate SHALL also persist before the SDK store call returns because
+the authorization server may already have consumed the prior refresh token.
+Credentials acquired by an unpublished interactive
+candidate SHALL remain local to that candidate until tool listing succeeds,
+then SHALL replace the sole durable active record before the candidate is
+published. A persistence failure SHALL fail the candidate visibly without
+changing active credentials or the published connection. Failed or expired
+candidates SHALL require no durable cleanup. When a token response omits a
+refresh token, the system SHALL retain a previous refresh token only when the
+resource and effective client identity match. The effective client ID — and client secret, when issued — from
 dynamic client registration SHALL be stored with the token record and
 supplied to the SDK's OAuth options on subsequent connections. The record
 SHALL also contain the normalized configured MCP resource identity used when
@@ -151,9 +185,9 @@ and query retained.
 #### Scenario: Failed candidate does not replace active credentials
 
 - **GIVEN** a server has active durable credentials and a published connection
-- **AND** an explicit authorization candidate durably stores replacement credentials as pending
+- **AND** an explicit authorization candidate stores replacement credentials in its local cache
 - **WHEN** candidate initialization or tool listing fails before publication
-- **THEN** the pending credentials are discarded
+- **THEN** the candidate-local credentials are discarded
 - **AND** the prior active credential record remains authoritative and unchanged
 
 #### Scenario: Omitted refresh token is retained
@@ -177,20 +211,30 @@ and query retained.
 - **AND** the server reports `AwaitingAuth` for the new identity
 - **AND** the old durable record remains intact until replacement credentials are stored successfully
 
-#### Scenario: Legacy unbound credentials fail closed
+#### Scenario: Legacy credentials for the same resource migrate on upgrade
 
-- **GIVEN** a stored credential record has no canonical configured resource binding
+- **GIVEN** a stored credential record predates the canonical resource binding and carries a legacy resource that describes the configured endpoint
 - **WHEN** the daemon loads the server after upgrade
-- **THEN** no token, dynamically registered client ID, or client secret from that record is supplied to the SDK
+- **THEN** the record is stamped with the canonical resource identity and remains usable without reauthorization
+- **AND** the legacy resource field is retained so the migration can be repeated if the endpoint is corrected later
+- **AND** an absent obtained-at timestamp is stamped, so the credential is not computed as expired
+
+#### Scenario: Legacy credentials for a different audience fail closed
+
+- **GIVEN** a legacy record whose resource differs from the configured endpoint in scheme, host, port, query, or sibling path
+- **WHEN** the daemon loads the server after upgrade
+- **THEN** no token, client ID, or client secret from that record is supplied to the SDK
 - **AND** the server reports `AwaitingAuth` with `netclaw mcp auth <name>` as the remedy
-- **AND** Netclaw does not silently bind the legacy record to the current profile
+- **AND** the rejected binding and the configured endpoint are both logged
+- **AND** the record on disk is left unchanged
 
 #### Scenario: Revoked dynamic registration can be replaced explicitly
 
 - **GIVEN** credentials contain a dynamically registered client identity that the authorization server rejects as `invalid_client`
 - **WHEN** the operator runs explicit authorization
-- **THEN** that flow fails visibly and records the stored dynamic identity as rejected
-- **AND** the next explicit authorization attempt withholds the rejected identity so the SDK can perform new dynamic registration with a new authorization URL
+- **THEN** that flow fails visibly and the rejected client identity is discarded from the durable record
+- **AND** the stored tokens are left intact, because only the client identity was rejected
+- **AND** the next explicit authorization registers a new client and completes
 - **AND** the prior active credentials remain unchanged until the replacement candidate is published
 - **BUT** an explicitly configured static client ID is never discarded or replaced automatically
 

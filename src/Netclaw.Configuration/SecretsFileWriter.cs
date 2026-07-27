@@ -3,8 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Diagnostics;
-using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,7 +21,6 @@ namespace Netclaw.Configuration;
 public static class SecretsFileWriter
 {
     private static readonly TimeSpan SecretsLockTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan SecretsLockPollInterval = TimeSpan.FromMilliseconds(50);
 
     private static readonly JsonSerializerOptions DefaultJsonOptions = new()
     {
@@ -40,7 +38,7 @@ public static class SecretsFileWriter
     }
 
     /// <summary>
-    /// Read the latest secrets document and replace it while holding a path-scoped interprocess lock.
+    /// Read the latest secrets document and replace it while holding a path-scoped lock.
     /// Returning a null updated root leaves the file unchanged.
     /// </summary>
     public static TResult Update<TResult>(
@@ -257,117 +255,44 @@ public static class SecretsFileWriter
     /// </summary>
     internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
 
+    /// <summary>
+    /// Serializes read-modify-write against one secrets file within this process. The daemon
+    /// is the only writer at runtime, and the CLI writes while it is stopped, so a
+    /// cross-process lock buys nothing that this does not already cover.
+    /// </summary>
     private static IDisposable AcquireSecretsLock(string secretsPath, CancellationToken cancellationToken)
     {
-        var canonicalPath = GetCanonicalLockPath(secretsPath);
-        var lockIdentity = OperatingSystem.IsWindows()
-            ? canonicalPath.ToUpperInvariant()
-            : canonicalPath;
-        var lockId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lockIdentity)));
-        var lockScope = OperatingSystem.IsWindows() ? @"Global\" : string.Empty;
-        var mutex = new Mutex(initiallyOwned: false, $"{lockScope}netclaw-secrets-file-{lockId}");
-        var ownsMutex = false;
-
-        try
-        {
-            try
-            {
-                ownsMutex = WaitForMutex(mutex, cancellationToken);
-            }
-            catch (AbandonedMutexException)
-            {
-                ownsMutex = true;
-                // A killed writer may leave only a sibling temp file; the destination remains atomic.
-                DeleteAbandonedTempFiles(canonicalPath);
-            }
-
-            if (!ownsMutex)
-                throw new TimeoutException($"Timed out waiting to update secrets file '{secretsPath}'.");
-
-            return new SecretsLock(mutex);
-        }
-        catch
-        {
-            if (ownsMutex)
-                mutex.ReleaseMutex();
-            mutex.Dispose();
-            throw;
-        }
+        var gate = Gates.GetOrAdd(GateKey(secretsPath), static _ => new SemaphoreSlim(1, 1));
+        if (!gate.Wait(SecretsLockTimeout, cancellationToken))
+            throw new TimeoutException($"Timed out waiting to update secrets file '{secretsPath}'.");
+        return new SecretsLock(gate);
     }
 
-    private static bool WaitForMutex(Mutex mutex, CancellationToken cancellationToken)
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Two spellings of the same file must share one gate, so a symlinked config directory
+    /// does not hand concurrent writers separate locks and lose an update. Only the
+    /// immediate parent is resolved; a symlink deeper in the path is not a shape
+    /// <see cref="NetclawPaths"/> produces.
+    /// </summary>
+    private static string GateKey(string secretsPath)
     {
-        if (!cancellationToken.CanBeCanceled)
-            return mutex.WaitOne(SecretsLockTimeout);
-
-        var startedAt = Stopwatch.GetTimestamp();
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (mutex.WaitOne(TimeSpan.Zero))
-                return true;
-
-            var remaining = SecretsLockTimeout - Stopwatch.GetElapsedTime(startedAt);
-            if (remaining <= TimeSpan.Zero)
-                return false;
-
-            var wait = remaining < SecretsLockPollInterval ? remaining : SecretsLockPollInterval;
-            if (cancellationToken.WaitHandle.WaitOne(wait))
-                cancellationToken.ThrowIfCancellationRequested();
-        }
-    }
-
-    private static string GetCanonicalLockPath(string filePath)
-    {
-        var fullPath = Path.GetFullPath(filePath);
-        var directoryPath = Path.GetDirectoryName(fullPath)
+        var fullPath = Path.GetFullPath(secretsPath);
+        var directory = Path.GetDirectoryName(fullPath)
             ?? throw new InvalidOperationException("Secrets path has no parent directory.");
-        return Path.Combine(GetCanonicalDirectoryPath(directoryPath), Path.GetFileName(fullPath));
-    }
-
-    private static string GetCanonicalDirectoryPath(string directoryPath)
-    {
-        var fullPath = Path.GetFullPath(directoryPath);
-        var root = Path.GetPathRoot(fullPath)
-            ?? throw new InvalidOperationException("Secrets path has no root directory.");
-        var current = root;
-        var relativeDirectory = Path.GetRelativePath(root, fullPath);
-        foreach (var segment in relativeDirectory.Split(
-                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                     StringSplitOptions.RemoveEmptyEntries))
+        if (Directory.Exists(directory))
         {
-            var nextPath = Path.Combine(current, segment);
-            if (!Directory.Exists(nextPath))
-            {
-                current = nextPath;
-                continue;
-            }
-
-            var directory = new DirectoryInfo(nextPath);
-            var target = directory.ResolveLinkTarget(returnFinalTarget: true);
-            current = target is null
-                ? directory.FullName
-                : GetCanonicalDirectoryPath(target.FullName);
+            directory = new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                        ?? directory;
         }
 
-        return current;
+        var key = Path.Combine(directory, Path.GetFileName(fullPath));
+        return OperatingSystem.IsWindows() ? key.ToUpperInvariant() : key;
     }
 
-    private static void DeleteAbandonedTempFiles(string filePath)
+    private sealed class SecretsLock(SemaphoreSlim gate) : IDisposable
     {
-        var directory = Path.GetDirectoryName(filePath)
-            ?? throw new InvalidOperationException("Secrets path has no parent directory.");
-        var fileName = Path.GetFileName(filePath);
-        foreach (var tempPath in Directory.EnumerateFiles(directory, $"{fileName}.tmp-*"))
-            File.Delete(tempPath);
-    }
-
-    private sealed class SecretsLock(Mutex mutex) : IDisposable
-    {
-        public void Dispose()
-        {
-            mutex.ReleaseMutex();
-            mutex.Dispose();
-        }
+        public void Dispose() => gate.Release();
     }
 }

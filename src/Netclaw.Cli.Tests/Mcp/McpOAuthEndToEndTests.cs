@@ -55,6 +55,9 @@ public sealed class McpOAuthEndToEndTests : IDisposable
             new ToolRegistry(),
             new ToolConfig(),
             credentials,
+            new McpOAuthClientRegistrar(
+                new HttpClient(new BodylessDcrHandler()) { BaseAddress = new Uri("https://oauth.test") },
+                new RecordingLogger<McpOAuthClientRegistrar>()),
             broker,
             new DaemonConfig(),
             NullNotificationSink.Instance,

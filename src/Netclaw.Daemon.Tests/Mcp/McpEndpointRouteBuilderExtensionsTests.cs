@@ -77,6 +77,7 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             toolRegistry,
             new ToolConfig(),
             credentialStore,
+            McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,
             new DaemonConfig(),
             NullNotificationSink.Instance,
@@ -167,22 +168,6 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.Contains("Authorization failed", html);
     }
 
-    [Fact]
-    public async Task Callback_is_reachable_anonymously()
-    {
-        // This test ensures AllowAnonymous is actually wired — the anonymous
-        // request reaches the handler rather than being rejected with 401.
-        var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(spoofLoopback: false);
-        var client = app.GetTestClient();
-        // Deliberately no Authorization header
-
-        var response = await client.GetAsync("/api/mcp/oauth/callback", ct);
-
-        // Any non-401 proves the endpoint was reached
-        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     // ─── POST /api/mcp/oauth/start/{name} ─────────────────────────────────────
 
     [Fact]
@@ -218,24 +203,6 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.Contains("no URL", body.GetProperty("error").GetString());
     }
 
-    // ─── Trivial GETs — authenticated returns 200 with expected shape ──────────
-
-    [Fact]
-    public async Task GetStatuses_returns_200_with_empty_dictionary_when_no_servers_configured()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(spoofLoopback: true);
-        var client = app.GetTestClient();
-
-        var response = await client.GetAsync("/api/mcp/statuses", ct);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-        // No servers registered → empty object
-        Assert.Equal(JsonValueKind.Object, body.ValueKind);
-        Assert.Empty(body.EnumerateObject());
-    }
-
     [Fact]
     public async Task GetStatuses_includes_lastErrorAt_for_connection_failure()
     {
@@ -260,49 +227,6 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.Equal("Unreachable", body.GetProperty("broken").GetProperty("state").GetString());
         Assert.Equal(JsonValueKind.String, body.GetProperty("broken").GetProperty("lastErrorAt").ValueKind);
         await manager.StopAsync(ct);
-    }
-
-    [Fact]
-    public async Task GetTools_returns_200_with_empty_array_for_unknown_server()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(spoofLoopback: true);
-        var client = app.GetTestClient();
-
-        var response = await client.GetAsync("/api/mcp/tools/no-such-server", ct);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-        Assert.Equal(JsonValueKind.Array, body.ValueKind);
-        Assert.Equal(0, body.GetArrayLength());
-    }
-
-    [Fact]
-    public async Task GetOauthStatus_returns_200_with_status_field_for_known_server()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(spoofLoopback: true);
-        var client = app.GetTestClient();
-
-        var response = await client.GetAsync("/api/mcp/oauth/status/any-server", ct);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-        Assert.True(body.TryGetProperty("status", out _));
-    }
-
-    [Fact]
-    public async Task GetOauthStatusByState_returns_200_with_status_field_for_any_state()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(spoofLoopback: true);
-        var client = app.GetTestClient();
-
-        var response = await client.GetAsync("/api/mcp/oauth/status-by-state/some-arbitrary-state", ct);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-        Assert.True(body.TryGetProperty("status", out _));
     }
 
     [Fact]

@@ -54,7 +54,7 @@ internal static class ProviderCredentialWriter
         paths.EnsureDirectoriesExist();
 
         // Build provider config entry in netclaw.json
-        var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
+        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
         var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
 
         var providerEntry = new Dictionary<string, object>
@@ -93,15 +93,13 @@ internal static class ProviderCredentialWriter
         }
         else if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) =>
+            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+            secretProviders[providerName] = new Dictionary<string, object>
             {
-                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-                secretProviders[providerName] = new Dictionary<string, object>
-                {
-                    ["ApiKey"] = apiKey
-                };
-                return true;
-            }, effectiveProtector);
+                ["ApiKey"] = apiKey
+            };
+            SecretsFileWriter.Write(paths.SecretsPath, secrets,
+                options: JsonDefaults.Indented, protector: effectiveProtector);
         }
     }
 }

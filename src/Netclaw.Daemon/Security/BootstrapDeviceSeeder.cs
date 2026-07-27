@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Buffers.Text;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -52,7 +53,8 @@ internal sealed class BootstrapDeviceSeeder
         if (devices.Count > 0)
             return false;
 
-        if (HasDeviceToken())
+        var existingSecrets = LoadSecrets();
+        if (HasDeviceToken(existingSecrets))
             return false;
 
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
@@ -73,36 +75,8 @@ internal sealed class BootstrapDeviceSeeder
         };
 
         await _deviceRegistry.AddAsync(device, cancellationToken);
-        var committed = false;
-        try
-        {
-            committed = SecretsFileWriter.Update<bool>(
-                _paths.SecretsPath,
-                (root, _) =>
-                {
-                    if (root.TryGetPropertyValue("DeviceToken", out var existing)
-                        && existing?.ToString() is { Length: > 0 })
-                        return (null, false);
-
-                    root["configVersion"] ??= 1;
-                    root["DeviceToken"] = rawToken;
-                    return (root, true);
-                },
-                protector: _protector,
-                cancellationToken: cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await RollBackDeviceAsync(device.Name, ex);
-            throw;
-        }
-
-        if (!committed)
-        {
-            await _deviceRegistry.RemoveAsync(device.Name, CancellationToken.None);
-            return false;
-        }
-
+        existingSecrets["DeviceToken"] = rawToken;
+        SecretsFileWriter.Write(_paths.SecretsPath, existingSecrets, protector: _protector);
         _logger.LogInformation(
             "Seeded bootstrap paired device '{DeviceName}' for first non-local daemon start.",
             device.Name);
@@ -112,35 +86,29 @@ internal sealed class BootstrapDeviceSeeder
     public void MarkCompleted()
         => _bootstrapStateStore.MarkCompleted(_timeProvider);
 
-    private async Task RollBackDeviceAsync(string deviceName, Exception persistenceException)
+    private Dictionary<string, object> LoadSecrets()
     {
+        if (!File.Exists(_paths.SecretsPath))
+            return new Dictionary<string, object> { ["configVersion"] = 1 };
+
         try
         {
-            await _deviceRegistry.RemoveAsync(deviceName, CancellationToken.None);
+            var text = File.ReadAllText(_paths.SecretsPath);
+            var decrypted = _protector is not null
+                ? SecretsFileWriter.DecryptJsonLeaves(text, _protector)
+                : text;
+            return JsonSerializer.Deserialize<Dictionary<string, object>>(decrypted)
+                ?? new Dictionary<string, object> { ["configVersion"] = 1 };
         }
-        catch (Exception rollbackException)
+        catch (JsonException)
         {
-            throw new InvalidOperationException(
-                "Failed to persist bootstrap device token and failed to roll back the paired device.",
-                new AggregateException(persistenceException, rollbackException));
+            return new Dictionary<string, object> { ["configVersion"] = 1 };
         }
     }
 
-    private bool HasDeviceToken()
+    private static bool HasDeviceToken(Dictionary<string, object> secrets)
     {
-        if (!File.Exists(_paths.SecretsPath))
-            return false;
-
-        var tokenFound = SecretsFileWriter.Update<bool>(
-            _paths.SecretsPath,
-            (root, _) =>
-            {
-                var found = root.TryGetPropertyValue("DeviceToken", out var existing)
-                            && existing?.ToString() is { Length: > 0 };
-                return (null, found);
-            },
-            protector: _protector);
-
-        return tokenFound;
+        return secrets.TryGetValue("DeviceToken", out var existing)
+            && existing?.ToString() is { Length: > 0 };
     }
 }

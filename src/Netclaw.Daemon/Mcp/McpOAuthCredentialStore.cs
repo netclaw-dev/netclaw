@@ -15,137 +15,70 @@ using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
 
-internal enum McpOAuthCredentialTarget
-{
-    Active,
-    Pending,
-}
-
-internal sealed class McpOAuthStaleCredentialEpochException(string message) : InvalidOperationException(message);
-
-internal sealed class McpOAuthClientContext(
-    string? clientId,
-    string? clientSecret,
-    bool dynamicClientRegistration,
-    string canonicalResource,
-    string? baseActiveEpoch)
-{
-    private readonly object _sync = new();
-    private string? _clientId = clientId;
-    private string? _clientSecret = clientSecret;
-    private bool _dynamicClientRegistration = dynamicClientRegistration;
-    private McpOAuthCredentialTarget _target = McpOAuthCredentialTarget.Active;
-    private string? _flowId;
-    private DateTimeOffset? _pendingExpiresAt;
-    private string? _expectedActiveEpoch = baseActiveEpoch;
-    private bool _withholdAccessToken;
-    private bool _publishedOwner;
-    private string _ownerEpoch = Guid.NewGuid().ToString("N");
-
-    public string CanonicalResource { get; } = canonicalResource;
-
-    public string? BaseActiveEpoch { get; } = baseActiveEpoch;
-
-    public string OwnerEpoch
-    {
-        get
-        {
-            lock (_sync)
-                return _ownerEpoch;
-        }
-    }
-
-    public McpOAuthClientIdentity SnapshotIdentity()
-    {
-        lock (_sync)
-            return new McpOAuthClientIdentity(_clientId, _clientSecret, _dynamicClientRegistration);
-    }
-
-    public McpOAuthCredentialView SnapshotCredentialView()
-    {
-        lock (_sync)
-        {
-            return new McpOAuthCredentialView(
-                _target,
-                _flowId,
-                _pendingExpiresAt,
-                _expectedActiveEpoch,
-                _withholdAccessToken,
-                _publishedOwner,
-                _ownerEpoch);
-        }
-    }
-
-    public void ConfigureCredentialView(
-        McpOAuthCredentialTarget target,
-        string? flowId,
-        DateTimeOffset? pendingExpiresAt,
-        bool withholdAccessToken)
-    {
-        lock (_sync)
-        {
-            _target = target;
-            _flowId = flowId;
-            _pendingExpiresAt = pendingExpiresAt;
-            _withholdAccessToken = withholdAccessToken;
-        }
-    }
-
-    public void CaptureDynamicRegistration(DynamicClientRegistrationResponse response)
-    {
-        lock (_sync)
-        {
-            _clientId = response.ClientId;
-            _clientSecret = response.ClientSecret;
-            _dynamicClientRegistration = true;
-        }
-    }
-
-    public void MarkTokensStored(McpOAuthCredentialTarget target, string committedEpoch)
-    {
-        lock (_sync)
-        {
-            _withholdAccessToken = false;
-            if (target is McpOAuthCredentialTarget.Active)
-            {
-                _expectedActiveEpoch = committedEpoch;
-                if (_publishedOwner)
-                    _ownerEpoch = committedEpoch;
-            }
-        }
-    }
-
-    public void Activate()
-    {
-        lock (_sync)
-        {
-            _target = McpOAuthCredentialTarget.Active;
-            _flowId = null;
-            _pendingExpiresAt = null;
-            _expectedActiveEpoch = _ownerEpoch;
-            _withholdAccessToken = false;
-            _publishedOwner = true;
-        }
-    }
-}
+internal sealed class McpOAuthRetiredCredentialWriterException(string message) : InvalidOperationException(message);
 
 internal sealed record McpOAuthClientIdentity(
     string? ClientId,
     string? ClientSecret,
     bool DynamicClientRegistration);
 
-internal sealed record McpOAuthCredentialView(
-    McpOAuthCredentialTarget Target,
-    string? FlowId,
-    DateTimeOffset? PendingExpiresAt,
-    string? ExpectedActiveEpoch,
-    bool WithholdAccessToken,
-    bool PublishedOwner,
-    string OwnerEpoch);
+/// <summary>
+/// Per-connection SDK token cache. Unpublished candidates keep tokens local;
+/// the published cache persists refreshes before returning to the SDK.
+/// </summary>
+internal sealed class McpOAuthTokenCache : ITokenCache
+{
+    private readonly McpOAuthCredentialStore _store;
+
+    internal McpOAuthTokenCache(
+        McpOAuthCredentialStore store,
+        McpServerName serverName,
+        string canonicalResource,
+        McpOAuthClientIdentity identity,
+        McpOAuthTokenSet? credentials,
+        int baseRevision,
+        bool explicitAuthorization)
+    {
+        _store = store;
+        ServerName = serverName;
+        CanonicalResource = canonicalResource;
+        Identity = identity;
+        Credentials = credentials;
+        BaseRevision = baseRevision;
+        ExplicitAuthorization = explicitAuthorization;
+    }
+
+    internal McpServerName ServerName { get; }
+
+    internal string CanonicalResource { get; }
+
+    internal McpOAuthClientIdentity Identity { get; set; }
+
+    internal McpOAuthTokenSet? Credentials { get; set; }
+
+    internal int BaseRevision { get; set; }
+
+    internal bool ExplicitAuthorization { get; }
+
+    internal bool Dirty { get; set; }
+
+    internal bool Published { get; set; }
+
+    internal bool Retired { get; set; }
+
+    public ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
+        => new(_store.ReadTokens(this, cancellationToken));
+
+    public ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken)
+    {
+        _store.StoreTokens(this, tokens, cancellationToken);
+        return default;
+    }
+}
 
 /// <summary>
-/// Shared durable authority for every MCP SDK token cache. Epoch-conditional
-/// transactions reject writes from retired connections and stale processes.
+/// Durable authority for active MCP OAuth credentials. The daemon lifecycle
+/// gate publishes one cache owner; unpublished authorization state stays local.
 /// </summary>
 internal sealed class McpOAuthCredentialStore
 {
@@ -161,8 +94,7 @@ internal sealed class McpOAuthCredentialStore
     private readonly TimeProvider _timeProvider;
     private readonly ISecretsProtector _protector;
     private readonly ILogger<McpOAuthCredentialStore> _logger;
-    private readonly ConcurrentDictionary<McpServerName, McpOAuthCredentialEnvelope> _credentials = new();
-    private readonly ConcurrentDictionary<McpServerName, object> _serverLocks = new();
+    private readonly ConcurrentDictionary<McpServerName, ServerCredentialState> _servers = new();
 
     public McpOAuthCredentialStore(
         NetclawPaths paths,
@@ -174,7 +106,7 @@ internal sealed class McpOAuthCredentialStore
         _timeProvider = timeProvider;
         _protector = protector ?? throw new ArgumentNullException(nameof(protector));
         _logger = logger;
-        LoadAndRecoverDurableState();
+        LoadDurableState();
     }
 
     public static string CanonicalizeResource(string endpoint)
@@ -188,95 +120,106 @@ internal sealed class McpOAuthCredentialStore
         return builder.Uri.AbsoluteUri;
     }
 
-    public McpOAuthClientContext CreateContext(
+    public McpOAuthTokenCache CreateTokenCache(
         McpServerName serverName,
         string resourceIdentity,
         string? configuredClientId,
         bool explicitAuthorization)
     {
         var canonicalResource = CanonicalizeResource(resourceIdentity);
-        lock (GetServerLock(serverName))
+        var state = GetState(serverName);
+        lock (state.Sync)
         {
-            var envelope = GetEnvelope(serverName);
-            var active = IsBound(envelope.Active, canonicalResource) ? envelope.Active : null;
-            var baseActiveEpoch = envelope.Active?.CredentialEpoch;
+            var active = GetBoundOrMigrateLegacy(
+                serverName,
+                state,
+                canonicalResource,
+                configuredClientId);
+            McpOAuthClientIdentity identity;
             if (!string.IsNullOrWhiteSpace(configuredClientId))
             {
-                return new McpOAuthClientContext(
-                    configuredClientId,
-                    null,
-                    false,
-                    canonicalResource,
-                    baseActiveEpoch);
+                identity = new McpOAuthClientIdentity(configuredClientId, null, false);
             }
-
-            var clientId = active is { DynamicClientRegistration: true } ? active.ClientId : null;
-            var clientSecret = active is { DynamicClientRegistration: true } ? active.ClientSecret?.Value : null;
-            var dynamic = !string.IsNullOrWhiteSpace(clientId);
-            if (explicitAuthorization
-                && dynamic
-                && string.Equals(envelope.RejectedDynamicClientId, clientId, StringComparison.Ordinal))
+            else
             {
-                clientId = null;
-                clientSecret = null;
-                dynamic = false;
+                identity = active is { DynamicClientRegistration: true, ClientId: not null }
+                    ? new McpOAuthClientIdentity(active.ClientId, active.ClientSecret?.Value, true)
+                    : new McpOAuthClientIdentity(null, null, false);
             }
 
-            return new McpOAuthClientContext(
-                clientId,
-                clientSecret,
-                dynamic,
+            return new McpOAuthTokenCache(
+                this,
+                serverName,
                 canonicalResource,
-                baseActiveEpoch);
+                identity,
+                explicitAuthorization ? null : active,
+                state.Revision,
+                explicitAuthorization);
         }
     }
 
-    public ITokenCache CreateTokenCache(
-        McpServerName serverName,
-        string resourceIdentity,
-        McpOAuthClientContext context,
-        McpOAuthCredentialTarget target,
-        string? flowId,
-        DateTimeOffset? pendingExpiresAt,
-        bool withholdAccessToken)
+    public void Publish(McpOAuthTokenCache cache, CancellationToken cancellationToken)
     {
-        var canonical = CanonicalizeResource(resourceIdentity);
-        if (!string.Equals(canonical, context.CanonicalResource, StringComparison.Ordinal))
-            throw new InvalidOperationException("OAuth context resource does not match the token-cache resource.");
-        if (target is McpOAuthCredentialTarget.Pending
-            && (string.IsNullOrWhiteSpace(flowId) || pendingExpiresAt is null))
-            throw new InvalidOperationException("Pending OAuth credentials require a flow identity and expiry.");
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
+        {
+            ThrowIfRetired(cache);
+            if (cache.ExplicitAuthorization && cache.Credentials is null)
+                throw new InvalidOperationException("OAuth authorization completed without storing credentials.");
+            if (!cache.ExplicitAuthorization && cache.Dirty && cache.BaseRevision != state.Revision)
+            {
+                throw new McpOAuthRetiredCredentialWriterException(
+                    "Active OAuth credentials changed while the replacement connection initialized.");
+            }
 
-        context.ConfigureCredentialView(target, flowId, pendingExpiresAt, withholdAccessToken);
-        return new CredentialTokenCache(this, serverName, context);
+            if (cache.Dirty)
+            {
+                var replacement = Clone(cache.Credentials)!;
+                if (replacement.RefreshToken is null
+                    && CanRetainRefreshToken(state.Active, replacement))
+                    replacement.RefreshToken = state.Active!.RefreshToken;
+                Persist(cache.ServerName, replacement, cancellationToken);
+                state.Active = replacement;
+                state.Revision++;
+            }
+            else
+            {
+                cache.Credentials = IsBound(state.Active, cache.CanonicalResource)
+                    ? Clone(state.Active)
+                    : null;
+            }
+
+            if (state.PublishedCache is { } previous && !ReferenceEquals(previous, cache))
+                previous.Retired = true;
+            state.PublishedCache = cache;
+            cache.BaseRevision = state.Revision;
+            cache.Published = true;
+        }
     }
 
-    public void CaptureDynamicRegistration(
-        McpServerName serverName,
-        McpOAuthClientContext context,
-        DynamicClientRegistrationResponse response,
-        CancellationToken cancellationToken)
+    public void Discard(McpOAuthTokenCache cache)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        cancellationToken.ThrowIfCancellationRequested();
-        lock (GetServerLock(serverName))
-            context.CaptureDynamicRegistration(response);
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
+        {
+            if (!cache.Published)
+                cache.Retired = true;
+        }
     }
 
     public McpOAuthTokenSet? GetBoundActive(McpServerName serverName, string resourceIdentity)
     {
         var canonical = CanonicalizeResource(resourceIdentity);
-        lock (GetServerLock(serverName))
-        {
-            var active = GetEnvelope(serverName).Active;
-            return IsBound(active, canonical) ? active : null;
-        }
+        var state = GetState(serverName);
+        lock (state.Sync)
+            return IsBound(state.Active, canonical) ? Clone(state.Active) : null;
     }
 
     public bool HasAnyActive(McpServerName serverName)
     {
-        lock (GetServerLock(serverName))
-            return GetEnvelope(serverName).Active is not null;
+        var state = GetState(serverName);
+        lock (state.Sync)
+            return state.Active is not null;
     }
 
     public bool RequiresAuthorization(McpServerName serverName, string resourceIdentity)
@@ -289,263 +232,126 @@ internal sealed class McpOAuthCredentialStore
     }
 
     /// <summary>
-    /// Transfers active credential ownership to a newly published ordinary
-    /// connection. No record is created for a server that has no OAuth credentials.
+    /// Drops a client identity the authorization server has rejected as
+    /// <c>invalid_client</c>, so the next explicit authorization registers a fresh one.
+    /// Tokens are left alone. This replaces a persisted "rejected id" marker: a provider
+    /// that deletes a client registration would otherwise leave every future
+    /// authorization reusing an id the server will never accept again.
     /// </summary>
-    public void ClaimActiveEpoch(
-        McpServerName serverName,
-        McpOAuthClientContext context,
-        CancellationToken cancellationToken)
-    {
-        lock (GetServerLock(serverName))
-        {
-            var current = GetEnvelope(serverName);
-            var view = context.SnapshotCredentialView();
-            if (view.Target is not McpOAuthCredentialTarget.Active)
-                throw new InvalidOperationException("A pending OAuth view cannot claim the active epoch.");
-
-            var committed = CommitEnvelope(
-                serverName,
-                current,
-                latest =>
-                {
-                    if (latest.Active is null)
-                        return view.ExpectedActiveEpoch is null
-                            ? EnvelopeMutation.Unchanged
-                            : EnvelopeMutation.Stale("Active OAuth credentials were removed before publication.");
-                    if (!IsBound(latest.Active, context.CanonicalResource))
-                        return EnvelopeMutation.Unchanged;
-                    if (string.Equals(latest.Active.CredentialEpoch, view.OwnerEpoch, StringComparison.Ordinal))
-                        return EnvelopeMutation.Unchanged;
-                    if (!EpochEquals(latest.Active.CredentialEpoch, view.ExpectedActiveEpoch))
-                        return EnvelopeMutation.Stale("Active OAuth credentials changed before candidate publication.");
-
-                    latest.Active.CredentialEpoch = view.OwnerEpoch;
-                    return EnvelopeMutation.Changed;
-                },
-                cancellationToken);
-
-            if (IsBound(committed.Active, context.CanonicalResource)
-                && string.Equals(committed.Active!.CredentialEpoch, view.OwnerEpoch, StringComparison.Ordinal))
-                context.Activate();
-        }
-    }
-
-    public void PromotePending(
-        McpServerName serverName,
-        McpOAuthClientContext context,
-        string flowId,
-        CancellationToken cancellationToken)
-    {
-        lock (GetServerLock(serverName))
-        {
-            var current = GetEnvelope(serverName);
-            var view = context.SnapshotCredentialView();
-            CommitEnvelope(
-                serverName,
-                current,
-                latest =>
-                {
-                    var pending = latest.Pending;
-                    if (pending is null
-                        || !string.Equals(pending.FlowId, flowId, StringComparison.Ordinal)
-                        || !string.Equals(pending.Credentials.CredentialEpoch, view.OwnerEpoch, StringComparison.Ordinal))
-                    {
-                        return EnvelopeMutation.Stale("Pending OAuth credentials no longer belong to this flow epoch.");
-                    }
-                    if (!EpochEquals(latest.Active?.CredentialEpoch, context.BaseActiveEpoch))
-                        return EnvelopeMutation.Stale("Active OAuth credentials changed while authorization was pending.");
-
-                    latest.Active = pending.Credentials;
-                    latest.Pending = null;
-                    latest.RejectedDynamicClientId = null;
-                    return EnvelopeMutation.Changed;
-                },
-                cancellationToken);
-            context.Activate();
-        }
-    }
-
-    public void RemovePending(McpServerName serverName, string flowId, CancellationToken cancellationToken)
-    {
-        lock (GetServerLock(serverName))
-        {
-            var current = GetEnvelope(serverName);
-            CommitEnvelope(
-                serverName,
-                current,
-                latest =>
-                {
-                    if (latest.Pending is null
-                        || !string.Equals(latest.Pending.FlowId, flowId, StringComparison.Ordinal))
-                        return EnvelopeMutation.Unchanged;
-                    latest.Pending = null;
-                    return EnvelopeMutation.Changed;
-                },
-                cancellationToken);
-        }
-    }
-
-    public void MarkDynamicIdentityRejected(
+    public void ForgetClientIdentity(
         McpServerName serverName,
         string resourceIdentity,
-        string? configuredClientId,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(configuredClientId))
-            return;
-
         var canonical = CanonicalizeResource(resourceIdentity);
-        lock (GetServerLock(serverName))
+        var state = GetState(serverName);
+        lock (state.Sync)
         {
-            var current = GetEnvelope(serverName);
-            CommitEnvelope(
-                serverName,
-                current,
-                latest =>
-                {
-                    var active = latest.Active;
-                    if (!IsBound(active, canonical)
-                        || active is not { DynamicClientRegistration: true }
-                        || string.IsNullOrWhiteSpace(active.ClientId))
-                        return EnvelopeMutation.Unchanged;
+            if (!IsBound(state.Active, canonical)
+                || state.Active is not { DynamicClientRegistration: true, ClientId: not null })
+                return;
 
-                    latest.RejectedDynamicClientId = active.ClientId;
-                    return EnvelopeMutation.Changed;
-                },
-                cancellationToken);
+            var replacement = Clone(state.Active)!;
+            replacement.ClientId = null;
+            replacement.ClientSecret = null;
+            replacement.DynamicClientRegistration = false;
+            Persist(serverName, replacement, cancellationToken);
+            state.Active = replacement;
+            state.Revision++;
+            if (state.PublishedCache is { } published)
+            {
+                published.Credentials = Clone(replacement);
+                published.BaseRevision = state.Revision;
+            }
+
+            _logger.LogWarning(
+                "Discarded the rejected OAuth client identity for MCP server '{Name}'. " +
+                "The next authorization will register a new client.",
+                serverName.Value);
         }
     }
 
-    internal McpOAuthCredentialEnvelope GetEnvelopeForTests(McpServerName serverName)
+    internal McpOAuthTokenSet? GetActiveForTests(McpServerName serverName)
     {
-        lock (GetServerLock(serverName))
-            return Clone(GetEnvelope(serverName));
+        var state = GetState(serverName);
+        lock (state.Sync)
+            return Clone(state.Active);
     }
 
-    private TokenContainer? ReadTokens(
-        McpServerName serverName,
-        McpOAuthClientContext context,
-        CancellationToken cancellationToken)
+    internal McpOAuthClientIdentity GetIdentity(McpOAuthTokenCache cache)
+    {
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
+            return cache.Identity;
+    }
+
+    internal TokenContainer? ReadTokens(McpOAuthTokenCache cache, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (GetServerLock(serverName))
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
         {
-            var view = context.SnapshotCredentialView();
-            if (view.WithholdAccessToken)
+            if (!IsBound(cache.Credentials, cache.CanonicalResource))
                 return null;
-            var envelope = GetEnvelope(serverName);
-            McpOAuthTokenSet? credentials;
-            if (view.Target is McpOAuthCredentialTarget.Pending)
-            {
-                var pending = envelope.Pending;
-                credentials = pending is not null
-                              && string.Equals(pending.FlowId, view.FlowId, StringComparison.Ordinal)
-                              && string.Equals(pending.Credentials.CredentialEpoch, view.OwnerEpoch, StringComparison.Ordinal)
-                    ? pending.Credentials
-                    : null;
-            }
-            else
-            {
-                credentials = envelope.Active is not null
-                              && EpochEquals(envelope.Active.CredentialEpoch, view.ExpectedActiveEpoch)
-                    ? envelope.Active
-                    : null;
-            }
-
-            if (!IsBound(credentials, context.CanonicalResource))
-                return null;
-            return ToTokenContainer(credentials!);
+            return ToTokenContainer(cache.Credentials!);
         }
     }
 
-    private void StoreTokens(
-        McpServerName serverName,
-        McpOAuthClientContext context,
+    internal void StoreTokens(
+        McpOAuthTokenCache cache,
         TokenContainer tokens,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (GetServerLock(serverName))
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
         {
-            var current = GetEnvelope(serverName);
-            var view = context.SnapshotCredentialView();
-            var identity = context.SnapshotIdentity();
-            string? committedEpoch = null;
-            CommitEnvelope(
-                serverName,
-                current,
-                latest =>
+            ThrowIfRetired(cache);
+            if (cache.Published && !ReferenceEquals(state.PublishedCache, cache))
+                throw new McpOAuthRetiredCredentialWriterException(
+                    "A retired OAuth connection attempted to replace active credentials.");
+            if (!cache.Published
+                && !cache.ExplicitAuthorization
+                && cache.BaseRevision != state.Revision)
+            {
+                throw new McpOAuthRetiredCredentialWriterException(
+                    "Active OAuth credentials changed while the replacement connection initialized.");
+            }
+
+            var replacement = CreateReplacement(tokens, cache.Credentials, cache.Identity, cache.CanonicalResource);
+            if (cache.Published || !cache.ExplicitAuthorization)
+            if (cache.Published || !cache.ExplicitAuthorization)
+            {
+                Persist(cache.ServerName, replacement, cancellationToken);
+                state.Active = replacement;
+                state.Revision++;
+                cache.BaseRevision = state.Revision;
+                if (!cache.Published
+                    && state.PublishedCache is { } published)
                 {
-                    McpOAuthTokenSet? retainedFrom;
-                    if (view.Target is McpOAuthCredentialTarget.Active)
-                    {
-                        if (!EpochEquals(latest.Active?.CredentialEpoch, view.ExpectedActiveEpoch))
-                            return EnvelopeMutation.Stale("A retired OAuth connection attempted to replace active credentials.");
-                        retainedFrom = IsBound(latest.Active, context.CanonicalResource)
-                            ? latest.Active
-                            : null;
-                        if (latest.Active is not null && retainedFrom is null)
-                            return EnvelopeMutation.Stale("Active OAuth credentials are bound to another resource.");
-                    }
-                    else
-                    {
-                        if (string.IsNullOrWhiteSpace(view.FlowId) || view.PendingExpiresAt is null)
-                            return EnvelopeMutation.Stale("Pending OAuth credential context is incomplete.");
-                        if (!EpochEquals(latest.Active?.CredentialEpoch, context.BaseActiveEpoch))
-                            return EnvelopeMutation.Stale("Active OAuth credentials changed while authorization was pending.");
+                    published.Credentials = Clone(replacement);
+                    published.BaseRevision = state.Revision;
+                }
+            }
 
-                        if (latest.Pending is null)
-                        {
-                            retainedFrom = IsBound(latest.Active, context.CanonicalResource)
-                                ? latest.Active
-                                : null;
-                        }
-                        else if (string.Equals(latest.Pending.FlowId, view.FlowId, StringComparison.Ordinal)
-                                 && string.Equals(
-                                     latest.Pending.Credentials.CredentialEpoch,
-                                     view.OwnerEpoch,
-                                     StringComparison.Ordinal)
-                                 && IsBound(latest.Pending.Credentials, context.CanonicalResource))
-                        {
-                            retainedFrom = latest.Pending.Credentials;
-                        }
-                        else
-                        {
-                            return EnvelopeMutation.Stale("Another OAuth flow owns the pending credential record.");
-                        }
-                    }
+            cache.Credentials = replacement;
+            cache.Dirty = cache.ExplicitAuthorization && !cache.Published;
+        }
+    }
 
-                    var replacementEpoch = view.Target is McpOAuthCredentialTarget.Pending
-                        ? view.OwnerEpoch
-                        : view.PublishedOwner
-                            ? Guid.NewGuid().ToString("N")
-                            : view.ExpectedActiveEpoch ?? view.OwnerEpoch;
-                    committedEpoch = replacementEpoch;
-                    var replacement = CreateReplacement(
-                        tokens,
-                        retainedFrom,
-                        identity,
-                        context,
-                        replacementEpoch);
-                    if (view.Target is McpOAuthCredentialTarget.Active)
-                    {
-                        latest.Active = replacement;
-                    }
-                    else
-                    {
-                        latest.Pending = new McpOAuthPendingCredential
-                        {
-                            FlowId = view.FlowId!,
-                            ExpiresAt = view.PendingExpiresAt!.Value,
-                            Credentials = replacement,
-                        };
-                    }
-
-                    return EnvelopeMutation.Changed;
-                },
-                cancellationToken);
-            context.MarkTokensStored(view.Target, committedEpoch!);
+    /// <summary>
+    /// Adopts a client identity obtained by <see cref="McpOAuthClientRegistrar"/>. The
+    /// identity reaches disk with the first token store, which is also the first moment
+    /// it is known to work.
+    /// </summary>
+    internal void AdoptClientIdentity(McpOAuthTokenCache cache, McpOAuthClientIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var state = GetState(cache.ServerName);
+        lock (state.Sync)
+        {
+            ThrowIfRetired(cache);
+            cache.Identity = identity;
         }
     }
 
@@ -553,16 +359,12 @@ internal sealed class McpOAuthCredentialStore
         TokenContainer tokens,
         McpOAuthTokenSet? retainedFrom,
         McpOAuthClientIdentity identity,
-        McpOAuthClientContext context,
-        string credentialEpoch)
+        string canonicalResource)
     {
         var obtainedAt = tokens.ObtainedAt == default ? _timeProvider.GetUtcNow() : tokens.ObtainedAt;
-        return new McpOAuthTokenSet
+        var replacement = new McpOAuthTokenSet
         {
             AccessToken = new SensitiveString(tokens.AccessToken),
-            RefreshToken = tokens.RefreshToken is not null
-                ? new SensitiveString(tokens.RefreshToken)
-                : retainedFrom?.RefreshToken,
             ExpiresAt = tokens.ExpiresIn is { } expiresIn
                 ? obtainedAt.AddSeconds(expiresIn)
                 : null,
@@ -572,15 +374,33 @@ internal sealed class McpOAuthCredentialStore
             ClientId = identity.ClientId,
             ClientSecret = identity.ClientSecret is null ? null : new SensitiveString(identity.ClientSecret),
             DynamicClientRegistration = identity.DynamicClientRegistration,
-            ResourceIdentity = context.CanonicalResource,
-            CredentialEpoch = credentialEpoch,
+            ResourceIdentity = canonicalResource,
         };
+        replacement.RefreshToken = tokens.RefreshToken is not null
+            ? new SensitiveString(tokens.RefreshToken)
+            : CanRetainRefreshToken(retainedFrom, replacement)
+                ? retainedFrom!.RefreshToken
+                : null;
+        return replacement;
     }
 
-    private static TokenContainer ToTokenContainer(McpOAuthTokenSet credentials)
+    private static bool CanRetainRefreshToken(McpOAuthTokenSet? current, McpOAuthTokenSet replacement)
+        => current?.RefreshToken is not null
+           && string.Equals(current.ResourceIdentity, replacement.ResourceIdentity, StringComparison.Ordinal)
+           && string.Equals(current.ClientId, replacement.ClientId, StringComparison.Ordinal)
+           && current.DynamicClientRegistration == replacement.DynamicClientRegistration;
+
+    private TokenContainer ToTokenContainer(McpOAuthTokenSet credentials)
     {
+        // Records written before ObtainedAt existed deserialize it as 0001-01-01. Anchoring
+        // the lifetime at "now" keeps ExpiresAt authoritative; measuring from the default
+        // produces ~6.4e10 seconds, which saturates the int conversion to int.MaxValue and
+        // makes the SDK treat every migrated credential as permanently expired.
+        var obtainedAt = credentials.ObtainedAt == default
+            ? _timeProvider.GetUtcNow()
+            : credentials.ObtainedAt;
         var expiresIn = credentials.ExpiresAt is { } expiresAt
-            ? (int)Math.Max(0, (expiresAt - credentials.ObtainedAt).TotalSeconds)
+            ? (int)Math.Clamp((expiresAt - obtainedAt).TotalSeconds, 0, int.MaxValue)
             : (int?)null;
         return new TokenContainer
         {
@@ -588,150 +408,197 @@ internal sealed class McpOAuthCredentialStore
             AccessToken = credentials.AccessToken.Value,
             RefreshToken = credentials.RefreshToken?.Value,
             ExpiresIn = expiresIn,
-            ObtainedAt = credentials.ObtainedAt,
+            ObtainedAt = obtainedAt,
             Scope = credentials.Scope,
         };
     }
 
-    private McpOAuthCredentialEnvelope CommitEnvelope(
+    private void Persist(
         McpServerName serverName,
-        McpOAuthCredentialEnvelope current,
-        Func<McpOAuthCredentialEnvelope, EnvelopeMutation> mutate,
+        McpOAuthTokenSet credentials,
         CancellationToken cancellationToken)
     {
-        var outcome = SecretsFileWriter.Update<EnvelopeCommitResult>(
+        SecretsFileWriter.Update<object?>(
             _paths.SecretsPath,
             (root, _) =>
             {
                 var section = root[SectionKey]?.AsObject() ?? [];
                 root[SectionKey] = section;
-                var latest = ReadEnvelope(section[serverName.Value]) ?? Clone(current);
-                var mutation = mutate(latest);
-                if (mutation.StaleReason is not null)
-                    return (null, new EnvelopeCommitResult(latest, mutation.StaleReason));
-                if (!mutation.HasChanges)
-                    return (null, new EnvelopeCommitResult(latest, null));
-
-                section[serverName.Value] = JsonSerializer.SerializeToNode(latest, JsonOptions);
-                return (root, new EnvelopeCommitResult(latest, null));
+                section[serverName.Value] = JsonSerializer.SerializeToNode(credentials, JsonOptions);
+                return (root, null);
             },
             JsonOptions,
             _protector,
             cancellationToken);
-
-        _credentials[serverName] = outcome.Envelope;
-        if (outcome.StaleReason is not null)
-            throw new McpOAuthStaleCredentialEpochException(outcome.StaleReason);
-        return outcome.Envelope;
     }
 
-    private void LoadAndRecoverDurableState()
+    private void LoadDurableState()
     {
         if (!File.Exists(_paths.SecretsPath))
             return;
 
-        var loaded = SecretsFileWriter.Update<Dictionary<McpServerName, McpOAuthCredentialEnvelope>>(
-            _paths.SecretsPath,
-            (root, _) =>
-            {
-                var result = new Dictionary<McpServerName, McpOAuthCredentialEnvelope>();
-                var changed = false;
-                if (root[SectionKey] is not JsonObject section)
-                    return (null, result);
-
-                foreach (var (name, node) in section)
+        Dictionary<McpServerName, McpOAuthTokenSet> loaded;
+        try
+        {
+            loaded = SecretsFileWriter.Update<Dictionary<McpServerName, McpOAuthTokenSet>>(
+                _paths.SecretsPath,
+                (root, _) =>
                 {
-                    if (node is null)
-                        continue;
-                    var envelope = ReadEnvelope(node);
-                    if (envelope is null)
-                        continue;
-
-                    // A pending record cannot resume without its broker flow. A
-                    // promoted active record is complete durable state and remains
-                    // usable after a crash between promotion and publication.
-                    if (envelope.Pending is not null)
+                    var result = new Dictionary<McpServerName, McpOAuthTokenSet>();
+                    if (root[SectionKey] is not JsonObject section)
+                        return (null, result);
+                    foreach (var (name, node) in section)
                     {
-                        envelope.Pending = null;
-                        changed = true;
+                        var credentials = node?.Deserialize<McpOAuthTokenSet>(JsonOptions);
+                        if (credentials is not null)
+                            result[new McpServerName(name)] = credentials;
                     }
-                    if (envelope.Active is { ResourceIdentity: not null, CredentialEpoch: null })
-                    {
-                        envelope.Active.CredentialEpoch = Guid.NewGuid().ToString("N");
-                        changed = true;
-                    }
+                    return (null, result);
+                },
+                JsonOptions,
+                _protector);
+        }
+        catch (Exception ex)
+        {
+            // This runs in a singleton constructor and decrypts the whole secrets file, so
+            // one unreadable leaf anywhere in it would otherwise take down daemon startup.
+            // Losing cached credentials costs a reauthorization; losing the daemon costs
+            // every channel, webhook, and schedule.
+            _logger.LogError(ex,
+                "Failed to load MCP OAuth credentials from {Path}. " +
+                "Affected MCP servers will require reauthorization.",
+                _paths.SecretsPath);
+            return;
+        }
 
-                    if (changed)
-                        section[name] = JsonSerializer.SerializeToNode(envelope, JsonOptions);
-                    result[new McpServerName(name)] = envelope;
-                }
-
-                return (changed ? root : null, result);
-            },
-            JsonOptions,
-            _protector);
-
-        foreach (var (name, envelope) in loaded)
-            _credentials[name] = envelope;
+        foreach (var (name, credentials) in loaded)
+            _servers[name] = new ServerCredentialState(credentials);
         if (loaded.Count > 0)
             _logger.LogDebug("Loaded MCP OAuth credentials for {Count} server(s)", loaded.Count);
     }
 
-    private object GetServerLock(McpServerName serverName)
-        => _serverLocks.GetOrAdd(serverName, static _ => new object());
+    private ServerCredentialState GetState(McpServerName serverName)
+        => _servers.GetOrAdd(serverName, static _ => new ServerCredentialState(null));
 
-    private McpOAuthCredentialEnvelope GetEnvelope(McpServerName serverName)
-        => _credentials.GetOrAdd(serverName, static _ => new McpOAuthCredentialEnvelope());
+    private McpOAuthTokenSet? GetBoundOrMigrateLegacy(
+        McpServerName serverName,
+        ServerCredentialState state,
+        string canonicalResource,
+        string? configuredClientId)
+    {
+        if (IsBound(state.Active, canonicalResource))
+            return Clone(state.Active);
+        if (state.Active is not { ResourceIdentity: null, McpServerUrl: not null } legacy)
+            return null;
+
+        string legacyResource;
+        try
+        {
+            legacyResource = CanonicalizeResource(legacy.McpServerUrl);
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex,
+                "Legacy MCP OAuth credentials for '{Name}' have an invalid resource binding",
+                serverName.Value);
+            return null;
+        }
+
+        if (!IsEquivalentResource(legacyResource, canonicalResource))
+        {
+            // Silence here reads as "no credentials" and sends the operator to
+            // reauthorization with no way to see why the stored ones were withheld.
+            _logger.LogWarning(
+                "Legacy MCP OAuth credentials for '{Name}' are bound to {LegacyResource}, " +
+                "which does not match the configured endpoint {ConfiguredResource}. " +
+                "Authorization is required for the configured endpoint.",
+                serverName.Value,
+                legacyResource,
+                canonicalResource);
+            return null;
+        }
+
+        var migrated = Clone(legacy)!;
+        migrated.ResourceIdentity = canonicalResource;
+
+        // McpServerUrl stays populated. Dropping it made migration a one-way transform: an
+        // endpoint corrected afterwards had no second chance to match, and a rollback to a
+        // release that reads this field lost the binding entirely.
+        if (migrated.ObtainedAt == default)
+            migrated.ObtainedAt = _timeProvider.GetUtcNow();
+        if (string.IsNullOrWhiteSpace(configuredClientId)
+            && !string.IsNullOrWhiteSpace(migrated.ClientId))
+            migrated.DynamicClientRegistration = true;
+        Persist(serverName, migrated, CancellationToken.None);
+        state.Active = migrated;
+        state.Revision++;
+        _logger.LogInformation(
+            "Migrated legacy MCP OAuth credentials for '{Name}' after exact resource match",
+            serverName.Value);
+        return Clone(migrated);
+    }
+
+    /// <summary>
+    /// Whether a legacy <c>McpServerUrl</c> may be migrated onto the configured endpoint.
+    /// Legacy records stored the RFC 8707 resource indicator, not the endpoint, so an
+    /// ordinal match is stricter than the data supports. Scheme and authority must still
+    /// agree exactly — a stored token's audience is its origin, and bridging origins would
+    /// hand credentials to a different host.
+    /// </summary>
+    private static bool IsEquivalentResource(string legacy, string configured)
+    {
+        if (string.Equals(legacy, configured, StringComparison.Ordinal))
+            return true;
+
+        if (!Uri.TryCreate(legacy, UriKind.Absolute, out var legacyUri)
+            || !Uri.TryCreate(configured, UriKind.Absolute, out var configuredUri))
+            return false;
+
+        if (!string.Equals(legacyUri.Scheme, configuredUri.Scheme, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(legacyUri.Authority, configuredUri.Authority, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var legacyPath = legacyUri.AbsolutePath.TrimEnd('/');
+        var configuredPath = configuredUri.AbsolutePath.TrimEnd('/');
+
+        // Trailing slash and path case describe the same endpoint. The query still has to
+        // agree — it can select a tenant, and a different tenant is a different resource.
+        if (string.Equals(legacyPath, configuredPath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(legacyUri.Query, configuredUri.Query, StringComparison.Ordinal))
+            return true;
+
+        // Providers commonly publish the resource indicator as the bare origin while the
+        // MCP endpoint sits on a path beneath it. That covers the whole origin, so it also
+        // covers the configured path and query. Only this narrowing direction is accepted;
+        // a path-scoped credential is never widened to a sibling path.
+        return legacyPath.Length == 0 && legacyUri.Query.Length == 0;
+    }
 
     private static bool IsBound(McpOAuthTokenSet? credentials, string canonicalResource)
         => credentials?.ResourceIdentity is { } binding
            && string.Equals(binding, canonicalResource, StringComparison.Ordinal);
 
-    private static bool EpochEquals(string? left, string? right)
-        => string.Equals(left, right, StringComparison.Ordinal);
-
-    private static McpOAuthCredentialEnvelope? ReadEnvelope(JsonNode? node)
+    private static void ThrowIfRetired(McpOAuthTokenCache cache)
     {
-        if (node is not JsonObject obj)
-            return null;
-        if (obj.ContainsKey(nameof(McpOAuthCredentialEnvelope.Active))
-            || obj.ContainsKey(nameof(McpOAuthCredentialEnvelope.Pending))
-            || obj.ContainsKey(nameof(McpOAuthCredentialEnvelope.RejectedDynamicClientId)))
-            return obj.Deserialize<McpOAuthCredentialEnvelope>(JsonOptions);
-
-        var legacy = obj.Deserialize<McpOAuthTokenSet>(JsonOptions);
-        return legacy is null ? null : new McpOAuthCredentialEnvelope { Active = legacy };
+        if (cache.Retired)
+            throw new McpOAuthRetiredCredentialWriterException(
+                "A retired OAuth connection attempted to replace active credentials.");
     }
 
-    private static McpOAuthCredentialEnvelope Clone(McpOAuthCredentialEnvelope envelope)
-        => JsonSerializer.Deserialize<McpOAuthCredentialEnvelope>(
-            JsonSerializer.Serialize(envelope, JsonOptions), JsonOptions)!;
+    private static McpOAuthTokenSet? Clone(McpOAuthTokenSet? credentials)
+        => credentials is null
+            ? null
+            : JsonSerializer.Deserialize<McpOAuthTokenSet>(
+                JsonSerializer.Serialize(credentials, JsonOptions), JsonOptions)!;
 
-    private sealed record EnvelopeCommitResult(
-        McpOAuthCredentialEnvelope Envelope,
-        string? StaleReason);
-
-    private readonly record struct EnvelopeMutation(bool HasChanges, string? StaleReason)
+    private sealed class ServerCredentialState(McpOAuthTokenSet? active)
     {
-        public static EnvelopeMutation Changed => new(true, null);
+        public object Sync { get; } = new();
 
-        public static EnvelopeMutation Unchanged => new(false, null);
+        public McpOAuthTokenSet? Active { get; set; } = active;
 
-        public static EnvelopeMutation Stale(string reason) => new(false, reason);
-    }
+        public int Revision { get; set; }
 
-    private sealed class CredentialTokenCache(
-        McpOAuthCredentialStore store,
-        McpServerName serverName,
-        McpOAuthClientContext context) : ITokenCache
-    {
-        public ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
-            => new(store.ReadTokens(serverName, context, cancellationToken));
-
-        public ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken)
-        {
-            store.StoreTokens(serverName, context, tokens, cancellationToken);
-            return default;
-        }
+        public McpOAuthTokenCache? PublishedCache { get; set; }
     }
 }
