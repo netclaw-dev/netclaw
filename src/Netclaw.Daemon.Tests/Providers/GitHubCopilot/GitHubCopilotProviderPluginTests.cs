@@ -45,8 +45,29 @@ public sealed class GitHubCopilotProviderPluginTests
     private static GitHubCopilotProviderPlugin NewPlugin()
     {
         var exchanger = NewExchanger();
-        var descriptor = new GitHubCopilotDescriptor(new HttpClient(), exchanger);
+        var descriptor = DescriptorWithModels(exchanger, "/chat/completions");
         return new GitHubCopilotProviderPlugin(descriptor, exchanger);
+    }
+
+    private static GitHubCopilotDescriptor DescriptorWithModels(
+        CopilotTokenExchanger exchanger, params string[] endpoints)
+    {
+        var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                data = new[]
+                {
+                    new
+                    {
+                        id = "gpt-4o",
+                        capabilities = new { type = "chat" },
+                        supported_endpoints = endpoints,
+                    },
+                },
+            }), Encoding.UTF8, "application/json"),
+        });
+        return new GitHubCopilotDescriptor(new HttpClient(handler), exchanger);
     }
 
     [Fact]
@@ -119,7 +140,7 @@ public sealed class GitHubCopilotProviderPluginTests
         });
 
         var exchanger = ExchangerReturning("copilot-real", apiBase: "https://api.githubcopilot.com");
-        var descriptor = new GitHubCopilotDescriptor(new HttpClient(), exchanger);
+        var descriptor = DescriptorWithModels(exchanger, "/chat/completions");
         var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
         {
             TransportOverride = new HttpClientPipelineTransport(new HttpClient(captureHandler)),
@@ -161,7 +182,7 @@ public sealed class GitHubCopilotProviderPluginTests
         });
 
         var exchanger = ExchangerReturning("copilot-ghe", apiBase: "https://api.tenant.ghe.com");
-        var descriptor = new GitHubCopilotDescriptor(new HttpClient(), exchanger);
+        var descriptor = DescriptorWithModels(exchanger, "/chat/completions");
         var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
         {
             TransportOverride = new HttpClientPipelineTransport(new HttpClient(captureHandler)),
@@ -202,7 +223,7 @@ public sealed class GitHubCopilotProviderPluginTests
         });
 
         var exchanger = ExchangerReturning("copilot-ghe", apiBase: "https://api.tenant.ghe.com");
-        var descriptor = new GitHubCopilotDescriptor(new HttpClient(), exchanger);
+        var descriptor = DescriptorWithModels(exchanger, "/chat/completions");
         var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
         {
             TransportOverride = new HttpClientPipelineTransport(new HttpClient(captureHandler)),
@@ -226,6 +247,80 @@ public sealed class GitHubCopilotProviderPluginTests
         Assert.Equal("copilot-proxy.example.com", sentUri!.Host);
     }
 
+    [Fact]
+    public async Task CreateChatClient_ResponsesOnlyModel_UsesResponsesAtTokenHostWithCopilotHeaders()
+    {
+        Uri? sentUri = null;
+        HttpRequestMessage? sentRequest = null;
+        var captureHandler = new FakeHttpMessageHandler(req =>
+        {
+            sentUri = req.RequestUri;
+            sentRequest = req;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(MinimalResponseJson, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var exchanger = ExchangerReturning("copilot-ghe", apiBase: "https://api.tenant.ghe.com");
+        var descriptor = DescriptorWithModels(exchanger, "/responses", "ws:/responses");
+        var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
+        {
+            TransportOverride = new HttpClientPipelineTransport(new HttpClient(captureHandler)),
+        };
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot", AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("oauth-1"),
+        };
+
+        var client = plugin.CreateChatClient(
+            entry, new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" });
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(sentUri);
+        Assert.Equal("api.tenant.ghe.com", sentUri!.Host);
+        Assert.Equal("/responses", sentUri.AbsolutePath);
+        Assert.Equal("Bearer copilot-ghe", sentRequest!.Headers.Authorization!.ToString());
+        Assert.Equal("vscode-chat", sentRequest.Headers.GetValues("copilot-integration-id").Single());
+        Assert.True(sentRequest.Headers.Contains("editor-version"));
+        Assert.Equal("conversation-agent", sentRequest.Headers.GetValues("openai-intent").Single());
+        var userAgent = sentRequest.Headers.UserAgent.ToString();
+        Assert.StartsWith(NetclawUserAgent.Value, userAgent);
+        Assert.Equal(1, userAgent.Split(NetclawUserAgent.Value, StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public async Task CreateChatClient_ModelWithoutHttpEndpoint_FailsBeforeInference()
+    {
+        var inferenceCalls = 0;
+        var exchanger = ExchangerReturning("copilot-ghe", apiBase: "https://api.tenant.ghe.com");
+        var descriptor = DescriptorWithModels(exchanger, "ws:/responses");
+        var plugin = new GitHubCopilotProviderPlugin(descriptor, exchanger)
+        {
+            TransportOverride = new HttpClientPipelineTransport(new HttpClient(
+                new FakeHttpMessageHandler(_ =>
+                {
+                    Interlocked.Increment(ref inferenceCalls);
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }))),
+        };
+        var entry = new ProviderEntry
+        {
+            Type = "github-copilot", AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("oauth-1"),
+        };
+        var client = plugin.CreateChatClient(
+            entry, new ModelReference { Provider = "my-copilot", ModelId = "gpt-4o" });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("does not advertise a supported HTTP inference endpoint", error.Message);
+        Assert.Equal(0, inferenceCalls);
+    }
+
     private const string MinimalChatCompletionJson =
         """
         {
@@ -241,6 +336,26 @@ public sealed class GitHubCopilotProviderPluginTests
             }
           ],
           "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        }
+        """;
+
+    private const string MinimalResponseJson =
+        """
+        {
+          "id": "resp-test",
+          "object": "response",
+          "created_at": 0,
+          "status": "completed",
+          "model": "gpt-4o",
+          "output": [
+            {
+              "id": "msg-test",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [ { "type": "output_text", "text": "ok", "annotations": [] } ]
+            }
+          ]
         }
         """;
 }

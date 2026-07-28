@@ -128,5 +128,6 @@ internal sealed class CopilotRequestPolicy(
         headers.Set("copilot-integration-id", "vscode-chat");
         headers.Set("editor-version", "Netclaw/1.0");
         headers.Set("openai-intent", "conversation-agent");
+        headers.Set("user-agent", NetclawUserAgent.Value);
     }
 }
