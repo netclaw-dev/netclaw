@@ -320,7 +320,6 @@ internal sealed class McpOAuthCredentialStore
 
             var replacement = CreateReplacement(tokens, cache.Credentials, cache.Identity, cache.CanonicalResource);
             if (cache.Published || !cache.ExplicitAuthorization)
-            if (cache.Published || !cache.ExplicitAuthorization)
             {
                 Persist(cache.ServerName, replacement, cancellationToken);
                 state.Active = replacement;
