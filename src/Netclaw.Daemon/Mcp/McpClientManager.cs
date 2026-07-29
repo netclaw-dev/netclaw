@@ -6,7 +6,6 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
@@ -430,11 +429,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     functions,
                     checked(current.Generation + 1),
                     connectedStatus);
-                _toolRegistry.PublishMcpServerTools(
-                    current.Name.Value,
-                    publishedTools,
-                    lifecycle.SnapshotSlot,
-                    replacement);
+                // Connection first, tools second. A tool the model can see is then always
+                // dispatchable, because dispatch resolves it from this snapshot.
+                lifecycle.Publish(replacement);
+                _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
                 candidate = null;
                 oauthCache = null;
             }
@@ -609,11 +607,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         try
         {
             var client = lifecycle.Snapshot?.Client;
-            _toolRegistry.PublishMcpServerTools<McpServerSnapshot>(
-                serverName.Value,
-                [],
-                lifecycle.SnapshotSlot,
-                null);
+            // Tools first, connection second. The model stops seeing the server's tools
+            // before dispatch loses the snapshot that resolves them.
+            _toolRegistry.PublishMcpServerTools(serverName.Value, []);
+            lifecycle.Publish(null);
 
             if (client is null)
                 return;
@@ -1142,11 +1139,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             foreach (var (serverName, lifecycle) in _servers)
             {
-                _toolRegistry.PublishMcpServerTools<McpServerSnapshot>(
-                    serverName.Value,
-                    [],
-                    lifecycle.SnapshotSlot,
-                    null);
+                _toolRegistry.PublishMcpServerTools(serverName.Value, []);
+                lifecycle.Publish(null);
             }
         }
 
@@ -1213,20 +1207,13 @@ internal sealed record McpClientCandidate(
 
 internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
 {
-    private readonly StrongBox<McpServerSnapshot?> _snapshot = new(initialSnapshot);
+    private McpServerSnapshot? _snapshot = initialSnapshot;
 
     public SemaphoreSlim Gate { get; } = new(1, 1);
 
-    public McpServerSnapshot? Snapshot => Volatile.Read(ref _snapshot.Value);
+    public McpServerSnapshot? Snapshot => Volatile.Read(ref _snapshot);
 
-    /// <summary>
-    /// The slot <see cref="ToolRegistry.PublishMcpServerTools"/> writes while holding its
-    /// own lock, so publishing the snapshot and swapping the tools happen together without
-    /// the registry invoking code it does not own.
-    /// </summary>
-    public StrongBox<McpServerSnapshot?> SnapshotSlot => _snapshot;
-
-    public void Publish(McpServerSnapshot? snapshot) => Volatile.Write(ref _snapshot.Value, snapshot);
+    public void Publish(McpServerSnapshot? snapshot) => Volatile.Write(ref _snapshot, snapshot);
 }
 
 internal sealed record McpServerSnapshot(

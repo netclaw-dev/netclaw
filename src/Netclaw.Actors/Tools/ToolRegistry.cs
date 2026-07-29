@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -28,58 +27,52 @@ public sealed record McpServerSummary(string ServerName, string Description, int
 /// </summary>
 public sealed class ToolRegistry
 {
-    private readonly List<ToolRegistration> _tools = [];
-    private readonly object _sync = new();
+    // Copy-on-write. Registrations change at startup, at MCP reconnect, and at shutdown.
+    // Reads happen on every tool call from every concurrent session, so a reader takes no
+    // lock and copies nothing: it reads this field once and works on that array. A writer
+    // holds _writeSync, builds a replacement array, and publishes it in one volatile write,
+    // so a reader sees either the old set or the new set and never a partial swap.
+    private volatile ToolRegistration[] _tools = [];
+    private readonly object _writeSync = new();
 
     public void Register(INetclawTool tool)
     {
-        lock (_sync)
-            _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+        lock (_writeSync)
+            _tools = [.._tools, new ToolRegistration(tool, tool.GrantCategory)];
     }
 
     public void Replace(INetclawTool tool)
     {
-        lock (_sync)
+        lock (_writeSync)
         {
-            _tools.RemoveAll(t => string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal));
-            _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+            _tools =
+            [
+                .._tools.Where(t => !string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal)),
+                new ToolRegistration(tool, tool.GrantCategory),
+            ];
         }
     }
 
     /// <summary>
-    /// Swaps one MCP server's tools and publishes the caller's connection snapshot in the
-    /// same critical section, so a caller that observes the new tools is guaranteed to
-    /// observe the snapshot that produced them.
+    /// Replaces every tool of one MCP server in a single publication. Pass an empty list to
+    /// remove the server. A reader never sees the server with a partial tool set.
     /// </summary>
     /// <remarks>
-    /// The snapshot arrives as a slot plus a value rather than a callback. The write below
-    /// happens while <c>_sync</c> is held, and running caller-supplied code there would put
-    /// the registry's liveness at the mercy of whatever that code does — take another lock,
-    /// block, or grow one later. A slot lets this method perform the only write it needs
-    /// while executing nothing it does not own.
-    ///
-    /// The ordering guarantee is one-directional. Snapshot readers do not take
-    /// <c>_sync</c>, so a caller may still observe a new snapshot alongside tools it has
-    /// already read. That is harmless here: dispatch resolves tools from the snapshot, and
-    /// the registry only supplies the model's advertised tool list.
+    /// The caller owns the order against its own connection state. Publish the connection
+    /// first and the tools second when a server comes up, so a tool the model can see is
+    /// always dispatchable. Remove the tools first and the connection second when a server
+    /// goes down, so the model stops seeing a tool before dispatch loses it.
     /// </remarks>
-    public void PublishMcpServerTools<TSnapshot>(
-        string serverName,
-        IReadOnlyList<McpToolAdapter> tools,
-        StrongBox<TSnapshot?> snapshotSlot,
-        TSnapshot? snapshot)
-        where TSnapshot : class
+    public void PublishMcpServerTools(string serverName, IReadOnlyList<McpToolAdapter> tools)
     {
-        ArgumentNullException.ThrowIfNull(snapshotSlot);
-
-        lock (_sync)
+        lock (_writeSync)
         {
-            _tools.RemoveAll(t => t.Tool is McpToolAdapter mcp
-                                  && string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase));
-            foreach (var tool in tools)
-                _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
-
-            Volatile.Write(ref snapshotSlot.Value, snapshot);
+            _tools =
+            [
+                .._tools.Where(t => t.Tool is not McpToolAdapter mcp
+                                    || !string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase)),
+                ..tools.Select(t => new ToolRegistration(t, t.GrantCategory)),
+            ];
         }
     }
 
@@ -88,8 +81,8 @@ public sealed class ToolRegistry
     /// </summary>
     public void Register(AITool tool, string grantCategory)
     {
-        lock (_sync)
-            _tools.Add(new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory));
+        lock (_writeSync)
+            _tools = [.._tools, new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory)];
     }
 
     /// <summary>All registered tools as AITool for ChatOptions.Tools.</summary>
@@ -137,15 +130,15 @@ public sealed class ToolRegistry
 
     private ToolRegistration? FindRegistration(string name)
     {
-        lock (_sync)
-        {
-            var direct = _tools.FirstOrDefault(t => t.Tool.Name == name);
-            if (direct is not null)
-                return direct;
-            return _tools.FirstOrDefault(t =>
-                t.Tool is McpToolAdapter mcp
-                && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal));
-        }
+        // One volatile read. Both passes below scan the same array, so a concurrent
+        // publication cannot make the canonical pass and the alias pass disagree.
+        var tools = _tools;
+        var direct = tools.FirstOrDefault(t => t.Tool.Name == name);
+        if (direct is not null)
+            return direct;
+        return tools.FirstOrDefault(t =>
+            t.Tool is McpToolAdapter mcp
+            && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -161,7 +154,9 @@ public sealed class ToolRegistry
     /// <summary>
     /// Returns all registered tool registrations (for search and dynamic loading).
     /// </summary>
-    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => GetRegistrationsSnapshot();
+    // Wrapped, not copied: callers receive the shared array behind a read-only view so a
+    // cast cannot reach the registry's state.
+    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => Array.AsReadOnly(_tools);
 
     /// <summary>
     /// Returns tools discovered from one MCP server.
@@ -476,11 +471,9 @@ public sealed class ToolRegistry
         return d[rows - 1, cols - 1];
     }
 
-    private IReadOnlyList<ToolRegistration> GetRegistrationsSnapshot()
-    {
-        lock (_sync)
-            return _tools.ToList();
-    }
+    // The published array is never mutated after publication, so a reader can use it
+    // directly. This replaces a lock plus a full list copy on every read.
+    private IReadOnlyList<ToolRegistration> GetRegistrationsSnapshot() => _tools;
 
     /// <summary>
     /// Adapter to wrap bare <see cref="AITool"/> instances (e.g. test fakes) as <see cref="INetclawTool"/>.
