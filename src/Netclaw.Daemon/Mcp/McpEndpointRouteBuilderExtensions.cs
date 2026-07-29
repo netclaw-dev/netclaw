@@ -62,6 +62,13 @@ public static class McpEndpointRouteBuilderExtensions
                     requestCancellation);
                 return Results.Ok(started);
             }
+            // A disconnected client is not a server error. Without this clause the
+            // catch-all below would map the aborted request onto an error response and
+            // log it as a failure. The filter keeps genuine timeouts, which arrive as
+            // TaskCanceledException while the request token is still live, classified as
+            // faults rather than as the caller hanging up.
+            // Same guard as the start endpoint: a client that hung up must not be
+            // reported as a callback failure.
             catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
             {
                 throw;

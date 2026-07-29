@@ -247,10 +247,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 arguments,
                 ct);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
         catch (McpException ex) when (!IsTransportOrSessionFailure(ex))
         {
             return $"Error: MCP tool '{serverName.Value}/{toolName.Value}' failed: {ex.Message}";

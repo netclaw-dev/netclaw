@@ -174,21 +174,19 @@ public static class ToolRegistrationExtensions
                 logger);
             adapters.Add(adapter);
 
-            if (maxSchemaWarnChars <= 0
-                || adapter.ParameterSchema.ValueKind == System.Text.Json.JsonValueKind.Undefined)
-                continue;
-
-            var schemaChars = adapter.ParameterSchema.GetRawText().Length;
-            if (schemaChars > maxSchemaWarnChars)
+            if (maxSchemaWarnChars > 0 && adapter.ParameterSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
             {
-                logger?.LogWarning(
-                    "MCP tool '{ServerName}/{ToolName}' has an oversized schema ({SchemaChars} chars, threshold {Threshold}). " +
-                    "This wastes context window budget when the tool is loaded. Consider asking the MCP server author to reduce schema verbosity.",
-                    serverName, tool.Name, schemaChars, maxSchemaWarnChars);
+                var schemaChars = adapter.ParameterSchema.GetRawText().Length;
+                if (schemaChars > maxSchemaWarnChars)
+                {
+                    logger?.LogWarning(
+                        "MCP tool '{ServerName}/{ToolName}' has an oversized schema ({SchemaChars} chars, threshold {Threshold}). " +
+                        "This wastes context window budget when the tool is loaded. Consider asking the MCP server author to reduce schema verbosity.",
+                        serverName, tool.Name, schemaChars, maxSchemaWarnChars);
+                }
             }
         }
 
         return adapters;
     }
-
 }
