@@ -87,22 +87,16 @@ internal sealed class McpOAuthClientRegistrar(
 
         if (!response.IsSuccessStatusCode)
         {
-            // The provider's response body can carry authorization codes and secrets, so it
-            // rides on an inner exception. The daemon logs the whole tree; the operator-facing
-            // message is synthesized separately by McpClientManager.CreateSafeOAuthError and
-            // never echoes this text.
-            var providerDetail = new HttpRequestException(
-                $"Client registration POST to {registrationEndpoint} returned " +
-                $"{(int)response.StatusCode} {response.StatusCode}: {body}",
-                inner: null,
-                response.StatusCode);
-
+            // Only the endpoint, the status, and the RFC 7591 error fields are reported.
+            // The raw body is deliberately not carried anywhere: this exception is logged,
+            // and daemon logs are OTLP-exported when telemetry is enabled, so an arbitrary
+            // provider blob would leave the machine. DescribeOAuthError allowlists the two
+            // standard fields, which is the part an operator can act on.
             throw new McpOAuthRegistrationException(
-                $"MCP server '{serverName.Value}' rejected dynamic client registration: " +
-                $"HTTP {(int)response.StatusCode} {response.StatusCode}{DescribeOAuthError(body)}. " +
-                $"Register a client manually and set OAuthClientId for '{serverName.Value}' " +
-                "in the MCP server config.",
-                providerDetail);
+                $"MCP server '{serverName.Value}' rejected dynamic client registration at " +
+                $"{registrationEndpoint}: HTTP {(int)response.StatusCode} {response.StatusCode}" +
+                $"{DescribeOAuthError(body)}. Register a client manually and set OAuthClientId " +
+                $"for '{serverName.Value}' in the MCP server config.");
         }
 
         string? clientId;

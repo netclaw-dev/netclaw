@@ -40,7 +40,8 @@ operator-facing error naming `OAuthClientId` as the remedy.
 - **GIVEN** an authorization server that publishes no `registration_endpoint`, or whose registration endpoint rejects the request
 - **WHEN** the operator runs explicit authorization
 - **THEN** the failure names `OAuthClientId` as the way to supply a manually registered client
-- **AND** the provider's response body reaches the daemon log but not the operator-facing message
+- **AND** the daemon log records the registration endpoint, the HTTP status, and the RFC 7591 `error` / `error_description` fields
+- **AND** the raw response body is not carried into any exception or log entry, because daemon logs are OTLP-exported when telemetry is enabled
 
 #### Scenario: Startup with bound cached tokens requires no metadata cache
 
@@ -305,7 +306,7 @@ already returned.
 - **GIVEN** a provider that advertises dynamic client registration but rejects it with HTTP 403 and no body
 - **WHEN** the operator runs explicit authorization
 - **THEN** the CLI displays the failing operation and the HTTP status
-- **AND** the daemon log contains the full response context
+- **AND** the daemon log contains the registration endpoint and the HTTP status
 
 #### Scenario: Bodyless daemon error still yields CLI output
 

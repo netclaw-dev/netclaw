@@ -559,8 +559,20 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         Assert.DoesNotContain("oauth-code", error.Error.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("token-value", terminal.Error?.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("secret-value", terminal.Error?.Error, StringComparison.Ordinal);
+
+        // Not the daemon log either. Logs are OTLP-exported when telemetry is enabled, so a
+        // provider that echoes credentials in an error body would otherwise have them shipped
+        // off the machine.
+        var logged = string.Join("\n", harness.Logger.Exceptions.Select(e => e.ToString()));
+        Assert.DoesNotContain("oauth-code", logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("token-value", logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-value", logged, StringComparison.Ordinal);
+
+        // The failing endpoint and status still reach the log, so the rejection stays
+        // diagnosable without the raw body.
         Assert.Contains(harness.Logger.Exceptions, exception =>
-            exception.ToString().Contains("secret-value", StringComparison.Ordinal));
+            exception.ToString().Contains("dynamic client registration", StringComparison.Ordinal)
+            && exception.ToString().Contains("HTTP 403", StringComparison.Ordinal));
     }
 
     private static async Task CompleteManagerAuthorizationAsync(
