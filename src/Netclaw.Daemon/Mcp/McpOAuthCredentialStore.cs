@@ -567,10 +567,18 @@ internal sealed class McpOAuthCredentialStore
             return true;
 
         // Providers commonly publish the resource indicator as the bare origin while the
-        // MCP endpoint sits on a path beneath it. That covers the whole origin, so it also
-        // covers the configured path and query. Only this narrowing direction is accepted;
-        // a path-scoped credential is never widened to a sibling path.
-        return legacyPath.Length == 0 && legacyUri.Query.Length == 0;
+        // MCP endpoint sits on a path beneath it, so narrowing origin -> path is accepted.
+        // A path-scoped credential is never widened to a sibling path.
+        //
+        // The configured side must carry no query. A legacy bare origin is ambiguous: it
+        // means either the authorization server declared an origin-wide audience, or the
+        // previous release fell back to the configured URL because the server published no
+        // resource at all — in which case the endpoint has since been repointed. Those are
+        // indistinguishable in the record, and a query can select a tenant, so a credential
+        // of unknown scope is not bound to a tenant-scoped endpoint.
+        return legacyPath.Length == 0
+               && legacyUri.Query.Length == 0
+               && configuredUri.Query.Length == 0;
     }
 
     private static bool IsBound(McpOAuthTokenSet? credentials, string canonicalResource)

@@ -306,9 +306,6 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     // Trailing slash and path case describe the same endpoint as Resource.
     [InlineData("https://mcp.example.com/tools/?tenant=one")]
     [InlineData("https://mcp.example.com/TOOLS?tenant=one")]
-    // Providers commonly publish the RFC 8707 resource indicator as the bare origin
-    // while the MCP endpoint sits on a path beneath it.
-    [InlineData("https://mcp.example.com")]
     public async Task LegacyResourceEquivalentToConfiguredEndpointMigrates(string legacyResource)
     {
         var paths = Paths();
@@ -331,6 +328,9 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     // The query can select a tenant, so a different one is a different resource.
     [InlineData("https://mcp.example.com/tools?tenant=two")]
     [InlineData("https://mcp.example.com/tools")]
+    // A bare origin cannot be distinguished from a pre-repoint configured URL, so it is
+    // not bound to an endpoint whose query may select a tenant.
+    [InlineData("https://mcp.example.com")]
     public async Task LegacyResourceFromADifferentAudienceFailsClosed(string legacyResource)
     {
         var paths = Paths();
@@ -342,6 +342,25 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         Assert.Null(await cache.GetTokensAsync(CancellationToken.None));
         Assert.Null(store.GetIdentity(cache).ClientId);
         Assert.Contains("legacy-access", File.ReadAllText(paths.SecretsPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LegacyBareOriginMigratesToAPathEndpointWithoutAQuery()
+    {
+        // The narrowing that providers actually produce: the authorization server declares
+        // the origin as the protected resource, the MCP endpoint sits on a path beneath it,
+        // and nothing about the binding is tenant-scoped.
+        const string endpoint = "https://mcp.example.com/tools";
+        var paths = Paths();
+        WriteLegacyCredentials(paths, "https://mcp.example.com");
+        var store = CreateStore(paths);
+
+        var cache = store.CreateTokenCache(ServerName, endpoint, null, false);
+
+        Assert.Equal("legacy-access", (await cache.GetTokensAsync(CancellationToken.None))?.AccessToken);
+        Assert.Equal(
+            McpOAuthCredentialStore.CanonicalizeResource(endpoint),
+            store.GetActiveForTests(ServerName)?.ResourceIdentity);
     }
 
     [Fact]
