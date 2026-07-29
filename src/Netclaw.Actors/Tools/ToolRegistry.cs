@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -45,12 +46,31 @@ public sealed class ToolRegistry
         }
     }
 
-    public void PublishMcpServerTools(
+    /// <summary>
+    /// Swaps one MCP server's tools and publishes the caller's connection snapshot in the
+    /// same critical section, so a caller that observes the new tools is guaranteed to
+    /// observe the snapshot that produced them.
+    /// </summary>
+    /// <remarks>
+    /// The snapshot arrives as a slot plus a value rather than a callback. The write below
+    /// happens while <c>_sync</c> is held, and running caller-supplied code there would put
+    /// the registry's liveness at the mercy of whatever that code does — take another lock,
+    /// block, or grow one later. A slot lets this method perform the only write it needs
+    /// while executing nothing it does not own.
+    ///
+    /// The ordering guarantee is one-directional. Snapshot readers do not take
+    /// <c>_sync</c>, so a caller may still observe a new snapshot alongside tools it has
+    /// already read. That is harmless here: dispatch resolves tools from the snapshot, and
+    /// the registry only supplies the model's advertised tool list.
+    /// </remarks>
+    public void PublishMcpServerTools<TSnapshot>(
         string serverName,
         IReadOnlyList<McpToolAdapter> tools,
-        Action publishSnapshot)
+        StrongBox<TSnapshot?> snapshotSlot,
+        TSnapshot? snapshot)
+        where TSnapshot : class
     {
-        ArgumentNullException.ThrowIfNull(publishSnapshot);
+        ArgumentNullException.ThrowIfNull(snapshotSlot);
 
         lock (_sync)
         {
@@ -59,10 +79,7 @@ public sealed class ToolRegistry
             foreach (var tool in tools)
                 _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
 
-            // Registry readers use this same lock. Publishing the manager
-            // snapshot here makes its volatile write the linearization point:
-            // readers can observe either the old pair or the new pair, not a mix.
-            publishSnapshot();
+            Volatile.Write(ref snapshotSlot.Value, snapshot);
         }
     }
 
