@@ -555,8 +555,8 @@ public sealed class WizardSecretsBuilder
                 var shouldWrite = hasDirectSecrets || contributionChanged && (fileExisted || HasUserSecretData(latest));
                 return shouldWrite ? (mergedRoot, true) : (null, false);
             },
-            JsonDefaults.ConfigFile,
-            SecretsProtection.CreateProtector(_paths));
+            SecretsProtection.CreateProtector(_paths),
+            JsonDefaults.ConfigFile);
     }
 
     internal void ApplyContribution(SectionContribution contribution)

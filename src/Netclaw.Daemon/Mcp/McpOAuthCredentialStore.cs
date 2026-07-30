@@ -426,8 +426,8 @@ internal sealed class McpOAuthCredentialStore
                 section[serverName.Value] = JsonSerializer.SerializeToNode(credentials, JsonOptions);
                 return (root, null);
             },
-            JsonOptions,
             _protector,
+            JsonOptions,
             cancellationToken);
     }
 
@@ -454,8 +454,8 @@ internal sealed class McpOAuthCredentialStore
                     }
                     return (null, result);
                 },
-                JsonOptions,
-                _protector);
+                _protector,
+                JsonOptions);
         }
         catch (Exception ex)
         {

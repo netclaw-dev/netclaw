@@ -32,7 +32,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     public void Write_creates_file_with_correct_content()
     {
         var json = """{"key": "value"}""";
-        SecretsFileWriter.Write(_secretsPath, json);
+        SecretsFileWriter.Write(_secretsPath, json, new NullSecretsProtector());
 
         Assert.True(File.Exists(_secretsPath));
         Assert.Contains("key", File.ReadAllText(_secretsPath), StringComparison.Ordinal);
@@ -44,7 +44,7 @@ public sealed class SecretsFileWriterTests : IDisposable
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return; // Skip on Windows
 
-        SecretsFileWriter.Write(_secretsPath, """{"test": true}""");
+        SecretsFileWriter.Write(_secretsPath, """{"test": true}""", new NullSecretsProtector());
 
         var mode = File.GetUnixFileMode(_secretsPath);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
@@ -54,7 +54,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     public void Write_creates_parent_directories()
     {
         var nestedPath = Path.Combine(_dir.Path, "nested", "deep", "secrets.json");
-        SecretsFileWriter.Write(nestedPath, """{}""");
+        SecretsFileWriter.Write(nestedPath, """{}""", new NullSecretsProtector());
 
         Assert.True(File.Exists(nestedPath));
     }
@@ -252,7 +252,7 @@ public sealed class SecretsFileWriterTests : IDisposable
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        SecretsFileWriter.Write(_secretsPath, """{"Existing":"keep"}""");
+        SecretsFileWriter.Write(_secretsPath, """{"Existing":"keep"}""", new NullSecretsProtector());
         var before = File.ReadAllText(_secretsPath);
         var originalMode = File.GetUnixFileMode(_dir.Path);
 
@@ -267,6 +267,7 @@ public sealed class SecretsFileWriterTests : IDisposable
                     root["Existing"] = "lost";
                     return (root, true);
                 },
+                new NullSecretsProtector(),
                 cancellationToken: TestContext.Current.CancellationToken));
         }
         finally

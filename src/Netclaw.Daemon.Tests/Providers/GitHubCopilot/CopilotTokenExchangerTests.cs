@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
@@ -194,7 +195,12 @@ public sealed class CopilotTokenExchangerTests
             "https://api.github.com/copilot_internal/v2/token",
         ], requestUris);
 
-        using var secretsDoc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
+        // Refreshed credentials reach disk encrypted.
+        var rawSecrets = File.ReadAllText(paths.SecretsPath);
+        Assert.DoesNotContain("oauth-new", rawSecrets, StringComparison.Ordinal);
+
+        using var secretsDoc = JsonDocument.Parse(SecretsFileWriter.DecryptJsonLeaves(
+            rawSecrets, SecretsProtection.CreateProtector(paths)));
         var secretProvider = secretsDoc.RootElement.GetProperty("Providers").GetProperty("copilot");
         Assert.Equal("oauth-new", secretProvider.GetProperty("OAuthAccessToken").GetString());
         Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());

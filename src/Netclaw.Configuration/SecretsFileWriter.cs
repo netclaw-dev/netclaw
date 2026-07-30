@@ -31,7 +31,7 @@ public static class SecretsFileWriter
     /// Write JSON content to the secrets file, creating parent directories as needed.
     /// On Linux/macOS, the file is set to owner-only read/write (chmod 600).
     /// </summary>
-    public static void Write(string secretsPath, string json, ISecretsProtector? protector = null)
+    public static void Write(string secretsPath, string json, ISecretsProtector protector)
     {
         using var secretsLock = AcquireSecretsLock(secretsPath, CancellationToken.None);
         WriteUnlocked(secretsPath, json, protector);
@@ -44,8 +44,8 @@ public static class SecretsFileWriter
     public static TResult Update<TResult>(
         string secretsPath,
         Func<JsonObject, bool, (JsonObject? UpdatedRoot, TResult Result)> update,
+        ISecretsProtector protector,
         JsonSerializerOptions? options = null,
-        ISecretsProtector? protector = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(update);
@@ -63,21 +63,20 @@ public static class SecretsFileWriter
         return outcome.Result;
     }
 
-    private static JsonObject ReadUnlocked(string secretsPath, ISecretsProtector? protector)
+    private static JsonObject ReadUnlocked(string secretsPath, ISecretsProtector protector)
     {
-        var json = File.ReadAllText(secretsPath);
-        if (protector is not null)
-            json = DecryptJsonLeaves(json, protector);
+        ArgumentNullException.ThrowIfNull(protector);
+        var json = DecryptJsonLeaves(File.ReadAllText(secretsPath), protector);
 
         var node = JsonNode.Parse(json);
         return node as JsonObject
                ?? throw new InvalidDataException($"Secrets file '{secretsPath}' must contain a JSON object.");
     }
 
-    private static void WriteUnlocked(string secretsPath, string json, ISecretsProtector? protector)
+    private static void WriteUnlocked(string secretsPath, string json, ISecretsProtector protector)
     {
-        if (protector is not null)
-            json = EncryptJsonLeaves(json, protector);
+        ArgumentNullException.ThrowIfNull(protector);
+        json = EncryptJsonLeaves(json, protector);
 
         // Atomic rename, with owner-only perms applied to the temp BEFORE it becomes the
         // destination so secrets.json is never momentarily world-readable.
@@ -88,7 +87,7 @@ public static class SecretsFileWriter
     /// Serialize a dictionary to JSON and write it to the secrets file with hardened permissions.
     /// </summary>
     public static void Write(string secretsPath, Dictionary<string, object> secrets,
-        JsonSerializerOptions? options = null, ISecretsProtector? protector = null)
+        ISecretsProtector protector, JsonSerializerOptions? options = null)
     {
         var json = JsonSerializer.Serialize(secrets, options ?? DefaultJsonOptions);
         Write(secretsPath, json, protector);

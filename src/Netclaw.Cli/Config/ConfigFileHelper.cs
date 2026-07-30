@@ -233,8 +233,8 @@ internal static class ConfigFileHelper
                                   ?? [];
                 return (updatedRoot, outcome.Result);
             },
-            JsonDefaults.Indented,
             effectiveProtector,
+            JsonDefaults.Indented,
             cancellationToken);
     }
 

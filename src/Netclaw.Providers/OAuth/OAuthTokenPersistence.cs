@@ -25,7 +25,7 @@ public static class OAuthTokenPersistence
         NetclawPaths paths,
         string providerName,
         OAuthDeviceFlowResult result,
-        ISecretsProtector? protector = null)
+        ISecretsProtector protector)
     {
         paths.EnsureDirectoriesExist();
 
@@ -139,8 +139,8 @@ public static class OAuthTokenPersistence
         // Decrypt with the protector for this config's keys directory rather than the process-wide
         // SensitiveStringTypeConverter.Protector static (an ambient hook reserved for the
         // framework-instantiated converters, not a general service locator).
-        ISecretsProtector? protector = SecretsProtection.CreateProtector(paths);
-        if (protector is not null && ISecretsProtector.IsEncrypted(accessTokenStr))
+        var protector = SecretsProtection.CreateProtector(paths);
+        if (ISecretsProtector.IsEncrypted(accessTokenStr))
             accessTokenStr = protector.Unprotect(accessTokenStr);
 
         string? refreshTokenStr = null;
