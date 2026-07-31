@@ -1,11 +1,18 @@
 # approvals.tape — smoke the `netclaw approvals` TUI.
 #
-# Validates that the page opens (panel title renders), shows the
-# no-daemon / empty state, and exits cleanly on Ctrl+Q. This covers
-# ApprovalsManagerPage rendering regressions (including the .WithFillHeight()
-# scroll fix from #1351) without requiring a live daemon.
+# Validates that the page revokes the highlighted row and exits cleanly.
+# This covers the selection regression from #1703 without a live daemon.
 
 Output "/tmp/tape-approvals.gif"
+
+# ─── Seed approvals ──────────────────────────────────────────────────
+Type "mkdir -p $NETCLAW_HOME/config"
+Enter
+Wait+Screen@5s /TAPE\$/
+
+Type "first=alpha second=bravo jq -n '{version:2,audiences:{personal:{shell_execute:[{verb:env.first},{verb:env.second}]}}}' > $NETCLAW_HOME/config/tool-approvals.json"
+Enter
+Wait+Screen@5s /TAPE\$/
 
 # ─── Launch ──────────────────────────────────────────────────────────
 Type "netclaw approvals"
@@ -13,10 +20,21 @@ Enter
 
 # PanelNode title always renders regardless of daemon state.
 Wait+Screen@10s /Approvals Manager/
-Sleep 300ms
+Wait+Screen@5s /alpha anywhere/
+Wait+Screen@5s /bravo anywhere/
+
+# ─── Revoke the second row ───────────────────────────────────────────
+Down
+Wait+Screen@5s /bravo anywhere/
+Type "r"
+Wait+Screen@5s /Revoke 'bravo anywhere'/
+Enter
+Wait+Screen@5s /Removed 'bravo anywhere'/
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
+
+# Wait for the alternate screen to close before the shell receives input.
 Sleep 1s
 Wait+Screen@10s /TAPE\$/
 

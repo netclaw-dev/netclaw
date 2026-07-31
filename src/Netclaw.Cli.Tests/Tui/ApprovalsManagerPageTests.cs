@@ -150,6 +150,29 @@ public sealed class ApprovalsManagerPageTests : IDisposable
         Assert.Equal(ApprovalsManagerState.List, vm.CurrentState.Value);
     }
 
+    [Theory]
+    [InlineData(ConsoleKey.R)]
+    [InlineData(ConsoleKey.Delete)]
+    public async Task RevokeKey_OnSecondRow_RevokesHighlightedEntry(ConsoleKey revokeKey)
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("alpha"));
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("bravo"));
+
+        var (_, app, _) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(revokeKey);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
+        Assert.Contains(remaining, entry => entry.Verb == "alpha");
+        Assert.DoesNotContain(remaining, entry => entry.Verb == "bravo");
+    }
+
     [Fact]
     public async Task EscOnConfirm_CancelsRevoke()
     {
