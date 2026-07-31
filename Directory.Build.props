@@ -8,14 +8,11 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.25.0</VersionPrefix>
+    <VersionPrefix>0.25.1</VersionPrefix>
     <VersionSuffix></VersionSuffix>
-    <PackageReleaseNotes>- Preserve Git working context across sessions and subagents — A bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context (#1630)
-- User-written AGENTS.md for application-specific agent guidance — Operators can author ~/.netclaw/identity/AGENTS.md, layered after Netclaw's embedded operating core and inherited by sub-agents (#1622)
-- Memory curation no longer overwrites existing documents on collision — Create-decision collisions now append new content instead of silently overwriting the existing document (#1637)
-- STDIO MCP server arguments no longer rewritten — The daemon now preserves configured STDIO MCP server arguments, and uses one daemon-owned client per configured MCP server (#1636)
-- Logical skill access and authoritative inventory refresh — Skill loading now resolves through logical skill_load/skill_read_resource access with native &gt; managed-feed &gt; external precedence (#1634)
-- Bump SkillServer to stable — Netclaw.SkillClient 0.4.0-beta.4 → 0.4.0 (#1638)</PackageReleaseNotes>
+    <PackageReleaseNotes>
+      Bug Fixes: MCP OAuth lifecycle hardened to prevent credential loss on upgrade; MCP tool-level auth failures now visible; MCP permissions focus/save fixed in TUI; TUI approval revocation targets highlighted item. Internal: Migrate to MCP SDK 2.0.0; GitHub Copilot GHE model routing. Dependencies: Anthropic 12.39.0, Mattermost.NET 5.0.7, SkillClient 0.4.1, OpenTelemetry 1.17.0, OllamaSharp 5.4.27, SkiaSharp 4.150.1, SourceLink 10.0.301, Akka updated.
+    </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

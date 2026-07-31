@@ -1,5 +1,27 @@
 # NetClaw Release Notes
 
+## 0.25.1 (2026-07-31)
+
+### Bug Fixes
+- **MCP OAuth lifecycle hardened** — Takes back client registration from the MCP SDK to prevent credential loss on upgrade; fixes `token_endpoint_auth_method` hardcoding issue with RFC 7591 ([#1708](https://github.com/netclaw-dev/netclaw/pull/1708))
+- **MCP tool-level auth failures now visible** — Daemon logs MCP `isError: true` responses at warning level, fixes `netclaw mcp auth` fallback for older daemons during upgrades ([#1720](https://github.com/netclaw-dev/netclaw/pull/1720))
+- **MCP permissions focus and save interaction fixed in TUI** ([#1694](https://github.com/netclaw-dev/netclaw/pull/1694))
+- **Revoke the highlighted approval in TUI** — Approval revocation now targets the currently highlighted item ([#1721](https://github.com/netclaw-dev/netclaw/pull/1721))
+
+### Internal Improvements
+- **Migrate to ModelContextProtocol SDK 2.0.0** — Brings in thread-safe token cache and updated OAuth flow ([#1714](https://github.com/netclaw-dev/netclaw/pull/1714))
+- **GitHub Copilot GHE: route models through advertised responses endpoint** with model catalog support ([#1707](https://github.com/netclaw-dev/netclaw/pull/1707))
+
+### Dependency Updates
+- **Bump Anthropic SDK** — 12.35.1 → 12.39.0
+- **Bump Mattermost.NET** — 5.0.3 → 5.0.7
+- **Bump Netclaw.SkillClient** — 0.4.0 → 0.4.1
+- **Bump OpenTelemetry** — 1.16.0 → 1.17.0
+- **Bump OllamaSharp** — 5.4.25 → 5.4.27
+- **Bump SkiaSharp.NativeAssets.Linux** — 4.148.0 → 4.150.1
+- **Bump Microsoft.SourceLink.GitHub** — 10.0.300 → 10.0.301
+- **Bump Akka** — Akka.Cluster.Sharding and Akka.Persistence updated
+
 ## 0.25.0 (2026-07-18)
 
 This stable release concludes the 0.25.0 beta cycle (five beta releases from 0.25.0-beta.1 through beta.5) and adds a round of final polish focused on installation, CLI reliability, and daemon shutdown robustness.
