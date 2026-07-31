@@ -9,7 +9,7 @@
     <OpenTelemetryVersion>1.17.0</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
-    <MattermostNetVersion>5.0.3</MattermostNetVersion>
+    <MattermostNetVersion>5.0.7</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
