@@ -22,7 +22,9 @@ internal static class LlmSessionTestExtensions
     public static IServiceCollection AddLlmSessionCompositeRecords(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(_ => ShellExecutionEnvironment.Current);
         services.TryAddSingleton<IGitWorkingContextInspector, GitWorkingContextInspector>();
+        services.TryAddSingleton<IExecutionEnvironmentInspector, ExecutionEnvironmentInspector>();
         services.TryAddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
         services.TryAddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),

@@ -18,17 +18,19 @@ public sealed class ToolAccessPolicy
     private readonly ToolConfig _toolConfig;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
-    private readonly ShellCommandPolicy? _shellCommandPolicy;
+    private readonly ShellCommandPolicy _shellCommandPolicy;
     private readonly ToolPathPolicy? _toolPathPolicy;
     private readonly IShellTrustZonePolicy? _shellTrustZonePolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
     private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
+    private readonly ShellApprovalMatcher _shellApprovalMatcher;
+    private readonly ShellExecutionEnvironment _shellEnvironment;
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,
-        ShellCommandPolicy? shellCommandPolicy = null,
+        ShellCommandPolicy shellCommandPolicy,
         IToolApprovalMatcher? fileApprovalMatcher = null,
         ToolPathPolicy? toolPathPolicy = null,
         FeatureGates? featureGates = null,
@@ -39,6 +41,8 @@ public sealed class ToolAccessPolicy
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
+        _shellEnvironment = shellCommandPolicy.ExecutionEnvironment;
+        _shellApprovalMatcher = new ShellApprovalMatcher(_shellEnvironment);
         _toolPathPolicy = toolPathPolicy;
         _shellTrustZonePolicy = shellTrustZonePolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
@@ -135,7 +139,7 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("shell_requires_personal_context");
 
         var shellCommand = ExtractShellCommand(arguments);
-        if (_shellCommandPolicy is not null && shellCommand is not null)
+        if (shellCommand is not null)
         {
             var hardDenyDecision = _shellCommandPolicy.Evaluate(shellCommand);
             if (!hardDenyDecision.Allowed)
@@ -170,7 +174,7 @@ public sealed class ToolAccessPolicy
             }
         }
 
-        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(toolName, context, arguments, _shellApprovalMatcher);
     }
 
     /// <summary>
@@ -196,13 +200,20 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
-        var pathTokens = ExtractShellPathTokens(shellCommand);
+        if (!_shellEnvironment.TryExtractStaticPathTokens(
+                shellCommand,
+                workingDirectory,
+                out var pathTokens))
+        {
+            return ToolAccessDecision.Deny("shell_command_has_unresolved_syntax");
+        }
+
         if (pathTokens.Count == 0)
             return null;
 
         foreach (var pathToken in pathTokens)
         {
-            var expanded = ShellTokenizer.NormalizePathToken(pathToken, workingDirectory);
+            var expanded = _shellEnvironment.NormalizePathToken(pathToken, workingDirectory);
             if (expanded is null)
                 continue;
 
@@ -213,31 +224,21 @@ public sealed class ToolAccessPolicy
         return null;
     }
 
-    private static IReadOnlyList<string> ExtractShellPathTokens(string shellCommand)
+    private bool ShellCommandHasTrustZoneSensitiveInputs(string shellCommand, string? workingDirectory)
+        => !string.IsNullOrWhiteSpace(workingDirectory)
+           || ShellCommandHasPathArguments(shellCommand, workingDirectory);
+
+    private bool ShellCommandHasPathArguments(string shellCommand, string? workingDirectory)
     {
-        var pathTokens = new List<string>();
-        foreach (var segment in ShellTokenizer.GetAllCommandSegments(shellCommand))
+        if (!_shellEnvironment.TryExtractStaticPathTokens(
+                shellCommand,
+                workingDirectory,
+                out var pathTokens))
         {
-            foreach (var token in ShellTokenizer.Tokenize(segment))
-            {
-                var trimmed = TrimShellTokenPunctuation(token);
-                if (ShellTokenizer.LooksLikePath(trimmed))
-                    pathTokens.Add(trimmed);
-            }
+            return true;
         }
 
-        return pathTokens;
-    }
-
-    private static bool ShellCommandHasTrustZoneSensitiveInputs(string shellCommand, string? workingDirectory)
-        => !string.IsNullOrWhiteSpace(workingDirectory) || ShellCommandHasPathArguments(shellCommand);
-
-    private static string TrimShellTokenPunctuation(string token)
-        => token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
-
-    private static bool ShellCommandHasPathArguments(string shellCommand)
-    {
-        foreach (var token in ExtractShellPathTokens(shellCommand))
+        foreach (var token in pathTokens)
         {
             if (!string.IsNullOrWhiteSpace(token))
                 return true;
@@ -358,13 +359,18 @@ public sealed class ToolAccessPolicy
         // Safe-verb ∩ safe-space short-circuit. Runs only for shell and only
         // when the matcher could extract candidate verbs cleanly — messy
         // commands always prompt regardless of verb membership. Auto-allows
-        // demonstrably read-only verbs (cat/ls/grep/find/git status/...)
-        // when every effective directory is inside session_dir or project_dir.
+        // demonstrably read-only verbs (cat/ls/grep/find/git status/...) only
+        // when BOTH the cwd AND every path the command touches stay inside a
+        // safe-space root, and the command reads no non-filesystem provider
+        // drive. The cwd check alone is not enough: `cat /etc/passwd` (or
+        // `Get-ChildItem Env:`) from a trusted cwd reaches outside the zone, so
+        // OperationStaysInSafeSpace validates the operation targets too.
         if (_safeVerbPolicy is not null
             && isShell
             && !isMessy
             && candidateVerbs.Count > 0
-            && _safeVerbPolicy.AllShortCircuit(candidates, context.Approval.Cwd, context.Invocation))
+            && _safeVerbPolicy.AllShortCircuit(candidates, context.Approval.Cwd, context.Invocation)
+            && OperationStaysInSafeSpace(arguments, context))
         {
             return ToolAccessDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
         }
@@ -388,6 +394,71 @@ public sealed class ToolAccessPolicy
             Candidates: candidates);
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
+    }
+
+    // Non-filesystem PowerShell provider drives. A read-only verb like
+    // Get-Content pointed at one of these (`Get-Content Env:\SECRET`,
+    // `Get-ChildItem HKLM:\...`) exposes ambient state a filesystem-zone check
+    // cannot contain, so such a command is never auto-passed. This is a small,
+    // stable part of PowerShell (its built-in providers), not an open-ended
+    // list that has to track new tools.
+    private static readonly HashSet<string> NonFilesystemProviderDrives = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Env", "HKLM", "HKCU", "HKCR", "HKU", "HKCC", "Cert", "Variable", "Function", "Alias", "WSMan",
+        "Registry"
+    };
+
+    /// <summary>
+    /// Second gate on the safe-verb auto-pass: the whole command must stay
+    /// inside the safe space, not just the process cwd. Returns false — falling
+    /// through to the interactive prompt — when the command reads or writes a
+    /// path outside a safe-space root, references a non-filesystem provider
+    /// drive, or cannot be statically resolved. Fail-closed by construction:
+    /// any unresolved token, provider drive, or out-of-zone target prompts.
+    /// </summary>
+    private bool OperationStaysInSafeSpace(IDictionary<string, object?>? arguments, ToolExecutionContext context)
+    {
+        var command = ExtractShellCommand(arguments);
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+
+        if (ReferencesNonFilesystemProviderDrive(command))
+            return false;
+
+        var workingDirectory = ExtractWorkingDirectory(arguments);
+
+        // Arguments and redirect targets both count. A dynamic or unparseable
+        // command returns false here and fails closed.
+        if (!_shellEnvironment.TryExtractStaticPathTokens(command, workingDirectory, out var pathTokens))
+            return false;
+
+        foreach (var token in pathTokens)
+        {
+            var absolute = _shellEnvironment.NormalizePathToken(token, workingDirectory);
+            if (absolute is null || !_safeVerbPolicy!.IsWithinSafeSpace(absolute, context.Invocation))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool ReferencesNonFilesystemProviderDrive(string command)
+    {
+        foreach (var token in ShellTokenizer.Tokenize(command))
+        {
+            var trimmed = token.Trim('"', '\'', ';', '|', '&', '(', ')');
+            var colon = trimmed.IndexOf(':', StringComparison.Ordinal);
+
+            // colon <= 1 is no colon or a single-letter filesystem drive (C:,
+            // D:); a longer prefix is a provider-qualified drive like Env:.
+            if (colon <= 1)
+                continue;
+
+            if (NonFilesystemProviderDrives.Contains(trimmed[..colon]))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -9,6 +9,7 @@ using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -68,6 +69,7 @@ public sealed class ToolIndexUpdaterTests
                 TrustAudience.Public,
                 ShellExecutionMode.Off,
                 UsedStrictFallback: true),
+            shellCommandPolicy: new ShellCommandPolicy(ShellExecutionEnvironment.Current),
             featureGates: new FeatureGates(SubAgentsEnabled: false, SchedulingEnabled: false));
         var registry = new ToolRegistry();
         registry.Register(AIFunctionFactory.Create(() => "ok", "file_read"), "file");

@@ -1209,6 +1209,15 @@ assert_grounding_admit_unknown() {
         stdout_not_contains 'is active'
 }
 
+assert_grounding_shell_grammar() {
+    # The eval container is Linux, so its execution_environment declares Bash.
+    # The model must ground command syntax in that context rather than emitting
+    # the PowerShell spelling from the prompt's contrastive hint.
+    stdout_contains '\[tool:call\] shell_execute' \
+        && stdout_contains 'printf.*netclaw-grammar-eval' \
+        && stdout_not_contains 'Write-Output'
+}
+
 assert_grounding_action_verification() {
     stdout_contains '\[tool:call\] set_reminder'
 }
@@ -1805,6 +1814,9 @@ run_all() {
 
     run_case grounding_admit_unknown "no hallucinated status" \
         "What's the status of the Petabridge Kubernetes cluster?"
+
+    run_case grounding_shell_grammar "uses declared Bash grammar instead of PowerShell" \
+        "Consult the execution_environment in your working context, then use shell_execute to print exactly netclaw-grammar-eval with that environment's native grammar. On Bash use printf; on PowerShell use Write-Output."
 
     run_case grounding_action_verification "set_reminder called" \
         "Schedule a reminder to check email in 10 minutes"

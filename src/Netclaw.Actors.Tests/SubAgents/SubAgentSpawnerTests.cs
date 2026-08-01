@@ -48,11 +48,12 @@ public sealed class SubAgentSpawnerTests : TestKit
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy()),
+                new ShellCommandPolicy(ShellExecutionEnvironment.Current)),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
@@ -85,6 +86,12 @@ public sealed class SubAgentSpawnerTests : TestKit
         Assert.Equal("/tmp/netclaw/sessions/parent", bound.SessionDirectory);
         Assert.Equal("/home/user/repos/foo", run.Scope.Authority.ProjectDirectory);
         Assert.Equal("/home/user/repos/foo", run.Scope.Authority.InheritedCwd);
+        var executionEnvironment = Assert.IsType<ExecutionEnvironmentSnapshot>(
+            run.Scope.InitialWorkingSnapshot.ExecutionEnvironment);
+        Assert.Equal(
+            ShellExecutionEnvironment.Current.Grammar.ToString(),
+            executionEnvironment.Grammar,
+            ignoreCase: true);
 
         childProbe.Reply(new SubAgentResult
         {
@@ -179,11 +186,12 @@ public sealed class SubAgentSpawnerTests : TestKit
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy()),
+                new ShellCommandPolicy(ShellExecutionEnvironment.Current)),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
@@ -522,11 +530,12 @@ public sealed class SubAgentSpawnerTests : TestKit
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy()),
+                new ShellCommandPolicy(ShellExecutionEnvironment.Current)),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
@@ -562,6 +571,7 @@ public sealed class SubAgentSpawnerTests : TestKit
     private static SubAgentSpawner CreateSpawner()
         => CreateSpawner(new WorkingContextSnapshotProvider(
             new GitWorkingContextInspector(TimeProvider.System),
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
             NullLogger<WorkingContextSnapshotProvider>.Instance));
 
     private static SubAgentSpawner CreateSpawner(IWorkingContextSnapshotProvider workingContextSnapshots)
@@ -579,7 +589,7 @@ public sealed class SubAgentSpawnerTests : TestKit
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy()),
+                new ShellCommandPolicy(ShellExecutionEnvironment.Current)),
             approvalService: null,
             new StaticSystemPromptProvider("You are an inspector."),
             workingContextSnapshots,

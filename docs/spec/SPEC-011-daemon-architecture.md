@@ -321,6 +321,13 @@ works for:
 The TUI is a presentation layer — it renders tool call/result output but does
 not execute tools.
 
+Shell execution uses the daemon's canonical platform environment: `/bin/bash`
+with Bash grammar on Linux/macOS and PowerShell 7 (`pwsh`) with PowerShell
+grammar on Windows. Parser selection, approval policy, process startup, and the
+model-visible execution context consume that same immutable environment.
+Windows deployments require `pwsh` on the daemon process `PATH`; absence is a
+visible execution error, with no `cmd.exe` or `powershell.exe` fallback.
+
 ## Configuration Restart Coordination
 
 ### Trigger

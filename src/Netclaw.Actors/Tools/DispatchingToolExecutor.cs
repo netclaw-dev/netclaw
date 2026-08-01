@@ -36,7 +36,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-                new ShellCommandPolicy()),
+                new ShellCommandPolicy(ShellExecutionEnvironment.Current)),
             approvalService: null,
             logger)
     {

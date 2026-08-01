@@ -147,7 +147,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
         var subAgentRegistry = new SubAgentDefinitionRegistry();
         var subAgentPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-subagents-{Guid.NewGuid():N}"));
         subAgentPaths.EnsureDirectoriesExist();
@@ -180,6 +180,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             promptProvider,
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkingContextSnapshotProvider>.Instance),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
 
@@ -263,7 +264,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             && m.Text.Contains("You are a summarizer.", StringComparison.Ordinal)
             && m.Text.Contains("headless, non-interactive worker", StringComparison.Ordinal));
         Assert.Contains(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User && string.Equals(m.Text, "Summarize src/README.md", StringComparison.Ordinal));
+            m.Role == Microsoft.Extensions.AI.ChatRole.User
+            && (m.Text?.Contains("execution_environment:", StringComparison.Ordinal) ?? false)
+            && (m.Text?.Contains("Task:\nSummarize src/README.md", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System && (m.Text?.Contains("test assistant with subagent support", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
@@ -539,16 +542,14 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             && (m.Text?.Contains("You specialize in daemon health checks.", StringComparison.Ordinal) ?? false));
         Assert.Contains(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && string.Equals(m.Text, "check daemon health", StringComparison.Ordinal));
+            && (m.Text?.Contains("execution_environment:", StringComparison.Ordinal) ?? false)
+            && (m.Text?.Contains("Task:\ncheck daemon health", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(MainIdentityMarker, StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(AgentsLayerMarker, StringComparison.Ordinal) ?? false));
-        Assert.DoesNotContain(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && (m.Text?.Contains("Context:", StringComparison.Ordinal) ?? false));
     }
 
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the

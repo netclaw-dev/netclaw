@@ -52,7 +52,7 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         // The sub-agent resolves "file_read" from this registry; the fake LLM
         // never calls it — it just has to resolve so the spawn proceeds.
@@ -77,6 +77,7 @@ public class SpawnAgentStreamingTests : TestKit
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 
@@ -145,7 +146,7 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         var registry = new ToolRegistry();
         registry.Register(new FakeNetclawTool("file_read", "stub content"));
@@ -169,6 +170,7 @@ public class SpawnAgentStreamingTests : TestKit
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
 

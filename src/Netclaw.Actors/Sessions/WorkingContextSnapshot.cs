@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -48,8 +49,11 @@ public sealed record WorkingContextSnapshot
 {
     public required WorkingContext WorkingContext { get; init; }
     public required GitWorkingContextInspection Git { get; init; }
+    public ExecutionEnvironmentSnapshot? ExecutionEnvironment { get; init; }
 
-    public bool IsEmpty => WorkingContext.IsEmpty && Git is GitWorkingContextInspection.Skipped or GitWorkingContextInspection.NotRepository;
+    public bool IsEmpty => WorkingContext.IsEmpty
+        && ExecutionEnvironment is null
+        && Git is GitWorkingContextInspection.Skipped or GitWorkingContextInspection.NotRepository;
 
     public string ToContextBlock()
     {
@@ -65,6 +69,15 @@ public sealed record WorkingContextSnapshot
             sb.Append("\nrecent_files:");
             foreach (var path in WorkingContext.RecentFiles)
                 sb.Append("\n  - ").Append(path);
+        }
+
+        if (ExecutionEnvironment is { } environment)
+        {
+            sb.Append("\nexecution_environment:")
+                .Append("\n  platform: ").Append(environment.Platform)
+                .Append("\n  shell: ").Append(environment.Executable)
+                .Append("\n  preferred_grammar: ").Append(environment.Grammar)
+                .Append("\n  path_style: ").Append(environment.PathStyle);
         }
 
         switch (Git)
@@ -100,6 +113,28 @@ public sealed record WorkingContextSnapshot
 
         return sb.ToString();
     }
+}
+
+public sealed record ExecutionEnvironmentSnapshot(
+    string Platform,
+    string Executable,
+    string Grammar,
+    string PathStyle);
+
+public interface IExecutionEnvironmentInspector
+{
+    ExecutionEnvironmentSnapshot Inspect();
+}
+
+public sealed class ExecutionEnvironmentInspector(ShellExecutionEnvironment environment)
+    : IExecutionEnvironmentInspector
+{
+    public ExecutionEnvironmentSnapshot Inspect()
+        => new(
+            environment.Platform,
+            environment.Executable,
+            environment.Grammar.ToString().ToLowerInvariant(),
+            environment.PathStyle.ToString().ToLowerInvariant());
 }
 
 public interface IGitWorkingContextInspector
@@ -155,6 +190,7 @@ public interface IWorkingContextSnapshotProvider
 
 public sealed class WorkingContextSnapshotProvider(
     IGitWorkingContextInspector gitInspector,
+    IExecutionEnvironmentInspector executionEnvironmentInspector,
     ILogger<WorkingContextSnapshotProvider> logger)
     : IWorkingContextSnapshotProvider
 {
@@ -165,18 +201,36 @@ public sealed class WorkingContextSnapshotProvider(
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (audience == TrustAudience.Public || context.ProjectDirectory is null)
+        if (audience == TrustAudience.Public)
         {
             return new WorkingContextSnapshot
             {
-                WorkingContext = audience == TrustAudience.Public ? WorkingContext.Empty : context,
-                Git = new GitWorkingContextInspection.Skipped()
+                WorkingContext = WorkingContext.Empty,
+                Git = new GitWorkingContextInspection.Skipped(),
+                ExecutionEnvironment = null
             };
         }
 
-        var inspection = Directory.Exists(context.ProjectDirectory)
-            ? await gitInspector.InspectAsync(context.ProjectDirectory, cancellationToken).ConfigureAwait(false)
-            : new GitWorkingContextInspection.Unavailable("project directory does not exist");
+        GitWorkingContextInspection inspection;
+        try
+        {
+            inspection = context.ProjectDirectory switch
+            {
+                null => new GitWorkingContextInspection.Skipped(),
+                { } projectDirectory when Directory.Exists(projectDirectory) =>
+                    await gitInspector.InspectAsync(projectDirectory, cancellationToken).ConfigureAwait(false),
+                _ => new GitWorkingContextInspection.Unavailable("project directory does not exist")
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
+        {
+            logger.LogWarning(ex, "Git working-context inspection failed unexpectedly");
+            inspection = new GitWorkingContextInspection.Unavailable("working context inspection failed");
+        }
 
         switch (inspection)
         {
@@ -191,6 +245,9 @@ public sealed class WorkingContextSnapshotProvider(
         return new WorkingContextSnapshot
         {
             WorkingContext = context,
+            ExecutionEnvironment = audience == TrustAudience.Personal
+                ? executionEnvironmentInspector.Inspect()
+                : null,
             Git = inspection switch
             {
                 GitWorkingContextInspection.Unavailable failure =>

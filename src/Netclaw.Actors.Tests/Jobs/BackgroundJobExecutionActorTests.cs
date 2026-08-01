@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
@@ -54,9 +55,19 @@ public class BackgroundJobExecutionActorTests : TestKit
     };
 
     private IActorRef SpawnExecution(BackgroundJobDefinition definition, IActorRef probe)
+        => SpawnExecution(definition, probe, ShellExecutionEnvironment.Current);
+
+    private IActorRef SpawnExecution(
+        BackgroundJobDefinition definition,
+        IActorRef probe,
+        ShellExecutionEnvironment environment)
     {
         var outputPath = _store.GetOutputLogPath(definition.Id);
-        var props = Props.Create(() => new BackgroundJobExecutionActor(definition, outputPath, TimeProvider.System));
+        var props = Props.Create(() => new BackgroundJobExecutionActor(
+            definition,
+            outputPath,
+            TimeProvider.System,
+            environment));
         return Sys.ActorOf(ForwardingParent.Props(props, probe), $"exec-{definition.Id}");
     }
 
@@ -75,6 +86,26 @@ public class BackgroundJobExecutionActorTests : TestKit
         Assert.Equal(BackgroundJobStatus.Completed, completed.Status);
         Assert.Equal(0, completed.ExitCode);
         Assert.Contains("hello-world", completed.OutputTail ?? "");
+    }
+
+    [Fact]
+    public async Task Missing_canonical_shell_reports_actionable_failure_without_fallback()
+    {
+        var definition = MakeDefinition("Write-Output nope");
+        var probe = CreateTestProbe("missing-shell-parent");
+        var environment = ShellExecutionEnvironment.PowerShell(Path.Combine(
+            _dir.Path,
+            "missing",
+            "pwsh-does-not-exist"));
+        SpawnExecution(definition, probe, environment);
+
+        var completed = await probe.ExpectMsgAsync<BackgroundJobCompleted>(
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(BackgroundJobStatus.Failed, completed.Status);
+        Assert.Contains("Required PowerShell shell", completed.OutputTail);
+        Assert.DoesNotContain("cmd.exe", completed.OutputTail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

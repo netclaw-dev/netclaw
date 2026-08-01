@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -212,6 +213,7 @@ public class ToolRegistryTests
                 TrustAudience.Public,
                 ShellExecutionMode.Off,
                 UsedStrictFallback: true),
+            shellCommandPolicy: new ShellCommandPolicy(ShellExecutionEnvironment.Current),
             featureGates: new FeatureGates(SubAgentsEnabled: false, SchedulingEnabled: false));
 
         var index = registry.GenerateCompressedIndex(TrustAudience.Public, policy);
@@ -293,7 +295,7 @@ public class ToolRegistryTests
         // must not mangle them in either direction.
         var config = new ToolConfig();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         Assert.Equal("shell_execute", registry.ToCanonicalName("shell_execute"));
         Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));

@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -64,10 +65,11 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             UsedStrictFallback: false));
         services.AddSingleton<ToolAccessPolicy>(sp => new ToolAccessPolicy(
             sp.GetRequiredService<ToolConfig>(),
-            sp.GetRequiredService<EffectivePolicyDefaults>()));
+            sp.GetRequiredService<EffectivePolicyDefaults>(),
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current)));
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(toolConfig, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(toolConfig, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy(ShellExecutionEnvironment.Current));
         services.AddSingleton(registry);
     }
 

@@ -916,7 +916,7 @@ public class SubAgentActorTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
     }
 
     private static string? GetLastToolResult(FakeChatClient fakeClient, string callId)
@@ -1206,7 +1206,7 @@ public class SubAgentActorTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         var definition = CreateDefinition([fakePlaywrightTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));

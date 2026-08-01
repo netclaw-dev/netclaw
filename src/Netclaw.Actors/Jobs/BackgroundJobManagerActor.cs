@@ -39,6 +39,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private readonly BackgroundJobDefinitionStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly ShellExecutionEnvironment _shellEnvironment;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly ILoggingAdapter _log;
 
@@ -49,10 +50,12 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,
         TimeProvider timeProvider,
+        ShellExecutionEnvironment shellEnvironment,
         IOperationalNotificationSink? notificationSink = null)
     {
         _store = store;
         _timeProvider = timeProvider;
+        _shellEnvironment = shellEnvironment;
         _notificationSink = notificationSink ?? NullNotificationSink.Instance;
         _log = Context.GetLogger();
 
@@ -388,7 +391,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         var outputLogPath = _store.GetOutputLogPath(running.Id);
         var props = DependencyResolver.For(Context.System)
-            .Props<BackgroundJobExecutionActor>(running, outputLogPath, _timeProvider);
+            .Props<BackgroundJobExecutionActor>(running, outputLogPath, _timeProvider, _shellEnvironment);
         Context.ActorOf(props, $"job-{running.Id}");
     }
 

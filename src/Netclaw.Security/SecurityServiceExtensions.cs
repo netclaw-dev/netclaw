@@ -31,13 +31,12 @@ public static class SecurityServiceExtensions
     }
 
     /// <summary>
-    /// Registers <see cref="IShellParser"/> for the approval gate evaluator.
-    /// The bash implementation is the only one shipped today; PowerShell and
-    /// cmd parsers are deferred to ShellSyntaxTree v0.2+.
+    /// Registers the canonical execution environment and its matching parser.
     /// </summary>
     public static IServiceCollection AddShellParser(this IServiceCollection services)
     {
-        services.AddSingleton<IShellParser, BashParser>();
+        services.AddSingleton(ShellExecutionEnvironment.Current);
+        services.AddSingleton<IShellParser>(ShellExecutionEnvironment.Current.Parser);
         return services;
     }
 }

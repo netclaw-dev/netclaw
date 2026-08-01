@@ -102,15 +102,24 @@ public interface IToolApprovalMatcher
 
 /// <summary>
 /// Shell-specific approval matcher. Verb-chain extraction stops at the first
-/// flag, path, or URL token; <c>&amp;&amp;</c> / <c>||</c> / <c>;</c> split
-/// approval units while <c>|</c> stays inside one unit; <c>bash -c</c> /
-/// <c>sh -c</c> wrappers recurse into the inner command.
+/// flag, path, or URL token. The selected ShellSyntaxTree grammar is the
+/// structural authority for clause, alias, path, wrapper, and dynamic-command
+/// classification.
 /// </summary>
 public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
-    public static readonly ShellApprovalMatcher Instance = new();
+    public static readonly ShellApprovalMatcher Instance = new(ShellExecutionEnvironment.Current);
 
-    private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
+    private readonly ShellExecutionEnvironment _environment;
+    private readonly IShellApprovalSemantics _approvalSemantics;
+
+    public ShellApprovalMatcher(ShellExecutionEnvironment environment)
+    {
+        _environment = environment;
+        _approvalSemantics = environment.PathStyle == ShellPathStyle.Windows
+            ? WindowsShellApprovalSemantics.Instance
+            : PosixShellApprovalSemantics.Instance;
+    }
 
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
@@ -127,29 +136,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var workingDirectory = GetWorkingDirectory(arguments);
         var patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // POSIX commands route through BashParser so the approval units
-        // match the clause decomposition ExtractCandidates already uses — in
-        // particular a bare newline separates statements, so a multi-line
-        // command yields one unit per statement. Windows keeps the legacy
-        // ShellTokenizer path — ShellSyntaxTree is bash-only.
-        if (!OperatingSystem.IsWindows())
+        foreach (var unit in ExtractApprovalUnitsViaParser(command, workingDirectory))
         {
-            foreach (var unit in ExtractApprovalUnitsViaBashAnalysis(command, workingDirectory))
-            {
-                var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
-                if (!string.IsNullOrEmpty(normalized))
-                    patterns.Add(normalized);
-            }
-
-            return patterns.ToList();
-        }
-
-        TraverseApprovalUnits(command, unit =>
-        {
-            var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
+            var normalized = _approvalSemantics.NormalizeApprovalUnit(unit, workingDirectory);
             if (!string.IsNullOrEmpty(normalized))
                 patterns.Add(normalized);
-        });
+        }
 
         return patterns.ToList();
     }
@@ -166,49 +158,22 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (string.IsNullOrWhiteSpace(command))
             return [];
 
-        // POSIX commands route through BashParser so we pick up the parser's
-        // cd-in-compound cwd attribution. The parser walks `cd X && verb`,
-        // `bash -c "cd X && verb"`, and multi-step `cd A && cd B && verb`
-        // chains; the candidate's directory inherits the latest cd target
-        // when the clause itself has no anchored path arg. Windows keeps
-        // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
-        if (!OperatingSystem.IsWindows())
-            return ExtractCandidatesViaBashAnalysis(command, GetWorkingDirectory(arguments));
-
-        var seen = new HashSet<(string, string?)>();
-        var candidates = new List<ApprovalCandidate>();
-        TraverseApprovalUnits(command, unit =>
-        {
-            var verb = ShellTokenizer.ExtractVerbChain(unit);
-            if (string.IsNullOrEmpty(verb))
-                return;
-
-            var directory = ShellTokenizer.ExtractFirstPathArgument(unit);
-            var key = (verb.ToLowerInvariant(), directory);
-            if (seen.Add(key))
-                candidates.Add(new ApprovalCandidate(verb, directory));
-        });
-
-        return candidates;
+        return ExtractCandidatesViaParser(command, GetWorkingDirectory(arguments));
     }
 
     /// <summary>
     /// Returns null when the parser cannot resolve the complete command.
     /// Callers then offer only one-time approval or show the raw command.
     /// </summary>
-    private static ShellCommandAnalysis? TryAnalyzeCommand(
-        string command,
-        string? workingDirectory = null)
+    private ShellCommandAnalysis? TryAnalyzeCommand(string command, string? workingDirectory)
     {
-        var result = Analyzer.Analyze(command, workingDirectory);
+        var result = _environment.Analyze(command, workingDirectory);
         return result.Failure == ShellAnalysisFailure.None && result.Clauses.Count > 0
             ? result
             : null;
     }
 
-    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashAnalysis(
-        string command,
-        string? workingDirectory)
+    private IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaParser(string command, string? workingDirectory)
     {
         var result = TryAnalyzeCommand(command, workingDirectory);
         if (result is null || result.HasDynamicSyntax)
@@ -301,7 +266,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         if (directories.Count == 0)
         {
-            // A side-effect verb ignores cwd. Other verbs inherit a prior cd.
             var cwdAttribution = isSideEffectVerb
                 ? null
                 : clause.Args.FirstOrDefault(a => a.IsCwdAttribution)?.Resolved;
@@ -452,19 +416,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// Splits a POSIX command into approval-unit strings via BashParser:
-    /// one unit per statement, with consecutive <c>|</c> clauses folded into
-    /// the same unit so <c>cat x | wc -l</c> stays a single decision.
+    /// Splits a command into approval-unit strings via the canonical parser:
+    /// one display unit per statement, with consecutive <c>|</c> clauses folded
+    /// into the same display text. Security candidates are still extracted for
+    /// every pipeline clause by <see cref="ExtractCandidatesViaParser"/>.
     /// Returns an empty list for messy, unparseable, or parser-rejected
     /// commands — mirroring the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
     /// empty-result contract so the prompt builder offers only Once/Deny.
     /// </summary>
-    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashAnalysis(
-        string command,
-        string? workingDirectory)
+    private IReadOnlyList<string> ExtractApprovalUnitsViaParser(string command, string? workingDirectory)
     {
-        // The parser is the sole structural authority. Dynamic or unresolved
-        // syntax cannot produce a persistent approval unit.
+        // Dynamic or unresolved syntax cannot produce a persistent approval unit.
         var result = TryAnalyzeCommand(command, workingDirectory);
         if (result is null || result.HasDynamicSyntax)
             return [];
@@ -692,9 +654,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
-        if (OperatingSystem.IsWindows())
-            return ShellTokenizer.IsMessyCompoundCommand(command);
-
         var workingDirectory = GetWorkingDirectory(arguments);
         var analysis = TryAnalyzeCommand(command, workingDirectory);
         if (analysis is null || analysis.HasDynamicSyntax)
@@ -718,14 +677,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         // Issue #1402: channel renderers embed DisplayText in single-line
         // code fences, so a multi-line quoted string (a message body, an
-        // inline script) dumped verbatim corrupts the approval prompt. On
-        // POSIX, rebuild a one-line view from the parse tree with multi-line
-        // args summarized by size; Windows flattens — ShellSyntaxTree is
-        // bash-only. The trailing ReplaceLineEndings catches line breaks the
+        // inline script) dumped verbatim corrupts the approval prompt. Rebuild
+        // a one-line view from the canonical parse tree with multi-line args
+        // summarized by size. The trailing ReplaceLineEndings catches line breaks the
         // reconstruction can leak and collapses CRLF to a single space.
-        var display = OperatingSystem.IsWindows()
-            ? command
-            : BuildSanitizedDisplayViaParser(command);
+        var display = BuildSanitizedDisplayViaParser(command, GetWorkingDirectory(arguments));
 
         return display.ReplaceLineEndings(" ");
     }
@@ -745,9 +701,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// misstate which statements a pipe or <c>&amp;&amp;</c> guard applies
     /// to. The flattened raw command is ugly but fully disclosed.
     /// </summary>
-    private static string BuildSanitizedDisplayViaParser(string command)
+    private string BuildSanitizedDisplayViaParser(string command, string? workingDirectory)
     {
-        var result = TryAnalyzeCommand(command);
+        var result = TryAnalyzeCommand(command, workingDirectory);
         if (result is null)
             return command;
 

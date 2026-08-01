@@ -353,6 +353,14 @@ public sealed class ShellTokenizerTests
         Assert.Equal("git status", segments[0]);
     }
 
+    [Fact]
+    public void GetAllSegments_pipe_with_error_stream_does_not_prefix_tail_with_ampersand()
+    {
+        var segments = ShellTokenizer.GetAllCommandSegments("echo safe |& netclaw daemon stop");
+
+        Assert.Equal(["echo safe", "netclaw daemon stop"], segments);
+    }
+
     // ── LooksLikePath ──
 
     // Anchored paths — always true

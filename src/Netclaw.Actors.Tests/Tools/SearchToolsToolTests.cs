@@ -220,7 +220,8 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                    new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current)));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -255,7 +256,8 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                    new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current)));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {

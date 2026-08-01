@@ -34,7 +34,7 @@ public sealed class SchedulingToolAudienceTests
     public void SchedulingTools_BlockedForPublicAudience_ByDefault(string toolName)
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults);
+        var policy = new ToolAccessPolicy(config, Defaults, new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current));
         var tool = CreateFakeTool(toolName, "scheduling");
 
         Assert.False(policy.IsToolExposed(tool, TrustAudience.Public));
@@ -48,7 +48,7 @@ public sealed class SchedulingToolAudienceTests
     public void SchedulingTools_AllowedForTeamAudience_ByDefault(string toolName)
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults);
+        var policy = new ToolAccessPolicy(config, Defaults, new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current));
         var tool = CreateFakeTool(toolName, "scheduling");
 
         Assert.True(policy.IsToolExposed(tool, TrustAudience.Team));
@@ -62,7 +62,7 @@ public sealed class SchedulingToolAudienceTests
     public void SchedulingTools_AllowedForPersonalAudience_ByDefault(string toolName)
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults);
+        var policy = new ToolAccessPolicy(config, Defaults, new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current));
         var tool = CreateFakeTool(toolName, "scheduling");
 
         Assert.True(policy.IsToolExposed(tool, TrustAudience.Personal));

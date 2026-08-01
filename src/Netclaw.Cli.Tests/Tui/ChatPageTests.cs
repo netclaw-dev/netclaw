@@ -458,7 +458,8 @@ public sealed class ChatPageTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current));
         var executionContext = new ToolExecutionContext(
             new ToolRunScope
             {

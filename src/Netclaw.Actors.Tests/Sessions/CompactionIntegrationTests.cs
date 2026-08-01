@@ -856,10 +856,11 @@ public class CompactionIntegrationTests : LlmSessionTestBase
 
         var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
-            && s.Contains("src/Rect.cs", StringComparison.Ordinal));
+            && s.Contains("src/Rect.cs", StringComparison.Ordinal)
+            && s.Contains("execution_environment:", StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
+            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs and the execution environment. All messages:\n{string.Join("\n---\n", allContent)}");
     }
 
     [Fact]
@@ -881,7 +882,7 @@ public class CompactionIntegrationTests : LlmSessionTestBase
             TotalTokenCount = 120
         };
 
-        var sessionId = new SessionId("test-channel/cache-prefix-stability");
+        var sessionId = new SessionId("console/cache-prefix-stability");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("cache-prefix-sub");
 
@@ -923,6 +924,15 @@ public class CompactionIntegrationTests : LlmSessionTestBase
 
         var turn1 = mainModelCalls[0];
         var turn2 = mainModelCalls[1];
+
+        var turn1Environment = Assert.Single(
+            turn1,
+            message => (message.Text ?? string.Empty)
+                .Contains("execution_environment:", StringComparison.Ordinal));
+        Assert.Contains(
+            turn2,
+            message => message.Role == turn1Environment.Role
+                && message.Text == turn1Environment.Text);
 
         var commonPrefix = 0;
         var minCount = Math.Min(turn1.Count, turn2.Count);

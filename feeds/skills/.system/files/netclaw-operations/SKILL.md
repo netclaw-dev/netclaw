@@ -54,6 +54,26 @@ receive a read-only project/recent-file snapshot. Successful and partial runs
 return only file edits confirmed through their own tools; failed or cancelled
 runs contribute no parent working-context changes.
 
+## Shell Environment
+
+For shell-capable sessions, `[working-context]` includes an
+`execution_environment` block with the runtime platform, shell executable,
+preferred grammar, and path style. Treat it as authoritative: use Bash syntax
+only when `preferred_grammar` is `bash`, and PowerShell syntax only when it is
+`powershell`. Do not mix operators, quoting, variables, or paths from another
+grammar. Windows shell execution requires PowerShell 7 (`pwsh`) and does not
+fall back to `cmd.exe` or Windows PowerShell. Do not wrap commands in either
+unsupported shell explicitly; those grammars are rejected before execution.
+Invoke `pwsh` command strings directly rather than through `Start-Process`;
+indirect shell process launchers are unresolved and rejected.
+Commands whose verb, arguments, or redirects depend on runtime expansion
+cannot be saved as persistent approvals because their eventual executable or
+path is unresolved.
+
+Every executable pipeline clause is evaluated independently by hard-deny,
+safe-verb, trust-zone, and approval policy. An approved or read-only pipeline
+head never authorizes a different tail command.
+
 ## Scheduling & Background Jobs
 
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always
@@ -295,9 +315,11 @@ implicit. Mutating verbs in the same directory still prompt.
 
 **When the prompt offers fewer buttons.** Two cases:
 
-- **Complex commands** (bash control-flow like `for/while/done`, unbalanced
-  quotes/brackets) get only `Once` and `Deny`. The matcher cannot extract a
-  clean verb chain to remember, so persistence is structurally impossible.
+- **Complex or unresolved commands** (bash control-flow like
+  `for/while/done`, unbalanced quotes/brackets, dynamic verbs, dynamic path
+  operands, or dynamic redirects) get only `Once` and `Deny`. The matcher
+  cannot extract a complete static command and path set to remember, so
+  persistence is structurally impossible.
 - **Shallow cwd** (e.g. `/etc/`, `/`) hides `Always here` only. Persisting a
   too-shallow root would grant the verb across most of the filesystem;
   `This chat` and `Always anywhere` remain available.

@@ -115,7 +115,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Bash()));
 
         var policy = new ToolAccessPolicy(
             config,
@@ -124,7 +124,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            shellCommandPolicy: new ShellCommandPolicy(),
+            shellCommandPolicy: new ShellCommandPolicy(ShellExecutionEnvironment.Bash()),
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),

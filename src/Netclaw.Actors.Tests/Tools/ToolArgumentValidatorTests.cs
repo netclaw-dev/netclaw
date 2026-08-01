@@ -35,7 +35,7 @@ public class ToolArgumentValidatorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy(ShellExecutionEnvironment.Current));
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -44,7 +44,8 @@ public class ToolArgumentValidatorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                    new Netclaw.Security.ShellCommandPolicy(Netclaw.Security.ShellExecutionEnvironment.Current)));
     }
 
     private static ToolExecutionContext PersonalContext(string sessionDir)

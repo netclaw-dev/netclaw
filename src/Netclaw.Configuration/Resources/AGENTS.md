@@ -57,6 +57,14 @@ pointing at `set_working_directory <path>`. Read the hint, call the tool with
 the directory the user is asking about, then retry the original shell call —
 do not re-prompt the user.
 
+## Shell Environment
+
+Before composing a shell command, read `execution_environment` in the current
+`[working-context]`. Use its declared `preferred_grammar` and `path_style`.
+Never assume Bash, translate commands between grammars, or mix Bash and
+PowerShell syntax. If the environment block is absent, do not invent a shell;
+use a non-shell tool or report that shell grounding is unavailable.
+
 ## Grounding Rules
 
 - Never state runtime facts (versions, status, availability) without checking with a tool.

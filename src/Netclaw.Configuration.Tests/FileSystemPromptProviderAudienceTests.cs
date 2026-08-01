@@ -68,6 +68,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Identity Files", prompt);
         Assert.Contains("Scheduling", prompt);
         Assert.Contains("Skill Loading", prompt);
+        Assert.Contains("Shell Environment", prompt);
+        Assert.Contains("execution_environment", prompt);
     }
 
     [Fact]
@@ -78,6 +80,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         // TOOLING.md content is written in the fixture — verify it is suppressed
         Assert.DoesNotContain("Host Environment", prompt);
         Assert.DoesNotContain("Shell: bash", prompt);
+        Assert.DoesNotContain("execution_environment", prompt);
     }
 
     [Theory]

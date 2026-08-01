@@ -619,10 +619,15 @@ static void ConfigureDaemonServices(
     var hardDenyOverrides = hardDenyOverridesLoader.Load(paths.HardDenyOverridesPath);
     services.AddSingleton(hardDenyOverridesLoader);
 
-    var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns, hardDenyOverrides);
-    services.AddSingleton(shellCommandPolicy);
+    var shellEnvironment = ShellExecutionEnvironment.Current;
+    services.AddSingleton(shellEnvironment);
+    services.AddSingleton<IShellParser>(shellEnvironment.Parser);
 
-    services.AddShellParser();
+    var shellCommandPolicy = new ShellCommandPolicy(
+        shellEnvironment,
+        toolConfig.HardDenyPatterns,
+        hardDenyOverrides);
+    services.AddSingleton(shellCommandPolicy);
 
     // Subagent timeout configuration
     var subAgentConfig = configuration.GetSection("SubAgents")
@@ -662,9 +667,6 @@ static void ConfigureDaemonServices(
     // at runtime.
     var safeVerbs = SafeVerbLoader.Load();
     services.AddSingleton(safeVerbs);
-
-    var bashParser = new BashParser();
-    services.AddSingleton<IShellParser>(bashParser);
 
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,
@@ -862,6 +864,7 @@ static void ConfigureDaemonServices(
     // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
     services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
     services.AddSingleton<IGitWorkingContextInspector, GitWorkingContextInspector>();
+    services.AddSingleton<IExecutionEnvironmentInspector, ExecutionEnvironmentInspector>();
     services.AddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
 
     // Expose all context layers as IReadOnlyList for actor DI resolution

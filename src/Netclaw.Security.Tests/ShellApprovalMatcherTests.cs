@@ -27,13 +27,9 @@ public sealed class ShellApprovalMatcherTests
     private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
     /// <summary>
-    /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
-    /// matcher falls through to the legacy <c>ShellTokenizer</c> path
-    /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
-    /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
-    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]</c>
-    /// produces a proper "Skipped" entry in the test log on Windows
-    /// runners instead of hiding the gap behind an early-return.
+    /// xunit.v3 <c>SkipUnless</c> hook for tests whose command and expected
+    /// path shape are specifically Bash/POSIX. Cross-grammar behavior has
+    /// separate PowerShell coverage below.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
@@ -59,7 +55,10 @@ public sealed class ShellApprovalMatcherTests
     [Fact]
     public void ExtractPatterns_recurses_into_bash_c_wrapper()
     {
-        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"), Args("bash -c \"git push --force\""));
+        // bash -c wrapper recursion is Bash grammar; pin the Bash environment so
+        // the inner command is unwrapped on any host.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var patterns = matcher.ExtractPatterns(new ToolName("shell_execute"), Args("bash -c \"git push --force\""));
 
         Assert.Single(patterns);
         Assert.Equal("git push --force", patterns[0]);
@@ -93,7 +92,10 @@ public sealed class ShellApprovalMatcherTests
         // The path argument is captured separately on
         // ExtractCandidates(...).Directory; see
         // ShellApprovalMatcherPathExtractionTests for the full coverage.
-        var verbs = _matcher.ExtractCandidateVerbs(
+        // POSIX path command (cat + /home/... path); pin the Bash grammar so the
+        // command head is extracted deterministically on any host.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var verbs = matcher.ExtractCandidateVerbs(
             new ToolName("shell_execute"),
             Args("cat /home/user/.netclaw/logs/crash.log"));
         Assert.Single(verbs);
@@ -261,8 +263,11 @@ public sealed class ShellApprovalMatcherTests
     [Fact]
     public void IsApproved_recurses_into_bash_c_wrapper()
     {
+        // bash -c wrapper recursion is Bash grammar; pin the Bash environment so
+        // the inner command is unwrapped and matched on any host.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
         var approved = new[] { Verb("git push") };
-        Assert.True(_matcher.IsApproved(
+        Assert.True(matcher.IsApproved(
             new ToolName("shell_execute"),
             Args("bash -c \"git push --force\""),
             approved,
@@ -451,9 +456,8 @@ public sealed class ShellApprovalMatcherTests
     [Fact]
     public void ExtractPatterns_strips_bare_integer_positional_arguments()
     {
-        // BashParser is bash-only, so on Windows the matcher falls through to
-        // the legacy ShellTokenizer path. This test exercises the POSIX path.
-        // Windows skips with a pass to keep the test active (no Slopwatch SW001).
+        // This command shape is Bash-specific; PowerShell grammar has separate
+        // value and alias coverage below.
         if (OperatingSystem.IsWindows()) return;
 
         // The approval pattern for `freshdesk ticket get 123` should be
@@ -607,13 +611,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     };
 
     /// <summary>
-    /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
-    /// matcher falls through to the legacy <c>ShellTokenizer</c> path
-    /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
-    /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
-    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]</c>
-    /// produces a proper "Skipped" entry in the test log on Windows
-    /// runners instead of hiding the gap behind an early-return.
+    /// xunit.v3 <c>SkipUnless</c> hook for Bash/POSIX path fixtures.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
@@ -796,12 +794,17 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     [Fact]
     public void ExtractCandidates_compound_command_extracts_per_clause()
     {
-        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+        // POSIX verbs and a POSIX path (`ls /repo`); pin the Bash grammar so the
+        // per-clause extraction is deterministic on any host. The candidate
+        // directory is normalized to forward slashes because ApplyFileParentRule
+        // routes through System.IO.Path, which emits the host separator.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var candidates = matcher.ExtractCandidates(new ToolName("shell_execute"),
             Args("ls /repo && git status"));
 
         Assert.Equal(2, candidates.Count);
         Assert.Equal("ls", candidates[0].Verb);
-        Assert.Equal("/repo", candidates[0].Directory);
+        Assert.Equal("/repo", candidates[0].Directory?.Replace('\\', '/'));
         Assert.Equal("git status", candidates[1].Verb);
         Assert.Null(candidates[1].Directory);
     }
@@ -930,16 +933,38 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // dogfood case used `echo "---REMOTE-INFO---"` which already
         // breaks at the leading `-` — but operators routinely run
         // `echo hello`-shape commands in build scripts.
-        // (`echo done` would be the more obvious example but `done` is
-        // a bash control-flow keyword and triggers IsMessyCompoundCommand,
-        // which returns zero candidates.)
-        var candidates = _matcher.ExtractCandidates(
+        // (`echo done` is the more natural example; the parser now reads
+        // `done` as a plain argument — see
+        // ExtractCandidates_treats_control_flow_keyword_as_plain_argument.)
+        // Pinned to the Bash environment so the POSIX `echo` side-effect cap is
+        // exercised on any host (PowerShell would canonicalize `echo` to
+        // Write-Output — covered separately).
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var candidates = matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?> { ["Command"] = "echo hello" });
 
         var c = Assert.Single(candidates);
         Assert.Equal("echo", c.Verb);
         Assert.True(ApprovalPatternMatching.IsPureSideEffect(c));
+    }
+
+    [Fact]
+    public void ExtractCandidates_treats_control_flow_keyword_as_plain_argument()
+    {
+        // Regression for the removed hand-rolled messy scan: a bash
+        // control-flow keyword used as a plain argument (`done`, `for`, `case`)
+        // used to force the whole command "messy" — zero candidates, always a
+        // prompt — even though it is just an echo argument. The parser reads it
+        // correctly, so the command now resolves to a clean, auto-pass-eligible
+        // candidate. Pinned to the Bash environment so it exercises the Bash
+        // grammar on any host.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var arguments = new Dictionary<string, object?> { ["Command"] = "echo done" };
+
+        Assert.False(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        var c = Assert.Single(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.Equal("echo", c.Verb);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
@@ -1161,13 +1186,223 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             // No echo entry — exactly what the side-effect skip produces.
         };
 
+        // POSIX compound (cd/git/echo side effects); pin the Bash grammar so the
+        // side-effect skip and verb-chain extraction run deterministically on
+        // any host.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
         var compound =
             "cd ~/repo && git status && echo \"---\" && git remote -v && echo \"finished\"";
-        Assert.True(_matcher.IsApproved(
+        Assert.True(matcher.IsApproved(
             new ToolName("shell_execute"),
             new Dictionary<string, object?> { ["Command"] = compound },
             approvedEntries,
             cwd: null));
+    }
+
+    [Fact]
+    public void Static_redirect_target_scopes_side_effect_candidate_and_requires_approval()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.Bash());
+        var arguments = new Dictionary<string, object?>
+        {
+            ["Command"] = "echo owned > /tmp/netclaw-out.txt"
+        };
+
+        var candidate = Assert.Single(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+
+        Assert.Equal("echo", candidate.Verb);
+        // The redirect-target parent is computed via System.IO.Path
+        // (ApplyFileParentRule), which emits the host separator; normalize to
+        // forward slashes so the POSIX directory compares equal on any host.
+        Assert.Equal("/tmp", candidate.Directory?.Replace('\\', '/'));
+        Assert.False(ApprovalPatternMatching.IsPureSideEffect(candidate));
+        Assert.False(matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            approvedEntries: [],
+            cwd: null));
+    }
+
+    [Fact]
+    public void PowerShell_pipeline_uses_canonical_alias_and_includes_tail()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+
+        var candidates = matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?> { ["Command"] = "gci | Get-Date" });
+
+        Assert.Collection(
+            candidates,
+            candidate => Assert.Equal("Get-ChildItem", candidate.Verb),
+            candidate => Assert.Equal("Get-Date", candidate.Verb));
+    }
+
+    [Fact]
+    public void PowerShell_relative_path_uses_parser_working_directory()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var candidates = matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = @"gci .\logs",
+                ["WorkingDirectory"] = @"C:\work"
+            });
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal("Get-ChildItem", candidate.Verb);
+        Assert.Equal("C:/work/logs", candidate.Directory);
+    }
+
+    [Fact]
+    public void PowerShell_scoped_approval_round_trips_through_store_and_matcher()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-pwsh-approval-{Guid.NewGuid():N}");
+        var approvedDirectory = Path.Combine(root, "approved");
+        var outsideDirectory = Path.Combine(root, "outside");
+        var file = Path.Combine(root, "tool-approvals.json");
+        Directory.CreateDirectory(approvedDirectory);
+        Directory.CreateDirectory(outsideDirectory);
+
+        try
+        {
+            var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+            var arguments = new Dictionary<string, object?>
+            {
+                ["Command"] = @"gci .\approved",
+                ["WorkingDirectory"] = root
+            };
+            var candidate = Assert.Single(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+            var store = new ToolApprovalStore(file);
+            store.AddApproval(
+                TrustAudience.Personal,
+                "shell_execute",
+                new ApprovalEntry(candidate.Verb) { Directory = candidate.Directory });
+
+            var reloaded = new ToolApprovalStore(file)
+                .GetApprovedEntries(TrustAudience.Personal, "shell_execute");
+
+            Assert.True(matcher.IsApproved(
+                new ToolName("shell_execute"), arguments, reloaded, root));
+            Assert.False(matcher.IsApproved(
+                new ToolName("shell_execute"),
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = $"gci '{outsideDirectory}'",
+                    ["WorkingDirectory"] = root
+                },
+                reloaded,
+                root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PowerShell_dynamic_invocation_is_messy_and_not_persistable()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?> { ["Command"] = "& $command --version" };
+
+        Assert.True(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+    }
+
+    [Fact]
+    public void PowerShell_dynamic_operand_is_messy_and_not_persistable()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?>
+        {
+            ["Command"] = @"Get-Content $env:TEMP\secret.txt"
+        };
+
+        Assert.True(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.False(matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            [new ApprovalEntry("Get-Content") { Directory = null }],
+            cwd: null));
+    }
+
+    [Fact]
+    public void PowerShell_cmd_wrapper_is_unresolved_and_cannot_reuse_outer_approval()
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?>
+        {
+            ["Command"] = @"cmd.exe /c ""type C:\outside\secret.txt & curl https://example.com"""
+        };
+
+        Assert.True(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.False(matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            [new ApprovalEntry("cmd.exe") { Directory = null }],
+            cwd: null));
+    }
+
+    [Theory]
+    [InlineData("dir", "Get-ChildItem")]
+    [InlineData("type", "Get-Content")]
+    public void Legacy_PowerShell_alias_approval_fails_visibly_after_canonicalization(
+        string alias,
+        string canonicalVerb)
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?> { ["Command"] = alias };
+
+        var candidate = Assert.Single(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+
+        Assert.Equal(canonicalVerb, candidate.Verb);
+        Assert.False(matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            [new ApprovalEntry(alias) { Directory = null }],
+            cwd: null));
+    }
+
+    [Fact]
+    public void PowerShell_formatting_cmdlet_with_plain_args_stays_auto_pass_eligible()
+    {
+        // The read-only forms of the pipeline/formatting cmdlets resolve to a
+        // clean verb chain, so they can reach the safe-verb auto-pass path.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?>
+        {
+            ["Command"] = @"Get-ChildItem C:\repo | Format-Table Name, Length"
+        };
+
+        Assert.False(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.Equal(
+            new[] { "Get-ChildItem", "Format-Table" },
+            matcher.ExtractCandidates(new ToolName("shell_execute"), arguments)
+                .Select(c => c.Verb)
+                .ToArray());
+    }
+
+    [Theory]
+    [InlineData(@"Get-ChildItem C:\repo | Format-Table @{Expression={Remove-Item $_}}")]
+    [InlineData(@"Get-ChildItem C:\repo | Select-Object @{N='x';E={Remove-Item $_}}")]
+    [InlineData(@"Get-ChildItem C:\repo | Sort-Object {Remove-Item $_}")]
+    public void PowerShell_formatting_cmdlet_with_script_block_is_messy(string command)
+    {
+        // SCRIPT-BLOCK GUARDRAIL. A calculated-property or script-block argument
+        // could run arbitrary code, so it must never reach safe-verb auto-pass.
+        // The parser tags that argument dynamic; the matcher must then treat the
+        // whole command as messy — prompt only, no candidates, no persisted
+        // grant. This invariant is what makes it safe to list Format-Table /
+        // Select-Object / Sort-Object as safe verbs.
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.PowerShell());
+        var arguments = new Dictionary<string, object?> { ["Command"] = command };
+
+        Assert.True(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
     }
 }
 

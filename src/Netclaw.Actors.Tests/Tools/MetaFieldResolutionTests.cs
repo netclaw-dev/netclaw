@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -62,7 +63,7 @@ public class MetaFieldResolutionTests
     public void No_first_party_tool_parameter_collides_with_a_meta_field()
     {
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         var collisions = new List<string>();
         foreach (var registration in registry.GetAllRegistrations())

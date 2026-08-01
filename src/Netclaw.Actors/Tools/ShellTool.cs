@@ -16,7 +16,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Executes shell commands via /bin/bash (Linux) or cmd.exe (Windows).
+/// Executes shell commands through the canonical Bash or PowerShell environment.
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
@@ -38,16 +38,21 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy _pathPolicy;
     private readonly ShellCommandPolicy _commandPolicy;
+    private readonly ShellExecutionEnvironment _environment;
 
     public record Params(
         [property: Description("The shell command to execute")] string Command,
         [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
 
-    public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
+    public ShellTool(
+        ToolConfig config,
+        ToolPathPolicy pathPolicy,
+        ShellCommandPolicy commandPolicy)
     {
         _config = config;
         _pathPolicy = pathPolicy;
         _commandPolicy = commandPolicy;
+        _environment = commandPolicy.ExecutionEnvironment;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -62,10 +67,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         if (_pathPolicy.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory))
             return "Error: Command references a protected file path. Access denied by security policy.";
 
-        var isWindows = OperatingSystem.IsWindows();
         var psi = new ProcessStartInfo
         {
-            FileName = isWindows ? "cmd.exe" : "/bin/bash",
+            FileName = _environment.Executable,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
@@ -73,16 +77,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             CreateNoWindow = true
         };
 
-        if (isWindows)
-        {
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(args.Command);
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(args.Command);
-        }
+        foreach (var argument in _environment.CommandArguments)
+            psi.ArgumentList.Add(argument);
+        psi.ArgumentList.Add(args.Command);
 
         // Resolve working directory in priority order: explicit arg →
         // WorkingContext.ProjectDirectory (declared via set_working_directory)
@@ -124,7 +121,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 if (File.Exists(resolvedCwd))
                     return $"Error: Working directory '{resolvedCwd}' is a file, not a directory.";
 
-                var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
+                var mkdirHint = _environment.Grammar == ShellGrammar.PowerShell
+                    ? $"New-Item -ItemType Directory -Path '{resolvedCwd}'"
+                    : $"mkdir -p \"{resolvedCwd}\"";
                 return $"Error: Working directory '{resolvedCwd}' does not exist. "
                      + $"Create it first, e.g.: {mkdirHint}";
             }
@@ -142,14 +141,18 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             process = Process.Start(psi)!;
         }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
+        {
+            return $"Error: Required {_environment.Grammar} shell '{_environment.Executable}' was not found. Install it and ensure it is available on PATH.";
+        }
         catch (Exception ex)
         {
             return $"Error starting process: {ex.Message}";
         }
 
         // Start the timeout countdown only after the shell process exists, so
-        // process-spawn overhead (heavier on Windows: cmd.exe plus the child it
-        // execs) is not charged against the command's execution budget.
+        // process-spawn overhead is not charged against the command's execution
+        // budget.
         timeoutCts.CancelAfter(effectiveTimeout);
 
         using (process)
@@ -298,10 +301,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            var isWindows = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo
             {
-                FileName = isWindows ? "cmd.exe" : "/bin/bash",
+                FileName = _environment.Executable,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 RedirectStandardInput = true,
@@ -309,16 +311,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 CreateNoWindow = true
             };
 
-            if (isWindows)
-            {
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add(args.Command);
-            }
-            else
-            {
-                psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add(args.Command);
-            }
+            foreach (var argument in _environment.CommandArguments)
+                psi.ArgumentList.Add(argument);
+            psi.ArgumentList.Add(args.Command);
 
             var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
             if (!string.IsNullOrWhiteSpace(resolvedCwd))
@@ -349,7 +344,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                         return;
                     }
 
-                    var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
+                    var mkdirHint = _environment.Grammar == ShellGrammar.PowerShell
+                        ? $"New-Item -ItemType Directory -Path '{resolvedCwd}'"
+                        : $"mkdir -p \"{resolvedCwd}\"";
                     output.TryWrite(new ToolCompletedUpdate(
                         $"Error: Working directory '{resolvedCwd}' does not exist. "
                         + $"Create it first, e.g.: {mkdirHint}"));
@@ -363,6 +360,12 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             try
             {
                 process = Process.Start(psi)!;
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
+            {
+                output.TryWrite(new ToolCompletedUpdate(
+                    $"Error: Required {_environment.Grammar} shell '{_environment.Executable}' was not found. Install it and ensure it is available on PATH."));
+                return;
             }
             catch (Exception ex)
             {

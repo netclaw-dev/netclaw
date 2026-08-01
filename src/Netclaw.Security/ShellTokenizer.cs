@@ -328,7 +328,7 @@ public static class ShellTokenizer
 
         foreach (var segment in topLevel)
         {
-            allSegments.Add(segment);
+            allSegments.AddRange(SplitPipelineSegments(segment));
 
             var innerCommands = ExtractInnerCommands(segment);
             foreach (var inner in innerCommands)
@@ -339,6 +339,66 @@ public static class ShellTokenizer
         }
 
         return allSegments;
+    }
+
+    /// <summary>
+    /// Splits executable pipeline clauses while preserving quoted pipe
+    /// characters and the logical OR operator. Approval display may keep a
+    /// pipeline as one unit, but hard-deny policy must inspect every process
+    /// the shell will start.
+    /// </summary>
+    private static IReadOnlyList<string> SplitPipelineSegments(string command)
+    {
+        var segments = new List<string>();
+        var current = new StringBuilder();
+        char? quote = null;
+
+        for (var i = 0; i < command.Length; i++)
+        {
+            var ch = command[i];
+            if (quote is null && ch is '\'' or '"')
+            {
+                quote = ch;
+                current.Append(ch);
+                continue;
+            }
+
+            if (quote == ch)
+            {
+                quote = null;
+                current.Append(ch);
+                continue;
+            }
+
+            if (quote is null && ch == '|')
+            {
+                if (i + 1 < command.Length && command[i + 1] == '|')
+                {
+                    current.Append("||");
+                    i++;
+                    continue;
+                }
+
+                FlushPipelineSegment(current, segments);
+                if (i + 1 < command.Length && command[i + 1] == '&')
+                    i++;
+
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        FlushPipelineSegment(current, segments);
+        return segments;
+    }
+
+    private static void FlushPipelineSegment(StringBuilder current, List<string> segments)
+    {
+        var value = current.ToString().Trim();
+        if (value.Length > 0)
+            segments.Add(value);
+        current.Clear();
     }
 
     /// <summary>

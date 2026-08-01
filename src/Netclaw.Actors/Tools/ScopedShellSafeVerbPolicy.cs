@@ -96,6 +96,47 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     /// <summary>
+    /// Returns true when <paramref name="absolutePath"/> resolves inside one of
+    /// the audience-aware safe-space roots, with no symlink segment between the
+    /// root and the path. The safe-verb short-circuit uses this to confirm that
+    /// every file a command reads or writes — not just the process cwd — stays
+    /// in the zone before auto-approving. Mirrors the cwd check in
+    /// <see cref="AllShortCircuit"/>: same roots, same symlink guard.
+    /// </summary>
+    public bool IsWithinSafeSpace(string absolutePath, ToolInvocationContext context)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            return false;
+
+        var safeRoots = ResolveSafeSpaceRoots(context);
+        if (safeRoots.Count == 0)
+            return false;
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(absolutePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        foreach (var root in safeRoots)
+        {
+            if (!PathUtility.IsWithinRoot(fullPath, root))
+                continue;
+
+            if (PathUtility.ContainsSymlinkSegment(root, fullPath))
+                continue;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Resolves the audience-aware safe-space roots for the current
     /// invocation. Personal and Team get <c>session_dir + project_dir</c>;
     /// Public gets <c>session_dir</c> only.

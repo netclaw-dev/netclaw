@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -86,6 +87,7 @@ public class WorkingContextSnapshotTests
         var inspector = new RecordingGitInspector();
         var provider = new WorkingContextSnapshotProvider(
             inspector,
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
             NullLogger<WorkingContextSnapshotProvider>.Instance);
         var context = WorkingContext.Empty.WithProjectDirectory("/path/that/does/not/exist");
 
@@ -105,6 +107,7 @@ public class WorkingContextSnapshotTests
         var inspector = new RecordingGitInspector();
         var provider = new WorkingContextSnapshotProvider(
             inspector,
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
             NullLogger<WorkingContextSnapshotProvider>.Instance);
         var context = WorkingContext.Empty.WithProjectDirectory("/path/that/does/not/exist");
 
@@ -117,6 +120,68 @@ public class WorkingContextSnapshotTests
         Assert.Equal("project directory does not exist", unavailable.Reason);
         Assert.Equal(0, inspector.InvocationCount);
         Assert.Contains("status: unavailable", snapshot.ToContextBlock());
+        Assert.Contains("execution_environment:", snapshot.ToContextBlock());
+    }
+
+    [Fact]
+    public async Task Personal_without_project_still_receives_execution_environment()
+    {
+        var inspector = new RecordingGitInspector();
+        var provider = new WorkingContextSnapshotProvider(
+            inspector,
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.PowerShell()),
+            NullLogger<WorkingContextSnapshotProvider>.Instance);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitWorkingContextInspection.Skipped>(snapshot.Git);
+        Assert.Equal(0, inspector.InvocationCount);
+        var block = snapshot.ToContextBlock();
+        Assert.Contains("platform: windows", block);
+        Assert.Contains("shell: pwsh", block);
+        Assert.Contains("preferred_grammar: powershell", block);
+        Assert.Contains("path_style: windows", block);
+    }
+
+    [Fact]
+    public async Task Unexpected_git_failure_preserves_execution_environment()
+    {
+        var provider = new WorkingContextSnapshotProvider(
+            new ThrowingGitInspector(),
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.PowerShell()),
+            NullLogger<WorkingContextSnapshotProvider>.Instance);
+        var context = WorkingContext.Empty.WithProjectDirectory(Path.GetTempPath());
+
+        var snapshot = await provider.CreateAsync(
+            context,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        var unavailable = Assert.IsType<GitWorkingContextInspection.Unavailable>(snapshot.Git);
+        Assert.Equal("working context inspection failed", unavailable.Reason);
+        Assert.NotNull(snapshot.ExecutionEnvironment);
+        Assert.Contains("preferred_grammar: powershell", snapshot.ToContextBlock());
+    }
+
+    [Fact]
+    public async Task Team_without_shell_access_omits_execution_environment()
+    {
+        var inspector = new RecordingGitInspector();
+        var provider = new WorkingContextSnapshotProvider(
+            inspector,
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
+            NullLogger<WorkingContextSnapshotProvider>.Instance);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            TrustAudience.Team,
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(snapshot.ExecutionEnvironment);
+        Assert.Equal(string.Empty, snapshot.ToContextBlock());
     }
 
     [Fact]
@@ -338,6 +403,7 @@ public class WorkingContextSnapshotTests
         var reason = new string('x', 300) + "\ncredential-bearing second line";
         var provider = new WorkingContextSnapshotProvider(
             new FixedGitInspector(new GitWorkingContextInspection.Unavailable(reason)),
+            new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
             NullLogger<WorkingContextSnapshotProvider>.Instance);
         var context = WorkingContext.Empty.WithProjectDirectory(Path.GetTempPath());
 
@@ -394,6 +460,13 @@ public class WorkingContextSnapshotTests
         public Task<GitWorkingContextInspection> InspectAsync(
             string projectDirectory,
             CancellationToken cancellationToken) => Task.FromResult(result);
+    }
+
+    private sealed class ThrowingGitInspector : IGitWorkingContextInspector
+    {
+        public Task<GitWorkingContextInspection> InspectAsync(
+            string projectDirectory,
+            CancellationToken cancellationToken) => throw new InvalidOperationException("unexpected git failure");
     }
 
     private sealed record TimedGitResult(TimeSpan Elapsed, GitCommandResult Result);

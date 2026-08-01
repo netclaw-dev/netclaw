@@ -32,7 +32,13 @@ public sealed class ShellSyntaxTreeIntegrationTests
         using var provider = services.BuildServiceProvider();
         var parser = provider.GetRequiredService<IShellParser>();
 
-        Assert.IsType<BashParser>(parser);
+        // The DI registration resolves the parser for the host's canonical
+        // shell grammar: PowerShell (PwshParser) on Windows, Bash (BashParser)
+        // on Linux/macOS. Assert the type that matches the current OS.
+        if (OperatingSystem.IsWindows())
+            Assert.IsType<PwshParser>(parser);
+        else
+            Assert.IsType<BashParser>(parser);
     }
 
     [Fact]
@@ -192,6 +198,32 @@ public sealed class ShellSyntaxTreeIntegrationTests
         var clause = Assert.Single(result.Clauses);
         Assert.True(clause.IsCommandStringWrapped);
         Assert.Equal("git status", clause.Verb.Joined);
+        Assert.Null(clause.Verb.CanonicalVerb);
+    }
+
+    [Fact]
+    public void PowerShell_alias_exposes_canonical_verb()
+    {
+        var parser = new PwshParser();
+
+        var result = parser.Parse("gci C:\\temp");
+
+        Assert.False(result.IsUnparseable);
+        var clause = Assert.Single(result.Clauses);
+        Assert.False(clause.Verb.IsDynamic);
+        Assert.Equal("Get-ChildItem", clause.Verb.CanonicalVerb);
+    }
+
+    [Fact]
+    public void PowerShell_dynamic_invocation_is_explicitly_flagged()
+    {
+        var parser = new PwshParser();
+
+        var result = parser.Parse("& $COMMAND --version");
+
+        Assert.False(result.IsUnparseable);
+        var clause = Assert.Single(result.Clauses);
+        Assert.True(clause.Verb.IsDynamic);
         Assert.Null(clause.Verb.CanonicalVerb);
     }
 

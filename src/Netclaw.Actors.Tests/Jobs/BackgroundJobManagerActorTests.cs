@@ -11,6 +11,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -35,7 +36,7 @@ public class BackgroundJobManagerActorTests : TestKit
         builder.StartActors((system, registry, _) =>
         {
             var manager = system.ActorOf(
-                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System, ShellExecutionEnvironment.Current)),
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(manager);
         });
@@ -251,7 +252,7 @@ public class BackgroundJobManagerActorTests : TestKit
         // A fresh manager's PreStart reconciliation marks the orphan Lost and
         // must notify the owning session through the gateway.
         var manager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System, ShellExecutionEnvironment.Current)),
             "lost-notify-manager");
 
         // Readiness barrier: reconciliation runs before this reply.
@@ -293,7 +294,7 @@ public class BackgroundJobManagerActorTests : TestKit
 
         // Create a second manager — its PreStart reconciliation should mark the orphan as Lost
         var manager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System, ShellExecutionEnvironment.Current)),
             "reconcile-test-manager");
 
         // Readiness barrier: reconciliation runs before this reply.
@@ -331,7 +332,7 @@ public class BackgroundJobManagerActorTests : TestKit
         var sink = new RecordingNotificationSink();
 
         var legacyManager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(store, TimeProvider.System, sink)),
+            Props.Create(() => new BackgroundJobManagerActor(store, TimeProvider.System, ShellExecutionEnvironment.Current, sink)),
             "legacy-job-alert-manager");
 
         // Readiness barrier: startup alert emission runs before this reply.

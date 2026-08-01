@@ -222,4 +222,44 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
 
         Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
     }
+
+    [Fact]
+    public void Is_within_safe_space_accepts_a_path_inside_the_project_dir()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+
+        Assert.True(policy.IsWithinSafeSpace(Path.Combine(_projectDir, "sub", "file.txt"), ctx));
+    }
+
+    [Fact]
+    public void Is_within_safe_space_accepts_a_path_inside_the_session_dir()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));
+        var ctx = PersonalContext();
+
+        Assert.True(policy.IsWithinSafeSpace(Path.Combine(_sessionDir, "out.txt"), ctx));
+    }
+
+    [Fact]
+    public void Is_within_safe_space_rejects_a_path_outside_every_root()
+    {
+        // The core of the auto-pass over-fire fix: a read target outside the
+        // safe roots is refused even though the process cwd may be inside one.
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+
+        Assert.False(policy.IsWithinSafeSpace(Path.Combine(_outsideDir, "secret.txt"), ctx));
+    }
+
+    [Fact]
+    public void Is_within_safe_space_ignores_project_dir_for_public_audience()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));
+        var ctx = PublicContext(projectDir: _projectDir);
+
+        // Public does not get project_dir as a safe root, but keeps session_dir.
+        Assert.False(policy.IsWithinSafeSpace(Path.Combine(_projectDir, "file.txt"), ctx));
+        Assert.True(policy.IsWithinSafeSpace(Path.Combine(_sessionDir, "file.txt"), ctx));
+    }
 }

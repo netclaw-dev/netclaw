@@ -11,6 +11,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -42,7 +43,7 @@ public class BackgroundJobIntegrationTests : TestKit
         builder.StartActors((system, registry, _) =>
         {
             var manager = system.ActorOf(
-                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System, ShellExecutionEnvironment.Current)),
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(manager);
         });
@@ -134,7 +135,10 @@ public class BackgroundJobIntegrationTests : TestKit
             TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("does not exist", delivered.Content);
-        Assert.Contains("mkdir", delivered.Content);
+        // The create-directory remedy is OS-appropriate: PowerShell's New-Item
+        // on Windows, mkdir on Unix. Assert the hint the product actually emits
+        // for the host so the "helpful error" intent is verified either way.
+        Assert.Contains(OperatingSystem.IsWindows() ? "New-Item" : "mkdir", delivered.Content);
         Assert.Contains("failed", delivered.Content.ToLowerInvariant());
 
         await AwaitAssertAsync(() =>

@@ -10,6 +10,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -52,6 +53,7 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             promptProvider: null!,
             workingContextSnapshots: new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             logger);
 

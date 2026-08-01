@@ -14,7 +14,10 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class ShellToolStreamingTests
 {
-    private readonly ShellTool _tool = new(new ToolConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
+    private readonly ShellTool _tool = new(
+        new ToolConfig(),
+        new ToolPathPolicy([]),
+        new ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
     private static async Task<(List<ToolActivityUpdate> Activities, ToolCompletedUpdate? Completion)>
         CollectStreamAsync(ShellTool tool, IDictionary<string, object?> args,
@@ -59,7 +62,13 @@ public class ShellToolStreamingTests
     [Fact]
     public async Task Stderr_emits_activity_items_with_stderr_phase()
     {
-        var cmd = OperatingSystem.IsWindows() ? "echo error 1>&2" : "echo error >&2";
+        // On Windows, Write-Error sets a non-zero pwsh exit code, breaking the
+        // clean-exit assertion below. [Console]::Error.WriteLine writes to
+        // stderr and exits 0, keeping the test's meaning: stderr is emitted as
+        // a stderr-phase activity on a clean exit.
+        var cmd = OperatingSystem.IsWindows()
+            ? "[Console]::Error.WriteLine('error')"
+            : "echo error >&2";
         var args = ToolInput.Create("Command", cmd);
         var (activities, completion) = await CollectStreamAsync(_tool, args, ct: TestContext.Current.CancellationToken);
 
@@ -75,10 +84,9 @@ public class ShellToolStreamingTests
     public async Task Chatty_command_emits_multiple_activities()
     {
         // Produce enough output that pipe reads span multiple coalesce
-        // windows without relying on sleep-based timing or bash syntax
-        // (ShellTool uses cmd.exe on Windows).
+        // windows without relying on sleep-based timing.
         var cmd = OperatingSystem.IsWindows()
-            ? "for /L %i in (1,1,200) do @echo line %i"
+            ? "1..200 | ForEach-Object { Write-Output \"line $_\" }"
             : "for i in $(seq 1 200); do echo \"line $i\"; done";
         var args = ToolInput.Create("Command", cmd);
         var (activities, completion) = await CollectStreamAsync(_tool, args, ct: TestContext.Current.CancellationToken);
@@ -94,7 +102,7 @@ public class ShellToolStreamingTests
     public async Task Cancellation_kills_process_and_returns_timeout()
     {
         using var cts = new CancellationTokenSource();
-        var cmd = OperatingSystem.IsWindows() ? "ping -n 100 127.0.0.1" : "sleep 100";
+        var cmd = OperatingSystem.IsWindows() ? "Start-Sleep -Seconds 100" : "sleep 100";
         var args = ToolInput.Create("Command", cmd);
 
         // Cancel after a short delay
@@ -109,10 +117,10 @@ public class ShellToolStreamingTests
     [Fact]
     public async Task Output_clamping_preserved_in_completion_result()
     {
-        var tool = new ShellTool(new ToolConfig { MaxOutputChars = 100 }, new ToolPathPolicy([]), new ShellCommandPolicy());
+        var tool = new ShellTool(new ToolConfig { MaxOutputChars = 100 }, new ToolPathPolicy([]), new ShellCommandPolicy(ShellExecutionEnvironment.Current));
         // Generate output much larger than the 100-char budget
         var cmd = OperatingSystem.IsWindows()
-            ? "for /L %i in (1,1,10000) do @echo %i"
+            ? "1..10000"
             : "seq 1 10000";
         var args = ToolInput.Create("Command", cmd);
         var (_, completion) = await CollectStreamAsync(tool, args, ct: TestContext.Current.CancellationToken);
@@ -136,7 +144,7 @@ public class ShellToolStreamingTests
     [Fact]
     public async Task Hard_deny_yields_immediate_error_completion()
     {
-        var policy = new ShellCommandPolicy(["kill"], []);
+        var policy = new ShellCommandPolicy(ShellExecutionEnvironment.Current, ["kill"], []);
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), policy);
         var args = ToolInput.Create("Command", "kill -9 1");
         var (activities, completion) = await CollectStreamAsync(tool, args, ct: TestContext.Current.CancellationToken);

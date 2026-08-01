@@ -8,6 +8,31 @@
 - solution scaffold: `Netclaw.slnx` with `src/Akka.Agents` and
   `src/Netclaw.App`
 
+## Shell Execution Environment
+
+Netclaw uses one canonical non-interactive shell per host. Linux and macOS use
+`/bin/bash` with Bash grammar and POSIX paths. Windows uses PowerShell 7 via
+`pwsh` with PowerShell grammar and Windows paths. `cmd.exe`, Windows PowerShell
+(`powershell.exe`), and alternate POSIX shells are not compatibility fallbacks.
+
+Windows operators must install PowerShell 7 and ensure `pwsh` is on the daemon
+process `PATH`. Verify it from the same service account and environment that
+runs Netclaw:
+
+```powershell
+pwsh --version
+```
+
+If the canonical executable is unavailable, `shell_execute` returns an
+actionable error instead of changing grammar. Personal shell-capable turns also
+receive the same platform, executable, preferred grammar, and path style in the
+`execution_environment` subsection of `[working-context]`; agent-authored shell
+commands must follow those declared values.
+
+The PR validation workflow runs the full build and test suite on Linux, macOS,
+and Windows. Native Windows coverage verifies PowerShell selection, execution,
+parser behavior, and directory-scoped approval round trips.
+
 ## Planning and Spec Tooling
 
 - `OpenSpec` CLI: installed and initialized in this repo

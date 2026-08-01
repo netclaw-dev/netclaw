@@ -61,12 +61,36 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("git describe"));
         Assert.True(list.Contains("gh pr view"));
 
+        // Read-only pipeline/formatting cmdlets — the common tails of idiomatic
+        // PowerShell pipelines. Safe to auto-pass because a script-block or
+        // calculated-property argument (the only way they run code) parses as
+        // dynamic and drops the whole command to the interactive prompt.
+        Assert.True(list.Contains("Select-Object"));
+        Assert.True(list.Contains("Sort-Object"));
+        Assert.True(list.Contains("Format-Table"));
+        Assert.True(list.Contains("Measure-Object"));
+        Assert.True(list.Contains("ConvertTo-Json"));
+        Assert.True(list.Contains("Out-String"));
+
         // Excluded on purpose: gh api can issue any HTTP method; Get-Process
         // exposes other processes' state; gh auth status --show-token would
-        // print the GitHub token.
+        // print the GitHub token. Where-Object / ForEach-Object always carry a
+        // script block, so they are never auto-pass eligible and are omitted
+        // rather than listed as dead entries.
         Assert.False(list.Contains("gh api"));
         Assert.False(list.Contains("Get-Process"));
         Assert.False(list.Contains("gh auth status"));
+        Assert.False(list.Contains("Where-Object"));
+        Assert.False(list.Contains("ForEach-Object"));
+
+        // Pulled after the Windows security audit. Write-Output turns the
+        // redirect-write gate gap into an arbitrary-content file write
+        // (Write-Output '<bytes>' > path). Get-Command / Get-Help can trigger
+        // module auto-import (code exec via a planted module on PSModulePath),
+        // and Get-Help -Online spawns a browser plus a network request.
+        Assert.False(list.Contains("Write-Output"));
+        Assert.False(list.Contains("Get-Command"));
+        Assert.False(list.Contains("Get-Help"));
     }
 
     [Fact]

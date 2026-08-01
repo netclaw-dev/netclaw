@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.ComponentModel;
 using System.Diagnostics;
 using Akka.Actor;
 using Akka.Event;
@@ -20,6 +21,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
     private readonly BackgroundJobDefinition _definition;
     private readonly string _outputLogPath;
     private readonly TimeProvider _timeProvider;
+    private readonly ShellExecutionEnvironment _environment;
     private readonly ILoggingAdapter _log;
     private Process? _process;
     private ICancelable? _timeoutHandle;
@@ -27,11 +29,13 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
     public BackgroundJobExecutionActor(
         BackgroundJobDefinition definition,
         string outputLogPath,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ShellExecutionEnvironment environment)
     {
         _definition = definition;
         _outputLogPath = outputLogPath;
         _timeProvider = timeProvider;
+        _environment = environment;
         _log = Context.GetLogger();
 
         Receive<CancelBackgroundJob>(_ => HandleCancel());
@@ -77,10 +81,9 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
     private void SpawnProcess()
     {
-        var isWindows = OperatingSystem.IsWindows();
         var psi = new ProcessStartInfo
         {
-            FileName = isWindows ? "cmd.exe" : "/bin/bash",
+            FileName = _environment.Executable,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
@@ -88,16 +91,9 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             CreateNoWindow = true
         };
 
-        if (isWindows)
-        {
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(_definition.Command);
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(_definition.Command);
-        }
+        foreach (var argument in _environment.CommandArguments)
+            psi.ArgumentList.Add(argument);
+        psi.ArgumentList.Add(_definition.Command);
 
         if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
         {
@@ -114,8 +110,8 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                     return;
                 }
 
-                var mkdirHint = isWindows
-                    ? $"mkdir \"{_definition.WorkingDirectory}\""
+                var mkdirHint = _environment.Grammar == ShellGrammar.PowerShell
+                    ? $"New-Item -ItemType Directory -Path '{_definition.WorkingDirectory}'"
                     : $"mkdir -p \"{_definition.WorkingDirectory}\"";
                 ReportCompletion(BackgroundJobStatus.Failed, -1,
                     $"Working directory '{_definition.WorkingDirectory}' does not exist. "
@@ -126,7 +122,17 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             psi.WorkingDirectory = _definition.WorkingDirectory;
         }
 
-        _process = Process.Start(psi);
+        try
+        {
+            _process = Process.Start(psi);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
+        {
+            throw new InvalidOperationException(
+                $"Required {_environment.Grammar} shell '{_environment.Executable}' was not found. "
+                + "Install it and ensure it is available on PATH.",
+                ex);
+        }
         if (_process is null)
         {
             ReportCompletion(BackgroundJobStatus.Failed, -1, "Process.Start returned null");

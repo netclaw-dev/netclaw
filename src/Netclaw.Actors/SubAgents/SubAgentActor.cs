@@ -173,7 +173,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
         _approvalService = approvalService;
         _maxToolIterations = maxToolIterations;
         _log = Context.GetLogger();

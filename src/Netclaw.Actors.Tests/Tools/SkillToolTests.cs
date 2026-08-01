@@ -909,7 +909,7 @@ public class SkillToolTests : IDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(ShellExecutionEnvironment.Current));
 
         return new SubAgentSpawner(
             new NoOpChatClientProvider(),
@@ -919,6 +919,7 @@ public class SkillToolTests : IDisposable
             NullSystemPromptProvider.Instance,
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
+                new ExecutionEnvironmentInspector(ShellExecutionEnvironment.Current),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance);
     }

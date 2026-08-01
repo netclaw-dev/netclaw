@@ -153,7 +153,8 @@ internal sealed class ShellCommandAnalyzer
 internal enum ShellAnalysisFailure
 {
     None,
-    Unresolved
+    Unresolved,
+    UnsupportedShellWrapper
 }
 
 internal static class ShellGlobPath
