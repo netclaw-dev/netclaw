@@ -37,7 +37,8 @@ public sealed class ProviderManagerPageTests : IDisposable
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
-        input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Copilot
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "github-copilot"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);     // type row -> Name your provider
         input.EnqueueKey(ConsoleKey.Enter);     // accept generated provider name
         input.EnqueueKey(ConsoleKey.Enter);     // OAuth Device Flow

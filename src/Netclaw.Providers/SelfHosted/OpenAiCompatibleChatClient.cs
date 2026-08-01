@@ -16,6 +16,14 @@ using Netclaw.Media;
 
 namespace Netclaw.Providers.SelfHosted;
 
+public enum OpenAiCompatibleWireProfile
+{
+    Generic,
+    // DeepSeek requires a thinking field and reasoning_content replay rules.
+    // The generic OpenAI-compatible payload does not apply these rules.
+    DeepSeek,
+}
+
 public sealed class OpenAiCompatibleChatClient : IChatClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -26,14 +34,26 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private readonly HttpClient _httpClient;
     private readonly OpenAiCompatibleEndpoint _endpoint;
     private readonly string _modelId;
+    private readonly OpenAiCompatibleWireProfile _wireProfile;
     private readonly ILogger _logger;
 
     public OpenAiCompatibleChatClient(HttpClient httpClient, OpenAiCompatibleEndpoint endpoint, string modelId,
+        ILogger? logger = null)
+        : this(httpClient, endpoint, modelId, OpenAiCompatibleWireProfile.Generic, logger)
+    {
+    }
+
+    public OpenAiCompatibleChatClient(
+        HttpClient httpClient,
+        OpenAiCompatibleEndpoint endpoint,
+        string modelId,
+        OpenAiCompatibleWireProfile wireProfile,
         ILogger? logger = null)
     {
         _httpClient = httpClient;
         _endpoint = endpoint;
         _modelId = modelId;
+        _wireProfile = wireProfile;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -209,16 +229,18 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         var body = new JsonObject
         {
             ["model"] = options?.ModelId ?? _modelId,
-            ["messages"] = NormalizeMessages(messages, _logger),
+            ["messages"] = NormalizeMessages(messages, _wireProfile, _logger),
             ["stream"] = stream
         };
 
         if (stream)
         {
             body["stream_options"] = new JsonObject { ["include_usage"] = true };
-            // llama-server sends prefill progress as SSE data events when enabled.
-            // Harmless on servers that don't support it (unknown fields are ignored).
-            body["return_progress"] = true;
+            if (_wireProfile == OpenAiCompatibleWireProfile.Generic)
+            {
+                // llama-server sends prefill progress as SSE data events when enabled.
+                body["return_progress"] = true;
+            }
         }
 
         if (options?.Temperature is { } temperature)
@@ -233,6 +255,9 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             body["stop"] = new JsonArray(stop.Select(s => (JsonNode)JsonValue.Create(s)!).ToArray());
         if (options?.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(ToTool).ToArray<JsonNode>());
+
+        if (_wireProfile == OpenAiCompatibleWireProfile.DeepSeek)
+            ApplyDeepSeekReasoning(body, options?.Reasoning?.Effort);
 
         // Pass through additional properties as top-level JSON fields.
         // Enables provider-specific options like chat_template_kwargs for llama.cpp.
@@ -249,6 +274,28 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         LogPrefixDiagnostic(body);
 
         return body;
+    }
+
+    private static void ApplyDeepSeekReasoning(JsonObject body, ReasoningEffort? effort)
+    {
+        switch (effort)
+        {
+            case ReasoningEffort.None:
+                body["thinking"] = new JsonObject { ["type"] = "disabled" };
+                break;
+
+            case ReasoningEffort.Low:
+            case ReasoningEffort.Medium:
+            case ReasoningEffort.High:
+                body["thinking"] = new JsonObject { ["type"] = "enabled" };
+                body["reasoning_effort"] = "high";
+                break;
+
+            case ReasoningEffort.ExtraHigh:
+                body["thinking"] = new JsonObject { ["type"] = "enabled" };
+                body["reasoning_effort"] = "max";
+                break;
+        }
     }
 
     /// <summary>
@@ -342,6 +389,12 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     }
 
     internal static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages, ILogger? logger = null)
+        => NormalizeMessages(messages, OpenAiCompatibleWireProfile.Generic, logger);
+
+    internal static JsonArray NormalizeMessages(
+        IEnumerable<ChatMessage> messages,
+        OpenAiCompatibleWireProfile wireProfile,
+        ILogger? logger = null)
     {
         var normalized = new JsonArray();
         var all = messages.ToList();
@@ -403,7 +456,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         foreach (var message in passThrough)
         {
-            normalized.Add(ToMessage(message));
+            normalized.Add(ToMessage(message, wireProfile));
         }
 
         return normalized;
@@ -449,11 +502,17 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         => ProviderErrorHelper.ExtractUserMessage(responseBody, statusCode, "LLM provider");
 
     internal static JsonObject ToMessage(ChatMessage message)
+        => ToMessage(message, OpenAiCompatibleWireProfile.Generic);
+
+    internal static JsonObject ToMessage(
+        ChatMessage message,
+        OpenAiCompatibleWireProfile wireProfile)
     {
         // Classify contents by MEAI type
         var textSegments = new List<string>();
         var imageParts = new List<JsonObject>();
         var toolCalls = new List<JsonObject>();
+        var reasoningSegments = new List<string>();
         FunctionResultContent? toolResult = null;
 
         foreach (var content in message.Contents)
@@ -462,6 +521,12 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             {
                 case TextContent text when !string.IsNullOrEmpty(text.Text):
                     textSegments.Add(text.Text);
+                    break;
+
+                case TextReasoningContent reasoning
+                    when wireProfile == OpenAiCompatibleWireProfile.DeepSeek
+                         && !string.IsNullOrEmpty(reasoning.Text):
+                    reasoningSegments.Add(reasoning.Text);
                     break;
 
                 case DataContent data:
@@ -525,6 +590,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             };
             if (textSegments.Count > 0)
                 msg["content"] = textSegments[0];
+            if (reasoningSegments.Count > 0)
+                msg["reasoning_content"] = string.Concat(reasoningSegments);
             return msg;
         }
 
@@ -875,6 +942,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             "stop" => ChatFinishReason.Stop,
             "length" => ChatFinishReason.Length,
             "tool_calls" => ChatFinishReason.ToolCalls,
+            "content_filter" => ChatFinishReason.ContentFilter,
+            { Length: > 0 } value => new ChatFinishReason(value),
             _ => null
         };
     }

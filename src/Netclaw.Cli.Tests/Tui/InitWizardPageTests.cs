@@ -108,7 +108,8 @@ public sealed class InitWizardPageTests : IDisposable
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
-        input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Copilot
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "github-copilot"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);     // provider selection
         input.EnqueueKey(ConsoleKey.Enter);     // OAuth Device Flow
         input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Enterprise

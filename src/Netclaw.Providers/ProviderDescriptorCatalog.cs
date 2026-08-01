@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Providers.Anthropic;
+using Netclaw.Providers.DeepSeek;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -18,23 +19,17 @@ namespace Netclaw.Providers;
 /// </summary>
 public sealed class ProviderDescriptorCatalog
 {
-    private ProviderDescriptorCatalog(
-        OllamaDescriptor ollama,
-        OpenAiCompatibleDescriptor openAiCompatible,
-        OpenAiDescriptor openAi,
-        AnthropicDescriptor anthropic,
-        OpenRouterDescriptor openRouter,
-        GitHubCopilotDescriptor gitHubCopilot,
-        VeniceAiDescriptor veniceAi)
+    private ProviderDescriptorCatalog(IReadOnlyList<IProviderDescriptor> descriptors)
     {
-        Ollama = ollama;
-        OpenAiCompatible = openAiCompatible;
-        OpenAi = openAi;
-        Anthropic = anthropic;
-        OpenRouter = openRouter;
-        GitHubCopilot = gitHubCopilot;
-        VeniceAi = veniceAi;
-        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter, GitHubCopilot, VeniceAi];
+        All = descriptors;
+        Ollama = GetRequired<OllamaDescriptor>(descriptors);
+        OpenAiCompatible = GetRequired<OpenAiCompatibleDescriptor>(descriptors);
+        OpenAi = GetRequired<OpenAiDescriptor>(descriptors);
+        Anthropic = GetRequired<AnthropicDescriptor>(descriptors);
+        OpenRouter = GetRequired<OpenRouterDescriptor>(descriptors);
+        GitHubCopilot = GetRequired<GitHubCopilotDescriptor>(descriptors);
+        VeniceAi = GetRequired<VeniceAiDescriptor>(descriptors);
+        DeepSeek = GetRequired<DeepSeekDescriptor>(descriptors);
     }
 
     public OllamaDescriptor Ollama { get; }
@@ -51,6 +46,8 @@ public sealed class ProviderDescriptorCatalog
 
     public VeniceAiDescriptor VeniceAi { get; }
 
+    public DeepSeekDescriptor DeepSeek { get; }
+
     public IReadOnlyList<IProviderDescriptor> All { get; }
 
     public static ProviderDescriptorCatalog Create(
@@ -61,13 +58,18 @@ public sealed class ProviderDescriptorCatalog
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(copilotTokenExchanger);
 
-        return new ProviderDescriptorCatalog(
+        return new ProviderDescriptorCatalog([
             new OllamaDescriptor(httpClient),
             new OpenAiCompatibleDescriptor(httpClient),
             new OpenAiDescriptor(httpClient, timeProvider),
             new AnthropicDescriptor(httpClient),
             new OpenRouterDescriptor(httpClient),
             new GitHubCopilotDescriptor(httpClient, copilotTokenExchanger),
-            new VeniceAiDescriptor(httpClient));
+            new VeniceAiDescriptor(httpClient),
+            new DeepSeekDescriptor(httpClient),
+        ]);
     }
+
+    private static TDescriptor GetRequired<TDescriptor>(IReadOnlyList<IProviderDescriptor> descriptors)
+        where TDescriptor : class, IProviderDescriptor => descriptors.OfType<TDescriptor>().Single();
 }

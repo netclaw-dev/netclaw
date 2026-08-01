@@ -162,6 +162,10 @@ internal sealed class ReasoningSuppressionChatClient : DelegatingChatClient
                 properties["think"] = false;
                 break;
 
+            case ReasoningSuppressionDialect.DeepSeekThinking:
+                properties["thinking"] = new Dictionary<string, object?> { ["type"] = "disabled" };
+                break;
+
             case ReasoningSuppressionDialect.None:
             default:
                 break;

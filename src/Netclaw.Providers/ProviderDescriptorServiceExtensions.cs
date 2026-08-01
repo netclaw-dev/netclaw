@@ -53,6 +53,7 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().DeepSeek);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
@@ -61,6 +62,7 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().DeepSeek);
 
         services.AddSingleton(sp =>
             new ProviderDescriptorRegistry(sp.GetRequiredService<ProviderDescriptorCatalog>().All));
