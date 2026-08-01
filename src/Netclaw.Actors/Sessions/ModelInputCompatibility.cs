@@ -43,6 +43,12 @@ internal static class ModelInputCompatibility
         ModelCapabilities model,
         ModelInputCompatibilityResult result)
     {
+        var required = result.RequiredModalities == ModelModality.None
+            ? "none"
+            : result.RequiredModalities.ToString();
+        var supported = model.InputModalities == ModelModality.None
+            ? "none"
+            : model.InputModalities.ToString();
         var unsupported = result.UnsupportedModalities == ModelModality.None
             ? "none"
             : result.UnsupportedModalities.ToString();
@@ -51,6 +57,7 @@ internal static class ModelInputCompatibility
             : string.Join(", ", result.UnknownModalityValues);
 
         return $"The session input is not compatible with model '{model.ModelId}'. "
+            + $"Required modalities: {required}. Supported modalities: {supported}. "
             + $"Unsupported modalities: {unsupported}. Unknown modality values: {unknown}. "
             + "Select a model that supports this input, or start a new conversation.";
     }
