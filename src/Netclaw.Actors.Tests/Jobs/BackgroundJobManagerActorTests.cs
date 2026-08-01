@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobManagerActorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -212,6 +212,21 @@ public class BackgroundJobManagerActorTests : TestKit
         var sessionId = new SessionId("lost/notify-session");
         var gatewayProbe = CreateTestProbe("lost-gateway");
         ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref, overwrite: true);
+
+        // The manager created in ConfigureAkka runs its PreStart reconciliation
+        // on the dispatcher, not necessarily before this test body. If it
+        // reconciles after the orphan is persisted but before its output.log
+        // exists, it delivers a "lost" notification with no output path
+        // (NotifyLostJob swallows the missing-file error and nulls
+        // OutputFilePath). PreStart completes before any user message is
+        // dispatched, so a successful health reply proves this manager
+        // reconciled while the jobs directory was still empty — it can then
+        // never deliver for this orphan. Only the fresh manager below
+        // (created after the log write) reconciles the orphan, so the
+        // notification always carries the full output path.
+        await GetManager().Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // Pre-populate a "running" job with streamed output on disk, simulating
         // a job that was alive when the daemon went down.
