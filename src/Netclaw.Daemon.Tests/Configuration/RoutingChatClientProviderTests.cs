@@ -7,6 +7,8 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Providers;
+using Netclaw.Providers.SelfHosted;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
@@ -39,12 +41,12 @@ public sealed class RoleBasedFailoverRouterTests
     [Fact]
     public void Main_has_two_candidates_when_fallback_configured()
     {
-        var models = new ModelSelection
+        var roles = new ModelRoleAssignments
         {
-            Main = new ModelReference { Provider = "p", ModelId = "main" },
-            Fallback = new ModelReference { Provider = "p", ModelId = "fb" }
+            Main = "main",
+            Fallback = "fb"
         };
-        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), models);
+        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), roles);
 
         var main = router.Route(new ChatRoutingContext { Role = ModelRole.Main });
 
@@ -57,8 +59,8 @@ public sealed class RoleBasedFailoverRouterTests
     [Fact]
     public void Main_has_one_candidate_when_no_fallback()
     {
-        var models = new ModelSelection { Main = new ModelReference { Provider = "p", ModelId = "main" } };
-        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), models);
+        var roles = new ModelRoleAssignments { Main = "main" };
+        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), roles);
 
         Assert.Single(router.Route(new ChatRoutingContext { Role = ModelRole.Main }));
     }
@@ -66,17 +68,62 @@ public sealed class RoleBasedFailoverRouterTests
     [Fact]
     public void Compaction_is_a_distinct_single_pipeline_when_configured()
     {
-        var models = new ModelSelection
+        var roles = new ModelRoleAssignments
         {
-            Main = new ModelReference { Provider = "p", ModelId = "main" },
-            Compaction = new ModelReference { Provider = "p", ModelId = "comp" }
+            Main = "main",
+            Compaction = "comp"
         };
-        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), models);
+        var router = new RoleBasedFailoverRouter(_ => new FakeChatClient(), roles);
 
         var main = router.Route(new ChatRoutingContext { Role = ModelRole.Main });
         var compaction = router.Route(new ChatRoutingContext { Role = ModelRole.Compaction });
 
         Assert.Single(compaction);
         Assert.NotSame(main, compaction);
+    }
+}
+
+public sealed class NamedModelRuntimeRegistryTests
+{
+    [Fact]
+    public void GetRequired_caches_one_runtime_per_case_insensitive_name()
+    {
+        var model = new ModelReference
+        {
+            Provider = "local",
+            ModelId = "vision",
+            InputModalities = ModelModality.Text | ModelModality.Image,
+            OutputModalities = ModelModality.Text
+        };
+        var configuration = new ModelRuntimeConfiguration(
+            new Dictionary<string, ModelReference>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["vision"] = model
+            },
+            new ModelRoleAssignments { Main = "vision" },
+            new ModelProxyAssignments { Image = "vision" });
+        using var httpClient = new HttpClient();
+        var providerFactory = new ProviderPluginFactory(
+            new Dictionary<string, ProviderEntry>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["local"] = new ProviderEntry
+                {
+                    Type = "ollama",
+                    Endpoint = "http://localhost:11434"
+                }
+            },
+            [new OllamaProviderPlugin(new OllamaDescriptor(httpClient))]);
+        var pipelineFactory = new PipelineChatClientFactory(
+            providerFactory,
+            new RetryPolicy(),
+            NullLoggerFactory.Instance);
+        var registry = new NamedModelRuntimeRegistry(configuration, pipelineFactory);
+
+        var first = registry.GetRequired("vision");
+        var second = registry.GetRequired("VISION");
+
+        Assert.Same(first, second);
+        Assert.Equal(ModelModality.Text | ModelModality.Image, first.Capabilities.InputModalities);
+        Assert.Equal(ModelModality.Text, first.Capabilities.OutputModalities);
     }
 }

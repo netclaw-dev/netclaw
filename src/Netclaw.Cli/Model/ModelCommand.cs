@@ -47,14 +47,14 @@ internal static class ModelCommand
 
     private static int RunList(NetclawPaths paths, TextWriter writer)
     {
-        if (!TryLoadModelSelection(paths, out var models, out var error))
+        if (!TryLoadModelConfiguration(paths, out var resolution, out var error))
         {
             writer.WriteLine($"Error: {error}");
             writer.WriteLine("Fix the Models section in netclaw.json, then rerun `netclaw model list`.");
             return 1;
         }
 
-        if (models is null)
+        if (resolution is null)
         {
             writer.WriteLine("No models configured.");
             writer.WriteLine("Run `netclaw model set` or `netclaw model` (TUI) to configure models.");
@@ -63,6 +63,7 @@ internal static class ModelCommand
 
         writer.WriteLine($"{"Role",-12} {"Provider",-20} {"Model ID",-30} {"Context Window"}");
 
+        var models = resolution.Selection;
         WriteModelRow("Main", models.Main, writer);
 
         if (models.Fallback is not null)
@@ -74,6 +75,17 @@ internal static class ModelCommand
             WriteModelRow("Compaction", models.Compaction, writer);
         else
             writer.WriteLine($"{"Compaction",-12} {"(not set)",-20}");
+
+        var imageProxyName = resolution.Runtime.Proxies.Image;
+        if (imageProxyName is not null
+            && resolution.Runtime.Definitions.TryGetValue(imageProxyName, out var imageProxy))
+        {
+            WriteModelRow("ImageProxy", imageProxy, writer);
+        }
+        else
+        {
+            writer.WriteLine($"{"ImageProxy",-12} {"(not set)",-20}");
+        }
 
         return 0;
     }
@@ -97,7 +109,7 @@ internal static class ModelCommand
             writer.WriteLine("Usage: netclaw model set <role> <provider> <model-id> [--context-window <tokens>] [--clear-context-window]");
             writer.WriteLine("                       [--input-modalities <list>] [--output-modalities <list>] [--clear-modalities]");
             writer.WriteLine();
-            writer.WriteLine("Roles: main, fallback, compaction");
+            writer.WriteLine("Roles: main, fallback, compaction, image-proxy");
             return 1;
         }
 
@@ -201,13 +213,33 @@ internal static class ModelCommand
             "main" => "Main",
             "fallback" => "Fallback",
             "compaction" => "Compaction",
+            "image-proxy" => "Image",
             _ => null
         };
 
         if (roleKey is null)
         {
-            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles: main, fallback, compaction");
+            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles: main, fallback, compaction, image-proxy");
             return 1;
+        }
+
+        var isImageProxy = roleKey == "Image";
+        if (isImageProxy)
+        {
+            inputOverride = inputModalitySet is { } configuredInput
+                ? ValueOverride<ModelModality>.Set(configuredInput)
+                : ValueOverride<ModelModality>.Set(ModelModality.Text | ModelModality.Image);
+            outputOverride = outputModalitySet is { } configuredOutput
+                ? ValueOverride<ModelModality>.Set(configuredOutput)
+                : ValueOverride<ModelModality>.Set(ModelModality.Text);
+
+            if (!inputOverride.Value!.Value.HasFlag(ModelModality.Image)
+                || !inputOverride.Value.Value.HasFlag(ModelModality.Text)
+                || !outputOverride.Value!.Value.HasFlag(ModelModality.Text))
+            {
+                writer.WriteLine("Error: image-proxy requires Text and Image input plus Text output.");
+                return 1;
+            }
         }
 
         // Validate provider exists
@@ -277,16 +309,31 @@ internal static class ModelCommand
         // Definitions own model metadata, so role switches never destroy another model's
         // operator-owned overrides. Discovery seeds only a new definition; explicit input edits
         // an existing definition and absence remains runtime detection (#1127, #1610).
-        ModelEntryWriter.WriteRole(
-            modelsSection,
-            roleKey,
-            providerName,
-            modelId,
-            provenance,
-            contextWindowOverride,
-            inputOverride,
-            outputOverride,
-            discoveredModel);
+        if (isImageProxy)
+        {
+            ModelEntryWriter.WriteImageProxy(
+                modelsSection,
+                providerName,
+                modelId,
+                provenance,
+                contextWindowOverride,
+                inputOverride,
+                outputOverride,
+                discoveredModel);
+        }
+        else
+        {
+            ModelEntryWriter.WriteRole(
+                modelsSection,
+                roleKey,
+                providerName,
+                modelId,
+                provenance,
+                contextWindowOverride,
+                inputOverride,
+                outputOverride,
+                discoveredModel);
+        }
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
@@ -454,12 +501,13 @@ internal static class ModelCommand
         {
             "fallback" => "Fallback",
             "compaction" => "Compaction",
+            "image-proxy" => "Image",
             _ => null
         };
 
         if (roleKey is null)
         {
-            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles for clear: fallback, compaction");
+            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles for clear: fallback, compaction, image-proxy");
             return 1;
         }
 
@@ -475,7 +523,9 @@ internal static class ModelCommand
         bool removed;
         try
         {
-            removed = ModelEntryWriter.ClearRole(modelsSection, roleKey);
+            removed = roleKey == "Image"
+                ? ModelEntryWriter.ClearImageProxy(modelsSection)
+                : ModelEntryWriter.ClearRole(modelsSection, roleKey);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
@@ -518,7 +568,17 @@ internal static class ModelCommand
         out ModelSelection? models,
         out string? error)
     {
-        models = null;
+        var success = TryLoadModelConfiguration(paths, out var resolution, out error);
+        models = resolution?.Selection;
+        return success;
+    }
+
+    internal static bool TryLoadModelConfiguration(
+        NetclawPaths paths,
+        out ModelConfigurationResolution? resolution,
+        out string? error)
+    {
+        resolution = null;
         error = null;
         if (!File.Exists(paths.NetclawConfigPath))
             return true;
@@ -531,7 +591,7 @@ internal static class ModelCommand
             if (!configuration.GetSection("Models").Exists())
                 return true;
 
-            models = ModelConfigurationResolver.Resolve(configuration).Selection;
+            resolution = ModelConfigurationResolver.Resolve(configuration);
             return true;
         }
         catch (ModelConfigurationException ex)
@@ -554,11 +614,11 @@ internal static class ModelCommand
         writer.WriteLine("  list                                     Show current model assignments");
         writer.WriteLine("  set <role> <provider> <model-id>         Assign model to role");
         writer.WriteLine("  discover <provider>                      List available models from provider");
-        writer.WriteLine("  clear <role>                             Clear fallback or compaction role");
+        writer.WriteLine("  clear <role>                             Clear fallback, compaction, or image-proxy");
         writer.WriteLine();
         writer.WriteLine("Run `netclaw model` (no subcommand) for interactive TUI management.");
         writer.WriteLine();
-        writer.WriteLine("Roles: main, fallback, compaction");
+        writer.WriteLine("Roles: main, fallback, compaction, image-proxy");
         writer.WriteLine();
         writer.WriteLine("Options for 'set':");
         writer.WriteLine("  --context-window <tokens>    Override context window size");
@@ -577,6 +637,7 @@ internal static class ModelCommand
         writer.WriteLine("  netclaw model set main my-openai gpt-x --clear-context-window");
         writer.WriteLine("  netclaw model set main my-vllm qwen-vl --input-modalities \"Text, Image\"");
         writer.WriteLine("  netclaw model set main my-ollama qwen3:30b --clear-modalities");
+        writer.WriteLine("  netclaw model set image-proxy my-vllm qwen-vl");
         writer.WriteLine("  netclaw model clear fallback");
         return 0;
     }

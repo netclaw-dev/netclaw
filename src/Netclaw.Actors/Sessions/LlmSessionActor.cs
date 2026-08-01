@@ -56,6 +56,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
+    private readonly IImageProxyAnalyzer _imageProxyAnalyzer;
     private readonly IToolExecutor? _toolExecutor;
     private readonly SessionToolExecutionPipeline? _toolExecutionPipeline;
     private readonly Tools.ToolRegistry? _toolRegistry;
@@ -145,6 +146,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Actor-owned CTS for active tool execution. Cancels direct approval waits
     // and tool calls when the session stops, restarts, or fails the turn.
     private CancellationTokenSource? _activeToolExecutionCts;
+    private CancellationTokenSource? _activeImageProxyCts;
+    private bool _imageProxyPreparationPending;
 
     // Correlation ID for the active LLM call. Incremented in FireLlmCall.
     // Stale LlmResponseReceived/LlmCallFailed/LlmResponseDeltaReceived messages
@@ -233,6 +236,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _promptProvider = services.PromptProvider;
         _contextLayers = services.ContextLayers;
         _workingContextSnapshots = services.WorkingContextSnapshots;
+        _imageProxyAnalyzer = services.ImageProxyAnalyzer;
         _skillRegistry = tools?.SkillRegistry;
         _subAgentRegistry = tools?.SubAgentRegistry;
         _subAgentSpawner = tools?.SubAgentSpawner;
@@ -279,6 +283,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ClearActiveToolBatchTracking();
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
+        Recover<ImageProxyAnalysisRecorded>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt =>
         {
@@ -454,6 +459,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<LlmResponseReceived>(_ => { }); // stale response arriving after transition to Ready
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
+        Command<ImageProxyPreparationCompleted>(_ => { });
+        Command<ImageProxyPreparationFailed>(_ => { });
         CommandDistillationAckNoOp();
         CommandJobReapResolved();
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
@@ -530,6 +537,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
+
+        Command<ImageProxyPreparationCompleted>(HandleImageProxyPreparationCompleted);
+        Command<ImageProxyPreparationFailed>(HandleImageProxyPreparationFailed);
 
         Command<LlmResponseReceived>(HandleLlmResponseReceived);
 
@@ -2527,6 +2537,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _buffer.Clear();
         CancelAndDisposeLlmCts();
         CancelAndDisposeToolExecutionCts();
+        CancelAndDisposeImageProxyCts();
 
         base.PreRestart(reason, message);
     }
@@ -2535,6 +2546,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         CancelAndDisposeLlmCts();
         CancelAndDisposeToolExecutionCts();
+        CancelAndDisposeImageProxyCts();
 
         // Safety net for non-graceful stop paths (shutdown timeout, OOM, etc.).
         if (!_passivationCompleted)
@@ -2555,6 +2567,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeToolExecutionCts?.Cancel();
         _activeToolExecutionCts?.Dispose();
         _activeToolExecutionCts = null;
+    }
+
+    private void CancelAndDisposeImageProxyCts()
+    {
+        _activeImageProxyCts?.Cancel();
+        _activeImageProxyCts?.Dispose();
+        _activeImageProxyCts = null;
+        _imageProxyPreparationPending = false;
     }
 
     // ── Helpers ──
@@ -2643,9 +2663,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
-        var compatibility = ModelInputCompatibility.Evaluate(_model.InputModalities, _state.History);
+        var analyzedPaths = _state.ImageProxyAnalyses.Keys.ToHashSet(StringComparer.Ordinal);
+        var compatibility = ModelInputCompatibility.Evaluate(
+            _model.InputModalities,
+            _state.History,
+            analyzedImagePaths: analyzedPaths);
         if (!compatibility.IsCompatible)
         {
+            if (CanUseImageProxy(compatibility))
+            {
+                StartImageProxyPreparation(recallQuery, forceNoTools);
+                return;
+            }
+
             TurnLog().Warning(
                 "turn_media_history_incompatible required={Required} unsupported={Unsupported} unknownCount={UnknownCount} " +
                 "model={ModelId} — incompatible media references will be stripped from wire messages by the assembler",
@@ -2736,6 +2766,128 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ContinueFireLlmCall(forceNoTools);
     }
 
+    private bool CanUseImageProxy(ModelInputCompatibilityResult compatibility) =>
+        _imageProxyAnalyzer.IsEnabled
+        && compatibility.UnknownModalityValues.Count == 0
+        && compatibility.UnsupportedModalities == ModelModality.Image;
+
+    private void StartImageProxyPreparation(string? recallQuery, bool forceNoTools)
+    {
+        if (_imageProxyPreparationPending)
+            return;
+
+        var pending = _state.History
+            .SelectMany(message => message.MediaReferences)
+            .Where(media => (MediaModality)media.Modality == MediaModality.Image)
+            .Where(media => !_state.ImageProxyAnalyses.ContainsKey(media.RelativePath))
+            .DistinctBy(media => media.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+        if (pending.Length == 0)
+        {
+            FailCurrentTurn(
+                "The image proxy could not find the required image input.",
+                new InvalidOperationException("No image requires proxy analysis."),
+                ErrorCategory.InputCompatibility);
+            return;
+        }
+
+        _imageProxyPreparationPending = true;
+        _activeImageProxyCts = new CancellationTokenSource(_config.TurnLlmTimeout);
+        _ = PrepareImagesAsync(
+                pending,
+                recallQuery,
+                forceNoTools,
+                _turnRestartNotice,
+                _activeImageProxyCts.Token)
+            .PipeTo(Self);
+    }
+
+    private async Task<INoSerializationVerificationNeeded> PrepareImagesAsync(
+        IReadOnlyList<SerializableMediaReference> pending,
+        string? recallQuery,
+        bool forceNoTools,
+        string? turnRestartNotice,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var analyses = new List<ImageProxyAnalysis>(pending.Count);
+            foreach (var media in pending)
+            {
+                analyses.Add(await _imageProxyAnalyzer.AnalyzeAsync(
+                    _sessionId,
+                    media,
+                    _sessionsBasePath,
+                    cancellationToken).ConfigureAwait(false));
+            }
+
+            return new ImageProxyPreparationCompleted(
+                analyses,
+                recallQuery,
+                forceNoTools,
+                turnRestartNotice);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ImageProxyPreparationFailed(
+                new TimeoutException("The image proxy request exceeded the session timeout."));
+        }
+        catch (Exception ex)
+        {
+            return new ImageProxyPreparationFailed(ex);
+        }
+    }
+
+    private void HandleImageProxyPreparationCompleted(ImageProxyPreparationCompleted message)
+    {
+        CancelAndDisposeImageProxyCts();
+        if (message.Analyses.Count == 0)
+        {
+            HandleImageProxyPreparationFailed(
+                new ImageProxyPreparationFailed(
+                    new InvalidOperationException("The image proxy returned no analysis records.")));
+            return;
+        }
+
+        var events = message.Analyses.Select(analysis => new ImageProxyAnalysisRecorded
+        {
+            SessionId = _sessionId,
+            Analysis = analysis
+        }).ToArray();
+        var remaining = events.Length;
+        PersistAll(events, evt =>
+        {
+            _state = _state.Apply(evt);
+            remaining--;
+            if (remaining == 0)
+                ResumeAfterImageProxyPreparation(message);
+        });
+    }
+
+    private void ResumeAfterImageProxyPreparation(ImageProxyPreparationCompleted message)
+    {
+        var priorNotice = _turnRestartNotice;
+        _turnRestartNotice = message.TurnRestartNotice;
+        try
+        {
+            FireLlmCall(message.RecallQuery, message.ForceNoTools);
+        }
+        finally
+        {
+            _turnRestartNotice = priorNotice;
+        }
+    }
+
+    private void HandleImageProxyPreparationFailed(ImageProxyPreparationFailed message)
+    {
+        CancelAndDisposeImageProxyCts();
+        TurnLog().Error(message.Cause, "turn_image_proxy_failed");
+        FailCurrentTurn(
+            "The image proxy could not analyze the session image. The main model was not called.",
+            message.Cause,
+            ErrorCategory.ProviderFailure);
+    }
+
     private bool TryRejectIncompatibleInput(
         IReadOnlyList<SerializableMediaReference> pendingMedia,
         MessageSource? source)
@@ -2743,8 +2895,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var compatibility = ModelInputCompatibility.Evaluate(
             _model.InputModalities,
             _state.History,
-            pendingMedia);
+            pendingMedia,
+            _state.ImageProxyAnalyses.Keys.ToHashSet(StringComparer.Ordinal));
         if (compatibility.IsCompatible)
+            return false;
+        if (CanUseImageProxy(compatibility))
             return false;
 
         // History-only incompatibility: debug log and let the assembler strip
@@ -2827,7 +2982,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Canonical names live in history (post-PR follow-up); the
             // LLM provider wants the sanitized alias back on the wire.
             ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName,
-            SupportedInputModalities: _model.InputModalities));
+            SupportedInputModalities: _model.InputModalities,
+            UseImageProxyAnalysis: !_model.InputModalities.HasFlag(ModelModality.Image)
+                && _imageProxyAnalyzer.IsEnabled,
+            ImageProxyAnalyses: _state.ImageProxyAnalyses));
         _startupContextInjected = true;
 
         var self = Self;

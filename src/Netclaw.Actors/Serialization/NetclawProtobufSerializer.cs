@@ -46,6 +46,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string SessionBackgroundJobsReapedManifest = "sbjr-v1";
     private const string PendingApprovalPromptTrackedManifest = "papt-v1";
     private const string PendingApprovalPromptClearedManifest = "papc-v1";
+    private const string ImageProxyAnalysisRecordedManifest = "ipar-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
     {
@@ -74,6 +75,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(SessionBackgroundJobsReaped)] = SessionBackgroundJobsReapedManifest,
         [typeof(Channels.PendingApprovalPromptTracked)] = PendingApprovalPromptTrackedManifest,
         [typeof(Channels.PendingApprovalPromptCleared)] = PendingApprovalPromptClearedManifest,
+        [typeof(ImageProxyAnalysisRecorded)] = ImageProxyAnalysisRecordedManifest,
     }.ToFrozenDictionary();
 
     public override int Identifier => 150;
@@ -150,6 +152,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.PendingApprovalPromptTrackedProto.Parser.ParseFrom(bytes)),
             PendingApprovalPromptClearedManifest => NetclawProtoMapper.FromProto(
                 Proto.PendingApprovalPromptClearedProto.Parser.ParseFrom(bytes)),
+            ImageProxyAnalysisRecordedManifest => NetclawProtoMapper.FromProto(
+                Proto.ImageProxyAnalysisRecordedProto.Parser.ParseFrom(bytes)),
             _ => throw new ArgumentException(
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };

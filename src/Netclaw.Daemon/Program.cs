@@ -230,6 +230,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // timing of the previous eager-resolution path while letting detection use
     // the host's IModelCapabilityResolver chain and ILoggerFactory.
     app.Services.GetRequiredService<ModelCapabilities>();
+    app.Services.GetRequiredService<IImageProxyAnalyzer>();
 
     app.UseAuthentication();
     app.UseAuthorization();
@@ -360,7 +361,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // No silent fallback to local-ollama: an empty Providers section yields
     // the NoProviderConfigured outcome and the host registers NoOpChatClientProvider.
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    var models = ModelConfigurationResolver.Resolve(configuration).Selection;
+    var modelResolution = ModelConfigurationResolver.Resolve(configuration);
+    var models = modelResolution.Selection;
     var validation = ProviderRuntimeValidation.Evaluate(
         providers,
         models,
@@ -373,7 +375,7 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
         .Tuning.StreamingRetryPolicy;
 
     services.AddSingleton(validation);
-    services.AddDaemonLlmProviders(providers, models, validation, streamingRetryPolicy);
+    services.AddDaemonLlmProviders(providers, modelResolution, validation, streamingRetryPolicy);
 
     return paths;
 }
@@ -972,6 +974,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<ISystemPromptProvider>(),
         sp.GetRequiredService<IReadOnlyList<IContextLayerProvider>>(),
         sp.GetRequiredService<IWorkingContextSnapshotProvider>(),
+        sp.GetRequiredService<IImageProxyAnalyzer>(),
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<NetclawPaths>()));
 

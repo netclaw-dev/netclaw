@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
@@ -48,6 +49,7 @@ public sealed class DiscordChannelHealthContractTests(ITestOutputHelper output)
                 AudienceProfiles = TestDiscordGatewayDeps.DefaultAudienceProfiles
             },
             TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            DisabledImageProxyAnalyzer.Instance,
             TestDiscordGatewayDeps.NewTestPaths());
     }
 

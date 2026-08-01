@@ -3,20 +3,43 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Media;
 
 namespace Netclaw.Actors.Channels;
+
+public enum ImageInputRoute
+{
+    None,
+    Direct,
+    Proxy
+}
 
 /// <summary>
 /// Shared inline-vs-path-only decision for channel attachments and local file inspection.
 /// </summary>
 public static class AttachmentInlineDecision
 {
+    public static ImageInputRoute SelectImageRoute(
+        ModelModality inputModalities,
+        bool imageProxyEnabled)
+        => inputModalities.HasFlag(ModelModality.Image)
+            ? ImageInputRoute.Direct
+            : imageProxyEnabled
+                ? ImageInputRoute.Proxy
+                : ImageInputRoute.None;
+
     public static (bool Inlined, string? Note) Resolve(MimeType mimeType, AttachmentCategory category, bool inlineImages)
+        => Resolve(mimeType, category, inlineImages ? ImageInputRoute.Direct : ImageInputRoute.None);
+
+    public static (bool Inlined, string? Note) Resolve(
+        MimeType mimeType,
+        AttachmentCategory category,
+        ImageInputRoute imageRoute)
     {
         if (category == AttachmentCategory.Image)
         {
-            if (!inlineImages)
+            if (imageRoute == ImageInputRoute.None)
                 return (false, AttachmentNotes.ModelMissingImage);
 
             // Only inline image types the provider can actually ingest as model

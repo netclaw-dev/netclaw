@@ -21,7 +21,20 @@ internal static class ModelCapabilityResolution
         int defaultContextWindow = 32_768,
         ILogger? logger = null)
     {
-        var model = models.Main;
+        var result = ResolveModelCapabilities(
+            models.Main,
+            detected,
+            defaultContextWindow,
+            logger);
+        return result with { CompactionModelId = models.Compaction?.ModelId };
+    }
+
+    public static ModelCapabilities ResolveModelCapabilities(
+        ModelReference model,
+        ResolvedModelCapabilities? detected,
+        int defaultContextWindow = 32_768,
+        ILogger? logger = null)
+    {
         // Final safety net: provider parsers should normalize non-positive context
         // metadata to null, but keep runtime capabilities valid even if an older
         // or custom resolver reports llama.cpp-style n_ctx=0 as a sentinel.
@@ -60,7 +73,6 @@ internal static class ModelCapabilityResolution
             ContextWindowTokens = contextWindow,
             InputModalities = inputModalities,
             OutputModalities = outputModalities,
-            CompactionModelId = models.Compaction?.ModelId,
         };
     }
 }

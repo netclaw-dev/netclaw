@@ -21,6 +21,7 @@ public sealed record SessionServices(
     ISystemPromptProvider PromptProvider,
     IReadOnlyList<IContextLayerProvider> ContextLayers,
     IWorkingContextSnapshotProvider WorkingContextSnapshots,
+    IImageProxyAnalyzer ImageProxyAnalyzer,
     TimeProvider TimeProvider,
     NetclawPaths Paths);
 

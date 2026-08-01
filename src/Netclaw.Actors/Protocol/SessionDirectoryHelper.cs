@@ -40,6 +40,21 @@ public static class SessionDirectoryHelper
         return Path.Combine(basePath, sanitized);
     }
 
+    public static string GetMediaFilePath(
+        SessionId sessionId,
+        string basePath,
+        string relativePath)
+    {
+        var mediaDirectory = Path.GetFullPath(Path.Combine(
+            GetSessionDirectory(sessionId, basePath),
+            MediaSubdirectory));
+        var fullPath = Path.GetFullPath(Path.Combine(mediaDirectory, relativePath));
+        if (!fullPath.StartsWith(mediaDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new InvalidOperationException("The media path escapes the session media directory.");
+
+        return fullPath;
+    }
+
     /// <summary>
     /// Computes and creates the <c>inbox/</c> subdirectory under the
     /// session directory, returning its full path. Channel adapters call

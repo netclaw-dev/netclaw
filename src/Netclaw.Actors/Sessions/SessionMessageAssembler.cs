@@ -39,7 +39,9 @@ public sealed record ContextAssemblyInput(
     // When set, media references whose modality is not supported by the
     // active model are dropped from the wire message list. The assembler
     // injects a volatile system notice when any media is stripped.
-    ModelModality SupportedInputModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video);
+    ModelModality SupportedInputModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video,
+    bool UseImageProxyAnalysis = false,
+    IReadOnlyDictionary<string, ImageProxyAnalysis>? ImageProxyAnalyses = null);
 
 /// <summary>
 /// Pure-function assembly of the <see cref="AiChatMessage"/> list sent to
@@ -120,14 +122,21 @@ public static class SessionMessageAssembler
             input.State.History,
             sessionDir,
             toolNameResolver: input.ToolNameToLlmFacing,
-            supportedModalities: input.SupportedInputModalities);
+            supportedModalities: input.SupportedInputModalities,
+            useImageProxyAnalysis: input.UseImageProxyAnalysis,
+            imageProxyAnalyses: input.ImageProxyAnalyses);
 
         // Inject volatile notice when media was stripped from history
         var strippedCount = ChatMessageConverter.CountStrippedMedia(
-            input.State.History, input.SupportedInputModalities);
+            input.State.History,
+            input.SupportedInputModalities,
+            input.UseImageProxyAnalysis);
         if (strippedCount > 0)
         {
-            var notice = BuildMediaStrippedNotice(strippedCount, input.SupportedInputModalities);
+            var notice = BuildMediaStrippedNotice(
+                strippedCount,
+                input.SupportedInputModalities,
+                input.UseImageProxyAnalysis);
             messages.Insert(0, new AiChatMessage(
                 Microsoft.Extensions.AI.ChatRole.User,
                 notice));
@@ -305,10 +314,13 @@ public static class SessionMessageAssembler
     /// were stripped from the wire message list because the active model does
     /// not support their modality.
     /// </summary>
-    internal static string BuildMediaStrippedNotice(int strippedCount, ModelModality supported)
+    internal static string BuildMediaStrippedNotice(
+        int strippedCount,
+        ModelModality supported,
+        bool useImageProxyAnalysis = false)
     {
         var required = string.Empty;
-        if ((supported & ModelModality.Image) == 0)
+        if (!useImageProxyAnalysis && (supported & ModelModality.Image) == 0)
             required = "image";
         if ((supported & ModelModality.Audio) == 0)
             required = (required.Length > 0 ? required + ", " : "") + "audio";

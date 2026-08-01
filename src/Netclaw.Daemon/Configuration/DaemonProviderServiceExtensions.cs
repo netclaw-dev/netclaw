@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -30,10 +31,32 @@ public static class DaemonProviderServiceExtensions
         ModelSelection models,
         ProviderRuntimeValidation validation,
         RetryPolicy? retryPolicy = null)
+        => AddDaemonLlmProviders(
+            services,
+            providers,
+            new ModelConfigurationResolution(
+                models,
+                IsLegacy: true,
+                CreateLegacyRuntime(models)),
+            validation,
+            retryPolicy);
+
+    public static IServiceCollection AddDaemonLlmProviders(
+        this IServiceCollection services,
+        Dictionary<string, ProviderEntry> providers,
+        ModelConfigurationResolution modelResolution,
+        ProviderRuntimeValidation validation,
+        RetryPolicy? retryPolicy = null)
     {
         // Register descriptors/OAuth endpoints even in degraded mode so operators
         // can recover through provider/model setup flows without restarting first.
         services.AddLlmProviders();
+
+        if (string.IsNullOrWhiteSpace(modelResolution.Runtime.Proxies.Image)
+            || validation.Status != ProviderRuntimeStatus.Valid)
+        {
+            services.AddSingleton<IImageProxyAnalyzer>(DisabledImageProxyAnalyzer.Instance);
+        }
 
         if (validation.Status == ProviderRuntimeStatus.NoProviderConfigured)
         {
@@ -80,10 +103,16 @@ public static class DaemonProviderServiceExtensions
             sp.GetRequiredService<ILoggerFactory>(),
             sp.GetService<TimeProvider>()));
 
+        services.AddSingleton(modelResolution.Runtime);
+        services.AddSingleton<INamedModelRuntimeRegistry, NamedModelRuntimeRegistry>();
+        if (!string.IsNullOrWhiteSpace(modelResolution.Runtime.Proxies.Image))
+            services.AddSingleton<IImageProxyAnalyzer, NamedImageProxyAnalyzer>();
+
         // Routing policy. Today: role-based selection with primary→fallback failover.
         // Per-session / per-provider routing slots in here later as a different policy.
         services.AddSingleton<IChatClientRouter>(sp => new RoleBasedFailoverRouter(
-            sp.GetRequiredService<PipelineChatClientFactory>(), models));
+            sp.GetRequiredService<INamedModelRuntimeRegistry>(),
+            modelResolution.Runtime.Roles));
 
         // Router-backed provider the actor layer consumes via GetClient(role).
         services.AddSingleton<IChatClientProvider>(sp => new RoutingChatClientProvider(
@@ -93,5 +122,28 @@ public static class DaemonProviderServiceExtensions
             sp.GetService<TimeProvider>()));
 
         return services;
+    }
+
+    private static ModelRuntimeConfiguration CreateLegacyRuntime(ModelSelection models)
+    {
+        var definitions = new Dictionary<string, ModelReference>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["main"] = models.Main
+        };
+        var roles = new ModelRoleAssignments { Main = "main" };
+
+        if (models.Fallback is not null)
+        {
+            definitions["fallback"] = models.Fallback;
+            roles.Fallback = "fallback";
+        }
+
+        if (models.Compaction is not null)
+        {
+            definitions["compaction"] = models.Compaction;
+            roles.Compaction = "compaction";
+        }
+
+        return new ModelRuntimeConfiguration(definitions, roles, new ModelProxyAssignments());
     }
 }

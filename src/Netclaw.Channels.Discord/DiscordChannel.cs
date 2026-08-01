@@ -34,6 +34,7 @@ public sealed class DiscordChannel : IChannel
     private readonly ILogger<DiscordChannel> _logger;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
+    private readonly bool _imageProxyEnabled;
     private readonly NetclawPaths _paths;
 
     private readonly object _connectionSetupLock = new();
@@ -57,6 +58,7 @@ public sealed class DiscordChannel : IChannel
         ILogger<DiscordChannel> logger,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
+        Netclaw.Actors.Sessions.IImageProxyAnalyzer imageProxyAnalyzer,
         NetclawPaths paths)
     {
         _system = system;
@@ -79,6 +81,7 @@ public sealed class DiscordChannel : IChannel
         _logger = logger;
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
+        _imageProxyEnabled = imageProxyAnalyzer.IsEnabled;
         _paths = paths;
 
         _gatewayClient.CleanReconnectRequired += HandleCleanReconnectRequiredAsync;
@@ -190,6 +193,7 @@ public sealed class DiscordChannel : IChannel
                 ContentScanner: _contentScanner,
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
+                ImageProxyEnabled: _imageProxyEnabled,
                 Paths: _paths,
                 BotUserId: botUserId,
                 PromptInjectionDetector: _promptInjectionDetector,

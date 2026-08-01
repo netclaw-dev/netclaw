@@ -97,6 +97,126 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Set_ImageProxy_WritesNamedProxyWithRequiredModalities()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "vllm",
+                    ["Endpoint"] = "http://localhost:8000"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-vllm",
+                    ["ModelId"] = "qwen-text"
+                }
+            }
+        });
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "image-proxy", "my-vllm", "qwen-vl", "--context-window", "32768"],
+            _paths,
+            output: _output);
+
+        Assert.Equal(0, exitCode);
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var models = config.RootElement.GetProperty("Models");
+        var definitionName = models.GetProperty("Proxies").GetProperty("Image").GetString()!;
+        var definition = models.GetProperty("Definitions").GetProperty(definitionName);
+        Assert.Equal("Text, Image", definition.GetProperty("InputModalities").GetString());
+        Assert.Equal("Text", definition.GetProperty("OutputModalities").GetString());
+        var mainName = models.GetProperty("Roles").GetProperty("Main").GetString()!;
+        var main = models.GetProperty("Definitions").GetProperty(mainName);
+        Assert.Equal("my-vllm", main.GetProperty("Provider").GetString());
+        Assert.Equal("qwen-text", main.GetProperty("ModelId").GetString());
+
+        _output.GetStringBuilder().Clear();
+        await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
+        Assert.Contains("ImageProxy", _output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("qwen-vl", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Set_ImageProxy_RejectsIncompatibleModalitiesBeforePersistence()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "vllm",
+                    ["Endpoint"] = "http://localhost:8000"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-vllm",
+                    ["ModelId"] = "qwen-text"
+                }
+            }
+        });
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "image-proxy", "my-vllm", "qwen-vl", "--input-modalities", "Text"],
+            _paths,
+            output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("requires Text and Image input", _output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Clear_ImageProxy_RemovesOnlyProxyAssignment()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["main"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "p",
+                        ["ModelId"] = "text"
+                    },
+                    ["vision"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "p",
+                        ["ModelId"] = "vision"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "main" },
+                ["Proxies"] = new Dictionary<string, object> { ["Image"] = "vision" }
+            }
+        });
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "clear", "image-proxy"],
+            _paths,
+            output: _output);
+
+        Assert.Equal(0, exitCode);
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var models = config.RootElement.GetProperty("Models");
+        Assert.False(models.TryGetProperty("Proxies", out _));
+        Assert.Equal("main", models.GetProperty("Roles").GetProperty("Main").GetString());
+    }
+
+    [Fact]
     public async Task Set_OpenAiOAuthModel_StoresLiveDiscoveredMetadata()
     {
         WriteConfig(new Dictionary<string, object>

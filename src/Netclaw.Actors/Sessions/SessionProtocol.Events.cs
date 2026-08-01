@@ -268,6 +268,16 @@ public static partial class SessionProtocol
         public DateTimeOffset Timestamp => SetAt;
     }
 
+    public sealed record ImageProxyAnalysisRecorded : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public ImageProxyAnalysis Analysis { get; init; } = new();
+
+        public DateTimeOffset Timestamp =>
+            DateTimeOffset.FromUnixTimeMilliseconds(Analysis.AnalyzedAtMs);
+    }
+
     /// <summary>
     /// Persisted event recording that a session's conversation history was compacted.
     /// A snapshot is also taken after this event to avoid replaying the full journal.

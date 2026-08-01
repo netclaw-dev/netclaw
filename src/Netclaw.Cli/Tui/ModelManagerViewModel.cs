@@ -60,6 +60,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     // ── Loaded state ──
     public ModelSelection? Models { get; private set; }
+    public ModelReference? ImageProxy { get; private set; }
     public List<(string Name, string DisplayName, ProviderEntry Entry)> Providers { get; } = [];
 
     // ── Assignment flow ──
@@ -95,14 +96,20 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     public void Refresh()
     {
-        if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models, out _))
+        if (!Model.ModelCommand.TryLoadModelConfiguration(_paths, out var resolution, out _))
         {
             Models = null;
+            ImageProxy = null;
             StatusMessage.Value = "Model configuration is invalid. Run `netclaw doctor` for details.";
         }
         else
         {
-            Models = models;
+            Models = resolution?.Selection;
+            var imageProxyName = resolution?.Runtime.Proxies.Image;
+            ImageProxy = imageProxyName is not null
+                         && resolution!.Runtime.Definitions.TryGetValue(imageProxyName, out var imageProxy)
+                ? imageProxy
+                : null;
         }
         Providers.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
@@ -178,6 +185,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             "Main" => "Main",
             "Fallback" => "Fallback",
             "Compaction" => "Compaction",
+            "ImageProxy" => "Image",
             _ => SelectedRole
         };
 
@@ -198,16 +206,31 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         // clamp and modality overrides, none of which the picker can supply (#1127, #1610). The
         // picker has no manual-override inputs, so it passes no explicit context window and Unset
         // modality intent — the probe result seeds a first-time set only; existing values win.
-        ModelEntryWriter.WriteRole(
-            modelsSection,
-            roleKey,
-            SelectedProvider,
-            SelectedModelId,
-            provenance,
-            ValueOverride<int>.Unset,
-            ValueOverride<ModelModality>.Unset,
-            ValueOverride<ModelModality>.Unset,
-            discoveredModel);
+        if (roleKey == "Image")
+        {
+            ModelEntryWriter.WriteImageProxy(
+                modelsSection,
+                SelectedProvider,
+                SelectedModelId,
+                provenance,
+                ValueOverride<int>.Unset,
+                ValueOverride<ModelModality>.Set(ModelModality.Text | ModelModality.Image),
+                ValueOverride<ModelModality>.Set(ModelModality.Text),
+                discoveredModel);
+        }
+        else
+        {
+            ModelEntryWriter.WriteRole(
+                modelsSection,
+                roleKey,
+                SelectedProvider,
+                SelectedModelId,
+                provenance,
+                ValueOverride<int>.Unset,
+                ValueOverride<ModelModality>.Unset,
+                ValueOverride<ModelModality>.Unset,
+                discoveredModel);
+        }
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();
@@ -233,12 +256,17 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         {
             "Fallback" => "Fallback",
             "Compaction" => "Compaction",
+            "ImageProxy" => "Image",
             _ => role
         };
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection is not null && ModelEntryWriter.ClearRole(modelsSection, roleKey))
+        var removed = modelsSection is not null
+                      && (roleKey == "Image"
+                          ? ModelEntryWriter.ClearImageProxy(modelsSection)
+                          : ModelEntryWriter.ClearRole(modelsSection, roleKey));
+        if (removed)
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();
@@ -281,7 +309,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
                     ClearAssignmentState();
                     CurrentState.Value = ModelManagerState.RoleOverview;
                     NotifyStateChanged();
-            }
+                }
                 break;
             default:
                 if (IsEmbeddedInConfig)

@@ -29,6 +29,7 @@ internal static class LlmSessionTestExtensions
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetRequiredService<IWorkingContextSnapshotProvider>(),
+            sp.GetService<IImageProxyAnalyzer>() ?? DisabledImageProxyAnalyzer.Instance,
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<NetclawPaths>()));
 

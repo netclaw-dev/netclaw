@@ -6,6 +6,7 @@
 using Discord.WebSocket;
 using Mattermost;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
 using Netclaw.Channels.Discord.Transport;
@@ -58,6 +59,7 @@ public static class ChannelIntegrationRegistrationExtensions
                 var paths = sp.GetRequiredService<NetclawPaths>();
                 var toolConfig = sp.GetRequiredService<ToolConfig>();
                 var modelCapabilities = sp.GetRequiredService<ModelCapabilities>();
+                var imageProxyEnabled = sp.GetRequiredService<IImageProxyAnalyzer>().IsEnabled;
                 var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SlackThreadHistoryFetcher>();
                 return new SlackThreadHistoryFetcher(
                     slackApi.Conversations,
@@ -67,7 +69,8 @@ public static class ChannelIntegrationRegistrationExtensions
                     paths,
                     toolConfig.AudienceProfiles,
                     modelCapabilities,
-                    logger);
+                    logger,
+                    imageProxyEnabled);
             })
             .WithOutboundClient<ISlackOutboundClient, SlackOutboundClient>()
             .WithLookupClient<ISlackTargetLookupClient, SlackApiTargetLookupClient>()
@@ -161,6 +164,7 @@ public static class ChannelIntegrationRegistrationExtensions
                 var contentScanner = sp.GetRequiredService<IContentScanner>();
                 var toolConfig = sp.GetRequiredService<ToolConfig>();
                 var modelCapabilities = sp.GetRequiredService<ModelCapabilities>();
+                var imageProxyEnabled = sp.GetRequiredService<IImageProxyAnalyzer>().IsEnabled;
                 var paths = sp.GetRequiredService<NetclawPaths>();
                 var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<DiscordThreadHistoryFetcher>();
 
@@ -172,7 +176,8 @@ public static class ChannelIntegrationRegistrationExtensions
                     toolConfig.AudienceProfiles,
                     modelCapabilities,
                     paths,
-                    logger);
+                    logger,
+                    imageProxyEnabled);
             })
             .WithReminderResolver((_, options) => new DiscordReminderTargetResolver(options))
             .WithResolver((sp, options) => new DiscordAddressResolver(
@@ -236,6 +241,7 @@ public static class ChannelIntegrationRegistrationExtensions
                 var contentScanner = sp.GetRequiredService<IContentScanner>();
                 var toolConfig = sp.GetRequiredService<ToolConfig>();
                 var modelCapabilities = sp.GetRequiredService<ModelCapabilities>();
+                var imageProxyEnabled = sp.GetRequiredService<IImageProxyAnalyzer>().IsEnabled;
                 var paths = sp.GetRequiredService<NetclawPaths>();
                 var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<MattermostThreadHistoryFetcher>();
 
@@ -250,7 +256,8 @@ public static class ChannelIntegrationRegistrationExtensions
                     toolConfig.AudienceProfiles,
                     modelCapabilities,
                     paths,
-                    logger);
+                    logger,
+                    imageProxyEnabled);
             })
             .WithReminderResolver<MattermostReminderTargetResolver>()
             .WithOutboundClient<IMattermostOutboundClient, MattermostNetOutboundClient>()

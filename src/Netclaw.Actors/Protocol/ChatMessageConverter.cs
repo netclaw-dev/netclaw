@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Tools;
@@ -54,7 +55,9 @@ public static class ChatMessageConverter
         ILogger? logger = null,
         Func<string, string>? toolNameResolver = null,
         bool reinjectMeta = false,
-        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video)
+        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video,
+        bool useImageProxyAnalysis = false,
+        IReadOnlyDictionary<string, ImageProxyAnalysis>? imageProxyAnalyses = null)
     {
         var role = msg.Role switch
         {
@@ -120,6 +123,27 @@ public static class ChatMessageConverter
 
             foreach (var media in msg.MediaReferences)
             {
+                if (useImageProxyAnalysis && (MediaModality)media.Modality == MediaModality.Image)
+                {
+                    if (imageProxyAnalyses is null
+                        || !imageProxyAnalyses.TryGetValue(media.RelativePath, out var analysis))
+                    {
+                        throw new InvalidOperationException(
+                            $"Image proxy analysis is missing for media '{media.RelativePath}'.");
+                    }
+
+                    var safePath = NeutralizeProxyText(media.RelativePath)
+                        .Replace('\r', ' ')
+                        .Replace('\n', ' ')
+                        .Replace('"', '＂');
+                    var safeDescription = NeutralizeProxyText(analysis.Description);
+                    contents.Add(new TextContent(
+                        $"[image-proxy untrusted=\"true\" path=\"{safePath}\"]\n"
+                        + safeDescription
+                        + "\n[/image-proxy]"));
+                    continue;
+                }
+
                 if (!AcceptsModality(supportedModalities, (MediaModality)media.Modality))
                 {
                     logger?.LogDebug(
@@ -159,24 +183,36 @@ public static class ChatMessageConverter
         string? sessionDir = null,
         ILogger? logger = null,
         Func<string, string>? toolNameResolver = null,
-        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video)
+        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video,
+        bool useImageProxyAnalysis = false,
+        IReadOnlyDictionary<string, ImageProxyAnalysis>? imageProxyAnalyses = null)
     {
-        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger, toolNameResolver, false, supportedModalities))];
+        return [.. messages.Select(m => ToAiMessage(
+            m,
+            sessionDir,
+            logger,
+            toolNameResolver,
+            supportedModalities: supportedModalities,
+            useImageProxyAnalysis: useImageProxyAnalysis,
+            imageProxyAnalyses: imageProxyAnalyses))];
     }
 
     /// <summary>
-    /// Count how many media references across <paramref name="messages"/> would
-    /// be stripped given <paramref name="supportedModalities"/>.
+    /// Count media references that cannot reach the model as native input.
     /// </summary>
     public static int CountStrippedMedia(
         IEnumerable<SerializableChatMessage> messages,
-        ModelModality supportedModalities)
+        ModelModality supportedModalities,
+        bool useImageProxyAnalysis = false)
     {
         var count = 0;
-        foreach (var m in messages)
+        foreach (var message in messages)
         {
-            foreach (var media in m.MediaReferences)
+            foreach (var media in message.MediaReferences)
             {
+                if (useImageProxyAnalysis && (MediaModality)media.Modality == MediaModality.Image)
+                    continue;
+
                 if (!AcceptsModality(supportedModalities, (MediaModality)media.Modality))
                     count++;
             }
@@ -191,6 +227,10 @@ public static class ChatMessageConverter
         MediaModality.Video => (supported & ModelModality.Video) != 0,
         _ => false // unknown modality → not accepted
     };
+
+    private static string NeutralizeProxyText(string value) => value
+        .Replace('[', '［')
+        .Replace(']', '］');
 
     /// <param name="interpretToolCall">
     /// Optional schema-aware interpreter (the executor's <c>PrepareToolCall</c>) used to

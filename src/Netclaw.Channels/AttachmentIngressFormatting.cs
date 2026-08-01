@@ -20,7 +20,8 @@ public static class AttachmentIngressFormatting
         long size,
         string relativePath,
         bool inlined,
-        string? note)
+        string? note,
+        string? via = null)
     {
         var inlinedWire = inlined ? "true" : "false";
         var sb = new StringBuilder(128);
@@ -29,6 +30,8 @@ public static class AttachmentIngressFormatting
         sb.Append(" size=").Append(size);
         sb.Append(" path=\"").Append(EscapeQuoted(relativePath)).Append('"');
         sb.Append(" inlined=\"").Append(inlinedWire).Append('"');
+        if (!string.IsNullOrEmpty(via))
+            sb.Append(" via=\"").Append(EscapeQuoted(via)).Append('"');
         if (!string.IsNullOrEmpty(note))
             sb.Append(" note=\"").Append(EscapeQuoted(note)).Append('"');
         return sb.ToString();
@@ -79,10 +82,31 @@ public static class AttachmentIngressFormatting
         bool inlineImages,
         long size,
         CancellationToken cancellationToken)
+        => await BuildAcceptedProjectionAsync(
+            inboxPath,
+            filename,
+            mimeType,
+            category,
+            inlineImages ? ImageInputRoute.Direct : ImageInputRoute.None,
+            size,
+            cancellationToken);
+
+    public static async Task<AttachmentIngressProjection> BuildAcceptedProjectionAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        ImageInputRoute imageRoute,
+        long size,
+        CancellationToken cancellationToken)
     {
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
-        var (inlined, note) = ResolveInlineDecision(new MimeType(mimeType), category, inlineImages);
-        var line = BuildAttachmentLine(filename, mimeType, size, relativePath, inlined, note);
+        var (inlined, note) = AttachmentInlineDecision.Resolve(
+            new MimeType(mimeType),
+            category,
+            imageRoute);
+        var via = inlined && imageRoute == ImageInputRoute.Proxy ? "image-proxy" : null;
+        var line = BuildAttachmentLine(filename, mimeType, size, relativePath, inlined, note, via);
 
         if (!inlined)
             return new AttachmentIngressProjection(line, InlineContent: null, Inlined: false);
@@ -99,9 +123,26 @@ public static class AttachmentIngressFormatting
         bool inlineImages,
         long size,
         CancellationToken cancellationToken)
+        => await BuildAcceptedContentsAsync(
+            inboxPath,
+            filename,
+            mimeType,
+            category,
+            inlineImages ? ImageInputRoute.Direct : ImageInputRoute.None,
+            size,
+            cancellationToken);
+
+    public static async Task<IReadOnlyList<AIContent>> BuildAcceptedContentsAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        ImageInputRoute imageRoute,
+        long size,
+        CancellationToken cancellationToken)
     {
         var projection = await BuildAcceptedProjectionAsync(
-            inboxPath, filename, mimeType, category, inlineImages, size, cancellationToken);
+            inboxPath, filename, mimeType, category, imageRoute, size, cancellationToken);
         var line = new TextContent(projection.Line);
         return projection.InlineContent is null
             ? [line]

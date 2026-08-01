@@ -67,6 +67,15 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
     public long CallId { get; init; }
 }
 
+internal sealed record ImageProxyPreparationCompleted(
+    IReadOnlyList<ImageProxyAnalysis> Analyses,
+    string? RecallQuery,
+    bool ForceNoTools,
+    string? TurnRestartNotice) : INoSerializationVerificationNeeded;
+
+internal sealed record ImageProxyPreparationFailed(Exception Cause)
+    : INoSerializationVerificationNeeded;
+
 /// <summary>
 /// Internal message sent back to the session actor when tool execution completes.
 /// Contains the tool results to feed back into the next LLM call.

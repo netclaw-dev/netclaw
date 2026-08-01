@@ -111,20 +111,29 @@ so changing Main or Fallback does not destroy overrides belonging to the previou
   "Models": {
     "Definitions": {
       "qwen-main": {
-      "Provider": "remote-gpu",
-      "ModelId": "qwen3:30b",
-      "ContextWindow": 32768
+        "Provider": "remote-gpu",
+        "ModelId": "qwen3:30b",
+        "ContextWindow": 32768
       },
       "qwen-small": {
         "Provider": "remote-gpu",
         "ModelId": "qwen3:8b",
         "ContextWindow": 32768
+      },
+      "qwen-vision": {
+        "Provider": "remote-gpu",
+        "ModelId": "qwen2.5-vl:7b",
+        "InputModalities": "Text, Image",
+        "OutputModalities": "Text"
       }
     },
     "Roles": {
       "Main": "qwen-main",
       "Fallback": "qwen-small",
       "Compaction": "qwen-small"
+    },
+    "Proxies": {
+      "Image": "qwen-vision"
     }
   }
 }
@@ -145,6 +154,18 @@ so changing Main or Fallback does not destroy overrides belonging to the previou
 | `ContextWindow` | int? | `null` | Effective runtime context window in tokens. When set, it clamps the detected provider value. If not set, Netclaw uses the provider-reported value when available, otherwise defaults to 32,768. |
 | `InputModalities` | string? | `null` | Manual override for input modalities. Comma-separated flags from `Text`, `Image`, `Audio`, `Video` — e.g. `"Text"` or `"Text, Image"`. When set, bypasses automated capability detection. |
 | `OutputModalities` | string? | `null` | Manual override for output modalities. Same form as `InputModalities`. |
+
+`Models.Proxies.Image` references one named definition. The definition must accept text and image input, and it must produce text output.
+
+The image proxy lets a text-only main model use approved image attachments. Netclaw sends each image to the proxy without session history or tools.
+
+Netclaw stores the proxy description as a durable session event. The main model receives that description as untrusted text.
+
+Netclaw keeps the original media reference. An image-capable main model still receives the original image.
+
+Netclaw also analyzes an old unprocessed image before the next main model call. A proxy failure stops the turn before a main or fallback call.
+
+Use `netclaw model set image-proxy <provider> <model-id>` to set the proxy. Use `netclaw model clear image-proxy` to clear it.
 
 ### Session
 
@@ -558,11 +579,20 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="60"
       "qwen-small": {
         "Provider": "local",
         "ModelId": "qwen3:8b"
+      },
+      "qwen-vision": {
+        "Provider": "local",
+        "ModelId": "qwen2.5-vl:7b",
+        "InputModalities": "Text, Image",
+        "OutputModalities": "Text"
       }
     },
     "Roles": {
       "Main": "qwen-main",
       "Compaction": "qwen-small"
+    },
+    "Proxies": {
+      "Image": "qwen-vision"
     }
   },
   "Session": {

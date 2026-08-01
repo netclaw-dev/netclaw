@@ -22,16 +22,17 @@ internal static class ModelInputCompatibility
     public static ModelInputCompatibilityResult Evaluate(
         ModelModality supportedModalities,
         IEnumerable<SerializableChatMessage> history,
-        IEnumerable<SerializableMediaReference>? pendingMedia = null)
+        IEnumerable<SerializableMediaReference>? pendingMedia = null,
+        IReadOnlySet<string>? analyzedImagePaths = null)
     {
         var required = ModelModality.None;
         var unknown = new HashSet<int>();
 
         foreach (var message in history)
-            AddRequirements(message.MediaReferences, ref required, unknown);
+            AddRequirements(message.MediaReferences, analyzedImagePaths, ref required, unknown);
 
         if (pendingMedia is not null)
-            AddRequirements(pendingMedia, ref required, unknown);
+            AddRequirements(pendingMedia, analyzedImagePaths, ref required, unknown);
 
         return new ModelInputCompatibilityResult(
             required,
@@ -64,6 +65,7 @@ internal static class ModelInputCompatibility
 
     private static void AddRequirements(
         IEnumerable<SerializableMediaReference> media,
+        IReadOnlySet<string>? analyzedImagePaths,
         ref ModelModality required,
         HashSet<int> unknown)
     {
@@ -72,7 +74,8 @@ internal static class ModelInputCompatibility
             switch ((MediaModality)reference.Modality)
             {
                 case MediaModality.Image:
-                    required |= ModelModality.Image;
+                    if (analyzedImagePaths?.Contains(reference.RelativePath) != true)
+                        required |= ModelModality.Image;
                     break;
                 case MediaModality.Audio:
                     required |= ModelModality.Audio;

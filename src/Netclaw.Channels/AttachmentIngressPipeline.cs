@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Media;
@@ -56,7 +57,7 @@ public static class AttachmentIngressPipeline
         AttachmentIngressRequest request,
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
-        bool inlineImages,
+        ImageInputRoute imageRoute,
         string inboxDir,
         string stagingDir,
         TimeSpan operationTimeout,
@@ -206,7 +207,7 @@ public static class AttachmentIngressPipeline
             name,
             verifiedMime.Value,
             verifiedCategory,
-            inlineImages,
+            imageRoute,
             downloadResult.BytesWritten,
             cancellationToken);
 

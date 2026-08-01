@@ -165,7 +165,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         CommandAny(_ =>
         {
-                Stash.Stash();
+            Stash.Stash();
         });
     }
 
@@ -507,8 +507,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         // provider plugin currently serializes application/pdf inline, and
         // the agent can always read them from inbox/ via shell_execute +
         // pdftotext or other file tools.
-        var modelCapabilities = _dependencies.ModelCapabilities;
-        var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+        var imageRoute = AttachmentInlineDecision.SelectImageRoute(
+            _dependencies.ModelCapabilities.InputModalities,
+            _dependencies.ImageProxyEnabled);
 
         var acceptedLines = new List<string>(files.Count);
         var dataContents = new List<DataContent>();
@@ -523,7 +524,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 file,
                 audience,
                 policy,
-                inlineImages,
+                imageRoute,
                 inboxDir,
                 stagingDir,
                 cancellationToken);
@@ -561,7 +562,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         SlackFileReference file,
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
-        bool inlineImages,
+        ImageInputRoute imageRoute,
         string inboxDir,
         string stagingDir,
         CancellationToken cancellationToken)
@@ -569,7 +570,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             new AttachmentIngressRequest(file.Name, file.MimeType, file.Size),
             audience,
             policy,
-            inlineImages,
+            imageRoute,
             inboxDir,
             stagingDir,
             OperationTimeout,
@@ -1048,19 +1049,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         switch (threadOutput.Output)
         {
             case TextOutput text:
-            {
-                var fullText = text.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(fullText))
                 {
-                    var result = await SafePostAsync(fullText);
-                    if (result.Success)
-                        _postedThisTurn = true;
-                    else
-                        _lastFailedPost = result;
-                }
+                    var fullText = text.Text?.Trim();
+                    if (!string.IsNullOrWhiteSpace(fullText))
+                    {
+                        var result = await SafePostAsync(fullText);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
+                    }
 
-                break;
-            }
+                    break;
+                }
 
             case FileOutput file:
                 var uploadResult = await SafeUploadFileAsync(file);

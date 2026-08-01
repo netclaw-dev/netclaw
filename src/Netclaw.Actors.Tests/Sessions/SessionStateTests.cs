@@ -632,6 +632,29 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void Image_proxy_analysis_survives_snapshot_round_trip()
+    {
+        var analysis = new ImageProxyAnalysis
+        {
+            RelativePath = "photo.png",
+            DefinitionName = "vision",
+            ModelId = "qwen-vl",
+            PromptVersion = "image-description-v1",
+            Description = "A red status light.",
+            AnalyzedAtMs = 1234
+        };
+        var state = SessionState.Empty.Apply(new ImageProxyAnalysisRecorded
+        {
+            SessionId = TestSessionId,
+            Analysis = analysis
+        });
+
+        var restored = SessionState.FromSnapshot(state.ToSnapshot());
+
+        Assert.Equal(analysis, restored.ImageProxyAnalyses["photo.png"]);
+    }
+
+    [Fact]
     public void Successful_subagent_merge_adds_only_confirmed_changed_files()
     {
         var child = new WorkingContextDelta

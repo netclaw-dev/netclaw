@@ -80,4 +80,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
+
+    public IReadOnlyList<ImageProxyAnalysis> ImageProxyAnalyses { get; init; } =
+        Array.Empty<ImageProxyAnalysis>();
 }

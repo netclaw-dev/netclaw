@@ -31,6 +31,7 @@ public sealed class MattermostChannel : IChannel
     private readonly ILogger<MattermostChannel> _logger;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
+    private readonly bool _imageProxyEnabled;
     private readonly NetclawPaths _paths;
     private readonly MattermostCallbackActionStore? _callbackActionStore;
 
@@ -62,6 +63,7 @@ public sealed class MattermostChannel : IChannel
         ILogger<MattermostChannel> logger,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
+        Netclaw.Actors.Sessions.IImageProxyAnalyzer imageProxyAnalyzer,
         NetclawPaths paths,
         MattermostCallbackActionStore? callbackActionStore = null)
     {
@@ -81,6 +83,7 @@ public sealed class MattermostChannel : IChannel
         _logger = logger;
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
+        _imageProxyEnabled = imageProxyAnalyzer.IsEnabled;
         _paths = paths;
         _callbackActionStore = callbackActionStore;
 
@@ -197,6 +200,7 @@ public sealed class MattermostChannel : IChannel
                 ContentScanner: _contentScanner,
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
+                ImageProxyEnabled: _imageProxyEnabled,
                 Paths: _paths,
                 ServerUrl: serverUrl,
                 CallbackUrl: _options.CallbackUrl,

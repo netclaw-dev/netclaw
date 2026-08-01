@@ -362,6 +362,13 @@
                 "Compaction": { "type": ["string", "null"] }
               },
               "additionalProperties": false
+            },
+            "Proxies": {
+              "type": "object",
+              "properties": {
+                "Image": { "type": ["string", "null"] }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
