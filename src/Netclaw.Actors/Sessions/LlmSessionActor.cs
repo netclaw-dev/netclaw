@@ -2321,6 +2321,33 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolMaxCount,
             _fullRegistry);
 
+        // Strict modality consumer contract: the session actor trusts ingress
+        // to have routed attachments through its own capability gate. If an
+        // unsupported modality still reaches here, the originating channel
+        // skipped the contract in netclaw-input-adapters and that is a bug
+        // the operator needs to see — surface it loudly and continue.
+        if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
+        {
+            var offendingRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
+            if (offendingRefs.Count > 0)
+            {
+                var offendingDesc = string.Join(",",
+                    offendingRefs.Select(r => $"{r.RelativePath}:modality={r.Modality}"));
+                _log.Error(
+                    "ingress_bug model={ModelId} modalities={Modalities} offending={Offending}",
+                    _model.ModelId, _model.InputModalities, offendingDesc);
+
+                mediaRefs = [.. mediaRefs.Where(r => r.Modality != (int)MediaModality.Image)];
+
+                const string ingressBugNotice =
+                    "[system] An attachment was received but could not be delivered to the model due to an ingress bug. " +
+                    "Please retry, or notify the operator if this persists.";
+                userContent = string.IsNullOrEmpty(userContent)
+                    ? ingressBugNotice
+                    : userContent + "\n\n" + ingressBugNotice;
+            }
+        }
+
         if (TryHandleSlashCommand(executableUserContent, mediaRefs))
             return;
 
