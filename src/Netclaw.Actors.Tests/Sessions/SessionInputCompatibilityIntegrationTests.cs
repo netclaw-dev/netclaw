@@ -42,7 +42,7 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
     }
 
     [Fact]
-    public async Task Recovered_image_history_is_rejected_before_model_call()
+    public async Task Recovered_image_history_is_degraded_not_rejected()
     {
         var sessionId = new SessionId("test-channel/recovered-image-compatibility");
         var seeder = Sys.ActorOf(Props.Create(() => new SessionEventSeeder($"session-{sessionId.Value}")));
@@ -82,20 +82,20 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
             Content = "Continue."
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ErrorCategory.InputCompatibility, error.Category);
-        Assert.Contains("Image", error.Message, StringComparison.Ordinal);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(TurnOutcome.Skipped, completed.Outcome);
-        Assert.Equal(0, _chatClient.CallCount);
+        // The session should proceed normally — the historical image is stripped
+        // at assembly time, not rejected. The model is called with text-only content.
+        var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true,
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotEqual(TurnOutcome.Skipped, completed.Outcome);
+        Assert.NotEqual(TurnOutcome.Failed, completed.Outcome);
+        Assert.True(_chatClient.CallCount >= 1);
     }
 
     [Fact]
-    public async Task Buffered_image_is_rejected_before_follow_up_model_call()
+    public async Task Buffered_image_is_degraded_not_rejected()
     {
-        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _chatClient.NextResponseGate = responseGate;
-
         var sessionId = new SessionId("test-channel/buffered-image-compatibility");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffered-image-compatibility-sub");
@@ -107,15 +107,13 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        // Send two messages back-to-back. The second one carries an image
+        // that the text-only model will strip at assembly time.
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message."
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await AwaitAssertAsync(
-            () => Assert.Equal(1, _chatClient.CallCount),
-            TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -124,20 +122,16 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
             MediaReferences = [ImageReference("buffered.png")]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        responseGate.TrySetResult();
+        // Collect both TurnCompleted events. Neither turn should fail —
+        // the buffered image is stripped at assembly time.
+        for (var i = 0; i < 2; i++)
+        {
+            var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
+                _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotEqual(TurnOutcome.Failed, completed.Outcome);
+        }
 
-        var error = (ErrorOutput)await subscriber.FishForMessageAsync<object>(
-            message => message is ErrorOutput,
-            TimeSpan.FromSeconds(10),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ErrorCategory.InputCompatibility, error.Category);
-
-        var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
-            _ => true,
-            TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
-        Assert.Equal(1, _chatClient.CallCount);
+        Assert.Equal(2, _chatClient.CallCount);
     }
 
     private static SerializableMediaReference ImageReference(string path) => new()

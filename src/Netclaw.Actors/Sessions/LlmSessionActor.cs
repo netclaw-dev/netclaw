@@ -2646,12 +2646,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var compatibility = ModelInputCompatibility.Evaluate(_model.InputModalities, _state.History);
         if (!compatibility.IsCompatible)
         {
-            var message = ModelInputCompatibility.BuildErrorMessage(_model, compatibility);
-            FailCurrentTurn(
-                message,
-                new InvalidOperationException(message),
-                ErrorCategory.InputCompatibility);
-            return;
+            TurnLog().Warning(
+                "turn_media_history_incompatible required={Required} unsupported={Unsupported} unknownCount={UnknownCount} " +
+                "model={ModelId} — incompatible media references will be stripped from wire messages by the assembler",
+                compatibility.RequiredModalities,
+                compatibility.UnsupportedModalities,
+                compatibility.UnknownModalityValues.Count,
+                _model.ModelId);
+            // Do not fail the turn — ChatMessageConverter.ToAiMessages strips
+            // incompatible DataContent at assembly time, and the assembler
+            // injects a volatile system notice. The session stays usable.
         }
 
         _anyContentStreamed = false;
@@ -2743,6 +2747,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (compatibility.IsCompatible)
             return false;
 
+        // History-only incompatibility: debug log and let the assembler strip
+        // incompatible media at wire time. Only new user-supplied media on this
+        // specific command triggers a hard rejection.
+        if (pendingMedia.Count == 0)
+        {
+            TurnLog().Info(
+                "session_history_media_stripped model={ModelId} required={Required} unsupported={Unsupported} unknown={Unknown} " +
+                "— historical media references are incompatible with the current model and will be stripped by the assembler",
+                _model.ModelId,
+                compatibility.RequiredModalities,
+                compatibility.UnsupportedModalities,
+                string.Join(",", compatibility.UnknownModalityValues));
+            return false;
+        }
+
         var message = ModelInputCompatibility.BuildErrorMessage(_model, compatibility);
         var cause = new InvalidOperationException(message);
         var correlationId = Guid.NewGuid();
@@ -2807,7 +2826,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SkillHint: skillHint,
             // Canonical names live in history (post-PR follow-up); the
             // LLM provider wants the sanitized alias back on the wire.
-            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName));
+            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName,
+            SupportedInputModalities: _model.InputModalities));
         _startupContextInjected = true;
 
         var self = Self;

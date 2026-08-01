@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionMessageAssembler.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -35,7 +35,11 @@ public sealed record ContextAssemblyInput(
     // MCP tool calls, the LLM provider will return 400. Production
     // callers should pass `toolRegistry.ToLlmFacingName`; unit tests
     // that don't exercise MCP can leave it null.
-    Func<string, string>? ToolNameToLlmFacing = null);
+    Func<string, string>? ToolNameToLlmFacing = null,
+    // When set, media references whose modality is not supported by the
+    // active model are dropped from the wire message list. The assembler
+    // injects a volatile system notice when any media is stripped.
+    ModelModality SupportedInputModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video);
 
 /// <summary>
 /// Pure-function assembly of the <see cref="AiChatMessage"/> list sent to
@@ -115,7 +119,19 @@ public static class SessionMessageAssembler
         var messages = ChatMessageConverter.ToAiMessages(
             input.State.History,
             sessionDir,
-            toolNameResolver: input.ToolNameToLlmFacing);
+            toolNameResolver: input.ToolNameToLlmFacing,
+            supportedModalities: input.SupportedInputModalities);
+
+        // Inject volatile notice when media was stripped from history
+        var strippedCount = ChatMessageConverter.CountStrippedMedia(
+            input.State.History, input.SupportedInputModalities);
+        if (strippedCount > 0)
+        {
+            var notice = BuildMediaStrippedNotice(strippedCount, input.SupportedInputModalities);
+            messages.Insert(0, new AiChatMessage(
+                Microsoft.Extensions.AI.ChatRole.User,
+                notice));
+        }
 
         var staticBlock = BuildStaticContextBlock(input, sessionDir);
         if (!string.IsNullOrEmpty(staticBlock))
@@ -282,5 +298,26 @@ public static class SessionMessageAssembler
             sb.AppendLine($"  {item.Content}");
         }
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Build a volatile (non-persisted) system notice when media references
+    /// were stripped from the wire message list because the active model does
+    /// not support their modality.
+    /// </summary>
+    internal static string BuildMediaStrippedNotice(int strippedCount, ModelModality supported)
+    {
+        var required = string.Empty;
+        if ((supported & ModelModality.Image) == 0)
+            required = "image";
+        if ((supported & ModelModality.Audio) == 0)
+            required = (required.Length > 0 ? required + ", " : "") + "audio";
+        if ((supported & ModelModality.Video) == 0)
+            required = (required.Length > 0 ? required + ", " : "") + "video";
+
+        return $"[system: media-filtered] {strippedCount} media reference(s) from earlier in this " +
+            $"conversation were omitted because the current model does not support " +
+            $"{(required.Length > 0 ? required : "this")} input. " +
+            "Switch to a multimodal model in your Netclaw configuration to view them.";
     }
 }
