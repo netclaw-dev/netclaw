@@ -34,12 +34,25 @@ This enables:
 
 ## Turn Lifecycle
 
-1. `SendUserMessage` command accepted after policy checks.
-2. Actor appends user message to `SessionState.History`.
-3. Actor invokes configured `IChatClient` via `ChatMessageConverter`.
-4. Actor persists `TurnRecorded` event and applies to state.
-5. Actor emits typed `SessionOutput` events to subscribers.
-6. Actor checks compaction threshold.
+1. `SendUserMessage` passes policy and complete input compatibility checks.
+2. Actor appends the user message to `SessionState.History`.
+3. Actor checks active history again before each model call.
+4. Actor invokes the configured `IChatClient` via `ChatMessageConverter`.
+5. Actor persists the `TurnRecorded` event and applies it to state.
+6. Actor emits typed `SessionOutput` events to subscribers.
+7. Actor checks the compaction threshold.
+
+### Model Input Compatibility
+
+The actor checks all active media references against the main model input
+modalities. The check includes recovered history, new input, buffered input,
+and tool-result media. An unknown persisted modality fails closed.
+
+The actor rejects incompatible new input before it changes the session state.
+It checks again before each model call to protect paths that add media during a
+turn. The actor emits `ErrorCategory.InputCompatibility` with the unsupported
+modalities and recovery guidance. It does not call the primary client,
+fallback client, or provider when this local check fails.
 
 ### Tool Execution Pipeline
 
