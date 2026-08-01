@@ -96,6 +96,12 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
     [Fact]
     public async Task Buffered_image_is_degraded_not_rejected()
     {
+        // Gate the first model response so the buffered second message
+        // drains after we release the gate — both TurnCompleted events
+        // arrive deterministically rather than racing.
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _chatClient.NextResponseGate = responseGate;
+
         var sessionId = new SessionId("test-channel/buffered-image-compatibility");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffered-image-compatibility-sub");
@@ -107,8 +113,6 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
-        // Send two messages back-to-back. The second one carries an image
-        // that the text-only model will strip at assembly time.
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -122,8 +126,10 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
             MediaReferences = [ImageReference("buffered.png")]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        // Collect both TurnCompleted events. Neither turn should fail —
-        // the buffered image is stripped at assembly time.
+        // Release the gate — first turn completes, drain fires, second call
+        // proceeds with the image stripped at assembly time.
+        responseGate.TrySetResult();
+
         for (var i = 0; i < 2; i++)
         {
             var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
