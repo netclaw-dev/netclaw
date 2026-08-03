@@ -168,7 +168,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             return rejection.Message;
         }
 
-        var tool = await AuthorizeCoreAsync(toolCall, context, ct);
+        var tool = await GetAuthorizedToolAsync(toolCall, context, ct);
 
         var sw = Stopwatch.StartNew();
         try
@@ -210,7 +210,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     public async Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
     {
-        _ = await AuthorizeCoreAsync(toolCall, context, ct);
+        _ = await GetAuthorizedToolAsync(toolCall, context, ct);
     }
 
     // The tool's own override (verbose tools like shell opt down) wins; otherwise
@@ -247,7 +247,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // Authorization throws (ToolApprovalRequiredException / ToolAccessDeniedException)
         // before the first item is produced; the tool-execution pipeline handles
         // those exactly as it does for the non-streaming path.
-        var tool = await AuthorizeCoreAsync(toolCall, context, ct);
+        var tool = await GetAuthorizedToolAsync(toolCall, context, ct);
         var sw = Stopwatch.StartNew();
         await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct))
         {
@@ -274,18 +274,30 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         }
     }
 
-    private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+    /// <summary>
+    /// Evaluates the complete authorization gate before a tool runs or a user receives a prompt.
+    /// </summary>
+    /// <remarks>
+    /// This method returns expected authorization outcomes instead of exceptions.
+    /// Execution adapters translate the result into the existing pipeline exceptions.
+    /// </remarks>
+    internal async Task<ToolAuthorizationDecision> EvaluateAuthorizationAsync(
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        CancellationToken ct)
     {
         context.Approval.ClearAppliedDecision();
 
         var tool = _registry.GetByName(toolCall.Name);
         if (tool is null)
         {
-            _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
-            throw new ToolAccessDeniedException("tool_not_found");
+            var missingToolDecision = ToolAuthorizationDecision.Deny("tool_not_found");
+            LogAuthorizationDecision(toolCall.Name, missingToolDecision);
+            return missingToolDecision;
         }
 
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
+        IReadOnlyList<ToolApprovalMatch> approvalMatches = [];
 
         if (accessDecision.NeedsApproval && _approvalService is not null)
         {
@@ -328,7 +340,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 if (candidatesForCheck.Count == 0)
                 {
                     // Every candidate is side-effect-only — auto-allow.
-                    accessDecision = ToolAccessDecision.Allow();
+                    accessDecision = ToolAccessDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates);
                 }
                 else
                 {
@@ -348,14 +360,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                         candidatesForCheck,
                         context.Approval.Cwd,
                         ct);
+                    approvalMatches = approvalCheck.ApprovedMatches;
 
                     if (approvalCheck.UnapprovedPatterns.Count == 0)
+                    {
                         context.Approval.ApplyDecision(
                             "PreviouslyApproved",
                             FormatApprovalMatches(approvalCheck.ApprovedMatches));
+                    }
 
                     accessDecision = approvalCheck.UnapprovedPatterns.Count == 0
-                        ? ToolAccessDecision.Allow()
+                        ? ToolAccessDecision.Allow(ToolAllowReason.StoredApproval)
                         : ToolAccessDecision.RequiresApproval(approvalContext);
                 }
             }
@@ -364,26 +379,95 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         if (accessDecision.NeedsApproval
             && IsOneTimeApprovalSatisfied(context, toolCall, accessDecision.ApprovalContext))
         {
-            _logger.LogInformation(
-                "Applying one-time approval bypass for tool {ToolName} in session {SessionId}",
-                toolCall.Name,
-                context.SessionId ?? "unknown");
-            accessDecision = ToolAccessDecision.Allow();
+            accessDecision = ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval);
         }
 
+        var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);
+        LogAuthorizationDecision(toolCall.Name, authorizationDecision);
+        return authorizationDecision;
+    }
+
+    private async Task<INetclawTool> GetAuthorizedToolAsync(
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        CancellationToken ct)
+    {
+        var decision = await EvaluateAuthorizationAsync(toolCall, context, ct);
+
+        if (decision.Outcome is ToolAuthorizationOutcome.RequiresApproval)
+        {
+            throw new ToolApprovalRequiredException(
+                decision.ApprovalContext
+                ?? throw new InvalidOperationException("Approval decision missing approval context."));
+        }
+
+        if (decision.Outcome is ToolAuthorizationOutcome.Denied)
+        {
+            throw new ToolAccessDeniedException(
+                decision.DenyReason
+                ?? throw new InvalidOperationException("Denied decision missing a deny reason."));
+        }
+
+        return _registry.GetByName(toolCall.Name)
+            ?? throw new InvalidOperationException("Allowed decision missing its registered tool.");
+    }
+
+    private static ToolAuthorizationDecision CompleteAuthorizationDecision(
+        ToolAccessDecision accessDecision,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+    {
         if (accessDecision.NeedsApproval)
         {
-            _logger.LogInformation("Tool requires approval: {ToolName}", toolCall.Name);
-            throw new ToolApprovalRequiredException(accessDecision.ApprovalContext!);
+            return ToolAuthorizationDecision.RequiresApproval(
+                accessDecision.ApprovalContext
+                ?? throw new InvalidOperationException("Approval decision missing approval context."),
+                approvalMatches);
         }
 
         if (!accessDecision.Allowed)
         {
-            _logger.LogWarning("Tool denied by policy: {ToolName} reason={Reason}", toolCall.Name, accessDecision.DenyReason);
-            throw new ToolAccessDeniedException(accessDecision.DenyReason ?? "tool_denied");
+            return ToolAuthorizationDecision.Deny(
+                accessDecision.DenyReason
+                ?? throw new InvalidOperationException("Denied decision missing a deny reason."));
         }
 
-        return tool;
+        return ToolAuthorizationDecision.Allow(
+            accessDecision.AllowReason
+            ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
+            approvalMatches);
+    }
+
+    private void LogAuthorizationDecision(string toolName, ToolAuthorizationDecision decision)
+    {
+        switch (decision.Outcome)
+        {
+            case ToolAuthorizationOutcome.Allowed:
+                var allowReason = decision.AllowReason
+                    ?? throw new InvalidOperationException("Allowed decision missing an allow reason.");
+                _logger.LogDebug(
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
+                    "reason={AuthorizationReason} explanation={AuthorizationExplanation}",
+                    toolName,
+                    decision.Outcome.ToString(),
+                    allowReason.ToString(),
+                    allowReason.GetDescription());
+                break;
+            case ToolAuthorizationOutcome.RequiresApproval:
+                _logger.LogInformation(
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome}",
+                    toolName,
+                    decision.Outcome.ToString());
+                break;
+            case ToolAuthorizationOutcome.Denied:
+                _logger.LogWarning(
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} reason={AuthorizationReason}",
+                    toolName,
+                    decision.Outcome.ToString(),
+                    decision.DenyReason);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(decision), decision.Outcome, "Unknown authorization outcome.");
+        }
     }
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)

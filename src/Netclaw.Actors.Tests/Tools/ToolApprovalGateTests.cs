@@ -82,6 +82,58 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+    }
+
+    [Fact]
+    public void Safe_verb_in_trusted_scope_reports_allow_reason()
+    {
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-safe-reason-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+            config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["shell_execute"] = ToolApprovalMode.Approval
+                }
+            };
+            var policy = new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                safeVerbs: SafeVerbList.FromVerbs(["git status"]));
+            var context = TestToolExecutionContext.CreateBound(
+                "signalr/thread-safe-reason",
+                null,
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Personal,
+                    ProjectDirectory = projectDirectory,
+                    InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+                });
+
+            var decision = policy.AuthorizeInvocation(
+                ShellTool(),
+                context,
+                ToolInput.Create(
+                    "Command", "git status",
+                    "WorkingDirectory", projectDirectory));
+
+            Assert.True(decision.Allowed);
+            Assert.Equal(ToolAllowReason.SafeVerbInTrustedScope, decision.AllowReason);
+        }
+        finally
+        {
+            Directory.Delete(projectDirectory, recursive: true);
+        }
     }
 
     [Fact]
