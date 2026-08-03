@@ -65,8 +65,8 @@ The operator can change this in the generated config.
 
 ### Existing installations
 
-Existing Personal configs without an exact `shell_execute` override use the
-fail-closed `Approval` mode. This rule also applies when `ApprovalPolicy` is
+Personal `shell_execute` calls without an exact override use the fail-closed
+`Approval` mode. This rule also applies when the Personal `ApprovalPolicy` is
 absent or its `DefaultMode` is `Auto`.
 
 Rerun `netclaw init` or add the `Approval` override to make this behavior
