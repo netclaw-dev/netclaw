@@ -11,11 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <!-- xUnit 3.2.2 can append its foreground-thread diagnostic to the assembly-info
-         JSON consumed by the VS adapter, making discovery fail nondeterministically.
-         The protocol fix shipped in 4.0.0-pre.116; pre.128 is the first fixed build
-         published to NuGet. Keep prerelease consumption local until xUnit 4 is stable. -->
-    <PackageReference Include="xunit.v3.mtp-off" />
+    <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <!-- Promote the transitive MessagePack (via Aspire/StreamJsonRpc) to the patched
          2.5.301 to clear NuGetAudit GHSA-hv8m-jj95-wg3x. See Directory.Packages.props. -->
