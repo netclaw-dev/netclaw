@@ -606,7 +606,7 @@ public sealed record FeatureGates(
 public sealed record ToolAccessDecision(bool Allowed, string? DenyReason = null, ToolApprovalContext? ApprovalContext = null)
 {
     /// <summary>
-    /// Gets the allow rule for an allowed policy result.
+    /// Gets the reason for an allowed access decision.
     /// </summary>
     internal ToolAllowReason? AllowReason { get; private init; }
 
