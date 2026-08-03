@@ -337,10 +337,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                         .Select(verb => new ApprovalCandidate(verb, Directory: null))
                         .ToList();
 
-                if (candidatesForCheck.Count == 0)
+                if (approvalContext.Candidates is { Count: > 0 }
+                    && candidatesForCheck.Count == 0)
                 {
                     // Every candidate is side-effect-only — auto-allow.
                     accessDecision = ToolAccessDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates);
+                }
+                else if (candidatesForCheck.Count == 0)
+                {
+                    // A zero-candidate result does not prove that the command is exempt.
+                    // Malformed input or a parser rejection can also produce this result.
+                    accessDecision = ToolAccessDecision.RequiresApproval(approvalContext);
                 }
                 else
                 {
