@@ -569,3 +569,30 @@ jobs:
     needs: publish-binary-manifest
     uses: ./.github/workflows/publish_skills.yml
     secrets: inherit
+
+  # ────────────────────────────────────────────────────────────────────
+  # Job 7: Trigger netclaw.dev website rebuild
+  # ────────────────────────────────────────────────────────────────────
+  # The website rebuilds at deploy time by fetching the GitHub Releases API,
+  # so it needs the release to be created but has no dependency on binary
+  # publishing or skills. Dispatches directly (rather than reacting to a
+  # release:published event) because GITHUB_TOKEN-authored releases cannot
+  # trigger downstream workflows.
+  rebuild-website:
+    name: Trigger netclaw.dev rebuild
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Dispatch website deploy workflow
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::WEBSITE_DISPATCH_TOKEN secret is not set on this repository." >&2
+            exit 1
+          fi
+          gh workflow run deploy.yml \
+            --repo netclaw-dev/netclaw-website \
+            --ref dev
+          echo "Dispatched deploy.yml on netclaw-dev/netclaw-website@dev."
