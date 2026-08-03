@@ -65,8 +65,13 @@ The operator can change this in the generated config.
 
 ### Existing installations
 
-Existing configs without `ApprovalPolicy` are unaffected — all tools remain in
-`Auto` mode. Add the `ApprovalPolicy` section manually or rerun `netclaw init`.
+Existing Personal configs without an exact `shell_execute` override use the
+fail-closed `Approval` mode. This rule also applies when `ApprovalPolicy` is
+absent or its `DefaultMode` is `Auto`.
+
+Rerun `netclaw init` or add the `Approval` override to make this behavior
+explicit. Set an exact `shell_execute` override to `Auto` only when shell
+commands must run without approval.
 
 ### Headless mode
 
