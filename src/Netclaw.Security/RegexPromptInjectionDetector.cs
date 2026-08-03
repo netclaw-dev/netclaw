@@ -31,8 +31,9 @@ namespace Netclaw.Security;
 public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetector
 {
     // Each pattern uses regular language features. The non-backtracking engine guarantees linear work.
-    // This choice removes wall-clock timeouts that can fail under scheduler pressure.
-    private const RegexOptions TextPatternOptions = RegexOptions.IgnoreCase | RegexOptions.NonBacktracking;
+    // Text patterns use the invariant culture so host culture cannot change security decisions.
+    private const RegexOptions TextPatternOptions =
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
     private const RegexOptions UnicodePatternOptions = RegexOptions.NonBacktracking;
 
     private readonly ILogger<RegexPromptInjectionDetector> _logger;
