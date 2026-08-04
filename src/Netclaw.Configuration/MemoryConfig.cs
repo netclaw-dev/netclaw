@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MemoryConfig.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -28,8 +28,8 @@ public sealed class MemoryConfig
     public int AutoRecallMaxItems { get; set; } = 3;
 
     /// <summary>
-    /// Embedding-based semantic memory settings (memory-core-redesign Slice 2: embedding
-    /// foundation). See <see cref="MemoryEmbeddingsConfig.Enabled"/> for why this defaults off.
+    /// Embedding-based semantic memory settings (memory-core-redesign).
+    /// Enables ONNX-based local embeddings, hybrid recall, and the cross-encoder relevance gate.
     /// </summary>
     public MemoryEmbeddingsConfig Embeddings { get; set; } = new();
 
@@ -54,12 +54,10 @@ public sealed class MemoryEmbeddingsConfig
     /// <summary>
     /// When true, the daemon provisions/loads the embedding model at startup
     /// (<c>EmbeddingWarmupHostedService</c>) and computes embeddings on memory writes.
-    /// Defaults to <b>false</b> for Slice 2 ("embedding foundation"): this slice only writes
-    /// vectors — nothing in the write or read path consumes them yet (nominate/decide dedup is
-    /// Slice 3, hybrid recall is Slice 4). Flipping this default to <c>true</c> is a deliberate
-    /// decision left to whichever of those slices ships first, not an oversight here.
+    /// When false, the entire semantic memory pipeline is disabled: no models are loaded,
+    /// no embeddings are computed, and hybrid recall degrades to lexical-only.
     /// </summary>
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 
     /// <summary>
     /// Allowlisted embedding model id (see <c>EmbeddingModelProvisioner.Allowlist</c> in
