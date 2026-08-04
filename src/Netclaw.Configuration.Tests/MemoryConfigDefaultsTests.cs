@@ -8,19 +8,17 @@ using Xunit;
 namespace Netclaw.Configuration.Tests;
 
 /// <summary>
-/// Bear-trap tests for <see cref="MemoryEmbeddingsConfig"/> defaults (memory-core-redesign
-/// Slice 2, task 2.11). If you change a default, you must update these assertions — forcing a
-/// deliberate decision rather than an accidental drift. <see cref="MemoryEmbeddingsConfig.Enabled"/>
-/// defaults to false in particular: flipping it is a deliberate Slice 3/4 decision, not something
-/// that should silently change because a refactor touched the property initializer.
+/// Bear-trap tests for <see cref="MemoryEmbeddingsConfig"/> defaults. If you change a default,
+/// you must update these assertions — forcing a deliberate decision rather than an accidental
+/// drift.
 /// </summary>
 public sealed class MemoryConfigDefaultsTests
 {
     [Fact]
-    public void Embeddings_disabled_by_default()
+    public void Embeddings_enabled_by_default()
     {
         var config = new MemoryConfig();
-        Assert.False(config.Embeddings.Enabled);
+        Assert.True(config.Embeddings.Enabled);
     }
 
     // int8 default: a dedicated prefixed-query gold-set sweep (arctic-int8-prefix-eval)
