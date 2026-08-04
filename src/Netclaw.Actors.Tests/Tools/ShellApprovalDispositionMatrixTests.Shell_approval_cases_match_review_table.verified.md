@@ -27,18 +27,18 @@
 | newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git status, git push | No |
 | or-chain-prompts | Personal | Project | Interactive | git status \|\| git push | none | RequiresApproval | approval required | git status, git push | No |
 | three-step-release-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push origin dev | none | RequiresApproval | approval required | git add, git commit, git push origin dev | No |
-| hard-deny-pipeline-tail-currently-prompts | Personal | Project | Interactive | echo safe \| netclaw daemon stop | none | RequiresApproval | approval required | echo, netclaw daemon stop | No |
+| hard-deny-pipeline-tail-blocks | Personal | Project | Interactive | echo safe \| netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | hard-deny-nested-shell-blocks | Personal | Project | Interactive | bash -lc "netclaw daemon stop" | none | Denied | hard_deny_self_destructive | none | Not applicable |
-| nested-shell-currently-prompts-for-wrapper | Personal | Project | Interactive | bash -lc "git push" | none | RequiresApproval | approval required | bash | No |
-| nested-shell-inner-grant-currently-does-not-match | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:git push | RequiresApproval | approval required | bash | No |
-| nested-shell-wrapper-grant-currently-allows | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:bash | Allowed | StoredApproval | none | Not applicable |
-| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | env bash | No |
-| timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout | No |
+| nested-shell-prompts-for-inner-command | Personal | Project | Interactive | bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
+| nested-shell-inner-grant-allows | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
+| nested-shell-wrapper-grant-does-not-cover-inner-command | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:bash | RequiresApproval | approval required | git push | No |
+| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
+| timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
 | subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git status, git push | No |
-| command-substitution-currently-auto-allows | Personal | Project | Interactive | echo $(git push) | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
-| dynamic-path-currently-auto-allows | Personal | Project | Interactive | cat "$FILE" | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| dynamic-redirect-currently-prompts | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | git status | No |
-| background-list-currently-auto-allows | Personal | Project | Interactive | git status & git push | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| command-substitution-fails-closed | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | none | Yes |
+| dynamic-path-fails-closed | Personal | Project | Interactive | cat "$FILE" | none | RequiresApproval | approval required | none | Yes |
+| dynamic-redirect-fails-closed | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | none | Yes |
+| background-list-prompts-for-mutating-tail | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
 | unbalanced-quote-fails-closed | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
 | multiline-argument-prompts | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
 | approved-pipeline-head-does-not-cover-tail | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | git push, curl | No |
@@ -49,20 +49,20 @@
 | cd-parent-then-safe-prompts | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | multiple-cd-then-safe-prompts | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | side-effect-before-mutation-prompts | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | echo, git push | No |
-| heredoc-prompts | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | RequiresApproval | approval required | none | No |
+| heredoc-prompts | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | RequiresApproval | approval required | none | Yes |
 | echo-allows-without-grant | Personal | Project | Interactive | echo hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | printf-allows-without-grant | Personal | Project | Interactive | printf hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | echo-redirect-prompts | Personal | Project | Interactive | echo hello > result.txt | none | RequiresApproval | approval required | echo | No |
-| echo-done-fails-closed | Personal | Project | Interactive | echo done | none | RequiresApproval | approval required | echo | Yes |
+| echo-control-word-argument-allows | Personal | Project | Interactive | echo done | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | control-flow-fails-closed | Personal | Project | Interactive | for f in *.txt; do cat "$f"; done | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
-| process-substitution-currently-prompts-without-complex-flag | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | No |
-| arithmetic-expansion-currently-prompts-without-complex-flag | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | No |
-| function-definition-currently-prompts-without-complex-flag | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | No |
+| process-substitution-fails-closed | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| arithmetic-expansion-fails-closed | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | Yes |
+| function-definition-fails-closed | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
 | inline-python-prompts-for-interpreter | Personal | Project | Interactive | python3 -c "print('hello')" | none | RequiresApproval | approval required | python3 | No |
 | inline-python-interpreter-grant-currently-allows | Personal | Project | Interactive | python3 -c "print('hello')" | persistent[anywhere]:python3 | Allowed | StoredApproval | none | Not applicable |
 | eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | eval | No |
 | eval-grant-currently-allows-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | Allowed | StoredApproval | none | Not applicable |
-| inline-python-heredoc-fails-closed | Personal | Project | Interactive | python3 <<'PY'\nprint('hello')\nPY | persistent[anywhere]:python3 | RequiresApproval | approval required | none | No |
+| inline-python-heredoc-fails-closed | Personal | Project | Interactive | python3 <<'PY'\nprint('hello')\nPY | persistent[anywhere]:python3 | RequiresApproval | approval required | none | Yes |
 | empty-command-fails-closed | Personal | Project | Interactive |  | none | RequiresApproval | approval required | none | No |
 | whitespace-command-fails-closed | Personal | Project | Interactive |     | none | RequiresApproval | approval required | none | No |
 | session-grant-allows | Personal | Project | Interactive | git push | session[this-chat]:git push | Allowed | StoredApproval | none | Not applicable |

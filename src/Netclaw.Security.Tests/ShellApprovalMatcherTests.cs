@@ -340,17 +340,13 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
-    public void ExtractPatterns_redirect_target_with_line_break_terminates_pattern()
+    public void ExtractPatterns_dynamic_redirect_target_is_not_persistable()
     {
-        // A quoted redirect target carrying an embedded newline must not
-        // reach the stored pattern — quote-aware normalization would
-        // otherwise preserve the break verbatim (`echo hi >> $LOGDIR\nfile`).
-        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
-            Args("echo hi >> \"$LOGDIR\nfile\""));
+        var toolName = new ToolName("shell_execute");
+        var arguments = Args("echo hi >> \"$LOGDIR\nfile\"");
 
-        Assert.Single(patterns);
-        Assert.DoesNotContain('\n', patterns[0]);
-        Assert.Equal("echo hi", patterns[0]);
+        Assert.Empty(_matcher.ExtractPatterns(toolName, arguments));
+        Assert.True(_matcher.IsMessy(toolName, arguments));
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]

@@ -110,10 +110,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
-    // BashParser is immutable — Parse delegates to a pure static — so one
-    // shared instance is safe and avoids a per-evaluation allocation. The DI
-    // container registers it as a singleton for the same reason.
-    private static readonly ShellSyntaxTree.BashParser Parser = new();
+    private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
 
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
@@ -137,7 +134,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
         {
-            foreach (var unit in ExtractApprovalUnitsViaBashParser(command, workingDirectory))
+            foreach (var unit in ExtractApprovalUnitsViaBashAnalysis(command, workingDirectory))
             {
                 var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
                 if (!string.IsNullOrEmpty(normalized))
@@ -176,7 +173,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // when the clause itself has no anchored path arg. Windows keeps
         // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
-            return ExtractCandidatesViaBashParser(command, GetWorkingDirectory(arguments));
+            return ExtractCandidatesViaBashAnalysis(command, GetWorkingDirectory(arguments));
 
         var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
@@ -196,38 +193,25 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// Parses <paramref name="command"/>, returning null when the parser
-    /// rejects it (unparseable, no clauses) or throws — a parser exception
-    /// must never take down the approval flow. Callers treat null as
-    /// "cannot decompose" and apply their own fail-safe: an empty
-    /// pattern/candidate list (messy semantics — Once/Deny prompt only) or
-    /// the flattened raw command for display.
+    /// Returns null when the parser cannot resolve the complete command.
+    /// Callers then offer only one-time approval or show the raw command.
     /// </summary>
-    private static ShellSyntaxTree.ParsedCommand? TryParseCommand(
+    private static ShellCommandAnalysis? TryAnalyzeCommand(
         string command,
         string? workingDirectory = null)
     {
-        try
-        {
-            var parser = string.IsNullOrWhiteSpace(workingDirectory)
-                ? Parser
-                : new ShellSyntaxTree.BashParser(
-                    new ShellSyntaxTree.BashParserOptions { WorkingDirectory = workingDirectory });
-            var result = parser.Parse(command);
-            return result.IsUnparseable || result.Clauses.Count == 0 ? null : result;
-        }
-        catch
-        {
-            return null;
-        }
+        var result = Analyzer.Analyze(command, workingDirectory);
+        return result.Failure == ShellAnalysisFailure.None && result.Clauses.Count > 0
+            ? result
+            : null;
     }
 
-    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(
+    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashAnalysis(
         string command,
         string? workingDirectory)
     {
-        var result = TryParseCommand(command, workingDirectory);
-        if (result is null)
+        var result = TryAnalyzeCommand(command, workingDirectory);
+        if (result is null || result.HasDynamicSyntax)
             return [];
 
         // The prompt groups a pipe as one approval unit. Authorization still
@@ -247,8 +231,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             // `git tag 0.4.2` matches. Mirrors the value-termination in
             // ReconstructClauseText so the gate candidate and the persisted
             // pattern normalize identically.
-            var verb = ShellTokenizer.ApplyVerbShortCircuit(
-                string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
+            if (clause.Verb.IsDynamic)
+                continue;
+
+            var parsedVerb = clause.Verb.CanonicalVerb
+                ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
+            var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
             if (string.IsNullOrEmpty(verb))
                 continue;
 
@@ -352,18 +340,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// commands — mirroring the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
     /// empty-result contract so the prompt builder offers only Once/Deny.
     /// </summary>
-    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashParser(
+    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashAnalysis(
         string command,
         string? workingDirectory)
     {
-        // Messy commands (control-flow keywords, unbalanced brackets) cannot
-        // be cleanly decomposed into approval units; mirror the legacy
-        // splitter, which returns no units for them.
-        if (ShellTokenizer.IsMessyCompoundCommand(command))
-            return [];
-
-        var result = TryParseCommand(command, workingDirectory);
-        if (result is null)
+        // The parser is the sole structural authority. Dynamic or unresolved
+        // syntax cannot produce a persistent approval unit.
+        var result = TryAnalyzeCommand(command, workingDirectory);
+        if (result is null || result.HasDynamicSyntax)
             return [];
 
         try
@@ -560,17 +544,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
-        // Messy commands cannot be auto-approved: the matcher cannot extract a
-        // candidate verb-chain to evaluate against the persisted store, so
-        // every messy invocation must round-trip through the user. The prompt
-        // builder offers only Once/Deny in this case (see IsMessy).
-        if (ShellTokenizer.IsMessyCompoundCommand(command))
-            return false;
-
-        // Fail-closed on a parser miss: BashParser swallows exceptions and
-        // unparseable results return an empty candidate list. Treating that
-        // as "approved" would silently auto-allow any command our parser
-        // regresses on. Force the gate instead.
+        // Empty candidates include parser failures and dynamic syntax.
+        // Both cases must return to the approval gate.
         var candidates = ExtractCandidates(toolName, arguments);
         if (candidates.Count == 0)
             return false;
@@ -593,7 +568,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
-        => ShellTokenizer.IsMessyCompoundCommand(GetCommand(arguments));
+    {
+        var command = GetCommand(arguments);
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+
+        if (OperatingSystem.IsWindows())
+            return ShellTokenizer.IsMessyCompoundCommand(command);
+
+        var analysis = TryAnalyzeCommand(command, GetWorkingDirectory(arguments));
+        return analysis is null || analysis.HasDynamicSyntax;
+    }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
@@ -636,7 +621,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// </summary>
     private static string BuildSanitizedDisplayViaParser(string command)
     {
-        var result = TryParseCommand(command);
+        var result = TryAnalyzeCommand(command);
         if (result is null)
             return command;
 
