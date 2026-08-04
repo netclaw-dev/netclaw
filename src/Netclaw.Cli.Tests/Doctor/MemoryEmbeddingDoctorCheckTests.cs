@@ -39,10 +39,24 @@ public sealed class MemoryEmbeddingDoctorCheckTests
     }
 
     [Fact]
-    public async Task Errors_when_enabled_but_model_is_missing()
+    public async Task Warns_when_enabled_but_model_is_missing_and_auto_download_is_true()
     {
         var paths = CreateTempPaths();
-        var config = WriteConfig(paths, enabled: true);
+        var config = WriteConfig(paths, enabled: true, autoDownload: true);
+        // No model files placed at paths.EmbeddingModelDirectory(ModelId).
+        var check = new MemoryEmbeddingDoctorCheck(paths, config, FixtureAllowlist());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains(ModelId, result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Errors_when_enabled_but_model_is_missing_and_auto_download_is_false()
+    {
+        var paths = CreateTempPaths();
+        var config = WriteConfig(paths, enabled: true, autoDownload: false);
         // No model files placed at paths.EmbeddingModelDirectory(ModelId).
         var check = new MemoryEmbeddingDoctorCheck(paths, config, FixtureAllowlist());
 
@@ -119,7 +133,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         return paths;
     }
 
-    private static IConfiguration WriteConfig(NetclawPaths paths, bool enabled)
+    private static IConfiguration WriteConfig(NetclawPaths paths, bool enabled, bool autoDownload = true)
     {
         var config = new Dictionary<string, object>
         {
@@ -129,7 +143,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
                 {
                     ["Enabled"] = enabled,
                     ["ModelId"] = ModelId,
-                    ["AutoDownload"] = true,
+                    ["AutoDownload"] = autoDownload,
                 }
             }
         };

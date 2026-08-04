@@ -63,12 +63,18 @@ public sealed class MemoryRelevanceGateDoctorCheck(
             var verified = await provisioner.TryLoadVerifiedRelevanceModelAsync(modelId, allowlist, modelDirectory, cancellationToken);
             if (verified is null)
             {
+                if (memoryConfig.Embeddings.AutoDownload)
+                {
+                    return DoctorCheckResult.Warning(
+                        CheckName,
+                        $"Relevance model '{modelId}' is not yet provisioned. The daemon will download and verify it on next startup.",
+                        "Restart the daemon to provision the relevance model.");
+                }
+
                 return DoctorCheckResult.Error(
                     CheckName,
                     $"Relevance model '{modelId}' is missing or fails hash verification at {modelDirectory}.",
-                    memoryConfig.Embeddings.AutoDownload
-                        ? "Restart the daemon to re-provision the relevance model."
-                        : "Memory.Embeddings.AutoDownload is false — provision the model manually, or enable AutoDownload and restart the daemon.");
+                    "Memory.Embeddings.AutoDownload is false — provision the model manually, or enable AutoDownload and restart the daemon.");
             }
 
             return DoctorCheckResult.Pass(

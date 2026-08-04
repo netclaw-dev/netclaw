@@ -54,12 +54,18 @@ public sealed class MemoryEmbeddingDoctorCheck(
             var verified = await provisioner.TryLoadVerifiedAsync(modelId, modelDirectory, cancellationToken);
             if (verified is null)
             {
+                if (memoryConfig.Embeddings.AutoDownload)
+                {
+                    return DoctorCheckResult.Warning(
+                        CheckName,
+                        $"Embedding model '{modelId}' is not yet provisioned. The daemon will download and verify it on next startup.",
+                        "Restart the daemon, or run `netclaw memory backfill-embeddings` to provision now.");
+                }
+
                 return DoctorCheckResult.Error(
                     CheckName,
                     $"Embedding model '{modelId}' is missing or fails hash verification at {modelDirectory}.",
-                    memoryConfig.Embeddings.AutoDownload
-                        ? "Restart the daemon to re-provision, or run `netclaw memory backfill-embeddings`."
-                        : "Memory.Embeddings.AutoDownload is false — provision the model manually, or enable AutoDownload and restart the daemon.");
+                    "Memory.Embeddings.AutoDownload is false — provision the model manually, or enable AutoDownload and restart the daemon.");
             }
 
             var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);

@@ -51,10 +51,24 @@ public sealed class MemoryRelevanceGateDoctorCheckTests
     }
 
     [Fact]
-    public async Task Errors_when_gate_active_but_model_is_missing()
+    public async Task Warns_when_gate_active_but_model_is_missing_and_auto_download_is_true()
     {
         var paths = CreateTempPaths();
-        var config = WriteConfig(paths, embeddingsEnabled: true, gateEnabled: null);
+        var config = WriteConfig(paths, embeddingsEnabled: true, gateEnabled: null, autoDownload: true);
+        // No model files placed at paths.EmbeddingModelDirectory(DefaultRelevanceModelId).
+        var check = new MemoryRelevanceGateDoctorCheck(paths, config, FixtureAllowlist());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains(EmbeddingModelProvisioner.DefaultRelevanceModelId, result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Errors_when_gate_active_but_model_is_missing_and_auto_download_is_false()
+    {
+        var paths = CreateTempPaths();
+        var config = WriteConfig(paths, embeddingsEnabled: true, gateEnabled: null, autoDownload: false);
         // No model files placed at paths.EmbeddingModelDirectory(DefaultRelevanceModelId).
         var check = new MemoryRelevanceGateDoctorCheck(paths, config, FixtureAllowlist());
 
@@ -86,7 +100,7 @@ public sealed class MemoryRelevanceGateDoctorCheckTests
         return paths;
     }
 
-    private static IConfiguration WriteConfig(NetclawPaths paths, bool embeddingsEnabled, bool? gateEnabled)
+    private static IConfiguration WriteConfig(NetclawPaths paths, bool embeddingsEnabled, bool? gateEnabled, bool autoDownload = true)
     {
         var recall = new Dictionary<string, object>
         {
@@ -102,7 +116,7 @@ public sealed class MemoryRelevanceGateDoctorCheckTests
                 ["Embeddings"] = new Dictionary<string, object>
                 {
                     ["Enabled"] = embeddingsEnabled,
-                    ["AutoDownload"] = true,
+                    ["AutoDownload"] = autoDownload,
                 },
                 ["Recall"] = recall,
             }
