@@ -8,6 +8,7 @@ using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using OpenAI;
+using OpenAI.Responses;
 
 namespace Netclaw.Providers.GitHubCopilot;
 
@@ -32,36 +33,59 @@ public sealed class GitHubCopilotProviderPlugin(
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
+        return new GitHubCopilotCapabilityResolvingChatClient(async () =>
+        {
+            var capability = await Descriptor.ResolveModelCapabilityAsync(entry, model.ModelId)
+                .ConfigureAwait(false);
+            return CreateSdkClient(entry, model.Provider, capability);
+        });
+    }
+
+    private IChatClient CreateSdkClient(
+        ProviderEntry entry, string? providerName, GitHubCopilotModelCapability capability)
+    {
         var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
             ? Descriptor.DefaultEndpoint
             : entry.Endpoint.TrimEnd('/');
-
-        var options = new OpenAIClientOptions
-        {
-            Endpoint = new Uri(endpoint),
-        };
-
-        if (TransportOverride is not null)
-            options.Transport = TransportOverride;
-
-        // The SDK owns the Authorization header: its key-credential auth policy
-        // runs after any policy we register and writes "Bearer {key}" from this
-        // credential at send time. So we hand it a mutable credential and let
-        // CopilotRequestPolicy refresh its value (to a fresh short-lived Copilot
-        // token) on every call. The "placeholder" is overwritten before the
-        // first request goes out.
         var credential = new ApiKeyCredential("placeholder");
         var oauth = GitHubCopilotDescriptor.CreateOAuthAuth(entry);
-
-        // When the operator left the endpoint on the public default, let the chat
-        // host follow the token's endpoints.api (required for GHE data residency,
-        // issue #1550). A deliberate custom endpoint (e.g. a proxy) is respected.
         var followTokenHost = !GitHubCopilotDescriptor.HasCustomEndpointOverride(entry.Endpoint);
-        options.AddPolicy(
-            new CopilotRequestPolicy(tokenExchanger, entry, credential, followTokenHost, model.Provider, oauth),
-            PipelinePosition.PerCall);
 
-        var client = new OpenAIClient(credential, options);
-        return client.GetChatClient(model.ModelId).AsIChatClient();
+        if (capability.PreferredApi is null)
+        {
+            var advertised = capability.SupportedEndpoints.Count == 0
+                ? "(none)"
+                : string.Join(", ", capability.SupportedEndpoints);
+            throw new InvalidOperationException(
+                $"GitHub Copilot model '{capability.ModelId}' does not advertise a supported HTTP inference endpoint. "
+                + $"Advertised endpoints: {advertised}.");
+        }
+
+        return capability.PreferredApi == GitHubCopilotApiKind.Responses
+            ? CreateResponsesClient()
+            : CreateChatCompletionsClient();
+
+        IChatClient CreateResponsesClient()
+        {
+            var options = new ResponsesClientOptions { Endpoint = new Uri(endpoint) };
+            if (TransportOverride is not null)
+                options.Transport = TransportOverride;
+            options.AddPolicy(CreateRequestPolicy(), PipelinePosition.PerCall);
+            return new ResponsesClient(credential, options).AsIChatClient(capability.ModelId);
+        }
+
+        IChatClient CreateChatCompletionsClient()
+        {
+            var options = new OpenAIClientOptions { Endpoint = new Uri(endpoint) };
+            if (TransportOverride is not null)
+                options.Transport = TransportOverride;
+            options.AddPolicy(CreateRequestPolicy(), PipelinePosition.PerCall);
+            return new OpenAIClient(credential, options)
+                .GetChatClient(capability.ModelId)
+                .AsIChatClient();
+        }
+
+        CopilotRequestPolicy CreateRequestPolicy() =>
+            new(tokenExchanger, entry, credential, followTokenHost, providerName, oauth);
     }
 }

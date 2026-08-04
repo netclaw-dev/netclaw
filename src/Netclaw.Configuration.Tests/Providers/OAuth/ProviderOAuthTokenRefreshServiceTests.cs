@@ -7,6 +7,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
@@ -114,7 +115,15 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
         Assert.Contains("grant_type=refresh_token", form);
         Assert.Contains("refresh_token=refresh-old", form);
 
-        using var secretsDoc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
+        // Refreshed credentials reach disk encrypted. This test asserted the plaintext form
+        // before the refresh path was required to supply a protector.
+        var rawSecrets = File.ReadAllText(paths.SecretsPath);
+        Assert.DoesNotContain("access-new", rawSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("refresh-new", rawSecrets, StringComparison.Ordinal);
+
+        var decrypted = SecretsFileWriter.DecryptJsonLeaves(
+            rawSecrets, SecretsProtection.CreateProtector(paths));
+        using var secretsDoc = JsonDocument.Parse(decrypted);
         var secretProvider = secretsDoc.RootElement.GetProperty("Providers").GetProperty("openai-codex");
         Assert.Equal("access-new", secretProvider.GetProperty("OAuthAccessToken").GetString());
         Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());

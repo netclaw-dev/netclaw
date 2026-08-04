@@ -83,6 +83,32 @@ public sealed class GitHubCopilotDescriptorTests
     }
 
     [Fact]
+    public void ParseCopilotModelCapabilities_RetainsHttpEndpointsWithoutConfusingWebSocketResponses()
+    {
+        var capabilities = GitHubCopilotDescriptor.ParseCopilotModelCapabilities(
+            """
+            { "data": [
+              { "id": "responses-only", "capabilities": { "type": "chat" }, "supported_endpoints": ["/responses", "ws:/responses"] },
+              { "id": "chat-only", "capabilities": { "type": "chat" }, "supported_endpoints": ["/chat/completions"] },
+              { "id": "dual", "capabilities": { "type": "chat" }, "supported_endpoints": ["/responses", "/chat/completions"] },
+              { "id": "not-chat", "capabilities": { "type": "embeddings" }, "supported_endpoints": ["/responses"] },
+              { "id": "hidden", "capabilities": { "type": "chat" }, "model_picker_enabled": false, "supported_endpoints": ["/responses"] }
+            ] }
+            """);
+
+        Assert.Equal(3, capabilities.Count);
+        var responsesOnly = Assert.Single(capabilities, capability => capability.ModelId == "responses-only");
+        Assert.True(responsesOnly.SupportsResponses);
+        Assert.False(responsesOnly.SupportsChatCompletions);
+        Assert.Contains("ws:/responses", responsesOnly.SupportedEndpoints);
+        Assert.Equal(GitHubCopilotApiKind.Responses, responsesOnly.PreferredApi);
+        Assert.Equal(GitHubCopilotApiKind.ChatCompletions,
+            Assert.Single(capabilities, capability => capability.ModelId == "chat-only").PreferredApi);
+        Assert.Equal(GitHubCopilotApiKind.Responses,
+            Assert.Single(capabilities, capability => capability.ModelId == "dual").PreferredApi);
+    }
+
+    [Fact]
     public async Task Probe_FallsBackToCuratedListWhenModelsEndpointFails()
     {
         var handler = new FakeHttpMessageHandler(request =>

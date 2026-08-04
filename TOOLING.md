@@ -59,6 +59,18 @@ When a tape fails, `smoke-logs/tapes/<name>/` collects: a debug GIF of the
 last frame, the combined tape file, daemon logs, and the produced
 `NETCLAW_HOME`. CI uploads the `smoke-logs` directory as a job artefact.
 
+**Rerun this workflow in full, never with `--failed`.** The binary artefact
+name ends with the attempt number
+(`netclaw-native-binaries-linux-x64-<run-id>-1`). A partial rerun becomes
+attempt 2 and looks for `...-2`, which the publish job never produced, so
+`Download binary artifact` fails before a tape runs. Use
+`gh run rerun <run-id>`, not `gh run rerun --failed <run-id>`.
+
+The job installs Ollama from its release-pinned installer before it runs a
+tape. A `curl: (35) Recv failure` at that step is a network failure that
+reaches no test code. Confirm the failure is inside a tape before you
+investigate the change under review.
+
 **Authoring conventions are in `tests/smoke/tapes/README.md`**
 — the short version: `Wait+Screen /pattern/` only (no `Sleep`), 1400×800
 default surface, no `Screenshot` directives in flow tapes, pair every

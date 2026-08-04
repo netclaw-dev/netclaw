@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.36.0"
+  version: "2.39.0"
 ---
 
 # Netclaw Operations
@@ -28,6 +28,7 @@ a reference file — load the one matching the user's intent with
 | Update identity / where facts go (identity vs memory) | [Identity](#identity) |
 | Work on a project, switch projects | `skill_read_resource('netclaw-operations', 'references/projects.md')` |
 | Discover MCP / available tools | `skill_read_resource('netclaw-operations', 'references/tools.md')` |
+| Authorize or diagnose an HTTP/SSE MCP server | [MCP OAuth](#mcp-oauth) |
 | Manage skills and sources | `skill_read_resource('netclaw-operations', 'references/skills.md')` |
 | Manage inbound webhooks / attachments | `skill_read_resource('netclaw-operations', 'references/webhooks.md')` |
 | Add/switch LLM or search provider, OAuth login | `skill_read_resource('netclaw-operations', 'references/providers.md')` |
@@ -112,6 +113,106 @@ re-reading a whole file. Secret-bearing values are redacted from all tool output
 Only a core toolset is always loaded. Use `search_tools(query)` to find additional
 or MCP tools by capability before concluding a tool doesn't exist. Full guidance:
 `skill_read_resource('netclaw-operations', 'references/tools.md')`.
+
+## MCP OAuth
+
+For HTTP/SSE MCP servers, the Model Context Protocol .NET SDK owns PKCE,
+authorization-code exchange, token refresh, and the related HTTP calls. Netclaw
+owns protected-resource discovery and dynamic client registration (DCR),
+presents the authorization URL, brokers the browser callback, and durably stores
+active credentials. Do not fetch metadata or token endpoints by hand, build PKCE
+requests, or create or repair `mcp-oauth-metadata.json`; legacy metadata files
+are ignored.
+
+Netclaw registers rather than letting the SDK do it because the SDK hard-codes
+`token_endpoint_auth_method: "client_secret_post"` and ignores what the
+authorization server advertises, which fails against servers that accept public
+clients only. Netclaw registers with the method the server advertises first.
+Registration happens only during `netclaw mcp auth <name>`, never on a
+background reconnect.
+
+### Authorize a server
+
+Run this with the daemon active:
+
+```bash
+netclaw mcp auth <name>
+```
+
+The command starts an unpublished client candidate, opens the authorization URL
+when possible, always prints it, and waits up to five minutes. Complete the
+browser flow normally. If the callback cannot reach this machine, paste the full
+redirect URL into the command. Netclaw keeps exchanged credentials local to the
+candidate, then commits them once and publishes the client only after tool
+discovery succeeds. A failed replacement does not alter durable credentials or
+displace an existing healthy connection.
+
+The SDK redirect URI is
+`http://127.0.0.1:{Daemon.Port}/api/mcp/oauth/callback`. If the provider requires
+a pre-registered redirect URI, use the configured `Daemon.Port`, not a fixed
+default port.
+
+A configured `Authorization` header takes precedence over SDK OAuth. Netclaw
+sends that header unchanged, does not start SDK OAuth after a challenge, and
+rejects `netclaw mcp auth <name>` until the header is removed. Check or rotate the
+configured header instead of trying to layer OAuth on top of it.
+
+OAuth credentials are bound to the server's canonical configured resource
+identity. If the same profile name is pointed at another resource, Netclaw
+withholds its old tokens and dynamically registered client credentials, reports
+`AwaitingAuth`, and preserves the old durable record until replacement succeeds.
+
+A token record written before resource binding existed is migrated in place when
+its legacy resource describes the configured endpoint, so upgrading does not
+force reauthorization. A trailing slash, path case, and a bare-origin resource
+indicator all still match; a different scheme, host, port, query, or sibling path
+does not, and those report `AwaitingAuth` with both bindings written to the
+daemon log. An explicitly configured static OAuth client ID remains
+authoritative.
+
+If a server rejects the stored client identity as `invalid_client` — usually
+because the registration was deleted on their side — Netclaw discards that
+identity, keeps the tokens, and registers a new client on the next
+`netclaw mcp auth <name>`. No manual cleanup is needed.
+
+If a server's authorization server publishes no `registration_endpoint`, or
+rejects registration, the error names the remedy: register a client manually
+with that provider and set it with `netclaw mcp add --client-id <id> ...`.
+
+### Read connection states
+
+| State | Meaning and action |
+|-------|--------------------|
+| `Connected` | A usable client generation is published. The status includes its discovered tool count. |
+| `AwaitingAuth` | No usable OAuth credential is bound to this resource, or an access token expired without a refresh token. Run `netclaw mcp auth <name>`. Startup and background reconnects never open a browser or block. |
+| `AuthFailed` | The server rejected credentials that were supplied. Reauthorize SDK-managed OAuth, or check the configured `Authorization` header if it owns auth. |
+| `Unreachable` | A non-auth transport, network, timeout, or initialization failure prevented connection. Check the endpoint and daemon logs. |
+
+### Diagnose failures
+
+```bash
+netclaw mcp list    # configured servers plus live daemon connection states
+netclaw doctor      # MCP config and health checks
+netclaw status      # daemon connector health, including MCP
+```
+
+`netclaw doctor` uses live daemon state when available. If the daemon is down, it
+can probe connectivity but cannot verify SDK-managed OAuth; start the daemon for
+an authoritative auth result.
+
+OAuth failures return safe structured errors with an `error`, an `operation`,
+and, when known, an HTTP `status`. The CLI prints the useful message rather than
+raw JSON. A blank provider body still produces a structured daemon error from its
+HTTP status. If the daemon response body is blank or malformed, the CLI falls
+back to `HTTP <code> <reason>` instead of showing an empty error. Check daemon
+logs for full server context; operator-facing errors omit authorization codes,
+tokens, PKCE data, and client secrets.
+
+Credential persistence fails loudly. If the durable secrets write fails,
+authorization fails, active credentials do not change, and the candidate is not
+published. Fix the filesystem or secrets-store error shown in daemon logs, then
+run `netclaw mcp auth <name>` again; browser success alone does not mean the MCP
+connection is ready.
 
 ## Approval Prompts
 

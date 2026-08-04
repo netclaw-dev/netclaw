@@ -241,12 +241,20 @@ public sealed class DaemonApi
             $"{_endpoint}/api/mcp/oauth/status-by-state/{Uri.EscapeDataString(state)}", cts.Token);
     }
 
-    public async Task<HttpResponseMessage> McpOAuthCallbackAsync(string code, string state, CancellationToken ct = default)
+    public async Task<HttpResponseMessage> McpOAuthCallbackAsync(
+        string code,
+        string state,
+        string? iss,
+        CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(LongTimeout, ct);
         var client = CreateHttpClient();
-        return await client.GetAsync(
-            $"{_endpoint}/api/mcp/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
+        // The MCP SDK validates iss per RFC 9207 and rejects the response when an advertising
+        // server sent one and it does not arrive, so the paste path must carry it too.
+        var query = $"code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}";
+        if (!string.IsNullOrEmpty(iss))
+            query += $"&iss={Uri.EscapeDataString(iss)}";
+        return await client.GetAsync($"{_endpoint}/api/mcp/oauth/callback?{query}", cts.Token);
     }
 
     public async Task<JsonElement> GetMcpServerStatusesAsync(CancellationToken ct = default)

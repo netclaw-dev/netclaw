@@ -48,6 +48,22 @@ public static class McpToolResultFormatter
         return result?.ToString() ?? string.Empty;
     }
 
+    /// <summary>
+    /// Reports whether the MCP server flagged this result as a failure, and yields the
+    /// server's own detail. A tool-level failure arrives as an ordinary successful
+    /// response, so no exception reaches the transport layer and nothing downstream can
+    /// tell it apart from a normal result without this signal.
+    /// </summary>
+    public static bool TryGetErrorDetail(object? result, out string detail)
+    {
+        detail = string.Empty;
+        if (result is not JsonElement element || !IsCallToolResult(element) || !IsError(element))
+            return false;
+
+        detail = ExtractDetail(element);
+        return true;
+    }
+
     private static bool IsCallToolResult(JsonElement element)
         => element.ValueKind == JsonValueKind.Object
            && (element.TryGetProperty("content", out _) || element.TryGetProperty("isError", out _));

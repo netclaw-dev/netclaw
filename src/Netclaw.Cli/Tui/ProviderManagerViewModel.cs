@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ProviderManagerViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -308,14 +308,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Get the currently selected provider display item, or null if the selection is invalid.
+    /// </summary>
+    public ProviderDisplayItem? SelectedProvider =>
+        SelectedProviderIndex >= 0 && SelectedProviderIndex < DisplayProviders.Count
+            ? DisplayProviders[SelectedProviderIndex]
+            : null;
+
+    /// <summary>
     /// Activate the currently selected provider based on its state.
     /// </summary>
     public void ActivateSelectedProvider()
     {
-        if (SelectedProviderIndex < 0 || SelectedProviderIndex >= DisplayProviders.Count)
+        if (SelectedProvider is not { } item)
             return;
-
-        var item = DisplayProviders[SelectedProviderIndex];
 
         if (!item.IsConfigured)
         {
@@ -729,6 +735,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Remove a configured provider. Used by the Delete keybinding on the list.
+    /// Takes the target item directly (resolved from the list's live highlight)
+    /// rather than the selection index, which only updates on Enter.
+    /// </summary>
+    public void RemoveSelectedProvider(ProviderDisplayItem item)
+    {
+        if (item is not { IsConfigured: true, ConfiguredName: not null })
+            return;
+
+        DetailProvider = item;
+        StartRemove();
+    }
+
+    /// <summary>
     /// Start remove confirmation for the detail provider.
     /// </summary>
     public void StartRemove()
@@ -738,6 +758,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         RemoveProviderName = DetailProvider.ConfiguredName;
         RemoveBlockingRoles.Clear();
+        ErrorMessage.Value = "";
 
         var roles = Provider.ProviderCommand.GetReferencingModelRoles(RemoveProviderName, _paths);
         RemoveBlockingRoles.AddRange(roles);

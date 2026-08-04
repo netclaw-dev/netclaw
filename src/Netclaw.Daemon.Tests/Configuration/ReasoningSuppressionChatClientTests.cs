@@ -24,6 +24,7 @@ public sealed class ReasoningSuppressionChatClientTests
     [InlineData(ReasoningSuppressionDialect.None)]
     [InlineData(ReasoningSuppressionDialect.ChatTemplateKwargs)]
     [InlineData(ReasoningSuppressionDialect.OllamaThink)]
+    [InlineData(ReasoningSuppressionDialect.DeepSeekThinking)]
     public async Task IntentKey_IsAlwaysRemoved_RegardlessOfDialect(ReasoningSuppressionDialect dialect)
     {
         ChatOptions? forwarded = null;
@@ -101,6 +102,32 @@ public sealed class ReasoningSuppressionChatClientTests
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(false, forwarded!.AdditionalProperties?["think"]);
+    }
+
+    [Fact]
+    public async Task DeepSeekThinkingDialect_EmitsDisabledThinking()
+    {
+        ChatOptions? forwarded = null;
+        var fake = new FakeChatClient((_, opts, _) =>
+        {
+            forwarded = opts;
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        });
+        var client = new ReasoningSuppressionChatClient(fake, ReasoningSuppressionDialect.DeepSeekThinking);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [NetclawChatOptionKeys.SuppressReasoning] = true
+            }
+        };
+
+        await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], options,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var thinking = Assert.IsType<Dictionary<string, object?>>(forwarded!.AdditionalProperties!["thinking"]);
+        Assert.Equal("disabled", thinking["type"]);
     }
 
     [Fact]

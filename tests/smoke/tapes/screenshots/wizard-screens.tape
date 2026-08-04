@@ -33,14 +33,14 @@ Enter
 Wait+Screen@10s /Choose your LLM provider:/
 # The heading can appear before the full provider list is painted on slower
 # CI runners. Anchor on the last row so the screenshot captures the settled list.
-Wait+Screen@5s /7\. Venice\.ai/
+Wait+Screen@5s /8\. Venice\.ai/
 Screenshot "/tmp/shot-wizard-provider-picker.png"
 
 # Provider list ordering is alphabetical by TypeKey:
-#   anthropic, github-copilot, ollama, openai, openai-compatible, openrouter
-# Anthropic is the default; two Downs land on Ollama (one Down lands on
-# github-copilot since it was added in PR #1075).
-Down 2
+#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai
+# Anthropic is the default; three Downs land on Ollama. Two Downs land on
+# github-copilot, whose OAuth flow would stop this capture-only tape.
+Down 3
 Enter
 
 # Endpoint input — native Ollama is at http://localhost:11434, which is

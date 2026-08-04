@@ -30,6 +30,12 @@ namespace Netclaw.Security;
 /// </remarks>
 public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetector
 {
+    // Each pattern uses regular language features. The non-backtracking engine guarantees linear work.
+    // Text patterns use the invariant culture so host culture cannot change security decisions.
+    private const RegexOptions TextPatternOptions =
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+    private const RegexOptions UnicodePatternOptions = RegexOptions.NonBacktracking;
+
     private readonly ILogger<RegexPromptInjectionDetector> _logger;
 
     private static readonly PatternEntry[] Patterns =
@@ -150,85 +156,85 @@ public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetec
     // ── Pattern definitions ──────────────────────────────────────────────
 
     // Prompt injection (High)
-    [GeneratedRegex(@"ignore\s+(all\s+)?previous\s+instructions", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"ignore\s+(all\s+)?previous\s+instructions", TextPatternOptions)]
     private static partial Regex IgnorePreviousInstructionsRegex();
 
-    [GeneratedRegex(@"you\s+are\s+now\s+(a|an)\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"you\s+are\s+now\s+(a|an)\b", TextPatternOptions)]
     private static partial Regex YouAreNowRegex();
 
-    [GeneratedRegex(@"forget\s+(all\s+)?previous\s+(instructions|context|rules)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"forget\s+(all\s+)?previous\s+(instructions|context|rules)", TextPatternOptions)]
     private static partial Regex ForgetPreviousRegex();
 
-    [GeneratedRegex(@"disregard\s+(all\s+)?previous\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"disregard\s+(all\s+)?previous\b", TextPatternOptions)]
     private static partial Regex DisregardPreviousRegex();
 
-    [GeneratedRegex(@"new\s+instructions?\s*:", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"new\s+instructions?\s*:", TextPatternOptions)]
     private static partial Regex NewInstructionsRegex();
 
-    [GeneratedRegex(@"system\s*prompt\s*:", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"system\s*prompt\s*:", TextPatternOptions)]
     private static partial Regex SystemPromptRegex();
 
-    [GeneratedRegex(@"do\s+not\s+follow\s+(any\s+)?previous", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"do\s+not\s+follow\s+(any\s+)?previous", TextPatternOptions)]
     private static partial Regex DoNotFollowPreviousRegex();
 
-    [GeneratedRegex(@"override\s+(all\s+)?(security|safety|restrictions?|rules?|policy)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"override\s+(all\s+)?(security|safety|restrictions?|rules?|policy)", TextPatternOptions)]
     private static partial Regex OverrideSecurityRegex();
 
     // Prompt injection (Medium)
-    [GeneratedRegex(@"\bact\s+as\s+if\s+you\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"\bact\s+as\s+if\s+you\b", TextPatternOptions)]
     private static partial Regex ActAsIfYouRegex();
 
     // Data exfiltration (High)
-    [GeneratedRegex(@"(send|post|transmit|exfiltrate|upload)\b.{0,40}\b(secret|password|token|credential|api[_\-]?key)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(send|post|transmit|exfiltrate|upload)\b.{0,40}\b(secret|password|token|credential|api[_\-]?key)", TextPatternOptions)]
     private static partial Regex SendSecretRegex();
 
-    [GeneratedRegex(@"(curl|wget|fetch)\s+.{0,60}(secret|password|token|credential|api[_\-]?key)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(curl|wget|fetch)\s+.{0,60}(secret|password|token|credential|api[_\-]?key)", TextPatternOptions)]
     private static partial Regex CurlSecretRegex();
 
-    [GeneratedRegex(@"(leak|expose|reveal|dump)\b.{0,40}\b(secret|password|token|credential|config)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(leak|expose|reveal|dump)\b.{0,40}\b(secret|password|token|credential|config)", TextPatternOptions)]
     private static partial Regex LeakSecretRegex();
 
     // Data exfiltration (Medium)
-    [GeneratedRegex(@"encode\s+.{0,30}\b(base64|hex)\b.{0,30}(secret|token|key|password)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"encode\s+.{0,30}\b(base64|hex)\b.{0,30}(secret|token|key|password)", TextPatternOptions)]
     private static partial Regex EncodeSecretRegex();
 
     // Privilege escalation (High)
-    [GeneratedRegex(@"(modify|change|disable|remove|bypass)\b.{0,40}\b(acl|access\s*control|permission|security\s*polic)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(modify|change|disable|remove|bypass)\b.{0,40}\b(acl|access\s*control|permission|security\s*polic)", TextPatternOptions)]
     private static partial Regex ModifyAclRegex();
 
-    [GeneratedRegex(@"(grant|allow|enable)\b.{0,40}\b(admin|root|unrestricted|all\s+tools?|all\s+permissions?)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(grant|allow|enable)\b.{0,40}\b(admin|root|unrestricted|all\s+tools?|all\s+permissions?)", TextPatternOptions)]
     private static partial Regex GrantAdminRegex();
 
-    [GeneratedRegex(@"(escalate|elevate)\b.{0,30}\b(privilege|permission|access)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(escalate|elevate)\b.{0,30}\b(privilege|permission|access)", TextPatternOptions)]
     private static partial Regex EscalatePrivilegeRegex();
 
     // Privilege escalation (Medium)
-    [GeneratedRegex(@"(modify|edit|overwrite)\b.{0,40}\b(secrets?\.json|netclaw\.json|config)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(modify|edit|overwrite)\b.{0,40}\b(secrets?\.json|netclaw\.json|config)", TextPatternOptions)]
     private static partial Regex ModifyConfigFileRegex();
 
     // Destructive operations (High)
-    [GeneratedRegex(@"\brm\s+-rf\s+/", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"\brm\s+-rf\s+/", TextPatternOptions)]
     private static partial Regex RmRfRootRegex();
 
-    [GeneratedRegex(@"\b(format\s+c:|mkfs|dd\s+if=)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"\b(format\s+c:|mkfs|dd\s+if=)", TextPatternOptions)]
     private static partial Regex DiskDestructionRegex();
 
     // Destructive operations (Medium)
-    [GeneratedRegex(@"\b(drop\s+table|drop\s+database|truncate\s+table)\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"\b(drop\s+table|drop\s+database|truncate\s+table)\b", TextPatternOptions)]
     private static partial Regex DropTableRegex();
 
-    [GeneratedRegex(@"(delete|destroy|wipe)\s+(all|every)\b.{0,30}\b(file|data|record|backup)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"(delete|destroy|wipe)\s+(all|every)\b.{0,30}\b(file|data|record|backup)", TextPatternOptions)]
     private static partial Regex MassDeletionRegex();
 
     // Invisible unicode (Medium)
-    [GeneratedRegex(@"[\u200B-\u200F\u2028-\u202F\uFEFF]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"[\u200B-\u200F\u2028-\u202F\uFEFF]", UnicodePatternOptions)]
     private static partial Regex ZeroWidthCharsRegex();
 
-    [GeneratedRegex(@"[\u2066-\u2069\u202A-\u202E]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"[\u2066-\u2069\u202A-\u202E]", UnicodePatternOptions)]
     private static partial Regex BidiControlCharsRegex();
 
     // Invisible unicode (Low)
-    [GeneratedRegex(@"[\uE000-\uF8FF]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    [GeneratedRegex(@"[\uE000-\uF8FF]", UnicodePatternOptions)]
     private static partial Regex PrivateUseAreaRegex();
 
     private sealed record PatternEntry(

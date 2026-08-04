@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -101,6 +103,54 @@ public sealed class ConfigEditorSessionTests : IDisposable
         Assert.Equal("new-brave-key", ConfigFileHelper.DecryptIfEncrypted(_paths, braveKey?.ToString()));
         Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var slackToken));
         Assert.Equal("stored-slack-token", ConfigFileHelper.DecryptIfEncrypted(_paths, slackToken?.ToString()));
+    }
+
+    [Fact]
+    public void Save_ReplaysSecretActionsAgainstLatestFileAndPreservesMcpTokenRefresh()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        SecretsFileWriter.Write(_paths.SecretsPath,
+            """
+            {
+              "Slack": {
+                "BotToken": "stored-slack-token"
+              }
+            }
+            """,
+            protector);
+
+        var session = new ConfigEditorSession(_paths);
+
+        SecretsFileWriter.Update(
+            _paths.SecretsPath,
+            (root, _) =>
+            {
+                root["McpOAuthTokens"] = new JsonObject
+                {
+                    ["memorizer"] = new JsonObject
+                    {
+                        ["AccessToken"] = "rotated-access-token"
+                    }
+                };
+                return (root, true);
+            },
+            protector: protector,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        session.Apply(new SectionContribution(
+            SecretActions:
+            [
+                new SectionSecretAction("Search.BraveApiKey", SectionSecretActionKind.Set, new SensitiveString("new-brave-key"))
+            ]));
+
+        session.Save();
+
+        var decrypted = SecretsFileWriter.DecryptJsonLeaves(File.ReadAllText(_paths.SecretsPath), protector);
+        using var doc = JsonDocument.Parse(decrypted);
+        Assert.Equal("stored-slack-token", doc.RootElement.GetProperty("Slack").GetProperty("BotToken").GetString());
+        Assert.Equal("new-brave-key", doc.RootElement.GetProperty("Search").GetProperty("BraveApiKey").GetString());
+        Assert.Equal("rotated-access-token",
+            doc.RootElement.GetProperty("McpOAuthTokens").GetProperty("memorizer").GetProperty("AccessToken").GetString());
     }
 
     [Fact]

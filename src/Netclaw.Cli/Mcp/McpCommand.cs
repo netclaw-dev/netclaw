@@ -199,7 +199,7 @@ internal static class McpCommand
 
         // Non-sensitive env vars go to netclaw.json; all env vars also go to secrets.json for security
         // Headers always go to secrets.json (they may contain auth tokens)
-        var (config, secrets) = LoadConfigFiles(paths);
+        var (config, _) = LoadConfigFiles(paths);
 
         var mcpServers = GetOrCreateSection(config, "McpServers");
         mcpServers[serverName.Value] = SerializeEntry(entry);
@@ -211,16 +211,19 @@ internal static class McpCommand
         // Write sensitive values to secrets.json
         if (envVars.Count > 0 || headers.Count > 0)
         {
-            var secretMcp = GetOrCreateSection(secrets, "McpServers");
-            var serverSecrets = new Dictionary<string, object>();
+            UpdateSecretsFile(paths, secrets =>
+            {
+                var secretMcp = GetOrCreateSection(secrets, "McpServers");
+                var serverSecrets = new Dictionary<string, object>();
 
-            if (envVars.Count > 0)
-                serverSecrets["EnvironmentVariables"] = envVars;
-            if (headers.Count > 0)
-                serverSecrets["Headers"] = headers;
+                if (envVars.Count > 0)
+                    serverSecrets["EnvironmentVariables"] = envVars;
+                if (headers.Count > 0)
+                    serverSecrets["Headers"] = headers;
 
-            secretMcp[serverName.Value] = JsonSerializer.SerializeToElement(serverSecrets);
-            WriteSecretsFile(paths, secrets);
+                secretMcp[serverName.Value] = JsonSerializer.SerializeToElement(serverSecrets);
+                return true;
+            });
         }
 
         writer.WriteLine($"Added MCP server '{serverName.Value}' ({transport})");
@@ -324,14 +327,24 @@ internal static class McpCommand
 
         if (!startResponse.IsSuccessStatusCode)
         {
-            var errorBody = await startResponse.Content.ReadAsStringAsync();
-            writer.WriteLine($"Error: {errorBody}");
+            writer.WriteLine($"Error: {await ReadMcpErrorAsync(startResponse)}");
             return 1;
         }
 
         var startResult = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
         var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
         var flowState = startResult.GetProperty("state").GetString()!;
+        // Wait until the deadline the daemon reports rather than assume the flow lifetime.
+        // A client that gives up first tells the operator the attempt timed out while the
+        // daemon is still ready to accept their callback.
+        // A daemon older than this CLI does not report the deadline. The CLI and the
+        // daemon swap separately during an upgrade, so a newer CLI against an older
+        // daemon is a normal window rather than a broken install, and crashing here
+        // would take out `netclaw mcp auth` for the length of it. Fall back to the
+        // lifetime that daemon enforces.
+        var deadline = startResult.TryGetProperty("expiresAt", out var expiresAt)
+            ? expiresAt.GetDateTimeOffset()
+            : DateTimeOffset.UtcNow.AddMinutes(5);
 
         // 2. Open browser (detect headless first)
         var canOpenBrowser = BrowserDetection.CanOpenBrowser();
@@ -367,7 +380,8 @@ internal static class McpCommand
 
         // 3. Start polling + listen for paste concurrently
         writer.Write("Waiting for authorization");
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var remaining = deadline - DateTimeOffset.UtcNow;
+        using var cts = new CancellationTokenSource(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
         var pollTask = PollMcpOAuthStatusAsync(daemonApi, flowState, writer, cts.Token);
         var pasteTask = ReadPasteRedirectAsync(daemonApi, writer, cts.Token);
 
@@ -422,6 +436,11 @@ internal static class McpCommand
                 if (status is "Failed")
                 {
                     writer.WriteLine();
+                    if (statusResponse.TryGetProperty("error", out var error)
+                        && error.ValueKind is JsonValueKind.Object
+                        && error.TryGetProperty("error", out var message)
+                        && !string.IsNullOrWhiteSpace(message.GetString()))
+                        writer.WriteLine($"Error: {message.GetString()}");
                     return false;
                 }
             }
@@ -449,14 +468,14 @@ internal static class McpCommand
         return await ReadPasteRedirectAsync(
             writer,
             token => Task.Run(Console.ReadLine, token),
-            (code, state, token) => daemonApi.McpOAuthCallbackAsync(code, state, token),
+            (code, state, iss, token) => daemonApi.McpOAuthCallbackAsync(code, state, iss, token),
             ct);
     }
 
     internal static async Task<bool> ReadPasteRedirectAsync(
         TextWriter writer,
         Func<CancellationToken, Task<string?>> readLineAsync,
-        Func<string, string, CancellationToken, Task<HttpResponseMessage>> submitRedirectAsync,
+        Func<string, string, string?, CancellationToken, Task<HttpResponseMessage>> submitRedirectAsync,
         CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -478,7 +497,7 @@ internal static class McpCommand
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
-            if (!OAuthRedirectParser.TryParse(line, out var code, out var state, out var error))
+            if (!OAuthRedirectParser.TryParse(line, out var code, out var state, out var iss, out var error))
             {
                 writer.WriteLine($"Invalid redirect URL: {error}");
                 continue;
@@ -486,11 +505,11 @@ internal static class McpCommand
 
             try
             {
-                using var response = await submitRedirectAsync(code, state, ct);
+                using var response = await submitRedirectAsync(code, state, iss, ct);
                 if (response.IsSuccessStatusCode)
                     return true;
 
-                writer.WriteLine("Redirect URL was rejected. Paste the latest redirect URL or wait for automatic completion.");
+                writer.WriteLine($"Redirect URL was rejected: {await ReadMcpErrorAsync(response)}");
             }
             catch (OperationCanceledException)
             {
@@ -503,6 +522,37 @@ internal static class McpCommand
         }
 
         return false;
+    }
+
+    internal static async Task<string> ReadMcpErrorAsync(HttpResponseMessage response)
+    {
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                using var document = JsonDocument.Parse(body);
+                if (document.RootElement.ValueKind is JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("error", out var error)
+                    && error.ValueKind is JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(error.GetString()))
+                    return error.GetString()!;
+            }
+        }
+        catch (JsonException)
+        {
+            return FormatHttpError(response);
+        }
+
+        return FormatHttpError(response);
+    }
+
+    private static string FormatHttpError(HttpResponseMessage response)
+    {
+        var reason = string.IsNullOrWhiteSpace(response.ReasonPhrase)
+            ? response.StatusCode.ToString()
+            : response.ReasonPhrase;
+        return $"HTTP {(int)response.StatusCode} {reason}";
     }
 
     private static async Task<bool> WaitUntilCancelledAsync(CancellationToken ct)
@@ -686,7 +736,7 @@ internal static class McpCommand
         }
 
         var serverName = new McpServerName(args[2]);
-        var (config, secrets) = LoadConfigFiles(paths);
+        var (config, _) = LoadConfigFiles(paths);
 
         var removed = false;
         var mcpServers = GetSectionOrNull(config, "McpServers");
@@ -696,12 +746,13 @@ internal static class McpCommand
             removed = true;
         }
 
-        var secretMcp = GetSectionOrNull(secrets, "McpServers");
-        if (secretMcp?.Remove(serverName.Value) == true)
+        var removedSecrets = ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) =>
         {
-            WriteSecretsFile(paths, secrets);
-            removed = true;
-        }
+            var secretMcp = GetSectionOrNull(secrets, "McpServers");
+            var removedSecret = secretMcp?.Remove(serverName.Value) == true;
+            return (removedSecret, removedSecret);
+        });
+        removed |= removedSecrets;
 
         if (removed)
         {
@@ -776,7 +827,10 @@ internal static class McpCommand
         }
         catch (HttpRequestException ex)
         {
-            return new McpProbeResult(McpProbeStatus.Unreachable, 0, ex.Message);
+            var status = ex.StatusCode is null
+                ? "connection failed"
+                : $"HTTP {(int)ex.StatusCode.Value} {ex.StatusCode.Value}";
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, status);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -784,7 +838,7 @@ internal static class McpCommand
         }
         catch (Exception ex) when (ex is IOException or SocketException)
         {
-            return new McpProbeResult(McpProbeStatus.Unreachable, 0, ex.Message);
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, "connection failed");
         }
     }
 
@@ -849,8 +903,8 @@ internal static class McpCommand
     private static void WriteConfigFile(string path, Dictionary<string, object> data)
         => ConfigFileHelper.WriteConfigFile(path, data);
 
-    private static void WriteSecretsFile(NetclawPaths paths, Dictionary<string, object> data)
-        => ConfigFileHelper.WriteSecretsFile(paths, data);
+    private static void UpdateSecretsFile(NetclawPaths paths, Func<Dictionary<string, object>, bool> update)
+        => ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) => update(secrets));
 
     internal static Dictionary<string, McpServerEntry> LoadMcpServers(NetclawPaths paths)
     {

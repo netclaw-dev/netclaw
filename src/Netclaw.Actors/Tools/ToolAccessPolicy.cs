@@ -289,7 +289,7 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
 
         if (mode == ToolApprovalMode.Auto)
-            return ToolAccessDecision.Allow();
+            return ToolAccessDecision.Allow(ToolAllowReason.PolicyAuto);
 
         // The approval policy is authoritative for every channel — there is no
         // safe-list auto-grant for non-interactive callers. A non-interactive
@@ -340,7 +340,7 @@ public sealed class ToolAccessPolicy
             && candidateVerbs.Count > 0
             && _safeVerbPolicy.AllShortCircuit(candidateVerbs, context.Approval.Cwd, context.Invocation))
         {
-            return ToolAccessDecision.Allow();
+            return ToolAccessDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
         }
 
         var options = BuildApprovalOptions(
@@ -605,10 +605,17 @@ public sealed record FeatureGates(
 
 public sealed record ToolAccessDecision(bool Allowed, string? DenyReason = null, ToolApprovalContext? ApprovalContext = null)
 {
+    /// <summary>
+    /// Gets the reason for an allowed access decision.
+    /// </summary>
+    internal ToolAllowReason? AllowReason { get; private init; }
+
     /// <summary>True when the decision is <see cref="RequiresApproval"/>.</summary>
     public bool NeedsApproval => ApprovalContext is not null && Allowed;
 
     public static ToolAccessDecision Allow() => new(true);
+
+    internal static ToolAccessDecision Allow(ToolAllowReason reason) => new(true) { AllowReason = reason };
 
     public static ToolAccessDecision Deny(string reason) => new(false, reason);
 

@@ -477,7 +477,7 @@ public sealed class McpCommandTests : IDisposable
     {
         var lines = new Queue<string?>([
             "not-a-url",
-            "http://127.0.0.1:5199/api/mcp/oauth/callback?code=auth-code&state=flow-state"
+            "http://127.0.0.1:5199/api/mcp/oauth/callback?code=auth-code&state=flow-state&iss=https%3A%2F%2Fauth.example"
         ]);
 
         var submissions = 0;
@@ -486,11 +486,14 @@ public sealed class McpCommandTests : IDisposable
         var result = await McpCommand.ReadPasteRedirectAsync(
             output,
             _ => Task.FromResult(lines.Dequeue()),
-            (code, state, _) =>
+            (code, state, iss, _) =>
             {
                 submissions++;
                 Assert.Equal("auth-code", code);
                 Assert.Equal("flow-state", state);
+                // The MCP SDK validates iss per RFC 9207. Dropping it here makes every
+                // headless authorization fail against a server that advertises it.
+                Assert.Equal("https://auth.example", iss);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             },
             CancellationToken.None);
@@ -514,7 +517,7 @@ public sealed class McpCommandTests : IDisposable
         var result = await McpCommand.ReadPasteRedirectAsync(
             output,
             _ => Task.FromResult(lines.Dequeue()),
-            (code, _, _) =>
+            (code, _, _, _) =>
             {
                 submissions++;
                 var status = code == "bad-code"
@@ -538,6 +541,40 @@ public sealed class McpCommandTests : IDisposable
 
         Assert.False(copied);
         Assert.Equal(string.Empty, output.ToString());
+    }
+
+    [Fact]
+    public async Task Auth_EmptyErrorBodyFallsBackToHttpStatusAndReason()
+    {
+        await McpCommand.RunAsync(
+            ["mcp", "add", "--transport", "http", "oauth", "https://mcp.example/mcp"],
+            _paths,
+            output: _output);
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/oauth/start/oauth" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var output = new StringWriter();
+
+        var exitCode = await McpCommand.RunAsync(["mcp", "auth", "oauth"], _paths, daemonApi, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("HTTP 403 Forbidden", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Error: \n", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadMcpError_MalformedBodyFallsBackToHttpStatusAndReason()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("not-json", Encoding.UTF8, "text/plain"),
+        };
+
+        var message = await McpCommand.ReadMcpErrorAsync(response);
+
+        Assert.Equal("HTTP 502 Bad Gateway", message);
     }
 
     private static JsonDocument ReadConfigFile(string path)

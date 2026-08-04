@@ -1,15 +1,14 @@
-# Fires netclaw-website's deploy workflow whenever a release is published
-# here. The receiving workflow rebuilds the site (re-fetching the GitHub
-# Releases API at build time) so /changelog stays in sync.
+# Manual fallback to dispatch netclaw-website's deploy workflow.
+# The automated path lives in publish_release_binaries.yml (rebuild-website job)
+# which dispatches directly after create-release because GITHUB_TOKEN-authored
+# releases cannot trigger downstream workflow events.
 #
 # Auth: WEBSITE_DISPATCH_TOKEN repository secret, a fine-grained PAT with
 # Actions: read+write on netclaw-dev/netclaw-website. See
 # ops/auto-rebuild-on-release/README.md in netclaw-website for setup.
-name: Trigger netclaw.dev rebuild
+name: Trigger netclaw.dev rebuild (manual)
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:

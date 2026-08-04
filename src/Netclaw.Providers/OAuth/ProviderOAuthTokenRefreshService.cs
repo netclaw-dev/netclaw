@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Providers.OAuth;
 
@@ -71,7 +72,11 @@ public sealed class ProviderOAuthTokenRefreshService(
             }
 
             ApplyRefreshResult(entry, result);
-            OAuthTokenPersistence.PersistTokens(paths, providerName, result);
+            // A protector is mandatory here. Passing none used to skip encryption, so a
+            // refreshed access and refresh token pair landed in secrets.json as plaintext
+            // until some later protected write happened to re-encrypt the file.
+            OAuthTokenPersistence.PersistTokens(
+                paths, providerName, result, SecretsProtection.CreateProtector(paths));
             return entry.OAuthAccessToken!;
         }
         finally

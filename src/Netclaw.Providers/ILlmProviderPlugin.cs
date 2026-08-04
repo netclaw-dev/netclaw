@@ -72,4 +72,9 @@ public enum ReasoningSuppressionDialect
     /// request mapping consumes.
     /// </summary>
     OllamaThink,
+
+    /// <summary>
+    /// DeepSeek's hosted API: emits top-level <c>thinking: { type: "disabled" }</c>.
+    /// </summary>
+    DeepSeekThinking,
 }

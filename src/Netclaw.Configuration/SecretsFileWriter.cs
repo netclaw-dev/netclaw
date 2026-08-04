@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration.Secrets;
@@ -18,6 +20,8 @@ namespace Netclaw.Configuration;
 /// </summary>
 public static class SecretsFileWriter
 {
+    private static readonly TimeSpan SecretsLockTimeout = TimeSpan.FromSeconds(30);
+
     private static readonly JsonSerializerOptions DefaultJsonOptions = new()
     {
         WriteIndented = true,
@@ -27,10 +31,52 @@ public static class SecretsFileWriter
     /// Write JSON content to the secrets file, creating parent directories as needed.
     /// On Linux/macOS, the file is set to owner-only read/write (chmod 600).
     /// </summary>
-    public static void Write(string secretsPath, string json, ISecretsProtector? protector = null)
+    public static void Write(string secretsPath, string json, ISecretsProtector protector)
     {
-        if (protector is not null)
-            json = EncryptJsonLeaves(json, protector);
+        using var secretsLock = AcquireSecretsLock(secretsPath, CancellationToken.None);
+        WriteUnlocked(secretsPath, json, protector);
+    }
+
+    /// <summary>
+    /// Read the latest secrets document and replace it while holding a path-scoped lock.
+    /// Returning a null updated root leaves the file unchanged.
+    /// </summary>
+    public static TResult Update<TResult>(
+        string secretsPath,
+        Func<JsonObject, bool, (JsonObject? UpdatedRoot, TResult Result)> update,
+        ISecretsProtector protector,
+        JsonSerializerOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        using var secretsLock = AcquireSecretsLock(secretsPath, cancellationToken);
+        var fileExists = File.Exists(secretsPath);
+        var root = fileExists
+            ? ReadUnlocked(secretsPath, protector)
+            : [];
+
+        var outcome = update(root, fileExists);
+        if (outcome.UpdatedRoot is not null)
+            WriteUnlocked(secretsPath, outcome.UpdatedRoot.ToJsonString(options ?? DefaultJsonOptions), protector);
+
+        return outcome.Result;
+    }
+
+    private static JsonObject ReadUnlocked(string secretsPath, ISecretsProtector protector)
+    {
+        ArgumentNullException.ThrowIfNull(protector);
+        var json = DecryptJsonLeaves(File.ReadAllText(secretsPath), protector);
+
+        var node = JsonNode.Parse(json);
+        return node as JsonObject
+               ?? throw new InvalidDataException($"Secrets file '{secretsPath}' must contain a JSON object.");
+    }
+
+    private static void WriteUnlocked(string secretsPath, string json, ISecretsProtector protector)
+    {
+        ArgumentNullException.ThrowIfNull(protector);
+        json = EncryptJsonLeaves(json, protector);
 
         // Atomic rename, with owner-only perms applied to the temp BEFORE it becomes the
         // destination so secrets.json is never momentarily world-readable.
@@ -41,7 +87,7 @@ public static class SecretsFileWriter
     /// Serialize a dictionary to JSON and write it to the secrets file with hardened permissions.
     /// </summary>
     public static void Write(string secretsPath, Dictionary<string, object> secrets,
-        JsonSerializerOptions? options = null, ISecretsProtector? protector = null)
+        ISecretsProtector protector, JsonSerializerOptions? options = null)
     {
         var json = JsonSerializer.Serialize(secrets, options ?? DefaultJsonOptions);
         Write(secretsPath, json, protector);
@@ -207,4 +253,51 @@ public static class SecretsFileWriter
     /// Set owner-only permissions (chmod 600) on Unix. No-op on Windows.
     /// </summary>
     internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
+
+    /// <summary>
+    /// Serializes read-modify-write against one secrets file <em>within this process</em>.
+    ///
+    /// This does NOT serialize against another process. Nothing stops `netclaw secrets set`
+    /// or `netclaw provider add` from running while the daemon is live, and those paths still
+    /// write the file without taking this gate, so a CLI write can still lose against a
+    /// concurrent daemon token refresh. That hazard predates this type — every caller was an
+    /// unlocked read-modify-write before it existed — and closing it needs both a
+    /// cross-process lock and the remaining callers moved onto <see cref="Update"/>. Both are
+    /// deferred; do not read this gate as covering them.
+    /// </summary>
+    private static IDisposable AcquireSecretsLock(string secretsPath, CancellationToken cancellationToken)
+    {
+        var gate = Gates.GetOrAdd(GateKey(secretsPath), static _ => new SemaphoreSlim(1, 1));
+        if (!gate.Wait(SecretsLockTimeout, cancellationToken))
+            throw new TimeoutException($"Timed out waiting to update secrets file '{secretsPath}'.");
+        return new SecretsLock(gate);
+    }
+
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Two spellings of the same file must share one gate, so a symlinked config directory
+    /// does not hand concurrent writers separate locks and lose an update. Only the
+    /// immediate parent is resolved; a symlink deeper in the path is not a shape
+    /// <see cref="NetclawPaths"/> produces.
+    /// </summary>
+    private static string GateKey(string secretsPath)
+    {
+        var fullPath = Path.GetFullPath(secretsPath);
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException("Secrets path has no parent directory.");
+        if (Directory.Exists(directory))
+        {
+            directory = new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                        ?? directory;
+        }
+
+        var key = Path.Combine(directory, Path.GetFileName(fullPath));
+        return OperatingSystem.IsWindows() ? key.ToUpperInvariant() : key;
+    }
+
+    private sealed class SecretsLock(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
 }

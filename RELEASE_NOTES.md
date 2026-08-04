@@ -1,21 +1,36 @@
 # NetClaw Release Notes
 
-## 0.25.0-alpha.onnx.8 (2026-07-18)
+## 0.25.2 (2026-08-01)
 
-> Experimental ONNX local-embeddings build. Syncs `feature/memory-embeddings` with `dev` @
-> **0.25.0 stable**. Everything still rides `Memory.Embeddings.Enabled`, off by default;
-> install only by exact pin (`NETCLAW_VERSION=0.25.0-alpha.onnx.8`).
+### Features
+- **Provider manager: delete providers** — Providers can now be removed from the provider list via the TUI provider manager ([#1726](https://github.com/netclaw-dev/netclaw/pull/1726))
+- **DeepSeek provider support** — First-party DeepSeek model provider with full provider lifecycle, model catalog, and TUI integration ([#1725](https://github.com/netclaw-dev/netclaw/pull/1725))
 
-### Synced from dev
-- **Daemon shutdown fixes** — `netclaw daemon stop` now bounds the session-drain timeout, adds a CLI force-kill grace window, and keeps the generated systemd unit's `TimeoutStopSec=` in lockstep with the daemon's own graceful-shutdown budget ([#1673](https://github.com/netclaw-dev/netclaw/pull/1673)). **Operators: re-run `netclaw daemon install` after upgrading so the regenerated unit picks up `TimeoutStopSec=230`.**
-- **Automated shell PATH integration for installers** — Unix and Windows installers now automatically update the shell profile or PATH registry on install ([#1687](https://github.com/netclaw-dev/netclaw/pull/1687))
-- **MCP arguments shown in approval prompts** — approval prompts now display full MCP tool arguments for better operator context ([#1689](https://github.com/netclaw-dev/netclaw/pull/1689))
-- **CLI reliability fixes** — unresolved model references and model migration validation errors are now reported cleanly instead of crashing the CLI ([#1680](https://github.com/netclaw-dev/netclaw/pull/1680), [#1678](https://github.com/netclaw-dev/netclaw/pull/1678))
-- **Security** — Pinned `Microsoft.OpenApi` to 2.7.5, addressing CVE-2026-49451 ([#1543](https://github.com/netclaw-dev/netclaw/pull/1543))
-- Routine dependency bumps synced from dev (OpenAI SDK 2.12, Microsoft.Extensions.AI 10.8.0, Akka 1.5.70, others)
+### Dependency Updates
+- **Bump OllamaSharp** — 5.4.27 → 5.4.30
+- **Bump Grpc.Tools** — 2.82.0 → 2.83.0
 
-### This onnx build only
-- **Curation LLM timeout raised 10s → 60s** ([#1679](https://github.com/netclaw-dev/netclaw/pull/1679)) — first onnx build carrying this
+## 0.25.1 (2026-07-31)
+
+### Bug Fixes
+- **MCP OAuth lifecycle hardened** — Takes back client registration from the MCP SDK to prevent credential loss on upgrade; fixes `token_endpoint_auth_method` hardcoding issue with RFC 7591 ([#1708](https://github.com/netclaw-dev/netclaw/pull/1708))
+- **MCP tool-level auth failures now visible** — Daemon logs MCP `isError: true` responses at warning level, fixes `netclaw mcp auth` fallback for older daemons during upgrades ([#1720](https://github.com/netclaw-dev/netclaw/pull/1720))
+- **MCP permissions focus and save interaction fixed in TUI** ([#1694](https://github.com/netclaw-dev/netclaw/pull/1694))
+- **Revoke the highlighted approval in TUI** — Approval revocation now targets the currently highlighted item ([#1721](https://github.com/netclaw-dev/netclaw/pull/1721))
+
+### Internal Improvements
+- **Migrate to ModelContextProtocol SDK 2.0.0** — Brings in thread-safe token cache and updated OAuth flow ([#1714](https://github.com/netclaw-dev/netclaw/pull/1714))
+- **GitHub Copilot GHE: route models through advertised responses endpoint** with model catalog support ([#1707](https://github.com/netclaw-dev/netclaw/pull/1707))
+
+### Dependency Updates
+- **Bump Anthropic SDK** — 12.35.1 → 12.39.0
+- **Bump Mattermost.NET** — 5.0.3 → 5.0.7
+- **Bump Netclaw.SkillClient** — 0.4.0 → 0.4.1
+- **Bump OpenTelemetry** — 1.16.0 → 1.17.0
+- **Bump OllamaSharp** — 5.4.25 → 5.4.27
+- **Bump SkiaSharp.NativeAssets.Linux** — 4.148.0 → 4.150.1
+- **Bump Microsoft.SourceLink.GitHub** — 10.0.300 → 10.0.301
+- **Bump Akka** — Akka.Cluster.Sharding and Akka.Persistence updated
 
 ## 0.25.0 (2026-07-18)
 
@@ -120,38 +135,6 @@ This stable release concludes the 0.25.0 beta cycle (five beta releases from 0.2
 - **Bump Microsoft.NET.Test.Sdk** — 18.7.0 → 18.8.1 ([#1651](https://github.com/netclaw-dev/netclaw/pull/1651))
 - **Bump Mattermost.NET** — 5.0.0 → 5.0.3 ([#1626](https://github.com/netclaw-dev/netclaw/pull/1626))
 
-## 0.25.0-alpha.onnx.7 (2026-07-16)
-
-> Experimental ONNX local-embeddings build. Syncs `feature/memory-embeddings` with `dev`
-> (post-0.25.0-beta.4). No memory/embeddings behavior changes vs onnx.6. Everything still
-> rides `Memory.Embeddings.Enabled`, off by default; install only by exact pin
-> (`NETCLAW_VERSION=0.25.0-alpha.onnx.7`).
-
-### Synced from dev
-- **Webhook timestamped HMAC verification** — inbound webhook signatures are now verified against a timestamped HMAC, closing a replay window ([#1660](https://github.com/netclaw-dev/netclaw/pull/1660))
-- **Tool execution pipeline refactor** — session tool dispatch now runs through a dedicated `SessionToolExecutionPipeline`/`SessionToolBatch` structure instead of a long positional-argument call, tightening the session/tool-execution seam ([#1641](https://github.com/netclaw-dev/netclaw/pull/1641), [#1643](https://github.com/netclaw-dev/netclaw/pull/1643), [#1644](https://github.com/netclaw-dev/netclaw/pull/1644), [#1646](https://github.com/netclaw-dev/netclaw/pull/1646))
-- **OpenAI client 2.12 support** — updated OpenAI provider integration for client library 2.12 ([#1654](https://github.com/netclaw-dev/netclaw/pull/1654))
-- **Reminders definition rescan fix** — reminder definitions are now rescanned correctly after edits ([#1653](https://github.com/netclaw-dev/netclaw/pull/1653))
-- **TSV content-scanner support** — the content scanner now handles tab-separated-value files ([#1645](https://github.com/netclaw-dev/netclaw/pull/1645))
-- Routine dependency bumps
-
-## 0.25.0-alpha.onnx.6 (2026-07-14)
-
-> Experimental ONNX local-embeddings build. Syncs `feature/memory-embeddings` with `dev`
-> through 0.25.0-beta.4. No changes to memory/embeddings behavior in this release — this is
-> a mainline sync only. Everything still rides `Memory.Embeddings.Enabled`, off by default;
-> install only by exact pin (`NETCLAW_VERSION=0.25.0-alpha.onnx.6`).
-
-### Features
-- **Preserve Git working context across sessions and subagents** — a bounded, audience-aware Git working-context snapshot stays current in the system prompt, and coding subagents inherit recent-file/project context so parent sessions merge back only confirmed successful child edits ([#1630](https://github.com/netclaw-dev/netclaw/pull/1630))
-
-### Bug Fixes
-- **Curation dedup no longer overwrites existing memories** — a Create-decision anchor collision now appends below a dated separator instead of silently replacing the document; verbatim duplicates are skipped. ([#1637](https://github.com/netclaw-dev/netclaw/pull/1637))
-- **STDIO MCP server arguments no longer rewritten** — the daemon now preserves configured STDIO MCP server arguments, and uses one daemon-owned client per configured MCP server ([#1636](https://github.com/netclaw-dev/netclaw/pull/1636))
-
-### Improvements
-- **Logical skill access and authoritative inventory refresh** — skill loading now resolves through logical `skill_load`/`skill_read_resource` access with native > managed-feed > external precedence ([#1634](https://github.com/netclaw-dev/netclaw/pull/1634))
-
 ## 0.25.0-beta.4 (2026-07-14)
 
 ### Features
@@ -168,29 +151,6 @@ This stable release concludes the 0.25.0 beta cycle (five beta releases from 0.2
 ### Dependency Updates
 - **Bump SkillServer to stable** — `Netclaw.SkillClient` 0.4.0-beta.4 → 0.4.0 (stable release) ([#1638](https://github.com/netclaw-dev/netclaw/pull/1638))
 
-## 0.25.0-alpha.onnx.5 (2026-07-12)
-
-> **Experimental feature build** (fifth in the memory-embeddings series). This build carries
-> **no changes to memory/embeddings behavior** versus `0.25.0-alpha.onnx.4` — it merges the
-> mainline `dev` branch to bring the experimental line current with recent fixes, most
-> importantly a fail-closed hardening of unattended sub-agent approvals. Same gating as before:
-> everything rides `Memory.Embeddings.Enabled`, off by default; install only by exact pin
-> (`NETCLAW_VERSION=0.25.0-alpha.onnx.5`). Upgrading from alpha.onnx.4 is a binary swap — no
-> config, data, or unit changes.
-
-### Security
-- **Fail-closed unattended sub-agent approvals** — a sub-agent spawned from a session whose transport cannot service interactive approval prompts no longer inherits an approval bridge from the parent context; bridge presence alone can never make an unattended child interactive. Prevents an approval-gated tool from becoming silently auto-approvable in headless, webhook, and reminder-driven turns ([#1616](https://github.com/netclaw-dev/netclaw/pull/1616))
-
-### Bug Fixes
-- **Discord DM reminders** — reminders now fire correctly in Discord direct-message channels ([#1609](https://github.com/netclaw-dev/netclaw/pull/1609))
-- **Slack processing-status updates serialized** — concurrent status updates on a Slack thread no longer race ([#1556](https://github.com/netclaw-dev/netclaw/pull/1556))
-- **CLI model picker preserves hand-set modalities** — re-setting a model via `netclaw model set` or the picker no longer discards manually-configured input modalities ([#1610](https://github.com/netclaw-dev/netclaw/pull/1610))
-
-### Dependency Updates
-- ModelContextProtocol versioning consolidated into the central props file ([#1614](https://github.com/netclaw-dev/netclaw/pull/1614))
-- MessagePack 3.1.7 → 3.1.8 ([#1605](https://github.com/netclaw-dev/netclaw/pull/1605))
-- .NET SDK 10.0.300 → 10.0.301 ([#1381](https://github.com/netclaw-dev/netclaw/pull/1381))
-
 ## 0.25.0-beta.3 (2026-07-12)
 
 ### Features
@@ -202,67 +162,6 @@ This stable release concludes the 0.25.0 beta cycle (five beta releases from 0.2
 - **Slack processing status serialization** — Slack processing status updates are now serialized to prevent race conditions during concurrent sends ([#1556](https://github.com/netclaw-dev/netclaw/pull/1556))
 - **Sub-agent token usage tracked in daily stats** — Sub-agent LLM calls now record token usage, making them visible in `netclaw stats` ([#1597](https://github.com/netclaw-dev/netclaw/pull/1597))
 - **Subagents fail closed for unattended approvals** — When a subagent requires approval but the session is unattended, it now fails closed instead of proceeding or hanging ([#1616](https://github.com/netclaw-dev/netclaw/pull/1616))
-
-## 0.25.0-alpha.onnx.4 (2026-07-09)
-
-> **Experimental feature build** (fourth in the memory-embeddings series). Same gating:
-> everything rides `Memory.Embeddings.Enabled`, off by default; install only by exact pin
-> (`NETCLAW_VERSION=0.25.0-alpha.onnx.4`). **Upgrade note:** the systemd unit template
-> changed — after installing, re-run `netclaw daemon install` to regenerate the unit and
-> pick up the new graceful-shutdown settings.
-
-### Features
-- **Operational alert on model provisioning failure** — if either ONNX model (embedder or relevance reranker) cannot be downloaded, verified, or loaded while embeddings are enabled, the daemon now pushes an operational alert to configured notification targets (same channel as reminder-failure alerts) with the failure reason and remediation, once per model per daemon run — semantic-memory degradation is no longer discoverable only via doctor/logs ([#1611](https://github.com/netclaw-dev/netclaw/pull/1611))
-
-### Bug Fixes
-- **Embedder failure no longer blocks the relevance model** — a provisioning failure in the embedding model made the reranker's provisioning unreachable, silently disabling the relevance gate alongside it ([#1611](https://github.com/netclaw-dev/netclaw/pull/1611))
-- **Graceful daemon shutdown** — `netclaw daemon stop` self-escalated to SIGKILL after 10s while the daemon's own shutdown budget allows 200s to drain in-flight turns; one `GracefulShutdownBudget` now governs the Akka shutdown phase, host shutdown timeout, CLI wait, and the generated unit's `TimeoutStopSec` ([#1612](https://github.com/netclaw-dev/netclaw/pull/1612))
-- **`--help` no longer executes commands** — `netclaw memory backfill-embeddings --help` ran a real backfill; worse, `netclaw daemon stop --help` actually stopped the daemon. Trailing help tokens are now handled uniformly across memory, daemon, webhooks, and reminder subcommands ([#1612](https://github.com/netclaw-dev/netclaw/pull/1612))
-
-## 0.25.0-alpha.onnx.3 (2026-07-09)
-
-> **Experimental feature build** (third in the memory-embeddings series) — the canary-feedback
-> batch: fixes found by running 0.25.0-alpha.onnx.2 in production. Same gating as before:
-> everything rides `Memory.Embeddings.Enabled`, off by default; install only by exact pin
-> (`NETCLAW_VERSION=0.25.0-alpha.onnx.3`). Upgrading from alpha.onnx.2 is a binary swap —
-> no config or data changes; models re-verify from disk without re-downloading.
-
-### Bug Fixes
-- **Relevance-gate cold starts** — after idle periods the whole recall pipeline could exceed its 300ms envelope before the cross-encoder gate ever ran (paged-out ONNX sessions + host contention), silently skipping the gate. Fixed with periodic keep-warm inference on both models, an envelope-derived gate sub-budget (120ms ceiling, clamped to remaining turn budget), and per-turn `gateElapsedMs` observability ([#1608](https://github.com/netclaw-dev/netclaw/pull/1608))
-- **`netclaw memory` command not dispatchable** — the command was advertised in help and fully implemented but missing from the CLI parser's known-command set; `backfill-embeddings` was unusable. Fixed, with a bidirectional sync test deriving ground truth from the dispatch source so the parser/handler/help trio cannot drift again
-- **`netclawd --version` booted the daemon** — the daemon binary ignored the flag and started a real instance; now prints the version and exits without touching directories or the daemon lock
-- **Version banners show the full version** — `--version` in both binaries previously printed the truncated numeric version (`0.25.0`), hiding the prerelease suffix; both now print the full semver
-
-## 0.25.0-alpha.onnx.2 (2026-07-08)
-
-> **Experimental feature build** (second in the memory-embeddings series). Everything here
-> is gated behind `Memory.Embeddings.Enabled`, **off by default** — without opting in,
-> behavior is identical to the mainline beta. Not published to the beta channel; install
-> only by exact pin: `NETCLAW_VERSION=0.25.0-alpha.onnx.2`.
-
-### Memory (Experimental)
-- **Hybrid semantic recall with an absolute relevance floor** — automatic pre-turn recall now unions FTS5 lexical and embedding-cosine candidates (identical policy gates for both), fuses scores with recency decay, and enforces a gold-set-calibrated minimum-similarity floor: when nothing relevant exists, nothing is injected. Zero-injection turns are normal and healthy.
-- **Cross-encoder relevance gate** — a 22 MB int8 reranker (ms-marco-MiniLM-L-6-v2, hash-pinned) scores each floor survivor against the query and drops weak matches; measured out-of-sample at 86.8% zero-injection accuracy with 98.3% recall retention. Follows `Memory.Embeddings.Enabled`; degraded mode falls back to floor-only recall, never blocks a turn.
-- **Model-documented query prefix + manifest-carried calibration** — recall queries now embed in arctic-embed's documented retrieval mode; each allowlisted model pins its prefix and calibrated floor together, and `Memory.Recall.MinCosineSimilarity` follows the active model's calibration unless explicitly overridden. Measured on the production gold set: F0.5 +73%, recall@3 2.8×, zero-injection accuracy 2.1× vs the unprefixed configuration.
-- **int8 arctic embedder is the new default model** — Snowflake's pre-quantized `model_uint8.onnx` (105 MB vs 416 MB fp32, ~1.7× faster, measurably better retrieval quality with the prefix). fp32 and mxbai remain allowlisted as explicit choices.
-
-### Upgrading from 0.25.0-alpha.onnx.1 with embeddings enabled
-- The default model id changes to `snowflake-arctic-embed-m-int8`. On first daemon start the warmup gap-repair sweep re-embeds your corpus under the new model automatically (recall degrades to lexical-only for unembedded documents until coverage completes); `netclaw memory backfill-embeddings --force` does it in one pass. Existing fp32 vectors are left in place and untouched; `netclaw doctor` will note the mixed-model rows until you re-backfill. Original memory content is never modified.
-
-## 0.25.0-alpha.onnx.1 (2026-07-08)
-
-> **Experimental feature build.** This is a named experimental prerelease of the semantic
-> memory-embeddings foundation, gated behind a config flag that is **off by default**
-> (`Memory.Embeddings.Enabled`). Without opting in, runtime behavior is identical to
-> 0.25.0-beta.2, which this build fully contains. It is not published to the beta channel —
-> install only by exact pin: `NETCLAW_VERSION=0.25.0-alpha.onnx.1`. Embeddings live in a
-> new additive table; disabling the flag or downgrading afterward is safe — vectors are
-> derived data and original memory content is never touched.
-
-### Memory (Experimental)
-- **Semantic memory embeddings (opt-in)** — In-process ONNX embedding runtime (snowflake-arctic-embed-m, CPU-only, hash-pinned model downloaded at daemon startup), embed-on-write with startup gap repair, a `netclaw memory backfill-embeddings [--force]` CLI command, and a doctor check for model/coverage status ([#1577](https://github.com/netclaw-dev/netclaw/pull/1577))
-- **Semantic dedup: kNN-nominate / LLM-decide with lossless merges** — With embeddings enabled, near-duplicate memories are nominated by vector similarity and merged by the curation LLM under a deterministic MergeGuard; guard failures fall back to a lossless structural append ([#1585](https://github.com/netclaw-dev/netclaw/pull/1585))
-- **Guard-rejected anchor updates fall through to nomination** — instead of being silently dropped ([#1587](https://github.com/netclaw-dev/netclaw/pull/1587))
 
 ## 0.25.0-beta.2 (2026-07-07)
 

@@ -50,7 +50,6 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
     public ReactiveProperty<int> StateVersion { get; } = new(0);
 
     public List<ApprovalDisplayItem> DisplayApprovals { get; } = [];
-    public int SelectedIndex { get; set; }
 
     public ApprovalDisplayItem? PendingRevoke { get; private set; }
 
@@ -84,9 +83,6 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
             }
         }
 
-        if (SelectedIndex >= DisplayApprovals.Count)
-            SelectedIndex = Math.Max(0, DisplayApprovals.Count - 1);
-
         CurrentState.Value = DisplayApprovals.Count == 0
             ? ApprovalsManagerState.Empty
             : ApprovalsManagerState.List;
@@ -94,12 +90,11 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
         StateVersion.Value++;
     }
 
-    public void StartRevoke()
+    public void StartRevoke(ApprovalDisplayItem target)
     {
         if (CurrentState.Value != ApprovalsManagerState.List) return;
-        if (SelectedIndex < 0 || SelectedIndex >= DisplayApprovals.Count) return;
 
-        PendingRevoke = DisplayApprovals[SelectedIndex];
+        PendingRevoke = target;
         CurrentState.Value = ApprovalsManagerState.RevokeConfirm;
         StateVersion.Value++;
     }

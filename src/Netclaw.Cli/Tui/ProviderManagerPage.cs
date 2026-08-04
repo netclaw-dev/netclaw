@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ProviderManagerPage.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,7 +31,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         _clipboardService = clipboardService;
     }
 
-    private SelectionListNode<string>? _providerList;
+    private SelectionListNode<ProviderDisplayItem>? _providerList;
+    private SelectionListNode<string>? _addTypeList;
     private SelectionListNode<string>? _authList;
     private SelectionListNode<string>? _githubCopilotAuthHostList;
     private TextInputNode? _apiKeyInput;
@@ -139,8 +140,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         // Embedded in `netclaw config`, Esc backs out to the dashboard (Navigate("/config"));
                         // standalone `netclaw provider`, it exits. Match the footer to the real behavior.
                         ViewModel.IsEmbeddedInConfig
-                            ? " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit"
-                            : " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
+                            ? " [\u2191/\u2193] Navigate  [Enter] Select  [Delete] Remove  [Esc] Back  [Ctrl+Q] Quit"
+                            : " [\u2191/\u2193] Navigate  [Enter] Select  [Delete] Remove  [Esc] Quit  [Ctrl+Q] Quit",
                     ProviderManagerState.AddSelectType =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddName =>
@@ -202,32 +203,46 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private const string AddNewProviderSentinel = "  + Add new provider...";
 
+    // Synthetic row appended to the typed provider list. Matched by reference so
+    // Enter routes to the add flow and Delete ignores it.
+    private static readonly ProviderDisplayItem AddNewProviderItem = new()
+    {
+        ProviderType = "<add-new>",
+        DisplayName = "Add new provider...",
+        IsConfigured = false
+    };
+
     private ILayoutNode BuildProviderListView()
     {
-        var items = ViewModel.DisplayProviders
-            .Select(p =>
-            {
-                if (p.IsConfigured)
+        // Keep the list typed so keybindings can read the live HighlightedItem
+        // instead of a VM index that only updates on Enter (see #1721 for the
+        // same fix on the approvals page). The sentinel row is a synthetic item
+        // matched by reference.
+        var items = ViewModel.DisplayProviders.ToList();
+
+        _providerList = Layouts.SelectionList(
+                items.Concat(new[] { AddNewProviderItem }),
+                static p =>
                 {
-                    var statusChar = p.Health switch
+                    if (ReferenceEquals(p, AddNewProviderItem))
+                        return AddNewProviderSentinel;
+
+                    if (p.IsConfigured)
                     {
-                        ProviderHealthStatus.Healthy => "\u2713",
-                        ProviderHealthStatus.Unhealthy => "\u26a0",
-                        ProviderHealthStatus.Probing => "\u2026",
-                        _ => " "
-                    };
+                        var statusChar = p.Health switch
+                        {
+                            ProviderHealthStatus.Healthy => "\u2713",
+                            ProviderHealthStatus.Unhealthy => "\u26a0",
+                            ProviderHealthStatus.Probing => "\u2026",
+                            _ => " "
+                        };
 
-                    var nameLabel = $"{p.ConfiguredName} ({p.DisplayName})";
-                    return $"{statusChar} {nameLabel,-36} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
-                }
+                        var nameLabel = $"{p.ConfiguredName} ({p.DisplayName})";
+                        return $"{statusChar} {nameLabel,-36} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
+                    }
 
-                return $"  {p.DisplayName,-36} {"(not configured)",-12}";
-            })
-            .ToList();
-
-        items.Add(AddNewProviderSentinel);
-
-        _providerList = Layouts.SelectionList(items)
+                    return $"  {p.DisplayName,-36} {"(not configured)",-12}";
+                })
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -239,7 +254,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    if (selected[0] == AddNewProviderSentinel)
+                    if (ReferenceEquals(selected[0], AddNewProviderItem))
                     {
                         ViewModel.StartAddNewProvider();
                     }
@@ -268,14 +283,14 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var displayToTypeKey = registry.KnownTypeKeys
             .ToDictionary(k => registry.Get(k).DisplayName, k => k);
 
-        _providerList = Layouts.SelectionList(displayToTypeKey.Keys.ToList())
+        _addTypeList = Layouts.SelectionList(displayToTypeKey.Keys.ToList())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
-        _providerList.OnFocused();
-        _lastFocusedList = _providerList;
+        _addTypeList.OnFocused();
+        _lastFocusedList = _addTypeList;
 
-        _providerList.SelectionConfirmed
+        _addTypeList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0 && displayToTypeKey.TryGetValue(selected[0], out var typeKey))
@@ -287,7 +302,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Select provider type to add:").WithForeground(Color.White))
-            .WithChild(_providerList);
+            .WithChild(_addTypeList);
     }
 
     private ILayoutNode BuildAddNameView()
@@ -971,7 +986,30 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         }
 
         // List state: Enter is handled by SelectionConfirmed subscription,
-        // arrow keys are routed through RouteInputToActiveComponent
+        // Delete starts remove confirmation for the highlighted provider row.
+        // Arrow keys are routed through RouteInputToActiveComponent.
+        if (state == ProviderManagerState.List && keyInfo.Key == ConsoleKey.Delete)
+        {
+            // Read the live highlight from the list, not the VM index: the index
+            // only updates on Enter, so it drifts once the user navigates with
+            // arrows (same bug class fixed for approvals in #1721).
+            if (_providerList?.HighlightedItem is not { } highlighted
+                || ReferenceEquals(highlighted.Value, AddNewProviderItem))
+                return;
+
+            var item = highlighted.Value;
+            if (item.IsConfigured)
+            {
+                ViewModel.RemoveSelectedProvider(item);
+            }
+            else
+            {
+                ViewModel.ErrorMessage.Value = "Cannot remove an unconfigured provider type.";
+                ViewModel.RequestRedraw();
+            }
+
+            return;
+        }
 
         // Enter in validating state
         if (state == ProviderManagerState.AddValidating && keyInfo.Key == ConsoleKey.Enter)
@@ -1006,7 +1044,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
         if (_lastFocusedList is not null)
         {
-            ((SelectionListNode<string>)_lastFocusedList).HandleInput(keyInfo);
+            _lastFocusedList.HandleInput(keyInfo);
             ViewModel.RequestRedraw();
         }
     }

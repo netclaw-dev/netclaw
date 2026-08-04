@@ -23,7 +23,7 @@ internal sealed class BootstrapDeviceSeeder
     private readonly BootstrapStateStore _bootstrapStateStore;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<BootstrapDeviceSeeder> _logger;
-    private readonly ISecretsProtector? _protector;
+    private readonly ISecretsProtector _protector;
 
     public BootstrapDeviceSeeder(
         NetclawPaths paths,
@@ -31,14 +31,14 @@ internal sealed class BootstrapDeviceSeeder
         BootstrapStateStore bootstrapStateStore,
         TimeProvider timeProvider,
         ILogger<BootstrapDeviceSeeder> logger,
-        ISecretsProtector? protector = null)
+        ISecretsProtector protector)
     {
         _paths = paths;
         _deviceRegistry = deviceRegistry;
         _bootstrapStateStore = bootstrapStateStore;
         _timeProvider = timeProvider;
         _logger = logger;
-        _protector = protector;
+        _protector = protector ?? throw new ArgumentNullException(nameof(protector));
     }
 
     public async Task<bool> EnsureSeededAsync(DaemonConfig config, CancellationToken cancellationToken)
@@ -76,7 +76,7 @@ internal sealed class BootstrapDeviceSeeder
 
         await _deviceRegistry.AddAsync(device, cancellationToken);
         existingSecrets["DeviceToken"] = rawToken;
-        SecretsFileWriter.Write(_paths.SecretsPath, existingSecrets, protector: _protector);
+        SecretsFileWriter.Write(_paths.SecretsPath, existingSecrets, _protector);
         _logger.LogInformation(
             "Seeded bootstrap paired device '{DeviceName}' for first non-local daemon start.",
             device.Name);
@@ -94,9 +94,7 @@ internal sealed class BootstrapDeviceSeeder
         try
         {
             var text = File.ReadAllText(_paths.SecretsPath);
-            var decrypted = _protector is not null
-                ? SecretsFileWriter.DecryptJsonLeaves(text, _protector)
-                : text;
+            var decrypted = SecretsFileWriter.DecryptJsonLeaves(text, _protector);
             return JsonSerializer.Deserialize<Dictionary<string, object>>(decrypted)
                 ?? new Dictionary<string, object> { ["configVersion"] = 1 };
         }

@@ -102,7 +102,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 warnings.Add("Personal profile also enables host shell, which has a high blast radius.");
         }
 
-        CheckMissingPersonalShellApproval(toolConfig, warnings);
+        CheckExplicitPersonalShellAuto(toolConfig, warnings);
 
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
@@ -283,7 +283,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
     }
 
-    private static void CheckMissingPersonalShellApproval(ToolConfig toolConfig, List<string> warnings)
+    private static void CheckExplicitPersonalShellAuto(ToolConfig toolConfig, List<string> warnings)
     {
         if (toolConfig.ShellMode != ShellExecutionMode.HostAllowed)
             return;
@@ -292,13 +292,15 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         if (!PersonalProfileAllowsShell(personal))
             return;
 
-        var approvalMode = personal.ApprovalPolicy?.GetEffectiveMode(ShellTool.ToolName) ?? ToolApprovalMode.Auto;
-        if (approvalMode is ToolApprovalMode.Approval or ToolApprovalMode.Deny)
+        if (personal.ApprovalPolicy is null
+            || !personal.ApprovalPolicy.TryGetExplicitMode(ShellTool.ToolName, out var approvalMode)
+            || approvalMode != ToolApprovalMode.Auto)
             return;
 
         warnings.Add(
-            "Personal profile enables host shell without an explicit shell_execute approval gate. " +
-            "Run `netclaw init` again or set Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute to Approval.");
+            "Personal profile explicitly sets shell_execute to Auto while host shell is enabled. " +
+            "Commands that pass earlier security gates run without approval. " +
+            "Set Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute to Approval.");
     }
 
     private static bool PersonalProfileAllowsShell(ToolAudienceProfile profile)

@@ -6,8 +6,7 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Per-MCP-server OAuth token storage. Serialized into <c>mcp-oauth-tokens.json</c>
-/// as a <c>Dictionary&lt;string, McpOAuthTokenSet&gt;</c> keyed by server name.
+/// Durable OAuth credentials for one configured MCP resource.
 /// </summary>
 public sealed class McpOAuthTokenSet
 {
@@ -23,9 +22,39 @@ public sealed class McpOAuthTokenSet
     [ConfigValue(Key = "ExpiresAt", PersistTo = ConfigPersistStore.McpOAuthTokens)]
     public DateTimeOffset? ExpiresAt { get; set; }
 
+    /// <summary>Token type supplied by the authorization server.</summary>
+    public string TokenType { get; set; } = "Bearer";
+
+    /// <summary>Granted scope supplied by the authorization server.</summary>
+    public string? Scope { get; set; }
+
+    /// <summary>When the SDK obtained this token set.</summary>
+    public DateTimeOffset ObtainedAt { get; set; }
+
     /// <summary>Resolved client ID (from DCR or static config).</summary>
     public string? ClientId { get; set; }
 
-    /// <summary>Canonical resource URI for RFC 8707 resource indicators.</summary>
+    /// <summary>DCR-issued client secret, when one was issued.</summary>
+    public SensitiveString? ClientSecret { get; set; }
+
+    /// <summary>Whether the stored client identity came from dynamic registration.</summary>
+    public bool DynamicClientRegistration { get; set; }
+
+    /// <summary>
+    /// Issuer of the authorization server that issued this client registration. The MCP SDK
+    /// binds a registration to one issuer and will not reuse it against another.
+    /// </summary>
+    public string? AuthorizationServer { get; set; }
+
+    /// <summary>Token endpoint authentication method this client registered with.</summary>
+    public string? TokenEndpointAuthMethod { get; set; }
+
+    /// <summary>
+    /// Legacy resource field. It is retained for deserialization only and is not
+    /// accepted as the security binding for cached credentials.
+    /// </summary>
     public string? McpServerUrl { get; set; }
+
+    /// <summary>Canonical configured endpoint identity bound to these credentials.</summary>
+    public string? ResourceIdentity { get; set; }
 }

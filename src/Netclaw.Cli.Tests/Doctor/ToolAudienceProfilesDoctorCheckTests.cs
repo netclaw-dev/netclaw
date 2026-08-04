@@ -89,9 +89,6 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     [Fact]
     public async Task UnrestrictedPersonalProfile_Explicit_NoUnrestrictedWarning()
     {
-        // When Personal profile is explicitly written, unrestricted access is intentional.
-        // Doctor should not warn about the unrestricted profile itself, but may still
-        // warn about missing shell_execute approval gate.
         WriteConfig(
             """
             {
@@ -114,10 +111,8 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        // Should not warn about unrestricted profile when it's explicit
         Assert.DoesNotContain("Personal profile allows all tools", result.Message);
-        // May still warn about missing shell approval gate (different message)
-        Assert.Contains("without an explicit shell_execute approval gate", result.Message);
+        Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
     }
 
     [Fact]
@@ -223,11 +218,8 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task RecommendedProfiles_WarnsAboutShellGateOnly()
+    public async Task RecommendedProfiles_UseFailClosedShellFallback()
     {
-        // CreateProfiles() writes all three profiles explicitly, so Personal is
-        // explicit. The unrestricted warning is suppressed, but the shell
-        // approval gate warning still fires (no ApprovalPolicy on Personal).
         var toolConfig = new ToolConfig
         {
             ShellMode = ShellExecutionMode.HostAllowed,
@@ -243,15 +235,12 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        // Unrestricted warning suppressed for explicit Personal
         Assert.DoesNotContain("Personal profile allows all tools", result.Message);
-        // Shell approval gate warning still fires
-        Assert.Contains("without an explicit shell_execute approval gate", result.Message);
+        Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
     }
 
     [Fact]
-    public async Task PersonalShellWithoutExplicitApprovalPolicy_Warns()
+    public async Task PersonalShellWithoutApprovalPolicy_DoesNotWarnAboutAutoMode()
     {
         WriteConfig(
             """
@@ -275,12 +264,11 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("without an explicit shell_execute approval gate", result.Message);
+        Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
     }
 
     [Fact]
-    public async Task PersonalShellWithExplicitApprovalPolicy_DoesNotWarnAboutMissingGate()
+    public async Task PersonalShellWithExplicitApproval_DoesNotWarnAboutAutoMode()
     {
         WriteConfig(
             """
@@ -309,7 +297,72 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain("without an explicit shell_execute approval gate", result.Message);
+        Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
+    }
+
+    [Fact]
+    public async Task PersonalShellWithoutExplicitOverride_DoesNotWarnAboutAutoMode()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ApprovalPolicy": {
+                      "DefaultMode": "Auto"
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
+    }
+
+    [Fact]
+    public async Task PersonalShellWithExplicitAuto_Warns()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ApprovalPolicy": {
+                      "ToolOverrides": {
+                        "shell_execute": "Auto"
+                      }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("explicitly sets shell_execute to Auto", result.Message);
     }
 
     // ── MCP server missing Personal approval-default warning ──

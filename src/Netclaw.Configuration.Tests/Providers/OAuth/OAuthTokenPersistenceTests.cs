@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -30,7 +31,8 @@ public sealed class OAuthTokenPersistenceTests
                 new SensitiveString("access-1"),
                 new SensitiveString("refresh-1"),
                 DateTimeOffset.Parse("2026-06-01T00:00:00+00:00"),
-                new SensitiveString("account-1")));
+                new SensitiveString("account-1")),
+            new NullSecretsProtector());
 
         // A partial refresh that returns only a new access token must NOT wipe the
         // previously-stored refresh token or ChatGPT account id (Codex needs them).
@@ -40,7 +42,8 @@ public sealed class OAuthTokenPersistenceTests
             new OAuthDeviceFlowResult(
                 new SensitiveString("access-2"),
                 null,
-                null));
+                null),
+            new NullSecretsProtector());
 
         using var doc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
         var provider = doc.RootElement
@@ -75,7 +78,8 @@ public sealed class OAuthTokenPersistenceTests
                 new SensitiveString("access-1"),
                 new SensitiveString("refresh-1"),
                 null,
-                new SensitiveString("account-1")));
+                new SensitiveString("account-1")),
+            new NullSecretsProtector());
 
         OAuthTokenPersistence.PersistTokens(
             paths,
@@ -84,7 +88,8 @@ public sealed class OAuthTokenPersistenceTests
                 new SensitiveString("access-2"),
                 new SensitiveString("refresh-2"),
                 null,
-                new SensitiveString("account-2")));
+                new SensitiveString("account-2")),
+            new NullSecretsProtector());
 
         using var doc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
         var provider = doc.RootElement
@@ -113,7 +118,8 @@ public sealed class OAuthTokenPersistenceTests
                 new SensitiveString("access-1"),
                 new SensitiveString("refresh-1"),
                 DateTimeOffset.Parse("2026-06-01T00:00:00+00:00"),
-                null));
+                null),
+            new NullSecretsProtector());
 
         // Secrets still persist (they live in secrets.json), but the expiry —
         // refresh-timing metadata that belongs in netclaw.json — is skipped

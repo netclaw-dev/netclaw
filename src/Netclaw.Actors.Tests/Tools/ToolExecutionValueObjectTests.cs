@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Media;
 
@@ -10,6 +11,17 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public sealed class ToolExecutionValueObjectTests
 {
+    [Fact]
+    public void Every_allow_reason_has_a_distinct_human_explanation()
+    {
+        var descriptions = Enum.GetValues<ToolAllowReason>()
+            .Select(reason => reason.GetDescription())
+            .ToList();
+
+        Assert.All(descriptions, description => Assert.False(string.IsNullOrWhiteSpace(description)));
+        Assert.Equal(descriptions.Count, descriptions.Distinct(StringComparer.Ordinal).Count());
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]

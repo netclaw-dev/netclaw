@@ -122,6 +122,23 @@ public sealed class McpToolAdapter : INetclawTool
             var coerced = McpSchemaSanitizer.CoerceArguments(normalized, _rawSchema);
             return await _invoker.InvokeAsync(ServerName, _toolName, coerced, context, ct);
         }
+        // Cancellation must not become a tool result. OperationCanceledException is an
+        // Exception, so without this clause the catch-all below would swallow a caller's
+        // abort and hand the agent "Error: ... The operation was canceled." as if the tool
+        // had merely misbehaved, and the agent would carry on.
+        //
+        // The filter matters as much as the rethrow: HttpClient timeouts surface as
+        // TaskCanceledException, which derives from OperationCanceledException. Those fire
+        // while ct is NOT cancelled, and they are faults rather than caller intent, so they
+        // fall through to the catch-all and come back as an actionable error instead of
+        // tearing down the caller's operation.
+        // Same guard as ExecuteAsync: without this the catch-all below turns a caller's
+        // cancellation into a tool result, and the filter keeps HttpClient timeouts
+        // (TaskCanceledException) classified as faults rather than caller intent.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return $"Error: MCP tool '{Name}' failed: {ex.Message}";
@@ -143,6 +160,10 @@ public sealed class McpToolAdapter : INetclawTool
                 : null;
             var result = await func.InvokeAsync(aiArgs, ct);
             return McpToolResultFormatter.Format(result, Name);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

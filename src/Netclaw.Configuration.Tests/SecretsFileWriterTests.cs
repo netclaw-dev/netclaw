@@ -1,9 +1,12 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SecretsFileWriterTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -29,7 +32,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     public void Write_creates_file_with_correct_content()
     {
         var json = """{"key": "value"}""";
-        SecretsFileWriter.Write(_secretsPath, json);
+        SecretsFileWriter.Write(_secretsPath, json, new NullSecretsProtector());
 
         Assert.True(File.Exists(_secretsPath));
         Assert.Contains("key", File.ReadAllText(_secretsPath), StringComparison.Ordinal);
@@ -41,7 +44,7 @@ public sealed class SecretsFileWriterTests : IDisposable
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return; // Skip on Windows
 
-        SecretsFileWriter.Write(_secretsPath, """{"test": true}""");
+        SecretsFileWriter.Write(_secretsPath, """{"test": true}""", new NullSecretsProtector());
 
         var mode = File.GetUnixFileMode(_secretsPath);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
@@ -51,7 +54,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     public void Write_creates_parent_directories()
     {
         var nestedPath = Path.Combine(_dir.Path, "nested", "deep", "secrets.json");
-        SecretsFileWriter.Write(nestedPath, """{}""");
+        SecretsFileWriter.Write(nestedPath, """{}""", new NullSecretsProtector());
 
         Assert.True(File.Exists(nestedPath));
     }
@@ -145,5 +148,37 @@ public sealed class SecretsFileWriterTests : IDisposable
         var (encrypted, plaintext) = SecretsFileWriter.CountEncryptionStatus("{}");
         Assert.Equal(0, encrypted);
         Assert.Equal(0, plaintext);
+    }
+
+    [Fact]
+    public void Update_when_file_replacement_fails_propagates_and_keeps_previous_content()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        SecretsFileWriter.Write(_secretsPath, """{"Existing":"keep"}""", new NullSecretsProtector());
+        var before = File.ReadAllText(_secretsPath);
+        var originalMode = File.GetUnixFileMode(_dir.Path);
+
+        try
+        {
+            File.SetUnixFileMode(_dir.Path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            Assert.ThrowsAny<Exception>(() => SecretsFileWriter.Update<bool>(
+                _secretsPath,
+                (root, _) =>
+                {
+                    root["Existing"] = "lost";
+                    return (root, true);
+                },
+                new NullSecretsProtector(),
+                cancellationToken: TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            File.SetUnixFileMode(_dir.Path, originalMode);
+        }
+
+        Assert.Equal(before, File.ReadAllText(_secretsPath));
     }
 }

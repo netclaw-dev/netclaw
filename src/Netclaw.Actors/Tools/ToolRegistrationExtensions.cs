@@ -137,6 +137,30 @@ public static class ToolRegistrationExtensions
         int maxSchemaWarnChars = 0,
         ILogger? logger = null)
     {
+        var adapters = PrepareMcpTools(
+            serverName,
+            tools.Cast<AIFunction>().ToList(),
+            grantCategory,
+            invoker,
+            maxDescriptionChars,
+            maxSchemaWarnChars,
+            logger);
+
+        foreach (var adapter in adapters)
+            registry.Register(adapter);
+
+        return registry;
+    }
+
+    public static IReadOnlyList<McpToolAdapter> PrepareMcpTools(
+        string serverName,
+        IReadOnlyList<AIFunction> tools,
+        string? grantCategory,
+        IMcpToolInvoker? invoker,
+        int maxDescriptionChars,
+        int maxSchemaWarnChars,
+        ILogger? logger)
+    {
         var adapters = new List<McpToolAdapter>(tools.Count);
         foreach (var tool in tools)
         {
@@ -163,9 +187,6 @@ public static class ToolRegistrationExtensions
             }
         }
 
-        foreach (var adapter in adapters)
-            registry.Register(adapter);
-
-        return registry;
+        return adapters;
     }
 }

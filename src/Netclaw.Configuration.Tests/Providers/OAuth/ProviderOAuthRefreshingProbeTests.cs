@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
@@ -49,7 +50,12 @@ public sealed class ProviderOAuthRefreshingProbeTests
         Assert.Equal("refresh-new", entry.OAuthRefreshToken!.Value);
         Assert.Equal(now.AddHours(1), entry.OAuthTokenExpiry);
 
-        using var secretsDoc = JsonDocument.Parse(File.ReadAllText(paths.SecretsPath));
+        // Refreshed credentials reach disk encrypted.
+        var rawSecrets = File.ReadAllText(paths.SecretsPath);
+        Assert.DoesNotContain("access-new", rawSecrets, StringComparison.Ordinal);
+
+        using var secretsDoc = JsonDocument.Parse(SecretsFileWriter.DecryptJsonLeaves(
+            rawSecrets, SecretsProtection.CreateProtector(paths)));
         var secretProvider = secretsDoc.RootElement.GetProperty("Providers").GetProperty("test-provider");
         Assert.Equal("access-new", secretProvider.GetProperty("OAuthAccessToken").GetString());
         Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());

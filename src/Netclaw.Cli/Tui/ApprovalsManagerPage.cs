@@ -20,7 +20,7 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewModel>
 {
-    private SelectionListNode<string>? _approvalList;
+    private SelectionListNode<ApprovalDisplayItem>? _approvalList;
     private SelectionListNode<string>? _confirmList;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _stepSubs = [];
@@ -127,11 +127,10 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
 
     private ILayoutNode BuildListView()
     {
-        var rows = ViewModel.DisplayApprovals
-            .Select(item => $"{item.AudienceWire,-10} {item.ToolName,-20} {item.DisplayText,-44} {item.AddedText}")
-            .ToList();
-
-        _approvalList = Layouts.SelectionList(rows)
+        _approvalList = Layouts.SelectionList(
+                ViewModel.DisplayApprovals,
+                static item =>
+                    $"{item.AudienceWire,-10} {item.ToolName,-20} {item.DisplayText,-44} {item.AddedText}")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -142,10 +141,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
             .Subscribe(selected =>
             {
                 if (selected.Count == 0) return;
-                var idx = rows.IndexOf(selected[0]);
-                if (idx < 0) return;
-                ViewModel.SelectedIndex = idx;
-                ViewModel.StartRevoke();
+                ViewModel.StartRevoke(selected[0]);
             })
             .DisposeWith(_stepSubs);
 
@@ -207,7 +203,8 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
         {
             if (keyInfo.Key == ConsoleKey.R || keyInfo.Key == ConsoleKey.Delete)
             {
-                ViewModel.StartRevoke();
+                if (_approvalList?.HighlightedItem is { } highlighted)
+                    ViewModel.StartRevoke(highlighted.Value);
                 return;
             }
 

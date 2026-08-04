@@ -847,15 +847,19 @@ static void ConfigureDaemonServices(
         return new OAuthPkceService(httpClient);
     });
     services.AddSingleton<IProviderOAuthCallbackListener, ProviderOAuthCallbackListener>();
-    services.AddHttpClient(nameof(McpOAuthService)).AddNetclawHeaders("mcp-oauth");
-    services.AddSingleton(sp => new McpOAuthService(
-        sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(McpOAuthService)),
+    services.AddSingleton(sp => new McpOAuthCredentialStore(
         paths,
         sp.GetRequiredService<TimeProvider>(),
-        sp.GetRequiredService<ILogger<McpOAuthService>>(),
-        sp.GetRequiredService<OAuthPkceService>(),
-        sp.GetRequiredService<IOperationalNotificationSink>(),
-        sp.GetService<ISecretsProtector>()));
+        sp.GetRequiredService<ISecretsProtector>(),
+        sp.GetRequiredService<ILogger<McpOAuthCredentialStore>>()));
+    services.AddHttpClient("McpOAuth").AddNetclawHeaders("mcp-oauth");
+    services.AddSingleton(sp => new McpOAuthClientRegistrar(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("McpOAuth"),
+        sp.GetRequiredService<ILogger<McpOAuthClientRegistrar>>()));
+    services.AddSingleton(sp => new McpOAuthFlowBroker(
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
+    services.AddSingleton<IMcpClientRuntime, McpClientRuntime>();
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
     services.AddSingleton<IMcpReconnectable>(sp => sp.GetRequiredService<McpClientManager>());

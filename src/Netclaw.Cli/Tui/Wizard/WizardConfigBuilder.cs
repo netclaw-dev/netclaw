@@ -493,15 +493,11 @@ public sealed class WizardSecretsBuilder
 {
     private readonly NetclawPaths _paths;
     private readonly Dictionary<string, object> _secrets = [];
-    private readonly Dictionary<string, object> _existingSecrets;
     private readonly List<SectionContribution> _sectionContributions = [];
-    private readonly bool _secretsFileExists;
 
     public WizardSecretsBuilder(NetclawPaths paths)
     {
         _paths = paths;
-        _secretsFileExists = File.Exists(paths.SecretsPath);
-        _existingSecrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
     }
 
     internal NetclawPaths Paths => _paths;
@@ -522,40 +518,45 @@ public sealed class WizardSecretsBuilder
         if (!hasDirectSecrets && _sectionContributions.Count == 0)
             return;
 
-        var merged = _existingSecrets.Count == 0
-            ? new Dictionary<string, object>()
-            : new Dictionary<string, object>(_existingSecrets, StringComparer.Ordinal);
+        // Encrypt with the protector for THIS config's keys directory (the same one the
+        // read/decrypt path derives) rather than the process-wide SensitiveStringTypeConverter
+        // .Protector static — that global is an ambient hook for the framework-instantiated
+        // converters only; reaching for it here as a service locator is what let a parallel test
+        // leak a foreign protector and break the encrypt/decrypt round-trip.
+        SecretsFileWriter.Update(
+            _paths.SecretsPath,
+            (latestRoot, fileExisted) =>
+            {
+                var latest = JsonSerializer.Deserialize<Dictionary<string, object>>(
+                                 latestRoot.ToJsonString(JsonDefaults.ConfigFile),
+                                 JsonDefaults.ConfigRead)
+                             ?? [];
 
-        var contributionChanged = false;
-        foreach (var contribution in _sectionContributions)
-            contributionChanged |= ConfigEditorSession.ApplySecretActions(merged, contribution);
+                var contributionChanged = false;
+                foreach (var contribution in _sectionContributions)
+                    contributionChanged |= ConfigEditorSession.ApplySecretActions(latest, contribution);
 
-        if (!hasDirectSecrets && !contributionChanged)
-            return;
+                if (!hasDirectSecrets && !contributionChanged)
+                    return (null, false);
 
-        var existingNode = JsonSerializer.SerializeToNode(merged, JsonDefaults.ConfigFile)?.AsObject()
-                           ?? [];
+                var mergedRoot = JsonSerializer.SerializeToNode(latest, JsonDefaults.ConfigFile)?.AsObject()
+                                 ?? [];
 
-        foreach (var (key, value) in _secrets)
-        {
-            var segments = SecretsJsonUpdater.ParseKeyPath(key);
-            var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
-            if (node is JsonObject obj)
-                SecretsJsonUpdater.MergeObject(existingNode, segments, obj);
-            else
-                SecretsJsonUpdater.UpsertNode(existingNode, segments, node);
-        }
+                foreach (var (key, value) in _secrets)
+                {
+                    var segments = SecretsJsonUpdater.ParseKeyPath(key);
+                    var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                    if (node is JsonObject obj)
+                        SecretsJsonUpdater.MergeObject(mergedRoot, segments, obj);
+                    else
+                        SecretsJsonUpdater.UpsertNode(mergedRoot, segments, node);
+                }
 
-        if (hasDirectSecrets || contributionChanged && (_secretsFileExists || HasUserSecretData(merged)))
-        {
-            // Encrypt with the protector for THIS config's keys directory (the same one the
-            // read/decrypt path derives) rather than the process-wide SensitiveStringTypeConverter
-            // .Protector static — that global is an ambient hook for the framework-instantiated
-            // converters only; reaching for it here as a service locator is what let a parallel test
-            // leak a foreign protector and break the encrypt/decrypt round-trip.
-            SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
-                protector: SecretsProtection.CreateProtector(_paths));
-        }
+                var shouldWrite = hasDirectSecrets || contributionChanged && (fileExisted || HasUserSecretData(latest));
+                return shouldWrite ? (mergedRoot, true) : (null, false);
+            },
+            SecretsProtection.CreateProtector(_paths),
+            JsonDefaults.ConfigFile);
     }
 
     internal void ApplyContribution(SectionContribution contribution)

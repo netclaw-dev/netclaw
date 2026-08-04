@@ -31,7 +31,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
     private CancellationTokenSource? _cts;
 
     // Set during flow start to route SubmitRedirectUrlAsync to the correct callback
-    private Func<string, string, Task<HttpResponseMessage>>? _activeCallbackFunc;
+    private Func<string, string, string?, Task<HttpResponseMessage>>? _activeCallbackFunc;
 
     // ── Observable state ──────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         Cancel();
         _cts = new CancellationTokenSource();
         _activeCallbackFunc = _daemonApi is not null
-            ? (code, state) => _daemonApi.ProviderOAuthCallbackAsync(code, state)
+            ? (code, state, _) => _daemonApi.ProviderOAuthCallbackAsync(code, state)
             : null;
         Completion = RunBrowserFlowAsync(providerType, onSuccess, _cts.Token);
         return _cts.Token;
@@ -94,7 +94,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         Cancel();
         _cts = new CancellationTokenSource();
         _activeCallbackFunc = _daemonApi is not null
-            ? (code, state) => _daemonApi.McpOAuthCallbackAsync(code, state)
+            ? (code, state, iss) => _daemonApi.McpOAuthCallbackAsync(code, state, iss)
             : null;
         Completion = RunMcpBrowserFlowAsync(serverName, onSuccess, _cts.Token);
         return _cts.Token;
@@ -121,7 +121,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
     /// </summary>
     public async Task SubmitRedirectUrlAsync(string? pastedUrl)
     {
-        if (!OAuthRedirectParser.TryParse(pastedUrl, out var code, out var state, out var error))
+        if (!OAuthRedirectParser.TryParse(pastedUrl, out var code, out var state, out var iss, out var error))
         {
             ErrorMessage = error;
             _requestRedraw();
@@ -137,7 +137,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
 
         try
         {
-            var response = await _activeCallbackFunc(code, state);
+            var response = await _activeCallbackFunc(code, state, iss);
 
             if (response.IsSuccessStatusCode)
             {
@@ -279,6 +279,12 @@ public sealed class OAuthFlowCoordinator : IDisposable
             var startResult = await startResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
             var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
             var flowState = startResult.GetProperty("state").GetString()!;
+            // The daemon owns the flow deadline; polling past it, or stopping before it,
+            // both misreport the outcome to the operator. A daemon older than this CLI
+            // does not report it, which is a normal window during a staged upgrade.
+            var deadline = startResult.TryGetProperty("expiresAt", out var expiresAt)
+                ? expiresAt.GetDateTimeOffset()
+                : DateTimeOffset.UtcNow.AddMinutes(5);
 
             // Step 2: Try to open browser (detect headless first)
             VerificationUri = authUrl;
@@ -300,7 +306,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
             }
 
             // Step 3: Poll daemon for completion
-            var pollTimeout = TimeSpan.FromMinutes(5);
+            var pollTimeout = deadline - DateTimeOffset.UtcNow;
             var pollInterval = TimeSpan.FromSeconds(2);
             var elapsed = TimeSpan.Zero;
 

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # approvals.tape post-tape assertion.
-#
-# The tape's Wait+Screen anchors on "Approvals Manager" and TAPE$ are
-# the primary regression detectors — a rendering failure or crash exits
-# vhs non-zero. This script intentionally does nothing further.
 
 set -euo pipefail
-echo "approvals: no post-tape assertion (vhs exit code is the test)"
+
+approvals_path="${NETCLAW_HOME}/config/tool-approvals.json"
+
+jq -e '
+  .version == 2
+  and (.audiences.personal.shell_execute | length) == 1
+  and .audiences.personal.shell_execute[0].verb == "alpha"
+' "$approvals_path" >/dev/null
+
+echo "approvals: the highlighted approval was revoked"

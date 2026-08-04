@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
@@ -37,7 +38,8 @@ public sealed class ProviderManagerPageTests : IDisposable
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
-        input.EnqueueKey(ConsoleKey.DownArrow); // GitHub Copilot
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "github-copilot"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);     // type row -> Name your provider
         input.EnqueueKey(ConsoleKey.Enter);     // accept generated provider name
         input.EnqueueKey(ConsoleKey.Enter);     // OAuth Device Flow
@@ -88,5 +90,52 @@ public sealed class ProviderManagerPageTests : IDisposable
         var app = sp.GetRequiredService<TerminaApplication>();
 
         return (terminal, app, capturedVm!);
+    }
+
+    [Fact]
+    public async Task DeleteKey_OnSecondRow_RemovesHighlightedProvider()
+    {
+        // Seed two configured providers so the list has multiple configured rows.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["alpha-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434",
+                    ["AuthMethod"] = "None"
+                },
+                ["bravo-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11435",
+                    ["AuthMethod"] = "None"
+                }
+            }
+        });
+
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.DownArrow); // move highlight off row 0 -> bravo-ollama
+        input.EnqueueKey(ConsoleKey.Delete);    // start remove for highlighted row
+        input.EnqueueKey(ConsoleKey.Enter);     // confirm "Yes, remove"
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        // The highlighted row (bravo-ollama) was removed; the un-highlighted row
+        // (alpha-ollama) must survive. This asserts Delete targets the live
+        // highlight, not a stale SelectedProviderIndex stuck on row 0.
+        Assert.Contains(vm.DisplayProviders, p => p.ConfiguredName == "alpha-ollama");
+        Assert.DoesNotContain(vm.DisplayProviders, p => p.ConfiguredName == "bravo-ollama");
+    }
+
+    private void WriteConfig(Dictionary<string, object> data)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

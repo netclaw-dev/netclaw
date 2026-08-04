@@ -191,7 +191,8 @@ public sealed class McpReconnectionServiceTests
             var serverName = new McpServerName(name);
             _statuses[serverName] = new McpServerStatus(
                 serverName, state, toolCount,
-                state == McpConnectionState.Unreachable ? "test error" : null);
+                state == McpConnectionState.Unreachable ? "test error" : null,
+                state == McpConnectionState.Unreachable ? DateTimeOffset.Parse("2026-05-01T00:00:00Z") : null);
         }
 
         public IReadOnlyDictionary<McpServerName, McpServerStatus> GetServerStatuses() => _statuses;

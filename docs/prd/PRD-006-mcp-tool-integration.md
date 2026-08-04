@@ -5,7 +5,7 @@
 - State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
-- Revised: 2026-02-21 (Memorizer as external memory tier, tool loading)
+- Revised: 2026-07-22 (secure SDK-owned OAuth and concurrent client lifecycle)
 - Depends on: `PRD-001`, `PRD-002`, `PRD-004`
 
 ## Goal
@@ -96,10 +96,27 @@ Runtime SHALL degrade gracefully when MCP server is unavailable:
 
 ### MCP-009 Daemon-Bound Server Ownership
 
-Each configured MCP server SHALL have at most one live client connection per
-Netclaw daemon. A local STDIO server process and its internal state are shared
+Each configured MCP server SHALL have at most one published client generation
+per Netclaw daemon. A replacement MAY initialize while the published generation
+continues serving, but it SHALL remain unpublished until initialization
+succeeds, and the replaced generation SHALL not be disposed while it has
+in-flight calls. A local STDIO server process and its internal state are shared
 by all sessions authorized to use that server; Netclaw session identity SHALL
 not launch or select a separate MCP process.
+
+### MCP-010 Secure OAuth Lifecycle
+
+HTTP MCP OAuth SHALL delegate protocol operations to the MCP C# SDK while
+Netclaw owns local browser-flow brokering, credential persistence, and client
+lifecycle. Persisted tokens and dynamically registered client credentials SHALL
+be bound to the configured MCP resource identity and SHALL NOT be supplied after
+that identity changes or when a legacy record lacks a binding. Credential
+persistence failures, invalid callback state, and authorization failures SHALL
+fail visibly without deleting the last working credentials or connection.
+
+Concurrent authorization and reconnect attempts SHALL coalesce per server.
+Ambiguous transport failures SHALL NOT automatically replay a tool invocation,
+because the remote operation may already have completed.
 
 ## Non-Goals (MVP)
 
@@ -119,6 +136,14 @@ not launch or select a separate MCP process.
 6. Unavailable MCP server does not crash the session.
 7. Calls from different authorized sessions to one local STDIO profile use the
    same daemon-owned client and child process.
+8. Repointing an MCP profile does not send credentials bound to its old resource
+   identity to the new endpoint.
+9. Legacy OAuth records without a resource binding fail closed and direct the
+   operator to reauthorize.
+10. OAuth token persistence failure is visible and does not advance caller-visible
+   credential state.
+11. A transport failure may reconnect the server for later calls but does not
+    replay the failed tool invocation automatically.
 
 ## Cross-References
 

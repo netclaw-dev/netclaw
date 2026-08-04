@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
 using Xunit;
@@ -445,7 +446,8 @@ public sealed class ExposureModeValidationServiceTests
                 registry,
                 new BootstrapStateStore(paths),
                 timeProvider,
-                NullLogger<BootstrapDeviceSeeder>.Instance),
+                NullLogger<BootstrapDeviceSeeder>.Instance,
+                new NullSecretsProtector()),
             async ct => (await registry.ListAsync(ct)).Count);
     }
 

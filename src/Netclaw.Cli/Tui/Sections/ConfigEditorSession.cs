@@ -18,14 +18,12 @@ internal sealed class ConfigEditorSession
 {
     private readonly NetclawPaths _paths;
     private readonly ConfigEditorStateStore _stateStore;
-    private readonly bool _secretsFileExists;
-    private bool _secretsChanged;
+    private readonly List<SectionContribution> _secretContributions = [];
 
     public ConfigEditorSession(NetclawPaths paths)
     {
         _paths = paths;
         _stateStore = new ConfigEditorStateStore(paths);
-        _secretsFileExists = File.Exists(paths.SecretsPath);
         Config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
         Secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
     }
@@ -37,7 +35,9 @@ internal sealed class ConfigEditorSession
     public void Apply(SectionContribution contribution)
     {
         ApplyFieldActions(Config, contribution);
-        _secretsChanged |= ApplySecretActions(Secrets, contribution);
+        ApplySecretActions(Secrets, contribution);
+        if (HasMutatingSecretActions(contribution))
+            _secretContributions.Add(contribution);
         _stateStore.Apply(contribution.StateActionsOrEmpty);
     }
 
@@ -47,8 +47,17 @@ internal sealed class ConfigEditorSession
         Config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, Config);
 
-        if (_secretsChanged && (_secretsFileExists || HasUserSecretData(Secrets)))
-            ConfigFileHelper.WriteSecretsFile(_paths, Secrets);
+        if (_secretContributions.Count > 0)
+        {
+            ConfigFileHelper.UpdateSecretsFile(_paths, (secrets, fileExisted) =>
+            {
+                var changed = false;
+                foreach (var contribution in _secretContributions)
+                    changed |= ApplySecretActions(secrets, contribution);
+
+                return changed && (fileExisted || HasUserSecretData(secrets));
+            });
+        }
     }
 
     internal static bool ApplyFieldActions(Dictionary<string, object> config, SectionContribution contribution)
@@ -104,6 +113,9 @@ internal sealed class ConfigEditorSession
 
     private static bool HasUserSecretData(Dictionary<string, object> secrets)
         => secrets.Keys.Any(static key => !string.Equals(key, "configVersion", StringComparison.Ordinal));
+
+    private static bool HasMutatingSecretActions(SectionContribution contribution)
+        => contribution.SecretActionsOrEmpty.Any(static action => action.Action is not SectionSecretActionKind.Preserve);
 
     // Mirrors SecretsJsonUpdater's path-merge (colon-collision cleanup + nested upsert), but over the
     // Dictionary<string, object> shape ConfigFileHelper loads rather than a JsonObject. The two share

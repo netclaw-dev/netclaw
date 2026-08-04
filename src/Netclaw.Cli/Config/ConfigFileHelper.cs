@@ -193,6 +193,51 @@ internal static class ConfigFileHelper
         SecretsFileWriter.Write(paths.SecretsPath, data, options: JsonDefaults.Indented, protector: protector);
     }
 
+    internal static void UpdateSecretsFile(
+        Configuration.NetclawPaths paths,
+        Func<Dictionary<string, object>, bool, bool> update,
+        ISecretsProtector? protector = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        UpdateSecretsFile<object?>(
+            paths,
+            (secrets, fileExisted) => (update(secrets, fileExisted), null),
+            protector,
+            cancellationToken);
+    }
+
+    internal static TResult UpdateSecretsFile<TResult>(
+        Configuration.NetclawPaths paths,
+        Func<Dictionary<string, object>, bool, (bool Write, TResult Result)> update,
+        ISecretsProtector? protector = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        var effectiveProtector = protector ?? SecretsProtection.CreateProtector(paths);
+        return SecretsFileWriter.Update(
+            paths.SecretsPath,
+            (root, fileExisted) =>
+            {
+                var secrets = JsonSerializer.Deserialize<Dictionary<string, object>>(
+                                  root.ToJsonString(JsonDefaults.ConfigFile),
+                                  JsonDefaults.ConfigRead)
+                              ?? [];
+                var outcome = update(secrets, fileExisted);
+                if (!outcome.Write)
+                    return (null, outcome.Result);
+
+                var updatedRoot = JsonSerializer.SerializeToNode(secrets, JsonDefaults.ConfigFile)?.AsObject()
+                                  ?? [];
+                return (updatedRoot, outcome.Result);
+            },
+            effectiveProtector,
+            JsonDefaults.Indented,
+            cancellationToken);
+    }
+
     internal static bool PathPresent(Dictionary<string, object> root, string path)
         => TryGetPathValue(root, path, out _);
 
