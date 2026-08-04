@@ -55,6 +55,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
     private readonly string? _botUserId;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
+    private readonly bool _imageProxyEnabled;
     private readonly NetclawPaths _paths;
     private readonly ILogger<MattermostThreadHistoryFetcher> _logger;
 
@@ -67,7 +68,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
         NetclawPaths paths,
-        ILogger<MattermostThreadHistoryFetcher> logger)
+        ILogger<MattermostThreadHistoryFetcher> logger,
+        bool imageProxyEnabled = false)
         : this(
             (rootPostId, cancellationToken) => FetchRawMessagesAsync(client, rootPostId, botUserIdFactory(), serverUrl, cancellationToken, logger),
             (fileId, stagingDir, maxBytes, ct) => DownloadFileViaSdkAsync(client, fileId, stagingDir, maxBytes, ct),
@@ -78,7 +80,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             audienceProfiles,
             modelCapabilities,
             paths,
-            logger)
+            logger,
+            imageProxyEnabled)
     {
     }
 
@@ -92,7 +95,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
         NetclawPaths paths,
-        ILogger<MattermostThreadHistoryFetcher> logger)
+        ILogger<MattermostThreadHistoryFetcher> logger,
+        bool imageProxyEnabled = false)
     {
         _messageFetcher = messageFetcher;
         _fileDownloader = fileDownloader;
@@ -102,6 +106,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         _botUserId = botUserId;
         _audienceProfiles = audienceProfiles;
         _modelCapabilities = modelCapabilities;
+        _imageProxyEnabled = imageProxyEnabled;
         _paths = paths;
         _logger = logger;
     }
@@ -129,7 +134,9 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         var audience = audienceResult.Audience;
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_audienceProfiles, audience);
         var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
-        var inlineImages = _modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+        var imageRoute = AttachmentInlineDecision.SelectImageRoute(
+            _modelCapabilities.InputModalities,
+            _imageProxyEnabled);
         var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
         var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
 
@@ -162,7 +169,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
                     rootPostId,
                     audience,
                     attachmentPolicy,
-                    inlineImages,
+                    imageRoute,
                     inboxDir,
                     stagingDir,
                     cancellationToken);
@@ -188,7 +195,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         MattermostRootPostId rootPostId,
         TrustAudience audience,
         ChannelAttachmentPolicy attachmentPolicy,
-        bool inlineImages,
+        ImageInputRoute imageRoute,
         string inboxDir,
         string stagingDir,
         CancellationToken cancellationToken)
@@ -218,7 +225,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
                     file,
                     audience,
                     attachmentPolicy,
-                    inlineImages,
+                    imageRoute,
                     inboxDir,
                     stagingDir,
                     cancellationToken));
@@ -263,7 +270,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         MattermostFileReference file,
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
-        bool inlineImages,
+        ImageInputRoute imageRoute,
         string inboxDir,
         string stagingDir,
         CancellationToken cancellationToken)
@@ -285,7 +292,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             return cached is HistoricalAttachmentIngress.ScanOutcome.Verified cachedOk
                 ? await AttachmentIngressFormatting.BuildAcceptedContentsAsync(
                     existingPath, file.Name, cachedOk.MimeType.Value, cachedOk.Category,
-                    inlineImages, existingSize, cancellationToken)
+                    imageRoute, existingSize, cancellationToken)
                 : [((HistoricalAttachmentIngress.ScanOutcome.Rejected)cached).Note];
         }
 
@@ -385,7 +392,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             file.Name,
             verifiedMime.Value,
             verifiedCategory,
-            inlineImages,
+            imageRoute,
             bytesWritten,
             cancellationToken);
     }

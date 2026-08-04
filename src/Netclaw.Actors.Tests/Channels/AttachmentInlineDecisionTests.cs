@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
+using Netclaw.Channels;
+using Netclaw.Configuration;
 using Netclaw.Media;
 using Xunit;
 
@@ -11,6 +13,21 @@ namespace Netclaw.Actors.Tests.Channels;
 
 public sealed class AttachmentInlineDecisionTests
 {
+    [Theory]
+    [InlineData(ModelModality.Text | ModelModality.Image, false, ImageInputRoute.Direct)]
+    [InlineData(ModelModality.Text | ModelModality.Image, true, ImageInputRoute.Direct)]
+    [InlineData(ModelModality.Text, true, ImageInputRoute.Proxy)]
+    [InlineData(ModelModality.Text, false, ImageInputRoute.None)]
+    public void SelectImageRoute_uses_main_capability_before_proxy(
+        ModelModality inputModalities,
+        bool imageProxyEnabled,
+        ImageInputRoute expected)
+    {
+        Assert.Equal(expected, AttachmentInlineDecision.SelectImageRoute(
+            inputModalities,
+            imageProxyEnabled));
+    }
+
     [Theory]
     [InlineData("image/png")]
     [InlineData("image/jpeg")]
@@ -47,5 +64,44 @@ public sealed class AttachmentInlineDecisionTests
 
         Assert.False(inlined);
         Assert.NotNull(note);
+    }
+
+    [Fact]
+    public void Proxy_route_accepts_supported_image_types()
+    {
+        var (inlined, note) = AttachmentInlineDecision.Resolve(
+            new MimeType("image/png"),
+            AttachmentCategory.Image,
+            ImageInputRoute.Proxy);
+
+        Assert.True(inlined);
+        Assert.Null(note);
+    }
+
+    [Fact]
+    public async Task Proxy_projection_marks_the_canonical_attachment_line()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [1, 2, 3], TestContext.Current.CancellationToken);
+
+            var projection = await AttachmentIngressFormatting.BuildAcceptedProjectionAsync(
+                path,
+                "photo.png",
+                "image/png",
+                AttachmentCategory.Image,
+                ImageInputRoute.Proxy,
+                3,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(projection.Inlined);
+            Assert.NotNull(projection.InlineContent);
+            Assert.Contains("inlined=\"true\" via=\"image-proxy\"", projection.Line, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

@@ -41,24 +41,26 @@ public sealed class RoleBasedFailoverRouter : IChatClientRouter
     private readonly IReadOnlyList<IChatClient> _mainCandidates;
     private readonly IReadOnlyList<IChatClient> _compactionCandidates;
 
-    public RoleBasedFailoverRouter(PipelineChatClientFactory factory, ModelSelection models)
-        : this(factory.Create, models)
+    public RoleBasedFailoverRouter(
+        INamedModelRuntimeRegistry registry,
+        ModelRoleAssignments roles)
+        : this(name => registry.GetRequired(name).Client, roles)
     {
     }
 
     // Test seam: build candidates from any create function, independent of the provider
     // plumbing PipelineChatClientFactory needs.
-    internal RoleBasedFailoverRouter(Func<ModelReference, IChatClient> create, ModelSelection models)
+    internal RoleBasedFailoverRouter(Func<string, IChatClient> create, ModelRoleAssignments roles)
     {
-        var main = create(models.Main);
-        _mainCandidates = models.Fallback is not null
-            ? [main, create(models.Fallback)]
+        var main = create(roles.Main);
+        _mainCandidates = roles.Fallback is not null
+            ? [main, create(roles.Fallback)]
             : [main];
 
         // A distinct compaction model gets its own (single-candidate) pipeline; without
         // one, compaction reuses the main candidates so it inherits failover.
-        _compactionCandidates = models.Compaction is not null
-            ? [create(models.Compaction)]
+        _compactionCandidates = roles.Compaction is not null
+            ? [create(roles.Compaction)]
             : _mainCandidates;
     }
 

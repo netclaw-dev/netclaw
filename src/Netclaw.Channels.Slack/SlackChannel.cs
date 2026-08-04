@@ -42,6 +42,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly IThreadHistoryFetcher _threadHistoryFetcher;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
+    private readonly bool _imageProxyEnabled;
     private readonly NetclawPaths _paths;
 
     private IActorRef? _gateway;
@@ -72,6 +73,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         IThreadHistoryFetcher threadHistoryFetcher,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
+        Netclaw.Actors.Sessions.IImageProxyAnalyzer imageProxyAnalyzer,
         NetclawPaths paths)
     {
         _pipeline = pipeline;
@@ -95,6 +97,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _threadHistoryFetcher = threadHistoryFetcher ?? throw new ArgumentNullException(nameof(threadHistoryFetcher));
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
+        _imageProxyEnabled = imageProxyAnalyzer.IsEnabled;
         _paths = paths;
     }
 
@@ -248,7 +251,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 ModelCapabilities: _modelCapabilities,
                 Paths: _paths,
                 HttpClient: httpClient,
-                PromptInjectionDetector: _promptInjectionDetector)),
+                PromptInjectionDetector: _promptInjectionDetector,
+                ImageProxyEnabled: _imageProxyEnabled)),
             "slack-gateway");
 
         // Publish the gateway under SlackGatewayActorKey so the reminder

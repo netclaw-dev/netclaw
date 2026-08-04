@@ -113,6 +113,35 @@ still read. `model list` reports an unparseable config instead of crashing.
 `netclaw doctor --fix` applies only repairs it can derive safely; it does not
 invent missing named definitions or role assignments.
 
+### Assigning an image proxy
+
+Use an image proxy when the main model accepts text but does not accept images:
+
+```bash
+netclaw model set image-proxy <provider> <model-id>
+netclaw model list
+```
+
+The command stores the model as a named definition. It also assigns `Models.Proxies.Image` to that definition.
+
+The proxy definition must accept text and image input. It must produce text output.
+
+Netclaw validates these modalities at startup. An invalid or unknown proxy definition stops startup with a configuration error.
+
+Netclaw sends one image and a fixed prompt to the proxy. The proxy call has no session history and no tools.
+
+Netclaw stores the description in the session journal. A text-only main model receives the stored description as untrusted text.
+
+Netclaw keeps the original media reference. A later image-capable main model receives the original image.
+
+The next turn also processes an old image that lacks a stored proxy result. A proxy failure stops the main and fallback calls.
+
+Remove the assignment with this command:
+
+```bash
+netclaw model clear image-proxy
+```
+
 ### Session input compatibility errors
 
 A saved session can contain image, audio, or video input from an earlier model.
@@ -121,7 +150,8 @@ main model lacks a required modality, the turn stops before any provider or
 fallback call.
 
 The error names the unsupported modalities and the active model. Select a model
-that accepts those modalities, or start a new conversation. Do not diagnose
+that accepts those modalities, or configure an image proxy for image-only gaps.
+Start a new conversation for unsupported audio or video history. Do not diagnose
 this result as a provider outage. Netclaw also rejects an unknown saved modality
 value instead of omitting that media.
 

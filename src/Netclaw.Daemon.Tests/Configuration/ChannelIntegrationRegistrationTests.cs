@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
 using Netclaw.Channels.Discord.Transport;
@@ -134,6 +135,7 @@ public sealed class ChannelIntegrationRegistrationTests
         services.AddSingleton<IContentScanner>(new NullContentScanner());
         services.AddSingleton(new ToolConfig());
         services.AddSingleton(new ModelCapabilities());
+        services.AddSingleton<IImageProxyAnalyzer>(DisabledImageProxyAnalyzer.Instance);
         services.AddSingleton(new NetclawPaths(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
 
         var configuration = new ConfigurationBuilder()

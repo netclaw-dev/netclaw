@@ -27,6 +27,8 @@ public sealed class NamedModelConfigurationTests
         Assert.Equal("vllm", result.Selection.Main.Provider);
         Assert.Equal(32768, result.Selection.Main.ContextWindow);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.Selection.Main.InputModalities);
+        Assert.Equal("qwen-vl", result.Runtime.Definitions[result.Runtime.Roles.Main].ModelId);
+        Assert.Null(result.Runtime.Proxies.Image);
     }
 
     [Fact]
@@ -45,6 +47,8 @@ public sealed class NamedModelConfigurationTests
         Assert.False(result.IsLegacy);
         Assert.Equal("qwen-vl", result.Selection.Main.ModelId);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.Selection.Main.InputModalities);
+        Assert.Equal("vision", result.Runtime.Roles.Main);
+        Assert.Equal("qwen-vl", result.Runtime.Definitions["VISION"].ModelId);
     }
 
     [Fact]
@@ -79,6 +83,59 @@ public sealed class NamedModelConfigurationTests
             () => ModelConfigurationResolver.Resolve(configuration));
 
         Assert.Contains("unknown definition 'missing'", exception.Message);
+    }
+
+    [Fact]
+    public void Resolve_ImageProxy_RetainsNamedAssignment()
+    {
+        var configuration = Build(new Dictionary<string, string?>
+        {
+            ["Models:Definitions:main:Provider"] = "vllm",
+            ["Models:Definitions:main:ModelId"] = "qwen-text",
+            ["Models:Definitions:vision:Provider"] = "vllm",
+            ["Models:Definitions:vision:ModelId"] = "qwen-vl",
+            ["Models:Roles:Main"] = "main",
+            ["Models:Proxies:Image"] = "vision",
+        });
+
+        var result = ModelConfigurationResolver.Resolve(configuration);
+
+        Assert.Equal("vision", result.Runtime.Proxies.Image);
+        Assert.Equal("qwen-vl", result.Runtime.Definitions["vision"].ModelId);
+    }
+
+    [Fact]
+    public void Resolve_UnknownImageProxy_FailsLoudly()
+    {
+        var configuration = Build(new Dictionary<string, string?>
+        {
+            ["Models:Definitions:main:Provider"] = "vllm",
+            ["Models:Definitions:main:ModelId"] = "qwen-text",
+            ["Models:Roles:Main"] = "main",
+            ["Models:Proxies:Image"] = "missing",
+        });
+
+        var exception = Assert.Throws<ModelConfigurationException>(
+            () => ModelConfigurationResolver.Resolve(configuration));
+
+        Assert.Contains("Models:Proxies:Image", exception.Message);
+        Assert.Contains("unknown definition 'missing'", exception.Message);
+    }
+
+    [Fact]
+    public void Resolve_ProxyWithLegacyRoles_FailsLoudly()
+    {
+        var configuration = Build(new Dictionary<string, string?>
+        {
+            ["Models:Main:Provider"] = "vllm",
+            ["Models:Main:ModelId"] = "qwen-text",
+            ["Models:Proxies:Image"] = "vision",
+        });
+
+        var exception = Assert.Throws<ModelConfigurationException>(
+            () => ModelConfigurationResolver.Resolve(configuration));
+
+        Assert.Contains("mixes legacy", exception.Message);
     }
 
     private static IConfiguration Build(Dictionary<string, string?> values)

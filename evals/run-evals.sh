@@ -1009,6 +1009,13 @@ assert_skill_operations_diagnostics() {
     stdout_contains '\[tool:call\]'
 }
 
+assert_skill_image_proxy_configuration() {
+    daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_response_contains 'model set image-proxy' \
+        && stdout_response_contains 'Text.*Image' \
+        && stdout_no_skill_file_read_called
+}
+
 assert_skill_citation_search() {
     # Model should actually search when asked to search.
     stdout_contains '\[tool:call\] web_search'
@@ -1666,6 +1673,9 @@ run_all() {
         "Something is wrong with my session, can you diagnose it?" \
         "My session seems broken, help me fix it" \
         "Debug my Netclaw session"
+
+    run_case skill_image_proxy_configuration "knows the image proxy command and required modalities" \
+        "My main model accepts only text. How do I configure a smaller model to describe image attachments? Include the exact Netclaw command and required modalities."
 
     run_case skill_citation_search "performs web search when asked" \
         "Search the web for the latest Akka.NET release" \

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
@@ -59,6 +60,7 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
                 AudienceProfiles = TestSlackGatewayDeps.DefaultAudienceProfiles
             },
             TestSlackGatewayDeps.DefaultVisionCapableModel,
+            DisabledImageProxyAnalyzer.Instance,
             TestSlackGatewayDeps.NewTestPaths());
 
         return _channel;

@@ -16,6 +16,8 @@ public sealed class NamedModelConfiguration
         new(StringComparer.OrdinalIgnoreCase);
 
     public ModelRoleAssignments Roles { get; set; } = new();
+
+    public ModelProxyAssignments Proxies { get; set; } = new();
 }
 
 public sealed class ModelRoleAssignments
@@ -23,6 +25,11 @@ public sealed class ModelRoleAssignments
     public string Main { get; set; } = string.Empty;
     public string? Fallback { get; set; }
     public string? Compaction { get; set; }
+}
+
+public sealed class ModelProxyAssignments
+{
+    public string? Image { get; set; }
 }
 
 /// <summary>
@@ -38,7 +45,8 @@ public static class ModelConfigurationResolver
         var hasLegacy = LegacyRoles.Any(role => modelsSection.GetSection(role).Exists());
         var hasDefinitions = modelsSection.GetSection(nameof(NamedModelConfiguration.Definitions)).Exists();
         var hasRoles = modelsSection.GetSection(nameof(NamedModelConfiguration.Roles)).Exists();
-        var hasNamed = hasDefinitions || hasRoles;
+        var hasProxies = modelsSection.GetSection(nameof(NamedModelConfiguration.Proxies)).Exists();
+        var hasNamed = hasDefinitions || hasRoles || hasProxies;
 
         if (hasLegacy && hasNamed)
             throw new ModelConfigurationException(
@@ -47,9 +55,11 @@ public static class ModelConfigurationResolver
 
         if (!hasNamed)
         {
+            var legacySelection = modelsSection.Get<ModelSelection>() ?? new ModelSelection();
             return new ModelConfigurationResolution(
-                modelsSection.Get<ModelSelection>() ?? new ModelSelection(),
-                IsLegacy: hasLegacy);
+                legacySelection,
+                IsLegacy: hasLegacy,
+                Runtime: BuildLegacyRuntime(legacySelection));
         }
 
         if (!hasDefinitions || !hasRoles)
@@ -72,41 +82,47 @@ public static class ModelConfigurationResolver
 
         var selection = new ModelSelection
         {
-            Main = ResolveRequired(named, nameof(named.Roles.Main), named.Roles.Main),
-            Fallback = ResolveOptional(named, nameof(named.Roles.Fallback), named.Roles.Fallback),
-            Compaction = ResolveOptional(named, nameof(named.Roles.Compaction), named.Roles.Compaction),
+            Main = ResolveRequired(named, "Roles:Main", named.Roles.Main),
+            Fallback = ResolveOptional(named, "Roles:Fallback", named.Roles.Fallback),
+            Compaction = ResolveOptional(named, "Roles:Compaction", named.Roles.Compaction),
         };
 
-        return new ModelConfigurationResolution(selection, IsLegacy: false);
+        _ = ResolveOptional(named, "Proxies:Image", named.Proxies.Image);
+
+        return new ModelConfigurationResolution(
+            selection,
+            IsLegacy: false,
+            Runtime: BuildNamedRuntime(named));
     }
 
     public static ModelConfigurationResolution Resolve(IConfiguration configuration)
         => Resolve(configuration.GetSection("Models"));
 
     private static ModelReference ResolveRequired(
-        NamedModelConfiguration named, string role, string definitionName)
+        NamedModelConfiguration named, string assignmentPath, string definitionName)
     {
         if (string.IsNullOrWhiteSpace(definitionName))
-            throw new ModelConfigurationException($"Models:Roles:{role} must reference a model definition.");
+            throw new ModelConfigurationException(
+                $"Models:{assignmentPath} must reference a model definition.");
 
-        return ResolveDefinition(named, role, definitionName);
+        return ResolveDefinition(named, assignmentPath, definitionName);
     }
 
     private static ModelReference? ResolveOptional(
-        NamedModelConfiguration named, string role, string? definitionName)
+        NamedModelConfiguration named, string assignmentPath, string? definitionName)
         => string.IsNullOrWhiteSpace(definitionName)
             ? null
-            : ResolveDefinition(named, role, definitionName);
+            : ResolveDefinition(named, assignmentPath, definitionName);
 
     private static ModelReference ResolveDefinition(
-        NamedModelConfiguration named, string role, string definitionName)
+        NamedModelConfiguration named, string assignmentPath, string definitionName)
     {
         var match = named.Definitions.FirstOrDefault(pair =>
             string.Equals(pair.Key, definitionName, StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrEmpty(match.Key))
         {
             throw new ModelConfigurationException(
-                $"Models:Roles:{role} references unknown definition '{definitionName}'.");
+                $"Models:{assignmentPath} references unknown definition '{definitionName}'.");
         }
 
         return Clone(match.Value);
@@ -121,9 +137,56 @@ public static class ModelConfigurationResolver
         InputModalities = source.InputModalities,
         OutputModalities = source.OutputModalities,
     };
+
+    private static ModelRuntimeConfiguration BuildLegacyRuntime(ModelSelection selection)
+    {
+        var definitions = new Dictionary<string, ModelReference>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["main"] = Clone(selection.Main)
+        };
+        var roles = new ModelRoleAssignments { Main = "main" };
+
+        if (selection.Fallback is not null)
+        {
+            definitions["fallback"] = Clone(selection.Fallback);
+            roles.Fallback = "fallback";
+        }
+
+        if (selection.Compaction is not null)
+        {
+            definitions["compaction"] = Clone(selection.Compaction);
+            roles.Compaction = "compaction";
+        }
+
+        return new ModelRuntimeConfiguration(definitions, roles, new ModelProxyAssignments());
+    }
+
+    private static ModelRuntimeConfiguration BuildNamedRuntime(NamedModelConfiguration named)
+    {
+        var definitions = named.Definitions.ToDictionary(
+            pair => pair.Key,
+            pair => Clone(pair.Value),
+            StringComparer.OrdinalIgnoreCase);
+        var roles = new ModelRoleAssignments
+        {
+            Main = named.Roles.Main,
+            Fallback = named.Roles.Fallback,
+            Compaction = named.Roles.Compaction
+        };
+        var proxies = new ModelProxyAssignments { Image = named.Proxies.Image };
+        return new ModelRuntimeConfiguration(definitions, roles, proxies);
+    }
 }
 
-public sealed record ModelConfigurationResolution(ModelSelection Selection, bool IsLegacy);
+public sealed record ModelRuntimeConfiguration(
+    IReadOnlyDictionary<string, ModelReference> Definitions,
+    ModelRoleAssignments Roles,
+    ModelProxyAssignments Proxies);
+
+public sealed record ModelConfigurationResolution(
+    ModelSelection Selection,
+    bool IsLegacy,
+    ModelRuntimeConfiguration Runtime);
 
 /// <summary>
 /// Represents an invalid operator-authored model configuration that cannot be resolved safely.

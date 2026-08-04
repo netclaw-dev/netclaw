@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Mattermost;
@@ -46,6 +47,7 @@ public sealed class MattermostChannelHealthContractTests(ITestOutputHelper outpu
                 AudienceProfiles = TestMattermostGatewayDeps.DefaultAudienceProfiles
             },
             TestMattermostGatewayDeps.DefaultVisionCapableModel,
+            DisabledImageProxyAnalyzer.Instance,
             TestMattermostGatewayDeps.NewTestPaths());
     }
 

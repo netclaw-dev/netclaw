@@ -108,4 +108,5 @@ public sealed record DiscordGatewayDependencies(
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,
     HttpClient? HttpClient = null,
     Func<DiscordChannelId, DiscordGatewayDependencies, Props>? ConversationPropsFactory = null,
-    Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);
+    Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null,
+    bool ImageProxyEnabled = false);

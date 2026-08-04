@@ -61,6 +61,20 @@ internal static class ModelEntryWriter
         return roles.Remove(roleKey);
     }
 
+    internal static bool ClearImageProxy(Dictionary<string, object> modelsSection)
+    {
+        if (!modelsSection.ContainsKey("Definitions") && !modelsSection.ContainsKey("Roles"))
+            return false;
+        if (!modelsSection.TryGetValue("Proxies", out _))
+            return false;
+
+        var proxies = GetDictionary(modelsSection, "Proxies");
+        var removed = proxies.Remove("Image");
+        if (proxies.Count == 0)
+            modelsSection.Remove("Proxies");
+        return removed;
+    }
+
     /// <summary>
     /// Write a role's model entry into <paramref name="modelsSection"/> non-destructively.
     /// Two on-disk attributes are treated as operator-owned overrides that provider discovery
@@ -103,6 +117,58 @@ internal static class ModelEntryWriter
         DiscoveredModel? discovered)
     {
         var (definitions, roles) = EnsureNamedShape(modelsSection, roleKey);
+        WriteAssignment(
+            definitions,
+            roles,
+            roleKey,
+            provider,
+            modelId,
+            provenance,
+            contextWindow,
+            inputModalities,
+            outputModalities,
+            discovered);
+    }
+
+    internal static void WriteImageProxy(
+        Dictionary<string, object> modelsSection,
+        string provider,
+        string? modelId,
+        ModelDiscoverySource? provenance,
+        ValueOverride<int> contextWindow,
+        ValueOverride<ModelModality> inputModalities,
+        ValueOverride<ModelModality> outputModalities,
+        DiscoveredModel? discovered)
+    {
+        var (definitions, _) = EnsureNamedShape(modelsSection);
+        if (!modelsSection.TryGetValue("Proxies", out _))
+            modelsSection["Proxies"] = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var proxies = GetDictionary(modelsSection, "Proxies");
+        WriteAssignment(
+            definitions,
+            proxies,
+            "Image",
+            provider,
+            modelId,
+            provenance,
+            contextWindow,
+            inputModalities,
+            outputModalities,
+            discovered);
+    }
+
+    private static void WriteAssignment(
+        Dictionary<string, object> definitions,
+        Dictionary<string, object> assignments,
+        string assignmentKey,
+        string provider,
+        string? modelId,
+        ModelDiscoverySource? provenance,
+        ValueOverride<int> contextWindow,
+        ValueOverride<ModelModality> inputModalities,
+        ValueOverride<ModelModality> outputModalities,
+        DiscoveredModel? discovered)
+    {
         var definitionName = FindDefinition(definitions, provider, modelId)
                              ?? CreateDefinitionName(definitions, provider, modelId);
         var existing = ReadSameModelEntry(definitions, definitionName, provider, modelId);
@@ -126,13 +192,15 @@ internal static class ModelEntryWriter
 
         definitions[definitionName] = BuildModelEntry(
             provider, modelId, provenance, resolvedWindow, resolvedInput, resolvedOutput);
-        roles[roleKey] = definitionName;
+        assignments[assignmentKey] = definitionName;
     }
 
     private static (Dictionary<string, object> Definitions, Dictionary<string, object> Roles)
         EnsureNamedShape(Dictionary<string, object> modelsSection, string? overwrittenRole = null)
     {
-        var hasNamed = modelsSection.ContainsKey("Definitions") || modelsSection.ContainsKey("Roles");
+        var hasNamed = modelsSection.ContainsKey("Definitions")
+                       || modelsSection.ContainsKey("Roles")
+                       || modelsSection.ContainsKey("Proxies");
         var hasLegacy = modelsSection.Keys.Any(key =>
             key is "Main" or "Fallback" or "Compaction");
 

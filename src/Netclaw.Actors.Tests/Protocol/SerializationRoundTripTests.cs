@@ -70,6 +70,28 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void ImageProxyAnalysisRecorded_round_trips()
+    {
+        var original = new ImageProxyAnalysisRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            Analysis = new ImageProxyAnalysis
+            {
+                RelativePath = "photo.png",
+                DefinitionName = "vision",
+                ModelId = "qwen-vl",
+                PromptVersion = "image-description-v1",
+                Description = "A red status light.",
+                AnalyzedAtMs = 1234
+            }
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original, result);
+    }
+
+    [Fact]
     public void SerializableChatMessage_round_trips_user_message()
     {
         var original = new SerializableChatMessage

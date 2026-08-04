@@ -199,3 +199,151 @@ public class ModalityGateVisionTests : LlmSessionTestBase
         Assert.Equal(1, _fakeChatClient.CallCount);
     }
 }
+
+public class ModalityGateImageProxyTests : LlmSessionTestBase
+{
+    private readonly FakeChatClient _fakeChatClient = new();
+    private readonly FakeImageProxyAnalyzer _analyzer = new();
+
+    public ModalityGateImageProxyTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
+        services.AddSingleton<IImageProxyAnalyzer>(_analyzer);
+        services.AddSingleton(new ModelCapabilities
+        {
+            ModelId = "text-only-model",
+            ContextWindowTokens = 128_000,
+            InputModalities = ModelModality.Text,
+        });
+        services.AddSingleton(new SessionConfig
+        {
+            Tuning = new SessionTuning { TitleGenerationInterval = 0 }
+        });
+        services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
+            "You are a test assistant."));
+    }
+
+    [Fact]
+    public async Task Proxy_analysis_precedes_text_only_main_call()
+    {
+        _analyzer.MainCallCount = () => _fakeChatClient.CallCount;
+        var sessionId = new SessionId("test-channel/modality-image-proxy");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("modality-image-proxy-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "What is in this picture?",
+            MediaReferences =
+            [
+                new SerializableMediaReference
+                {
+                    RelativePath = "photo.png",
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
+                    Modality = (int)MediaModality.Image
+                }
+            ]
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, _analyzer.CallCount);
+        Assert.Equal(1, _fakeChatClient.CallCount);
+        var mainRequest = Assert.Single(_fakeChatClient.ReceivedMessages);
+        Assert.DoesNotContain(mainRequest.SelectMany(message => message.Contents),
+            content => content is Microsoft.Extensions.AI.DataContent);
+        Assert.Contains(mainRequest,
+            message => message.Text.Contains("A red status light.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Proxy_failure_stops_main_call()
+    {
+        _analyzer.NextException = new InvalidOperationException("proxy unavailable");
+        var sessionId = new SessionId("test-channel/modality-image-proxy-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("modality-image-proxy-failure-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "What is in this picture?",
+            MediaReferences =
+            [
+                new SerializableMediaReference
+                {
+                    RelativePath = "photo.png",
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
+                    Modality = (int)MediaModality.Image
+                }
+            ]
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        Assert.Contains("main model was not called", error.Message, StringComparison.Ordinal);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
+        Assert.Equal(1, _analyzer.CallCount);
+        Assert.Equal(0, _fakeChatClient.CallCount);
+    }
+
+    private sealed class FakeImageProxyAnalyzer : IImageProxyAnalyzer
+    {
+        public int CallCount { get; private set; }
+
+        public Func<int> MainCallCount { get; set; } = () => 0;
+
+        public Exception? NextException { get; set; }
+
+        public bool IsEnabled => true;
+
+        public Task<ImageProxyAnalysis> AnalyzeAsync(
+            SessionId sessionId,
+            SerializableMediaReference media,
+            string sessionsBasePath,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Assert.Equal(0, MainCallCount());
+            if (NextException is not null)
+                return Task.FromException<ImageProxyAnalysis>(NextException);
+            return Task.FromResult(new ImageProxyAnalysis
+            {
+                RelativePath = media.RelativePath,
+                DefinitionName = "vision",
+                ModelId = "qwen-vl",
+                PromptVersion = "image-description-v1",
+                Description = "A red status light.",
+                AnalyzedAtMs = 1234
+            });
+        }
+
+    }
+}

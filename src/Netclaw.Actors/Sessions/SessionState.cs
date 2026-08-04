@@ -84,6 +84,9 @@ public sealed record SessionState
     public ImmutableDictionary<string, AdoptedContextAuditRecord> AdoptedContextRecords { get; init; } =
         [];
 
+    public ImmutableDictionary<string, ImageProxyAnalysis> ImageProxyAnalyses { get; init; } =
+        ImmutableDictionary.Create<string, ImageProxyAnalysis>(StringComparer.Ordinal);
+
     /// <summary>
     /// In-memory best-effort dedup ledger for background-job-originated turns.
     /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
@@ -142,6 +145,11 @@ public sealed record SessionState
     {
         return this with { Title = evt.Title };
     }
+
+    public SessionState Apply(ImageProxyAnalysisRecorded evt) => this with
+    {
+        ImageProxyAnalyses = ImageProxyAnalyses.SetItem(evt.Analysis.RelativePath, evt.Analysis)
+    };
 
     public SessionState Apply(SessionBackgroundJobsReaped evt)
         => MarkAllBackgroundJobsReaped(evt.ReapedAtMs);
@@ -457,7 +465,9 @@ public sealed record SessionState
                             TimestampMs = message.Timestamp.ToUnixTimeMilliseconds(),
                             AuthorityAtInclusion = message.AuthorityAtInclusion
                         })]
-                })]
+                })],
+            ImageProxyAnalyses = [.. ImageProxyAnalyses.Values
+                .OrderBy(analysis => analysis.RelativePath, StringComparer.Ordinal)]
         };
     }
 
@@ -496,7 +506,10 @@ public sealed record SessionState
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
             ActiveBackgroundJobs = activeJobs,
-            AdoptedContextRecords = adoptedContextRecords
+            AdoptedContextRecords = adoptedContextRecords,
+            ImageProxyAnalyses = snapshot.ImageProxyAnalyses.ToImmutableDictionary(
+                analysis => analysis.RelativePath,
+                StringComparer.Ordinal)
         };
     }
 }

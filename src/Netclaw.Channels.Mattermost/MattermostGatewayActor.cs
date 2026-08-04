@@ -109,4 +109,5 @@ public sealed record MattermostGatewayDependencies(
     MattermostCallbackActionStore? CallbackActionStore = null,
     HttpClient? HttpClient = null,
     Func<MattermostChannelId, MattermostGatewayDependencies, Props>? ConversationPropsFactory = null,
-    Func<SessionId, MattermostChannelId, MattermostRootPostId, MattermostGatewayDependencies, Props>? SessionPropsFactory = null);
+    Func<SessionId, MattermostChannelId, MattermostRootPostId, MattermostGatewayDependencies, Props>? SessionPropsFactory = null,
+    bool ImageProxyEnabled = false);

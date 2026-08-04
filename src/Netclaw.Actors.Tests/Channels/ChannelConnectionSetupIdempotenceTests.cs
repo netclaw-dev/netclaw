@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
@@ -67,6 +68,7 @@ public sealed class ChannelConnectionSetupIdempotenceTests(ITestOutputHelper out
                 AudienceProfiles = TestDiscordGatewayDeps.DefaultAudienceProfiles
             },
             TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            DisabledImageProxyAnalyzer.Instance,
             TestDiscordGatewayDeps.NewTestPaths());
 
         var snapshot = new DiscordGatewaySnapshot(
@@ -111,6 +113,7 @@ public sealed class ChannelConnectionSetupIdempotenceTests(ITestOutputHelper out
                 AudienceProfiles = TestMattermostGatewayDeps.DefaultAudienceProfiles
             },
             TestMattermostGatewayDeps.DefaultVisionCapableModel,
+            DisabledImageProxyAnalyzer.Instance,
             TestMattermostGatewayDeps.NewTestPaths());
 
         var snapshot = new MattermostGatewaySnapshot(

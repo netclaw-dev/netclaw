@@ -102,6 +102,20 @@ message SessionTitleSetProto {
   int64 set_at_ms = 3;
 }
 
+message ImageProxyAnalysisProto {
+  string relative_path = 1;
+  string definition_name = 2;
+  string model_id = 3;
+  string prompt_version = 4;
+  string description = 5;
+  int64 analyzed_at_ms = 6;
+}
+
+message ImageProxyAnalysisRecordedProto {
+  SessionIdProto session_id = 1;
+  ImageProxyAnalysisProto analysis = 2;
+}
+
 message SessionCompactedProto {
   SessionIdProto session_id = 1;
   string summary = 2;
@@ -264,7 +278,7 @@ message SessionSnapshotProto {
   WorkingContextProto working_context = 6;
   repeated ActiveJobInfoProto active_background_jobs = 7;
   repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
-  reserved 9;
+  repeated ImageProxyAnalysisProto image_proxy_analyses = 9;
 }
 
 // ── Session state ──

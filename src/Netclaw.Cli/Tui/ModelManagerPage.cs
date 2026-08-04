@@ -122,7 +122,8 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         {
             FormatRoleItem("Main", models?.Main),
             FormatRoleItem("Fallback", models?.Fallback),
-            FormatRoleItem("Compaction", models?.Compaction)
+            FormatRoleItem("Compaction", models?.Compaction),
+            FormatRoleItem("ImageProxy", ViewModel.ImageProxy)
         };
 
         _roleList = Layouts.SelectionList(items)
@@ -149,7 +150,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 .WithForeground(Color.Gray))
             .WithChild(_roleList)
             .WithChild(new TextNode("").Height(1))
-            .WithChild(new TextNode("  [Enter] Assign model  [D] Discover models  [C] Clear optional role")
+            .WithChild(new TextNode("  [Enter] Assign model  [D] Discover models  [C] Clear optional role or proxy")
                 .WithForeground(Color.Gray));
     }
 

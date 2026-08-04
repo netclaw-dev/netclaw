@@ -46,6 +46,7 @@ internal static class NetclawProtoMapper
         PendingApprovalPromptTracked v => ToProto(v),
         PendingApprovalPromptCleared v => ToProto(v),
         MemoriesDistilledV2 v => ToProto(v),
+        ImageProxyAnalysisRecorded v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
 
@@ -220,6 +221,40 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         CompactedMessages = proto.CompactedMessages.Select(FromProto).ToArray()
     };
+
+    internal static Proto.ImageProxyAnalysisProto ToProto(ImageProxyAnalysis analysis) => new()
+    {
+        RelativePath = analysis.RelativePath,
+        DefinitionName = analysis.DefinitionName,
+        ModelId = analysis.ModelId,
+        PromptVersion = analysis.PromptVersion,
+        Description = analysis.Description,
+        AnalyzedAtMs = analysis.AnalyzedAtMs
+    };
+
+    internal static ImageProxyAnalysis FromProto(Proto.ImageProxyAnalysisProto proto) => new()
+    {
+        RelativePath = proto.RelativePath,
+        DefinitionName = proto.DefinitionName,
+        ModelId = proto.ModelId,
+        PromptVersion = proto.PromptVersion,
+        Description = proto.Description,
+        AnalyzedAtMs = proto.AnalyzedAtMs
+    };
+
+    internal static Proto.ImageProxyAnalysisRecordedProto ToProto(
+        ImageProxyAnalysisRecorded evt) => new()
+        {
+            SessionId = ToProto(evt.SessionId),
+            Analysis = ToProto(evt.Analysis)
+        };
+
+    internal static ImageProxyAnalysisRecorded FromProto(
+        Proto.ImageProxyAnalysisRecordedProto proto) => new()
+        {
+            SessionId = FromProto(proto.SessionId),
+            Analysis = FromProto(proto.Analysis)
+        };
 
     // ── Tool batch / approval events ──
 
@@ -473,6 +508,7 @@ internal static class NetclawProtoMapper
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
+        proto.ImageProxyAnalyses.AddRange(snap.ImageProxyAnalyses.Select(ToProto));
         return proto;
     }
 
@@ -486,7 +522,8 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
-        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray()
+        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
+        ImageProxyAnalyses = proto.ImageProxyAnalyses.Select(FromProto).ToArray()
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(
@@ -535,22 +572,22 @@ internal static class NetclawProtoMapper
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage
         ToAdoptedContextSnapshotMessage(SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage m) => new()
-    {
-        MessageId = m.MessageId,
-        SenderId = m.SenderId.Value,
-        TimestampMs = m.TimestampMs,
-        AuthorityAtInclusion = m.AuthorityAtInclusion
-    };
+        {
+            MessageId = m.MessageId,
+            SenderId = m.SenderId.Value,
+            TimestampMs = m.TimestampMs,
+            AuthorityAtInclusion = m.AuthorityAtInclusion
+        };
 
     private static SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage
         FromAdoptedContextSnapshotMessage(
             Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage proto) => new()
-    {
-        MessageId = proto.MessageId,
-        SenderId = new SenderId(proto.SenderId),
-        TimestampMs = proto.TimestampMs,
-        AuthorityAtInclusion = proto.AuthorityAtInclusion
-    };
+            {
+                MessageId = proto.MessageId,
+                SenderId = new SenderId(proto.SenderId),
+                TimestampMs = proto.TimestampMs,
+                AuthorityAtInclusion = proto.AuthorityAtInclusion
+            };
 
     // ── WorkingContext ──
 
@@ -714,21 +751,21 @@ internal static class NetclawProtoMapper
 
     private static Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto ToAdoptedMessageRecord(
         AdoptedContextRecorded.AdoptedMessageRecord m) => new()
-    {
-        MessageId = m.MessageId,
-        SenderId = m.SenderId.Value,
-        TimestampMs = m.TimestampMs,
-        AuthorityAtInclusion = m.AuthorityAtInclusion
-    };
+        {
+            MessageId = m.MessageId,
+            SenderId = m.SenderId.Value,
+            TimestampMs = m.TimestampMs,
+            AuthorityAtInclusion = m.AuthorityAtInclusion
+        };
 
     private static AdoptedContextRecorded.AdoptedMessageRecord FromAdoptedMessageRecord(
         Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto proto) => new()
-    {
-        MessageId = proto.MessageId,
-        SenderId = new SenderId(proto.SenderId),
-        TimestampMs = proto.TimestampMs,
-        AuthorityAtInclusion = proto.AuthorityAtInclusion
-    };
+        {
+            MessageId = proto.MessageId,
+            SenderId = new SenderId(proto.SenderId),
+            TimestampMs = proto.TimestampMs,
+            AuthorityAtInclusion = proto.AuthorityAtInclusion
+        };
 
     // ── CursorAdvanced ──
 
