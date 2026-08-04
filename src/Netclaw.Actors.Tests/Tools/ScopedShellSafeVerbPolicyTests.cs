@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -58,6 +59,9 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
 
     private static SafeVerbList VerbList(params string[] verbs)
         => SafeVerbList.FromVerbs(verbs);
+
+    private static IReadOnlyList<ApprovalCandidate> Candidates(params string[] verbs)
+        => verbs.Select(verb => new ApprovalCandidate(verb, Directory: null)).ToList();
 
     private ToolInvocationContext PersonalContext(string? projectDir = null, string? sessionDir = null)
         => TestToolExecutionContext.CreateBound("session-1", sessionDir ?? _sessionDir, new TestToolExecutionContextOptions
@@ -153,7 +157,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("grep", "cat"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(["grep", "git push"], _projectDir, ctx));
+        Assert.False(policy.AllShortCircuit(Candidates("grep", "git push"), _projectDir, ctx));
     }
 
     [Fact]
@@ -162,7 +166,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("grep", "cat", "wc"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.True(policy.AllShortCircuit(["grep", "cat", "wc"], _projectDir, ctx));
+        Assert.True(policy.AllShortCircuit(Candidates("grep", "cat", "wc"), _projectDir, ctx));
     }
 
     [Fact]
@@ -206,6 +210,16 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("date"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(["date", "git push origin main"], _projectDir, ctx));
+        Assert.False(policy.AllShortCircuit(Candidates("date", "git push origin main"), _projectDir, ctx));
+    }
+
+    [Fact]
+    public void Candidate_path_outside_safe_spaces_falls_through_to_prompt()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var candidates = new[] { new ApprovalCandidate("cat", _outsideDir) };
+
+        Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
     }
 }

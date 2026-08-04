@@ -856,9 +856,8 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // so cd attribution must NOT attach to them — both because the
         // attribution is semantically meaningless for these verbs and
         // because ApprovalPatternMatching.IsPureSideEffect treats them
-        // as unconditional pass when Directory is null (the redirect
-        // detector still kicks in if a literal `> /tmp/log` path arg
-        // is present on the clause).
+        // as an unconditional pass when Directory is null. A redirect
+        // produces an additional directory candidate.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
@@ -900,11 +899,10 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void ExtractCandidates_collapses_pipe_chain_into_single_candidate()
+    public void ExtractCandidates_checks_each_clause_in_one_pipe_approval_unit()
     {
-        // Pipes stay inside one approval unit — approving cat /etc/hosts
-        // | wc -l shouldn't prompt twice. Compare with && which DOES
-        // produce independent units.
+        // The prompt keeps a pipeline in one approval unit. Authorization
+        // still checks each clause so an unsafe tail cannot hide.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
@@ -912,9 +910,27 @@ public sealed class ShellApprovalMatcherPathExtractionTests
                 ["Command"] = "cat /etc/hosts | wc -l"
             });
 
-        Assert.Single(candidates);
-        Assert.Equal("cat", candidates[0].Verb);
-        Assert.Equal("/etc/hosts", candidates[0].Directory);  // no extension → no file-parent
+        Assert.Equal(2, candidates.Count);
+        Assert.Contains(candidates, candidate =>
+            candidate.Verb == "cat" && candidate.Directory == "/etc/hosts");
+        Assert.Contains(candidates, candidate =>
+            candidate.Verb == "wc" && candidate.Directory is null);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_uses_redirect_target_and_invocation_working_directory()
+    {
+        var workingDirectory = Path.Combine(Path.GetTempPath(), $"netclaw-redirect-{Guid.NewGuid():N}");
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "echo hello > result.txt",
+                ["WorkingDirectory"] = workingDirectory
+            });
+
+        Assert.Contains(candidates, candidate =>
+            candidate.Verb == "echo" && candidate.Directory == workingDirectory);
     }
 
     [Fact]

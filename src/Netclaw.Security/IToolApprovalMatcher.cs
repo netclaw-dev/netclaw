@@ -14,10 +14,10 @@ namespace Netclaw.Security;
 /// <summary>
 /// One approval candidate extracted from a tool invocation. The verb is the
 /// command head plus subcommand chain (e.g., <c>find</c>, <c>git status</c>).
-/// The directory is the first path-like positional argument with the
-/// file-parent rule applied — when present it overrides the resolved cwd as
-/// the candidate's effective directory in the approval matcher; when null
-/// the matcher falls back to the spawned process's cwd.
+/// The directory identifies a path operand, a redirect parent, or an inherited
+/// shell directory. A null directory uses the spawned process cwd.
+/// One shell clause can produce multiple candidates when it accesses multiple
+/// authorization scopes.
 /// </summary>
 public sealed record ApprovalCandidate(string Verb, string? Directory);
 
@@ -65,11 +65,9 @@ public interface IToolApprovalMatcher
 
     /// <summary>
     /// Returns the candidate <c>(verb, directory)</c> pairs for this tool
-    /// invocation. The directory half is the first path-like positional
-    /// argument extracted from each clause (with the file-parent rule
-    /// applied), or null when the clause has no path argument. The matcher
-    /// SHALL use this directory as the candidate's effective directory,
-    /// falling back to <see cref="ToolExecutionContext.Cwd"/> when null.
+    /// invocation. A shell clause can emit candidates for its path operand,
+    /// redirect targets, and inherited directory. A null directory uses
+    /// <see cref="ToolExecutionContext.Cwd"/>.
     /// </summary>
     IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments);
 
@@ -139,7 +137,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
         {
-            foreach (var unit in ExtractApprovalUnitsViaBashParser(command))
+            foreach (var unit in ExtractApprovalUnitsViaBashParser(command, workingDirectory))
             {
                 var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
                 if (!string.IsNullOrEmpty(normalized))
@@ -178,7 +176,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // when the clause itself has no anchored path arg. Windows keeps
         // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
-            return ExtractCandidatesViaBashParser(command);
+            return ExtractCandidatesViaBashParser(command, GetWorkingDirectory(arguments));
 
         var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
@@ -205,11 +203,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// pattern/candidate list (messy semantics — Once/Deny prompt only) or
     /// the flattened raw command for display.
     /// </summary>
-    private static ShellSyntaxTree.ParsedCommand? TryParseCommand(string command)
+    private static ShellSyntaxTree.ParsedCommand? TryParseCommand(
+        string command,
+        string? workingDirectory = null)
     {
         try
         {
-            var result = Parser.Parse(command);
+            var parser = string.IsNullOrWhiteSpace(workingDirectory)
+                ? Parser
+                : new ShellSyntaxTree.BashParser(
+                    new ShellSyntaxTree.BashParserOptions { WorkingDirectory = workingDirectory });
+            var result = parser.Parse(command);
             return result.IsUnparseable || result.Clauses.Count == 0 ? null : result;
         }
         catch
@@ -218,31 +222,21 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
     }
 
-    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(string command)
+    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(
+        string command,
+        string? workingDirectory)
     {
-        var result = TryParseCommand(command);
+        var result = TryParseCommand(command, workingDirectory);
         if (result is null)
             return [];
 
-        // Group consecutive Pipe clauses into a single approval unit so
-        // `cat /etc/hosts | wc -l` stays one decision rather than two.
-        // AndIf / OrIf / Sequence and the leading None-operator clause each
-        // start a fresh group.
+        // The prompt groups a pipe as one approval unit. Authorization still
+        // checks each clause so an unsafe tail cannot hide behind a safe head.
         var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
-        ShellSyntaxTree.Clause? groupHead = null;
 
         foreach (var clause in result.Clauses)
         {
-            if (clause.Operator != ShellSyntaxTree.CompoundOperator.Pipe)
-                groupHead = clause;
-
-            if (groupHead is null)
-                continue;
-
-            if (!ReferenceEquals(clause, groupHead))
-                continue;  // pipe-tail clauses fold into the group head
-
             // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds
             // lowercase-leading value tokens into the verb chain (`git tag
             // v0.4.2`, `git show aa211dcb`, `git checkout feature2`), while
@@ -258,26 +252,24 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrEmpty(verb))
                 continue;
 
-            // Side-effect verbs (echo, printf, :, true, false) don't
-            // operate on the filesystem, so inheriting the cd target
-            // would (a) break ApprovalPatternMatching.IsPureSideEffect's
-            // null-directory invariant and (b) attach a misleading scope
-            // to a verb that ignores cwd. Their candidates remain
-            // directory-less; redirects (echo X > /tmp/log) still
-            // surface their target via the explicit-path scan above
-            // when BashParser exposes the redirect arg.
             var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
-            var directory = ResolveClauseDirectory(clause, isSideEffectVerb);
-            var key = (verb.ToLowerInvariant(), directory);
-            if (seen.Add(key))
-                candidates.Add(new ApprovalCandidate(verb, directory));
+            foreach (var directory in ResolveClauseDirectories(clause, isSideEffectVerb))
+            {
+                var key = (verb.ToLowerInvariant(), directory);
+                if (seen.Add(key))
+                    candidates.Add(new ApprovalCandidate(verb, directory));
+            }
         }
 
         return candidates;
     }
 
-    private static string? ResolveClauseDirectory(ShellSyntaxTree.Clause clause, bool isSideEffectVerb)
+    private static IReadOnlyList<string?> ResolveClauseDirectories(
+        ShellSyntaxTree.Clause clause,
+        bool isSideEffectVerb)
     {
+        var directories = new List<string?>();
+
         // First explicit path arg wins — that's the candidate's own
         // operand, e.g. `dotnet test /home/user/repos/Foo`. Only the
         // anchored-path predicate from the legacy tokenizer counts (/, ~/,
@@ -305,21 +297,51 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (ShellTokenizer.IsPathToken(raw))
             {
                 var canonical = !string.IsNullOrEmpty(arg.Resolved) ? arg.Resolved : raw;
-                return ShellTokenizer.ApplyFileParentRule(canonical);
+                directories.Add(ShellTokenizer.ApplyFileParentRule(canonical));
+                break;
             }
         }
 
-        // Side-effect verbs ignore cd attribution — see caller's comment
-        // on why (null-directory invariant in IsPureSideEffect, and these
-        // verbs don't operate on the filesystem anyway).
-        if (isSideEffectVerb)
-            return null;
+        if (directories.Count == 0)
+        {
+            // A side-effect verb ignores cwd. Other verbs inherit a prior cd.
+            var cwdAttribution = isSideEffectVerb
+                ? null
+                : clause.Args.FirstOrDefault(a => a.IsCwdAttribution)?.Resolved;
+            directories.Add(cwdAttribution);
+        }
 
-        // No explicit path → inherit the cd-attributed cwd from any
-        // preceding `cd X` in this compound (or in a wrapping `bash -c
-        // "..."` invocation; the parser flattens that).
-        var cwdAttribution = clause.Args.FirstOrDefault(a => a.IsCwdAttribution);
-        return cwdAttribution?.Resolved;
+        foreach (var redirect in clause.Redirects)
+        {
+            var directory = ResolveRedirectDirectory(redirect);
+            if (directory is not null)
+                directories.Add(directory);
+        }
+
+        return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static string? ResolveRedirectDirectory(ShellSyntaxTree.Redirect redirect)
+    {
+        if (string.IsNullOrWhiteSpace(redirect.Target)
+            || IsHeredocRedirect(redirect)
+            || redirect.Target.StartsWith('&'))
+        {
+            return null;
+        }
+
+        // A dynamic target must still block an automatic side-effect grant.
+        if (redirect.IsDynamicSkip)
+            return redirect.Target;
+
+        try
+        {
+            return Path.GetDirectoryName(redirect.Target) ?? redirect.Target;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return redirect.Target;
+        }
     }
 
     /// <summary>
@@ -330,7 +352,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// commands — mirroring the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
     /// empty-result contract so the prompt builder offers only Once/Deny.
     /// </summary>
-    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashParser(string command)
+    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashParser(
+        string command,
+        string? workingDirectory)
     {
         // Messy commands (control-flow keywords, unbalanced brackets) cannot
         // be cleanly decomposed into approval units; mirror the legacy
@@ -338,7 +362,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (ShellTokenizer.IsMessyCompoundCommand(command))
             return [];
 
-        var result = TryParseCommand(command);
+        var result = TryParseCommand(command, workingDirectory);
         if (result is null)
             return [];
 
