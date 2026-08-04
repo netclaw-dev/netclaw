@@ -110,12 +110,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         var countingApprovalService = new CountingApprovalService(approvalService);
         var config = CreateConfig();
+        var environment = testCase.Grammar switch
+        {
+            ShellGrammar.Bash => ShellExecutionEnvironment.Bash(),
+            ShellGrammar.PowerShell => ShellExecutionEnvironment.PowerShell(),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(testCase), testCase.Grammar, "Unknown shell grammar.")
+        };
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy(ShellExecutionEnvironment.Bash()));
+            new ShellCommandPolicy(environment));
 
         var policy = new ToolAccessPolicy(
             config,
@@ -124,7 +131,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            shellCommandPolicy: new ShellCommandPolicy(ShellExecutionEnvironment.Bash()),
+            shellCommandPolicy: new ShellCommandPolicy(environment),
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),

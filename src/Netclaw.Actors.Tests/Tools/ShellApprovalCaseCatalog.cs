@@ -6,6 +6,7 @@
 using System.Collections.Frozen;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -192,6 +193,7 @@ internal sealed record ExpectedApproval(
 
 internal sealed record ShellApprovalCase(
     string Id,
+    ShellGrammar Grammar,
     ShellApprovalInvocation Invocation,
     ApprovalState Approvals,
     ExpectedApproval Expected);
@@ -888,7 +890,7 @@ public static class ShellApprovalCases
         ShellApprovalInvocation invocation,
         ApprovalState approvals,
         ExpectedApproval expected)
-        => new(id, invocation, approvals, expected);
+        => new(id, ShellGrammar.Bash, invocation, approvals, expected);
 
     private static ShellApprovalInvocation Bash(
         string command,

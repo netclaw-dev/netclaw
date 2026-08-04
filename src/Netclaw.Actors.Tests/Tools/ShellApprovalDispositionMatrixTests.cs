@@ -37,6 +37,34 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     [Fact]
     public Task Shell_approval_cases_match_review_table()
         => Verifier.Verify(ShellApprovalCases.RenderReviewTable(), extension: "md");
+
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "This theory defines PowerShell authorization behavior on the Windows host.")]
+    [Theory(SkipUnless = nameof(IsWindows), Skip = "The PowerShell matrix defines Windows authorization behavior.")]
+    [MemberData(nameof(PowerShellApprovalCases.Rows), MemberType = typeof(PowerShellApprovalCases))]
+    public async Task PowerShell_approval_contract(string caseId)
+    {
+        var testCase = PowerShellApprovalCases.Get(caseId);
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+
+        var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(testCase.Expected.Outcome, observed.Outcome);
+        Assert.Equal(testCase.Expected.AllowReason, observed.AllowReason);
+        Assert.Equal(testCase.Expected.DenyReason, observed.DenyReason);
+        Assert.Equal(testCase.Expected.Candidates, observed.CandidateVerbs);
+        Assert.Equal(testCase.Expected.IsMessy, observed.IsMessy);
+        Assert.Equal(testCase.Expected.ApprovalChecks, harness.ApprovalService.CheckCount);
+        Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
+    }
+
+    [Fact]
+    public Task PowerShell_approval_cases_match_review_table()
+        => Verifier.Verify(PowerShellApprovalCases.RenderReviewTable(), extension: "md");
 }
 
 /// <summary>
