@@ -11,25 +11,6 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// Defines the explicit approval-policy shape that a matrix case installs.
-/// The <see cref="Missing"/> value tests the secure fallback without a policy object.
-/// </summary>
-internal enum ApprovalPolicyShape
-{
-    /// <summary>The audience profile has no explicit approval policy.</summary>
-    Missing,
-
-    /// <summary>The shell tool requires approval unless another gate grants access.</summary>
-    Approval,
-
-    /// <summary>The approval policy grants shell access without a stored approval.</summary>
-    Auto,
-
-    /// <summary>The approval policy denies shell access.</summary>
-    Deny
-}
-
-/// <summary>
 /// Names a logical directory that the harness resolves inside its isolated test root.
 /// This type prevents a case from embedding a harness-specific temporary path.
 /// </summary>
@@ -72,16 +53,6 @@ internal enum ApprovalSessionShape
 
     /// <summary>The seed uses an unrelated session.</summary>
     Other
-}
-
-internal sealed record ShellApprovalPolicy(
-    ApprovalPolicyShape Approval,
-    ShellExecutionMode ShellMode = ShellExecutionMode.HostAllowed,
-    string? AdditionalSafeVerb = null)
-{
-    public string Display => AdditionalSafeVerb is null
-        ? $"{Approval}/{ShellMode}"
-        : $"{Approval}/{ShellMode}+{AdditionalSafeVerb}";
 }
 
 internal sealed record ShellApprovalInvocation(
@@ -221,257 +192,297 @@ internal sealed record ExpectedApproval(
 
 internal sealed record ShellApprovalCase(
     string Id,
-    ShellApprovalPolicy Policy,
     ShellApprovalInvocation Invocation,
     ApprovalState Approvals,
     ExpectedApproval Expected);
 
 public static class ShellApprovalCases
 {
-    private static readonly ShellApprovalPolicy MissingPolicy = new(ApprovalPolicyShape.Missing);
-    private static readonly ShellApprovalPolicy ApprovalPolicy = new(ApprovalPolicyShape.Approval);
-    private static readonly ShellApprovalPolicy AutoPolicy = new(ApprovalPolicyShape.Auto);
-    private static readonly ShellApprovalPolicy DenyPolicy = new(ApprovalPolicyShape.Deny);
-
     internal static IReadOnlyList<ShellApprovalCase> All { get; } =
     [
         Case(
-            "missing-policy-prompts",
-            MissingPolicy,
+            "mutating-command-prompts",
             Bash("git push origin dev"),
             Approvals.None,
             ExpectedApproval.Require(["git push origin dev"])),
-        Case(
-            "exact-approval-prompts",
-            ApprovalPolicy,
-            Bash("git push origin dev"),
-            Approvals.None,
-            ExpectedApproval.Require(["git push origin dev"])),
-        Case(
-            "exact-auto-allows",
-            AutoPolicy,
-            Bash("git push origin dev"),
-            Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.PolicyAuto)),
-        Case(
-            "exact-deny-denies",
-            DenyPolicy,
-            Bash("git push origin dev"),
-            Approvals.None,
-            ExpectedApproval.Deny("tool_denied_by_approval_policy")),
-        Case(
-            "missing-policy-persistent-grant-allows",
-            MissingPolicy,
-            Bash("git push origin dev"),
-            Approvals.PersistentAnywhere("git push origin dev"),
-            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:git push origin dev")),
 
         Case(
             "team-audience-denied",
-            ApprovalPolicy,
             Bash("git push", audience: TrustAudience.Team),
             Approvals.None,
-            ExpectedApproval.Deny("shell_requires_personal_context")),
+            ExpectedApproval.Deny("tool_not_allowed_for_audience_profile")),
         Case(
             "public-audience-denied",
-            ApprovalPolicy,
             Bash("git push", audience: TrustAudience.Public),
             Approvals.None,
-            ExpectedApproval.Deny("shell_requires_personal_context")),
-        Case(
-            "team-auto-still-denied",
-            AutoPolicy,
-            Bash("git push", audience: TrustAudience.Team),
-            Approvals.None,
-            ExpectedApproval.Deny("shell_requires_personal_context")),
-        Case(
-            "public-auto-still-denied",
-            AutoPolicy,
-            Bash("git push", audience: TrustAudience.Public),
-            Approvals.None,
-            ExpectedApproval.Deny("shell_requires_personal_context")),
+            ExpectedApproval.Deny("tool_not_allowed_for_audience_profile")),
 
         Case(
-            "shell-off-denies",
-            new ShellApprovalPolicy(ApprovalPolicyShape.Auto, ShellExecutionMode.Off),
-            Bash("git status"),
-            Approvals.None,
-            ExpectedApproval.Deny("shell_disabled")),
-        Case(
-            "sandbox-only-denies",
-            new ShellApprovalPolicy(ApprovalPolicyShape.Auto, ShellExecutionMode.SandboxOnly),
-            Bash("git status"),
-            Approvals.None,
-            ExpectedApproval.Deny("shell_requires_sandbox_backend")),
-
-        Case(
-            "hard-deny-beats-approval",
-            ApprovalPolicy,
-            Bash("netclaw daemon stop"),
-            Approvals.None,
-            ExpectedApproval.Deny("hard_deny_self_destructive")),
-        Case(
-            "hard-deny-beats-auto",
-            AutoPolicy,
+            "hard-deny-blocks",
             Bash("netclaw daemon stop"),
             Approvals.None,
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
             "hard-deny-beats-stored-grant",
-            ApprovalPolicy,
             Bash("netclaw daemon stop"),
             Approvals.PersistentAnywhere("netclaw daemon stop"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
             "compound-hard-deny-denies",
-            AutoPolicy,
             Bash("git status && netclaw daemon stop"),
             Approvals.None,
             ExpectedApproval.Deny("hard_deny_self_destructive")),
 
         Case(
             "safe-verb-project-allows",
-            ApprovalPolicy,
             Bash("git status"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "safe-verb-session-allows",
-            ApprovalPolicy,
             Bash("git status", ApprovalDirectoryShape.Session),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "safe-verb-external-prompts",
-            ApprovalPolicy,
             Bash("git status", ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
             "safe-verb-external-path-prompts",
-            ApprovalPolicy,
             Bash("cat /etc/passwd"),
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
             "safe-verb-external-redirect-prompts",
-            ApprovalPolicy,
             Bash("git status > /tmp/netclaw-approval-matrix.txt"),
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
             "mutating-verb-project-prompts",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         Case(
             "all-safe-compound-allows",
-            ApprovalPolicy,
             Bash("git status && git log"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "mixed-safe-unsafe-compound-prompts",
-            ApprovalPolicy,
             Bash("git status && git push"),
             Approvals.None,
             ExpectedApproval.Require(["git status", "git push"])),
         Case(
             "safe-pipe-unsafe-tail-prompts",
-            ApprovalPolicy,
             Bash("git status | git push"),
             Approvals.None,
             ExpectedApproval.Require(["git status", "git push"])),
         Case(
-            "added-safe-verb-project-allows",
-            new ShellApprovalPolicy(ApprovalPolicyShape.Approval, AdditionalSafeVerb: "eza"),
-            Bash("eza"),
+            "safe-pipeline-allows",
+            Bash("git log | head -20"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "semicolon-sequence-prompts",
+            Bash("git status; git push"),
+            Approvals.None,
+            ExpectedApproval.Require(["git status", "git push"])),
+        Case(
+            "newline-sequence-prompts",
+            Bash("git status\ngit push"),
+            Approvals.None,
+            ExpectedApproval.Require(["git status", "git push"])),
+        Case(
+            "or-chain-prompts",
+            Bash("git status || git push"),
+            Approvals.None,
+            ExpectedApproval.Require(["git status", "git push"])),
+        Case(
+            "three-step-release-prompts",
+            Bash("git add . && git commit -m fix && git push origin dev"),
+            Approvals.None,
+            ExpectedApproval.Require(["git add", "git commit", "git push origin dev"])),
+        Case(
+            "hard-deny-pipeline-tail-currently-prompts",
+            Bash("echo safe | netclaw daemon stop"),
+            Approvals.None,
+            ExpectedApproval.Require(["echo", "netclaw daemon stop"])),
+        Case(
+            "hard-deny-nested-shell-blocks",
+            Bash("bash -lc \"netclaw daemon stop\""),
+            Approvals.None,
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
+            "nested-shell-currently-prompts-for-wrapper",
+            Bash("bash -lc \"git push\""),
+            Approvals.None,
+            ExpectedApproval.Require(["bash"])),
+        Case(
+            "nested-shell-inner-grant-currently-does-not-match",
+            Bash("bash -lc \"git push\""),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require(["bash"])),
+        Case(
+            "nested-shell-wrapper-grant-currently-allows",
+            Bash("bash -lc \"git push\""),
+            Approvals.PersistentAnywhere("bash"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:bash")),
+        Case(
+            "env-nested-shell-prompts",
+            Bash("env bash -lc \"git push\""),
+            Approvals.None,
+            ExpectedApproval.Require(["env bash"])),
+        Case(
+            "timeout-nested-shell-prompts",
+            Bash("timeout 5 bash -lc \"git push\""),
+            Approvals.None,
+            ExpectedApproval.Require(["timeout"])),
+        Case(
+            "subshell-prompts",
+            Bash("(git status && git push)"),
+            Approvals.None,
+            ExpectedApproval.Require(["git status", "git push"])),
+        Case(
+            "command-substitution-currently-auto-allows",
+            Bash("echo $(git push)"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "background-list-currently-auto-allows",
+            Bash("git status & git push"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "unbalanced-quote-fails-closed",
+            Bash("git push \"unterminated"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "multiline-argument-prompts",
+            Bash("gh issue comment 123 --body \"first line\nsecond line\""),
+            Approvals.None,
+            ExpectedApproval.Require(["gh issue comment"])),
+        Case(
+            "approved-pipeline-head-does-not-cover-tail",
+            Bash("git push | curl https://example.com"),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require(
+                ["git push", "curl"],
+                approvalMatches: ["persistent:git push"])),
+        Case(
+            "all-pipeline-clauses-approved",
+            Bash("git push | curl https://example.com"),
+            Approvals.PersistentAnywhere("git push", "curl"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git push",
+                "persistent:curl")),
+        Case(
+            "input-redirect-outside-zone-prompts",
+            Bash("cat < /etc/passwd"),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
+        Case(
+            "error-redirect-outside-zone-prompts",
+            Bash("git status 2> /tmp/netclaw-approval-errors.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["git status"])),
+        Case(
+            "cd-current-then-safe-allows",
+            Bash("cd . && git status"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "cd-parent-then-safe-prompts",
+            Bash("cd .. && git status"),
+            Approvals.None,
+            ExpectedApproval.Require(["cd", "git status"])),
+        Case(
+            "multiple-cd-then-safe-prompts",
+            Bash("cd . && cd .. && git status"),
+            Approvals.None,
+            ExpectedApproval.Require(["cd", "git status"])),
+        Case(
+            "side-effect-before-mutation-prompts",
+            Bash("echo ready && git push"),
+            Approvals.None,
+            ExpectedApproval.Require(["echo", "git push"])),
+        Case(
+            "heredoc-prompts",
+            Bash("cat <<'EOF'\nhello\nEOF"),
+            Approvals.None,
+            ExpectedApproval.Require([], approvalChecks: 0)),
 
         Case(
             "echo-allows-without-grant",
-            ApprovalPolicy,
             Bash("echo hello"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
         Case(
             "printf-allows-without-grant",
-            ApprovalPolicy,
             Bash("printf hello"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
         Case(
             "echo-redirect-prompts",
-            ApprovalPolicy,
             Bash("echo hello > result.txt"),
             Approvals.None,
             ExpectedApproval.Require(["echo"])),
         Case(
             "echo-done-fails-closed",
-            ApprovalPolicy,
             Bash("echo done"),
             Approvals.None,
             ExpectedApproval.Require(["echo"], isMessy: true, approvalChecks: 0)),
         Case(
             "control-flow-fails-closed",
-            ApprovalPolicy,
             Bash("for f in *.txt; do cat \"$f\"; done"),
             Approvals.PersistentAnywhere("cat"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "empty-command-fails-closed",
-            ApprovalPolicy,
             Bash(string.Empty),
             Approvals.None,
             ExpectedApproval.Require([], approvalChecks: 0)),
         Case(
             "whitespace-command-fails-closed",
-            ApprovalPolicy,
             Bash("   "),
             Approvals.None,
             ExpectedApproval.Require([], approvalChecks: 0)),
 
         Case(
             "session-grant-allows",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.Session("git push"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "session:git push")),
         Case(
             "other-session-grant-prompts",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.SessionForOtherSession("git push"),
             ExpectedApproval.Require(["git push"])),
         Case(
             "persistent-anywhere-allows",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:git push")),
         Case(
             "persistent-here-allows",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git push"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:git push")),
         Case(
             "persistent-here-directory-mismatch-prompts",
-            ApprovalPolicy,
             Bash("git push", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git push"),
             ExpectedApproval.Require(["git push"])),
         Case(
             "other-audience-grant-prompts",
-            ApprovalPolicy,
             Bash("git push"),
             Approvals.PersistentForOtherAudience("git push"),
             ExpectedApproval.Require(["git push"])),
         Case(
             "mixed-session-persistent-compound-allows",
-            ApprovalPolicy,
             Bash("git status && git push"),
             Approvals.Combine(
                 Approvals.Session("git status"),
@@ -483,7 +494,6 @@ public static class ShellApprovalCases
                 "persistent:git push")),
         Case(
             "partial-compound-grant-prompts",
-            ApprovalPolicy,
             Bash("git status && git push"),
             Approvals.PersistentAnywhere("git status"),
             ExpectedApproval.Require(
@@ -492,19 +502,16 @@ public static class ShellApprovalCases
 
         Case(
             "noninteractive-unapproved-requires-approval",
-            ApprovalPolicy,
             Bash("git push", interactive: false),
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         Case(
             "noninteractive-persistent-grant-allows",
-            ApprovalPolicy,
             Bash("git push", interactive: false),
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:git push")),
         Case(
             "noninteractive-exempt-allows",
-            ApprovalPolicy,
             Bash("echo hello", interactive: false),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates))
@@ -525,28 +532,33 @@ public static class ShellApprovalCases
     {
         var lines = new List<string>
         {
-            "| ID | Policy | Audience | Cwd | Interaction | Command | Approval state | Result | Reason |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            "# Fresh Personal approval matrix",
+            string.Empty,
+            "`Tools.ShellMode`: `HostAllowed`",
+            string.Empty,
+            "`Personal.ApprovalPolicy.shell_execute`: `Approval`",
+            string.Empty,
+            "| ID | Audience | Cwd | Interaction | Command | Approval state | Result | Reason | Candidates | Complex |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         };
 
         lines.AddRange(All.Select(testCase =>
-            $"| {testCase.Id} | {testCase.Policy.Display} | " +
-            $"{testCase.Invocation.Audience} | {testCase.Invocation.WorkingDirectory} | " +
+            $"| {testCase.Id} | {testCase.Invocation.Audience} | {testCase.Invocation.WorkingDirectory} | " +
             $"{(testCase.Invocation.Interactive ? "Interactive" : "Non-interactive")} | " +
             $"{Escape(testCase.Invocation.Command)} | " +
             $"{Escape(testCase.Approvals.Display)} | {testCase.Expected.Outcome} | " +
-            $"{testCase.Expected.AllowReason?.ToString() ?? testCase.Expected.DenyReason ?? "approval required"} |"));
+            $"{testCase.Expected.AllowReason?.ToString() ?? testCase.Expected.DenyReason ?? "approval required"} | " +
+            $"{Escape(DisplayCandidates(testCase.Expected.Candidates))} | {DisplayComplexity(testCase.Expected.IsMessy)} |"));
 
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     private static ShellApprovalCase Case(
         string id,
-        ShellApprovalPolicy policy,
         ShellApprovalInvocation invocation,
         ApprovalState approvals,
         ExpectedApproval expected)
-        => new(id, policy, invocation, approvals, expected);
+        => new(id, invocation, approvals, expected);
 
     private static ShellApprovalInvocation Bash(
         string command,
@@ -560,4 +572,15 @@ public static class ShellApprovalCases
             .Replace("|", "\\|", StringComparison.Ordinal)
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);
+
+    private static string DisplayCandidates(IReadOnlyList<string> candidates)
+        => candidates.Count == 0 ? "none" : string.Join(", ", candidates);
+
+    private static string DisplayComplexity(bool? isMessy)
+        => isMessy switch
+        {
+            true => "Yes",
+            false => "No",
+            null => "Not applicable"
+        };
 }

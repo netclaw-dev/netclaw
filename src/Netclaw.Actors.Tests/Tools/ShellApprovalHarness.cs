@@ -109,7 +109,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         }
 
         var countingApprovalService = new CountingApprovalService(approvalService);
-        var config = CreateConfig(testCase);
+        var config = CreateConfig();
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
@@ -117,9 +117,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             new ToolPathPolicy([]),
             new ShellCommandPolicy());
 
-        var safeVerbs = testCase.Policy.AdditionalSafeVerb is null
-            ? SafeVerbLoader.Load()
-            : SafeVerbList.FromVerbs([testCase.Policy.AdditionalSafeVerb]);
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(
@@ -131,7 +128,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
-            safeVerbs: safeVerbs);
+            safeVerbs: SafeVerbLoader.Load());
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 
         var workingDirectory = ResolveDirectory(
@@ -187,38 +184,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Directory.Delete(_rootDirectory, recursive: true);
     }
 
-    private static ToolConfig CreateConfig(ShellApprovalCase testCase)
-    {
-        var config = new ToolConfig { ShellMode = testCase.Policy.ShellMode };
-        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(
-            config.AudienceProfiles,
-            testCase.Invocation.Audience);
-
-        if (!profile.AllowedTools.Contains(ShellTool.ToolName, StringComparer.Ordinal))
-            profile.AllowedTools.Add(ShellTool.ToolName);
-
-        profile.ApprovalPolicy = testCase.Policy.Approval switch
-        {
-            ApprovalPolicyShape.Missing => null,
-            ApprovalPolicyShape.Approval => ExactPolicy(ToolApprovalMode.Approval),
-            ApprovalPolicyShape.Auto => ExactPolicy(ToolApprovalMode.Auto),
-            ApprovalPolicyShape.Deny => ExactPolicy(ToolApprovalMode.Deny),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(testCase),
-                testCase.Policy.Approval,
-                "Unknown approval policy shape.")
-        };
-
-        return config;
-    }
-
-    private static ToolApprovalConfig ExactPolicy(ToolApprovalMode mode)
+    private static ToolConfig CreateConfig()
         => new()
         {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                [ShellTool.ToolName] = mode
-            }
+            ShellMode = ShellExecutionMode.HostAllowed,
+            AudienceProfiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal)
         };
 
     private static IActorRef CreateApprovalActor(ActorSystem actorSystem, ToolApprovalStore store)

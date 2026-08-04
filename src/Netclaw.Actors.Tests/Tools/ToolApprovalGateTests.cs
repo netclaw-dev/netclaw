@@ -47,6 +47,53 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public void Shell_in_deny_mode_returns_deny()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Deny);
+        var args = ToolInput.Create("Command", "git push");
+
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+    }
+
+    [Fact]
+    public void Shell_in_auto_mode_allows_without_approval()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Auto);
+        var args = ToolInput.Create("Command", "git push");
+
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+    }
+
+    [Fact]
+    public void Missing_personal_approval_policy_fails_closed_for_shell()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = null;
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "git pull --ff-only"));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
+    }
+
+    [Fact]
     public void Compound_command_surfaces_all_approval_patterns_for_service_filtering()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);

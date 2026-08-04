@@ -781,21 +781,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     }
 
     private static ToolAudienceProfiles BuildPostureProfiles(DeploymentPosture posture)
-    {
-        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
-        if (posture == DeploymentPosture.Personal)
-        {
-            profiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-            {
-                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-                {
-                    [ToolAudienceProfileToolCatalog.ShellExecute] = ToolApprovalMode.Approval
-                }
-            };
-        }
-
-        return profiles;
-    }
+        => ToolAudienceProfileDefaults.CreateProfilesForPosture(posture);
 
     private static ToolAudienceProfile GetProfile(ToolAudienceProfiles profiles, TrustAudience audience)
         => audience switch
