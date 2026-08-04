@@ -255,7 +255,7 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["cat"])),
         Case(
             "safe-verb-external-redirect-prompts",
-            Bash("git status > /tmp/netclaw-approval-matrix.txt"),
+            Bash($"git status > {TemporaryFile("netclaw-approval-matrix.txt")}"),
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
@@ -386,7 +386,7 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["cat"])),
         Case(
             "error-redirect-outside-zone-prompts",
-            Bash("git status 2> /tmp/netclaw-approval-errors.txt"),
+            Bash($"git status 2> {TemporaryFile("netclaw-approval-errors.txt")}"),
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
@@ -566,6 +566,9 @@ public static class ShellApprovalCases
         TrustAudience audience = TrustAudience.Personal,
         bool interactive = true)
         => new(command, workingDirectory, audience, interactive);
+
+    private static string TemporaryFile(string fileName)
+        => Path.Join(Path.GetTempPath(), fileName);
 
     private static string Escape(string value)
         => value
