@@ -126,6 +126,24 @@ public sealed class ShellCommandPolicy
         if (OperatingSystem.IsWindows())
             return EvaluateLegacySegments(command);
 
+        return EvaluateBashAnalysis(command);
+    }
+
+    /// <summary>
+    /// Evaluates a Bash command with the same structural path that production
+    /// uses on Linux and macOS.
+    /// </summary>
+    internal ShellCommandDecision EvaluateBash(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return ShellCommandDecision.Allow();
+
+        var rawDecision = EvaluateRawString(command);
+        return rawDecision.Allowed ? EvaluateBashAnalysis(command) : rawDecision;
+    }
+
+    private ShellCommandDecision EvaluateBashAnalysis(string command)
+    {
         var analysis = Analyzer.Analyze(command);
         if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Clauses.Count == 0)
             return EvaluateLegacySegments(command);

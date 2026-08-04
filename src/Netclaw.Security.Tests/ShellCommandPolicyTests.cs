@@ -95,7 +95,7 @@ public sealed class ShellCommandPolicyTests
     [InlineData("bash -c \"echo safe | netclaw daemon stop\"")]
     public void Denies_pipeline_with_denied_tail(string command)
     {
-        var decision = _policy.Evaluate(command);
+        var decision = _policy.EvaluateBash(command);
 
         Assert.False(decision.Allowed);
     }
@@ -120,7 +120,7 @@ public sealed class ShellCommandPolicyTests
     [InlineData("bash -c \"echo safe\" && bash -lc \"netclaw daemon stop\"")]
     public void Denies_bash_wrapping_denied_command(string command)
     {
-        var decision = _policy.Evaluate(command);
+        var decision = _policy.EvaluateBash(command);
         Assert.False(decision.Allowed);
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }
