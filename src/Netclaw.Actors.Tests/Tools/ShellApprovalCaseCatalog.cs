@@ -269,6 +269,11 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "four-safe-mixed-operator-clauses-allow",
+            Bash("git status && git log | head -20; pwd"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
             "mixed-safe-unsafe-compound-prompts",
             Bash("git status && git push"),
             Approvals.None,
@@ -348,6 +353,16 @@ public static class ShellApprovalCases
             Bash("echo $(git push)"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "dynamic-path-currently-auto-allows",
+            Bash("cat \"$FILE\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "dynamic-redirect-currently-prompts",
+            Bash("git status > \"$OUTPUT\""),
+            Approvals.None,
+            ExpectedApproval.Require(["git status"])),
         Case(
             "background-list-currently-auto-allows",
             Bash("git status & git push"),
@@ -441,6 +456,46 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("cat"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "process-substitution-currently-prompts-without-complex-flag",
+            Bash("cat <(git push)"),
+            Approvals.PersistentAnywhere("cat", "git push"),
+            ExpectedApproval.Require([], approvalChecks: 0)),
+        Case(
+            "arithmetic-expansion-currently-prompts-without-complex-flag",
+            Bash("echo $((1 + 2))"),
+            Approvals.None,
+            ExpectedApproval.Require([], approvalChecks: 0)),
+        Case(
+            "function-definition-currently-prompts-without-complex-flag",
+            Bash("deploy() { git push; }; deploy"),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require([], approvalChecks: 0)),
+        Case(
+            "inline-python-prompts-for-interpreter",
+            Bash("python3 -c \"print('hello')\""),
+            Approvals.None,
+            ExpectedApproval.Require(["python3"])),
+        Case(
+            "inline-python-interpreter-grant-currently-allows",
+            Bash("python3 -c \"print('hello')\""),
+            Approvals.PersistentAnywhere("python3"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:python3")),
+        Case(
+            "eval-prompts-for-interpreter",
+            Bash("eval \"$CODE\""),
+            Approvals.None,
+            ExpectedApproval.Require(["eval"])),
+        Case(
+            "eval-grant-currently-allows-dynamic-payload",
+            Bash("eval \"$CODE\""),
+            Approvals.PersistentAnywhere("eval"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:eval")),
+        Case(
+            "inline-python-heredoc-fails-closed",
+            Bash("python3 <<'PY'\nprint('hello')\nPY"),
+            Approvals.PersistentAnywhere("python3"),
+            ExpectedApproval.Require([], approvalChecks: 0)),
+        Case(
             "empty-command-fails-closed",
             Bash(string.Empty),
             Approvals.None,
@@ -499,6 +554,159 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(
                 ["git status", "git push"],
                 approvalMatches: ["persistent:git status"])),
+        Case(
+            "four-unapproved-clauses-prompt",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.None,
+            ExpectedApproval.Require(["git add", "git commit", "git push", "gh pr merge"])),
+        Case(
+            "four-anywhere-grants-allow",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "persistent:gh pr merge")),
+        Case(
+            "four-one-missing-grant-prompts",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.PersistentAnywhere("git add", "git commit", "git push"),
+            ExpectedApproval.Require(
+                ["git add", "git commit", "git push", "gh pr merge"],
+                approvalMatches:
+                [
+                    "persistent:git add",
+                    "persistent:git commit",
+                    "persistent:git push"
+                ])),
+        Case(
+            "four-here-grants-allow",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "git add",
+                "git commit",
+                "git push",
+                "gh pr merge"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "persistent:gh pr merge")),
+        Case(
+            "four-one-wrong-directory-grant-prompts",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.Combine(
+                Approvals.PersistentHere(
+                    ApprovalDirectoryShape.Project,
+                    "git add",
+                    "git commit",
+                    "git push"),
+                Approvals.PersistentHere(ApprovalDirectoryShape.External, "gh pr merge")),
+            ExpectedApproval.Require(
+                ["git add", "git commit", "git push", "gh pr merge"],
+                approvalMatches:
+                [
+                    "persistent:git add",
+                    "persistent:git commit",
+                    "persistent:git push"
+                ])),
+        Case(
+            "four-one-other-session-grant-prompts",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.Combine(
+                Approvals.Session("git add", "git commit", "git push"),
+                Approvals.SessionForOtherSession("gh pr merge")),
+            ExpectedApproval.Require(
+                ["git add", "git commit", "git push", "gh pr merge"],
+                approvalMatches:
+                [
+                    "session:git add",
+                    "session:git commit",
+                    "session:git push"
+                ])),
+        Case(
+            "four-one-other-audience-grant-prompts",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.Combine(
+                Approvals.PersistentAnywhere("git add", "git commit", "git push"),
+                Approvals.PersistentForOtherAudience("gh pr merge")),
+            ExpectedApproval.Require(
+                ["git add", "git commit", "git push", "gh pr merge"],
+                approvalMatches:
+                [
+                    "persistent:git add",
+                    "persistent:git commit",
+                    "persistent:git push"
+                ])),
+        Case(
+            "four-mixed-grant-sources-allow",
+            Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
+            Approvals.Combine(
+                Approvals.Session("git add", "gh pr merge"),
+                Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git commit"),
+                Approvals.PersistentAnywhere("git push")),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "session:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "session:gh pr merge")),
+        Case(
+            "safe-and-stored-authority-currently-do-not-compose",
+            Bash("git status && git push && git log && gh pr merge 123"),
+            Approvals.PersistentAnywhere("git push", "gh pr merge"),
+            ExpectedApproval.Require(
+                ["git status", "git push", "git log", "gh pr merge"],
+                approvalMatches: ["persistent:git push", "persistent:gh pr merge"])),
+        Case(
+            "four-hard-deny-beats-grants",
+            Bash("git add . && git commit -m fix && netclaw daemon stop && git push"),
+            Approvals.PersistentAnywhere(
+                "git add",
+                "git commit",
+                "netclaw daemon stop",
+                "git push"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
+            "four-or-branches-with-grants-allow",
+            Bash("git add . || git commit -m fix || git push || gh pr merge 123"),
+            Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "persistent:gh pr merge")),
+        Case(
+            "four-newline-statements-with-grants-allow",
+            Bash("git add .\ngit commit -m fix\ngit push\ngh pr merge 123"),
+            Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "persistent:gh pr merge")),
+        Case(
+            "four-subshell-clauses-with-grants-allow",
+            Bash("(git add . && git commit -m fix) || (git push && gh pr merge 123)"),
+            Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git add",
+                "persistent:git commit",
+                "persistent:git push",
+                "persistent:gh pr merge")),
 
         Case(
             "noninteractive-unapproved-requires-approval",

@@ -19,6 +19,7 @@
 | safe-verb-external-redirect-prompts | Personal | Project | Interactive | git status > {TempPath}netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
 | mutating-verb-project-prompts | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| four-safe-mixed-operator-clauses-allow | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | mixed-safe-unsafe-compound-prompts | Personal | Project | Interactive | git status && git push | none | RequiresApproval | approval required | git status, git push | No |
 | safe-pipe-unsafe-tail-prompts | Personal | Project | Interactive | git status \| git push | none | RequiresApproval | approval required | git status, git push | No |
 | safe-pipeline-allows | Personal | Project | Interactive | git log \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -35,6 +36,8 @@
 | timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout | No |
 | subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git status, git push | No |
 | command-substitution-currently-auto-allows | Personal | Project | Interactive | echo $(git push) | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| dynamic-path-currently-auto-allows | Personal | Project | Interactive | cat "$FILE" | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| dynamic-redirect-currently-prompts | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | git status | No |
 | background-list-currently-auto-allows | Personal | Project | Interactive | git status & git push | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | unbalanced-quote-fails-closed | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
 | multiline-argument-prompts | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
@@ -52,6 +55,14 @@
 | echo-redirect-prompts | Personal | Project | Interactive | echo hello > result.txt | none | RequiresApproval | approval required | echo | No |
 | echo-done-fails-closed | Personal | Project | Interactive | echo done | none | RequiresApproval | approval required | echo | Yes |
 | control-flow-fails-closed | Personal | Project | Interactive | for f in *.txt; do cat "$f"; done | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| process-substitution-currently-prompts-without-complex-flag | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | No |
+| arithmetic-expansion-currently-prompts-without-complex-flag | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | No |
+| function-definition-currently-prompts-without-complex-flag | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | No |
+| inline-python-prompts-for-interpreter | Personal | Project | Interactive | python3 -c "print('hello')" | none | RequiresApproval | approval required | python3 | No |
+| inline-python-interpreter-grant-currently-allows | Personal | Project | Interactive | python3 -c "print('hello')" | persistent[anywhere]:python3 | Allowed | StoredApproval | none | Not applicable |
+| eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | eval | No |
+| eval-grant-currently-allows-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | Allowed | StoredApproval | none | Not applicable |
+| inline-python-heredoc-fails-closed | Personal | Project | Interactive | python3 <<'PY'\nprint('hello')\nPY | persistent[anywhere]:python3 | RequiresApproval | approval required | none | No |
 | empty-command-fails-closed | Personal | Project | Interactive |  | none | RequiresApproval | approval required | none | No |
 | whitespace-command-fails-closed | Personal | Project | Interactive |     | none | RequiresApproval | approval required | none | No |
 | session-grant-allows | Personal | Project | Interactive | git push | session[this-chat]:git push | Allowed | StoredApproval | none | Not applicable |
@@ -62,6 +73,19 @@
 | other-audience-grant-prompts | Personal | Project | Interactive | git push | persistent[anywhere,Team]:git push | RequiresApproval | approval required | git push | No |
 | mixed-session-persistent-compound-allows | Personal | Project | Interactive | git status && git push | session[this-chat]:git status, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | partial-compound-grant-prompts | Personal | Project | Interactive | git status && git push | persistent[anywhere]:git status | RequiresApproval | approval required | git status, git push | No |
+| four-unapproved-clauses-prompt | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | none | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-anywhere-grants-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
+| four-one-missing-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-here-grants-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[project]:git add, persistent[project]:git commit, persistent[project]:git push, persistent[project]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
+| four-one-wrong-directory-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[project]:git add, persistent[project]:git commit, persistent[project]:git push, persistent[external]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-one-other-session-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:git commit, session[this-chat]:git push, session[other-chat]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-one-other-audience-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere,Team]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-mixed-grant-sources-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:gh pr merge, persistent[project]:git commit, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
+| safe-and-stored-authority-currently-do-not-compose | Personal | Project | Interactive | git status && git push && git log && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | RequiresApproval | approval required | git status, git push, git log, gh pr merge | No |
+| four-hard-deny-beats-grants | Personal | Project | Interactive | git add . && git commit -m fix && netclaw daemon stop && git push | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:netclaw daemon stop, persistent[anywhere]:git push | Denied | hard_deny_self_destructive | none | Not applicable |
+| four-or-branches-with-grants-allow | Personal | Project | Interactive | git add . \|\| git commit -m fix \|\| git push \|\| gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
+| four-newline-statements-with-grants-allow | Personal | Project | Interactive | git add .\ngit commit -m fix\ngit push\ngh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
+| four-subshell-clauses-with-grants-allow | Personal | Project | Interactive | (git add . && git commit -m fix) \|\| (git push && gh pr merge 123) | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | noninteractive-unapproved-requires-approval | Personal | Project | Non-interactive | git push | none | RequiresApproval | approval required | git push | No |
 | noninteractive-persistent-grant-allows | Personal | Project | Non-interactive | git push | persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | noninteractive-exempt-allows | Personal | Project | Non-interactive | echo hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
