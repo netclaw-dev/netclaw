@@ -2227,6 +2227,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        if (TryRejectIncompatibleInput(cmd.MediaReferences, cmd.Source))
+            return;
+
         _inFlightDedup.ReserveReminder(reminderId);
         _inFlightDedup.ReserveBackgroundJob(bgJobId);
 
@@ -2317,33 +2320,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
             _fullRegistry);
-
-        // Strict modality consumer contract: the session actor trusts ingress
-        // to have routed attachments through its own capability gate. If an
-        // unsupported modality still reaches here, the originating channel
-        // skipped the contract in netclaw-input-adapters and that's a bug
-        // the operator needs to see — surface it loudly and continue.
-        if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
-        {
-            var offendingRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
-            if (offendingRefs.Count > 0)
-            {
-                var offendingDesc = string.Join(",",
-                    offendingRefs.Select(r => $"{r.RelativePath}:modality={r.Modality}"));
-                _log.Error(
-                    "ingress_bug model={ModelId} modalities={Modalities} offending={Offending}",
-                    _model.ModelId, _model.InputModalities, offendingDesc);
-
-                mediaRefs = [.. mediaRefs.Where(r => r.Modality != (int)MediaModality.Image)];
-
-                const string ingressBugNotice =
-                    "[system] An attachment was received but could not be delivered to the model due to an ingress bug. " +
-                    "Please retry, or notify the operator if this persists.";
-                userContent = string.IsNullOrEmpty(userContent)
-                    ? ingressBugNotice
-                    : userContent + "\n\n" + ingressBugNotice;
-            }
-        }
 
         if (TryHandleSlashCommand(executableUserContent, mediaRefs))
             return;
@@ -2667,6 +2643,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
+        var compatibility = ModelInputCompatibility.Evaluate(_model.InputModalities, _state.History);
+        if (!compatibility.IsCompatible)
+        {
+            TurnLog().Warning(
+                "turn_media_history_incompatible required={Required} unsupported={Unsupported} unknownCount={UnknownCount} " +
+                "model={ModelId} — incompatible media references will be stripped from wire messages by the assembler",
+                compatibility.RequiredModalities,
+                compatibility.UnsupportedModalities,
+                compatibility.UnknownModalityValues.Count,
+                _model.ModelId);
+            // Do not fail the turn — ChatMessageConverter.ToAiMessages strips
+            // incompatible DataContent at assembly time, and the assembler
+            // injects a volatile system notice. The session stays usable.
+        }
+
         _anyContentStreamed = false;
         CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();
@@ -2745,6 +2736,65 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ContinueFireLlmCall(forceNoTools);
     }
 
+    private bool TryRejectIncompatibleInput(
+        IReadOnlyList<SerializableMediaReference> pendingMedia,
+        MessageSource? source)
+    {
+        var compatibility = ModelInputCompatibility.Evaluate(
+            _model.InputModalities,
+            _state.History,
+            pendingMedia);
+        if (compatibility.IsCompatible)
+            return false;
+
+        // History-only incompatibility: debug log and let the assembler strip
+        // incompatible media at wire time. Only new user-supplied media on this
+        // specific command triggers a hard rejection.
+        if (pendingMedia.Count == 0)
+        {
+            TurnLog().Info(
+                "session_history_media_stripped model={ModelId} required={Required} unsupported={Unsupported} unknown={Unknown} " +
+                "— historical media references are incompatible with the current model and will be stripped by the assembler",
+                _model.ModelId,
+                compatibility.RequiredModalities,
+                compatibility.UnsupportedModalities,
+                string.Join(",", compatibility.UnknownModalityValues));
+            return false;
+        }
+
+        var message = ModelInputCompatibility.BuildErrorMessage(_model, compatibility);
+        var cause = new InvalidOperationException(message);
+        var correlationId = Guid.NewGuid();
+
+        _log.Error(
+            cause,
+            "session_input_incompatible model={ModelId} supported={Supported} required={Required} unsupported={Unsupported} unknown={Unknown} correlationId={CorrelationId}",
+            _model.ModelId,
+            _model.InputModalities,
+            compatibility.RequiredModalities,
+            compatibility.UnsupportedModalities,
+            string.Join(",", compatibility.UnknownModalityValues),
+            correlationId);
+
+        EmitOutput(new ErrorOutput
+        {
+            SessionId = _sessionId,
+            Message = message,
+            Category = ErrorCategory.InputCompatibility,
+            CorrelationId = correlationId,
+            Cause = cause
+        });
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = new TurnNumber(_state.TurnCount),
+            Outcome = TurnOutcome.Skipped,
+            SourceReminderId = source?.ReminderId
+        });
+        TryReplyAck();
+        return true;
+    }
+
     private void ContinueFireLlmCall(bool forceNoTools)
     {
         _activeRecall = _recallManager.TurnRecallCache;
@@ -2776,7 +2826,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SkillHint: skillHint,
             // Canonical names live in history (post-PR follow-up); the
             // LLM provider wants the sanitized alias back on the wire.
-            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName));
+            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName,
+            SupportedInputModalities: _model.InputModalities));
         _startupContextInjected = true;
 
         var self = Self;

@@ -16,8 +16,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// Tests the modality gate in <see cref="LlmSessionActor"/>:
-/// images sent to a text-only model are stripped; images sent to a vision model pass through.
+/// Tests the modality gate in <see cref="LlmSessionActor"/>.
 /// </summary>
 public class ModalityGateTextOnlyTests : LlmSessionTestBase
 {
@@ -46,14 +45,8 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Image_with_text_on_text_only_model_surfaces_ingress_bug_and_still_calls_llm()
+    public async Task Image_with_text_on_text_only_model_is_rejected_before_model_call()
     {
-        // The strict-consumer contract treats an unsupported-modality media
-        // ref reaching the session actor as an ingress bug. The session still
-        // completes the turn (so the user gets a reply) but the offending refs
-        // are dropped and a [system] notice about the ingress bug is appended
-        // to the user message before it goes to the model. No legacy
-        // "[Images removed]" placeholder is emitted.
         var sessionId = new SessionId("test-channel/modality-text-only");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-sub");
@@ -80,29 +73,27 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
             ]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        // The first output is the LLM response itself — there is no longer a
-        // separate "[Images removed]" TextOutput before the reply.
-        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("fake", textOutput.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Images removed", textOutput.Text);
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ErrorCategory.InputCompatibility, error.Category);
+        Assert.Contains("Image", error.Message, StringComparison.Ordinal);
+        Assert.Contains("text-only-model", error.Message, StringComparison.Ordinal);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Skipped, completed.Outcome);
+        Assert.Equal(0, _fakeChatClient.CallCount);
 
-        // LLM was called and saw the ingress-bug notice appended to the user text.
-        Assert.Equal(1, _fakeChatClient.CallCount);
-        Assert.NotEmpty(_fakeChatClient.ReceivedMessages);
-        var lastRequest = _fakeChatClient.ReceivedMessages[^1];
-        var concatenated = string.Join("\n", lastRequest.Select(m => m.Text ?? string.Empty));
-        Assert.Contains("ingress bug", concatenated, StringComparison.OrdinalIgnoreCase);
+        var joined = await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(0, joined.TurnCount);
+        Assert.Empty(joined.RecentMessages ?? []);
     }
 
     [Fact]
-    public async Task Image_only_message_on_text_only_model_still_calls_llm_with_ingress_bug_notice()
+    public async Task Image_only_message_on_text_only_model_is_rejected_before_model_call()
     {
-        // Empty text body + only unsupported media. The strict-consumer
-        // contract appends the [system] ingress bug notice to the user
-        // content so the LLM has something to respond to. We'd rather the
-        // user get a reply explaining the situation than silence.
         var sessionId = new SessionId("test-channel/modality-image-only");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-image-only-sub");
@@ -129,18 +120,13 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
             ]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var reply = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.DoesNotContain("Images removed", reply.Text);
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ErrorCategory.InputCompatibility, error.Category);
+        Assert.Contains("start a new conversation", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
-
-        // LLM was called once, and the user-visible content we sent it
-        // included the ingress-bug notice (not a legacy placeholder).
-        Assert.Equal(1, _fakeChatClient.CallCount);
-        Assert.NotEmpty(_fakeChatClient.ReceivedMessages);
-        var lastRequest = _fakeChatClient.ReceivedMessages[^1];
-        var concatenated = string.Join("\n", lastRequest.Select(m => m.Text ?? string.Empty));
-        Assert.Contains("ingress bug", concatenated, StringComparison.OrdinalIgnoreCase);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Skipped, completed.Outcome);
+        Assert.Equal(0, _fakeChatClient.CallCount);
     }
 }
 

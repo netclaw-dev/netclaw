@@ -113,6 +113,18 @@ still read. `model list` reports an unparseable config instead of crashing.
 `netclaw doctor --fix` applies only repairs it can derive safely; it does not
 invent missing named definitions or role assignments.
 
+### Session input compatibility errors
+
+A saved session can contain image, audio, or video input from an earlier model.
+Netclaw checks the complete active history before each model call. If the new
+main model lacks a required modality, the turn stops before any provider or
+fallback call.
+
+The error names the unsupported modalities and the active model. Select a model
+that accepts those modalities, or start a new conversation. Do not diagnose
+this result as a provider outage. Netclaw also rejects an unknown saved modality
+value instead of omitting that media.
+
 ### Adding GitHub Copilot
 
 GitHub Copilot uses the OAuth device flow only — no API key. The operator
