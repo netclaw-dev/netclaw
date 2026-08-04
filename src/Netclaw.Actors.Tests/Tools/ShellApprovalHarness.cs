@@ -21,7 +21,7 @@ internal sealed record ObservedApproval(
     ToolAuthorizationOutcome Outcome,
     ToolAllowReason? AllowReason,
     string? DenyReason,
-    IReadOnlyList<string> Candidates,
+    IReadOnlyList<string> CandidateVerbs,
     bool? IsMessy,
     IReadOnlyList<string> ApprovalMatches);
 

@@ -28,7 +28,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(testCase.Expected.Outcome, observed.Outcome);
         Assert.Equal(testCase.Expected.AllowReason, observed.AllowReason);
         Assert.Equal(testCase.Expected.DenyReason, observed.DenyReason);
-        Assert.Equal(testCase.Expected.Candidates, observed.Candidates);
+        Assert.Equal(testCase.Expected.Candidates, observed.CandidateVerbs);
         Assert.Equal(testCase.Expected.IsMessy, observed.IsMessy);
         Assert.Equal(testCase.Expected.ApprovalChecks, harness.ApprovalService.CheckCount);
         Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
