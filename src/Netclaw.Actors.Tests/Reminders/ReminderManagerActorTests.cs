@@ -855,7 +855,7 @@ public class ReminderManagerActorTests : TestKit
     public async Task Expired_reminder_disabled_on_fire_without_executing()
     {
         var manager = await GetManagerAsync();
-        var now = TimeProvider.System.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
 
         // Drain PreStart reconcile
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
