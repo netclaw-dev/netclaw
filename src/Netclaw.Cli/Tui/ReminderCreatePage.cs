@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderCreatePage.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -166,13 +166,13 @@ public sealed class ReminderCreatePage : ReactivePage<ReminderCreateViewModel>
             {
                 var text = state switch
                 {
-                    ReminderCreateState.Title => " [Enter] Next  [Esc] Quit  [Ctrl+Q] Quit",
+                    ReminderCreateState.Title => " [Enter] Next  [Ctrl+Q] Quit",
                     ReminderCreateState.ScheduleType => " [Up/Down] Select  [Enter] Next  [Esc] Back  [Ctrl+Q] Quit",
                     ReminderCreateState.Schedule => " [Enter] Next  [Esc] Back  [Ctrl+Q] Quit",
                     ReminderCreateState.Instructions => " [Ctrl+Enter] Newline  [Enter] Next  [Esc] Back  [Ctrl+Q] Quit",
                     ReminderCreateState.NotifyInstructions => " [Ctrl+Enter] Newline  [Enter] Next  [Esc] Back  [Ctrl+Q] Quit",
                     ReminderCreateState.Confirm => " [Up/Down] Select  [Enter] Confirm  [Esc] Back  [Ctrl+Q] Quit",
-                    ReminderCreateState.Done => " [Up/Down] Select  [Enter] Continue  [Esc] Quit  [Ctrl+Q] Quit",
+                    ReminderCreateState.Done => " [Up/Down] Select  [Enter] Continue  [Ctrl+Q] Quit",
                     _ => " [Ctrl+Q] Quit"
                 };
                 return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);

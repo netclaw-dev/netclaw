@@ -88,19 +88,26 @@ openai` defaults to the ChatGPT OAuth device flow. Use `--auth api-key
 `netclaw model set <role> <provider> <model-id>` creates or reuses a named model
 definition and assigns it to a role (`main`, `fallback`, `compaction`). Definitions
 own provider/model identity and metadata, while roles only reference definitions.
-Switching away from a model and back therefore preserves its overrides. Two attributes can be overridden by the
-operator and are **operator-owned**: the context window and the input/output
-modalities. Provider discovery seeds a new definition but never changes an existing
-definition, including adding a property the definition deliberately omits.
+Switching away from a model and back therefore preserves its overrides. The operator
+owns the context window and modality overrides.
+
+Provider discovery validates the model ID for selection. It does not persist the
+discovered context window or modalities. The daemon detects these values at each
+startup. Only explicit operator flags or manual configuration create capability
+overrides.
+
+Older releases can contain discovery snapshots in the override fields. The config does
+not record each field's source. Netclaw preserves these values to protect explicit
+operator overrides. Run `netclaw model set` with `--clear-context-window` and
+`--clear-modalities` once to restore runtime detection for an affected definition.
 
 - `--context-window <tokens>` clamps the session budget and takes precedence
   over provider-reported detection. Supplying it configures the model manually
   and skips the metadata probe.
 - `--input-modalities <list>` / `--output-modalities <list>` override detected
   modalities with a comma-separated list of named flags (`Text`, `Image`,
-  `Audio`, `Video`). These do **not** skip the probe — the model is still
-  validated and its context window discovered; the override just wins over the
-  discovered modalities.
+  `Audio`, `Video`). These do **not** skip the probe. The probe still validates
+  the model ID. The override wins over runtime detection.
 - `--clear-context-window` and `--clear-modalities` remove the respective
   override so runtime capability detection resolves it again (use these after a
   provider enlarges a model's window or fixes mis-reported modalities).
@@ -112,6 +119,18 @@ definitions and repairs the selected entry while keeping the fields it can
 still read. `model list` reports an unparseable config instead of crashing.
 `netclaw doctor --fix` applies only repairs it can derive safely; it does not
 invent missing named definitions or role assignments.
+
+### Session input compatibility errors
+
+A saved session can contain image, audio, or video input from an earlier model.
+Netclaw checks the complete active history before each model call. If the new
+main model lacks a required modality, the turn stops before any provider or
+fallback call.
+
+The error names the unsupported modalities and the active model. Select a model
+that accepts those modalities, or start a new conversation. Do not diagnose
+this result as a provider outage. Netclaw also rejects an unknown saved modality
+value instead of omitting that media.
 
 ### Adding GitHub Copilot
 

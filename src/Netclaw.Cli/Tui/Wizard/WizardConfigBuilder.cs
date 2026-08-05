@@ -141,16 +141,9 @@ public sealed class WizardConfigBuilder
                 Model.Provider,
                 Model.ModelId,
                 Model.Provenance,
-                Model.ContextWindow is { } contextWindow
-                    ? ValueOverride<int>.Set(contextWindow)
-                    : ValueOverride<int>.Unset,
-                Model.InputModalities is { } input
-                    ? ValueOverride<ModelModality>.Set(input)
-                    : ValueOverride<ModelModality>.Unset,
-                Model.OutputModalities is { } output
-                    ? ValueOverride<ModelModality>.Set(output)
-                    : ValueOverride<ModelModality>.Unset,
-                discovered: null);
+                ValueOverride<int>.Unset,
+                ValueOverride<ModelModality>.Unset,
+                ValueOverride<ModelModality>.Unset);
         }
 
         // Slack section
@@ -580,10 +573,7 @@ public sealed class ModelConfigSection
 {
     public required string Provider { get; init; }
     public string? ModelId { get; init; }
-    public int? ContextWindow { get; init; }
     public ModelDiscoverySource? Provenance { get; init; }
-    public ModelModality? InputModalities { get; init; }
-    public ModelModality? OutputModalities { get; init; }
 }
 
 public sealed class SlackConfigSection

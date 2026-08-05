@@ -17,7 +17,7 @@
     <MicrosoftExtensionsTimeProviderTestingVersion>10.8.0</MicrosoftExtensionsTimeProviderTestingVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.10</MicrosoftAspNetCoreVersion>
-    <SkiaSharpVersion>4.150.1</SkiaSharpVersion>
+    <SkiaSharpVersion>4.151.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
@@ -75,7 +75,7 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.1.5" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.2.0" />
     <PackageVersion Include="Termina" Version="0.15.1" />
   </ItemGroup>
   <!-- Serialization -->
@@ -90,7 +90,7 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
-    <PackageVersion Include="CsCheck" Version="4.7.0" />
+    <PackageVersion Include="CsCheck" Version="4.8.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.20.0" />
     <PackageVersion Include="Testcontainers" Version="4.13.0" />
   </ItemGroup>

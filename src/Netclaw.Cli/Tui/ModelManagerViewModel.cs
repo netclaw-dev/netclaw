@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ModelManagerViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -194,10 +194,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Non-destructive: re-assigning the same model preserves an existing context-window
-        // clamp and modality overrides, none of which the picker can supply (#1127, #1610). The
-        // picker has no manual-override inputs, so it passes no explicit context window and Unset
-        // modality intent — the probe result seeds a first-time set only; existing values win.
+        // The picker has no inputs for capability overrides.
+        // It preserves existing overrides and leaves new definitions empty (#1756).
         ModelEntryWriter.WriteRole(
             modelsSection,
             roleKey,
@@ -206,8 +204,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             provenance,
             ValueOverride<int>.Unset,
             ValueOverride<ModelModality>.Unset,
-            ValueOverride<ModelModality>.Unset,
-            discoveredModel);
+            ValueOverride<ModelModality>.Unset);
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();
@@ -292,11 +289,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
                     RouteRequested?.Invoke("/config");
                     Navigate?.Invoke("/config");
                 }
-                else
-                {
-                    // Standalone `netclaw model`: backing out past the root exits the app.
-                    Shutdown();
-                }
+                // Standalone `netclaw model`: backing out past the root is a no-op.
+                // Escape is a cancel key, not a quit key; Ctrl+Q quits.
 
                 break;
         }

@@ -38,6 +38,15 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<string> _pendingMessages = new();
     private readonly Queue<ToolInteractionRequest> _pendingInteractions = new();
+
+    /// <summary>
+    /// True while an interaction response is in flight to the daemon. Guards
+    /// against duplicate submissions (e.g. Escape + Enter pressed back to
+    /// back) so only one <see cref="ToolInteractionResponse"/> is sent per
+    /// interaction. Released on success (interaction dequeued) and on failure
+    /// (prompt re-presented for retry) alike.
+    /// </summary>
+    private bool _isSubmittingInteraction;
     private IDisposable? _daemonOutputSubscription;
     private IDisposable? _daemonConnectionSubscription;
     // Per-session USAGE log writer. Mirrors HeadlessChannel's writer so the
@@ -214,7 +223,7 @@ public partial class ChatViewModel : ReactiveViewModel
         }
     }
 
-    public void RequestAppShutdown()
+    public virtual void RequestAppShutdown()
     {
         Shutdown();
     }
@@ -276,6 +285,27 @@ public partial class ChatViewModel : ReactiveViewModel
             return Task.CompletedTask;
 
         return SubmitInteractionSelectionAsync(option.Key.Value);
+    }
+
+    /// <summary>
+    /// Denies the current pending approval interaction, if one exists.
+    /// Maps to the first-class <see cref="ApprovalOptionKeys.Deny"/> wire key,
+    /// so the session records a hard refusal of this call only (no ban on the
+    /// verb for future invocations). Called by the TUI when the user presses
+    /// Escape while an approval prompt is up — Escape means "cancel the
+    /// dialog", not "quit the app" (#1757).
+    /// </summary>
+    internal virtual Task DenyPendingInteractionAsync()
+    {
+        if (CurrentInteraction is null)
+            return Task.CompletedTask;
+
+        var denyOption = CurrentInteraction.Options.FirstOrDefault(candidate =>
+            string.Equals(candidate.Key.Value, ApprovalOptionKeys.Deny, StringComparison.Ordinal));
+        if (denyOption is null)
+            return Task.CompletedTask;
+
+        return SubmitInteractionSelectionAsync(denyOption.Key.Value);
     }
 
     /// <summary>
@@ -513,9 +543,12 @@ public partial class ChatViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    private async Task SubmitInteractionSelectionAsync(string selectedKey)
+    protected virtual async Task SubmitInteractionSelectionAsync(string selectedKey)
     {
         if (CurrentInteraction is null)
+            return;
+
+        if (_isSubmittingInteraction)
             return;
 
         if (!_sessionReady || !_daemonClient.IsConnected)
@@ -530,6 +563,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
         try
         {
+            _isSubmittingInteraction = true;
             await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
             await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
 
@@ -548,6 +582,10 @@ public partial class ChatViewModel : ReactiveViewModel
             StatusMessage.Value = $"Approval response failed ({ex.Message}). Reconnecting...";
             RequestRedraw();
             _ = ConnectUntilReadyAsync();
+        }
+        finally
+        {
+            _isSubmittingInteraction = false;
         }
     }
 

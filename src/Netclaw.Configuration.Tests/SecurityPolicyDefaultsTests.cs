@@ -70,4 +70,13 @@ public sealed class SecurityPolicyDefaultsTests
         Assert.Equal(ToolFilesystemMode.All, defaults.Personal.WriteFiles.Mode);
         Assert.Equal(ToolFilesystemMode.All, defaults.Personal.AttachFiles.Mode);
     }
+
+    [Fact]
+    public void Personal_posture_requires_shell_approval()
+    {
+        var profiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal);
+
+        var policy = Assert.IsType<ToolApprovalConfig>(profiles.Personal.ApprovalPolicy);
+        Assert.Equal(ToolApprovalMode.Approval, policy.ToolOverrides[ToolAudienceProfileToolCatalog.ShellExecute]);
+    }
 }

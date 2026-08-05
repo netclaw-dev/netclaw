@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackBlockConverterTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -415,5 +415,106 @@ public class SlackBlockConverterTests
             .FirstOrDefault(e => e.Style is { Bold: true, Italic: true });
         Assert.NotNull(styled);
         Assert.Equal("bold and italic", styled.Text);
+    }
+
+    [Fact]
+    public void UserMention_ProducesRichTextUser()
+    {
+        var blocks = SlackBlockConverter.Convert("Ping <@U01SU57E553> when ready");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var user = Assert.Single(section.Elements.OfType<RichTextUser>());
+        Assert.Equal("U01SU57E553", user.UserId);
+
+        var texts = section.Elements.OfType<RichTextText>().ToList();
+        Assert.Equal("Ping ", texts[0].Text);
+        Assert.Equal(" when ready", texts[1].Text);
+    }
+
+    [Fact]
+    public void UserMention_WithLabel_ProducesRichTextUser()
+    {
+        var blocks = SlackBlockConverter.Convert("Thanks <@U01SU57E553|david>!");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var user = Assert.Single(section.Elements.OfType<RichTextUser>());
+        Assert.Equal("U01SU57E553", user.UserId);
+    }
+
+    [Fact]
+    public void UserGroupMention_ProducesRichTextUserGroup()
+    {
+        var blocks = SlackBlockConverter.Convert("Heads up <@subteam^S0123ABC>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var group = Assert.Single(section.Elements.OfType<RichTextUserGroup>());
+        Assert.Equal("S0123ABC", group.UserGroupId);
+    }
+
+    [Fact]
+    public void UserGroupMention_WithLabel_ProducesRichTextUserGroup()
+    {
+        var blocks = SlackBlockConverter.Convert("Heads up <@subteam^S0123ABC|@eng-team>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var group = Assert.Single(section.Elements.OfType<RichTextUserGroup>());
+        Assert.Equal("S0123ABC", group.UserGroupId);
+    }
+
+    [Fact]
+    public void UserGroupMention_DocumentedBangForm_ProducesRichTextUserGroup()
+    {
+        var blocks = SlackBlockConverter.Convert("Heads up <!subteam^S0123ABC>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var group = Assert.Single(section.Elements.OfType<RichTextUserGroup>());
+        Assert.Equal("S0123ABC", group.UserGroupId);
+    }
+
+    [Fact]
+    public void ChannelMention_ProducesRichTextChannel()
+    {
+        var blocks = SlackBlockConverter.Convert("Posted in <#C0AM51E342X> already");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var channel = Assert.Single(section.Elements.OfType<RichTextChannel>());
+        Assert.Equal("C0AM51E342X", channel.ChannelId);
+    }
+
+    [Fact]
+    public void ChannelMention_PrivateChannel_ProducesRichTextChannel()
+    {
+        var blocks = SlackBlockConverter.Convert("See <#G0AM51E342X|private>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var channel = Assert.Single(section.Elements.OfType<RichTextChannel>());
+        Assert.Equal("G0AM51E342X", channel.ChannelId);
+    }
+
+    [Fact]
+    public void UserMention_InListItem_ProducesRichTextUser()
+    {
+        var blocks = SlackBlockConverter.Convert("- David: approve <@U01SU57E553>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var list = Assert.Single(rtb.Elements.OfType<RichTextList>());
+        var item = list.Elements[0];
+
+        var user = Assert.Single(item.Elements.OfType<RichTextUser>());
+        Assert.Equal("U01SU57E553", user.UserId);
     }
 }

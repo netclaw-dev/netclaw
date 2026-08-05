@@ -225,6 +225,29 @@ public sealed class SessionsPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Escape_AtRoot_DoesNotQuit()
+    {
+        // Regression for #1764: Escape used to call Shutdown() at the session picker
+        // root, so one stray tap killed `netclaw sessions`. It must be a no-op;
+        // only Ctrl+Q quits. Proof: the app stays alive and Enter still resumes.
+        var sessions = new[]
+        {
+            CreateSession("session-001", "tui", 1, _time.GetUtcNow().AddMinutes(-1)),
+        };
+
+        var (_, app, _, nav) = CreateHeadlessApp(out var input, sessions);
+
+        input.EnqueueKey(ConsoleKey.Escape);            // must be a no-op
+        input.EnqueueKey(ConsoleKey.Enter);             // still on sessions root -> resume
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("001", nav.ResumeSessionId);
+    }
+
+    [Fact]
     public async Task LongList_RendersManyRows_ForScrollableList()
     {
         var sessions = Enumerable.Range(1, 100)

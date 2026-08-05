@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ChatMessageConverter.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
@@ -42,12 +43,18 @@ public static class ChatMessageConverter
     /// rationale instead of silently falling back to defaults. Must stay false for
     /// outbound provider history — the model must never receive meta keys.
     /// </param>
+    /// <param name="supportedModalities">
+    /// When set, media references whose modality is not in this mask are dropped
+    /// from the wire <c>DataContent</c> list. Persisted
+    /// <see cref="SerializableChatMessage.MediaReferences"/> are not changed.
+    /// </param>
     public static AiChatMessage ToAiMessage(
         SerializableChatMessage msg,
         string? sessionDir = null,
         ILogger? logger = null,
         Func<string, string>? toolNameResolver = null,
-        bool reinjectMeta = false)
+        bool reinjectMeta = false,
+        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video)
     {
         var role = msg.Role switch
         {
@@ -113,6 +120,15 @@ public static class ChatMessageConverter
 
             foreach (var media in msg.MediaReferences)
             {
+                if (!AcceptsModality(supportedModalities, (MediaModality)media.Modality))
+                {
+                    logger?.LogDebug(
+                        "Skipping media reference modality={Modality} unsupported by model capabilities={Supported}",
+                        (MediaModality)media.Modality,
+                        supportedModalities);
+                    continue;
+                }
+
                 var fullPath = SessionMediaStore.GetMediaPath(sessionDir, media.RelativePath);
                 if (!File.Exists(fullPath))
                 {
@@ -131,14 +147,50 @@ public static class ChatMessageConverter
         return new AiChatMessage(role, msg.Content);
     }
 
+    /// <summary>
+    /// Convert a sequence of persisted messages to MEAI messages. When
+    /// <paramref name="supportedModalities"/> excludes a modality present in
+    /// a message's media references, that <c>DataContent</c> is silently
+    /// dropped from the wire representation while the persisted
+    /// <see cref="SerializableChatMessage.MediaReferences"/> remain untouched.
+    /// </summary>
     public static List<AiChatMessage> ToAiMessages(
         IEnumerable<SerializableChatMessage> messages,
         string? sessionDir = null,
         ILogger? logger = null,
-        Func<string, string>? toolNameResolver = null)
+        Func<string, string>? toolNameResolver = null,
+        ModelModality supportedModalities = ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video)
     {
-        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger, toolNameResolver))];
+        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger, toolNameResolver, false, supportedModalities))];
     }
+
+    /// <summary>
+    /// Count how many media references across <paramref name="messages"/> would
+    /// be stripped given <paramref name="supportedModalities"/>.
+    /// </summary>
+    public static int CountStrippedMedia(
+        IEnumerable<SerializableChatMessage> messages,
+        ModelModality supportedModalities)
+    {
+        var count = 0;
+        foreach (var m in messages)
+        {
+            foreach (var media in m.MediaReferences)
+            {
+                if (!AcceptsModality(supportedModalities, (MediaModality)media.Modality))
+                    count++;
+            }
+        }
+        return count;
+    }
+
+    private static bool AcceptsModality(ModelModality supported, MediaModality media) => media switch
+    {
+        MediaModality.Image => (supported & ModelModality.Image) != 0,
+        MediaModality.Audio => (supported & ModelModality.Audio) != 0,
+        MediaModality.Video => (supported & ModelModality.Video) != 0,
+        _ => false // unknown modality → not accepted
+    };
 
     /// <param name="interpretToolCall">
     /// Optional schema-aware interpreter (the executor's <c>PrepareToolCall</c>) used to

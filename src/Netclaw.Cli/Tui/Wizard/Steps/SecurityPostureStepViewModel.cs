@@ -144,25 +144,8 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
     private static ShellExecutionMode ShellModeFor(DeploymentPosture posture)
         => posture == DeploymentPosture.Personal ? ShellExecutionMode.HostAllowed : ShellExecutionMode.Off;
 
-    // Personal posture gates shell behind an approval prompt by default; the operator can override
-    // this in config for unrestricted shell. Shared by the typed (ContributeConfig) and section
-    // (BuildContribution) emission paths so they cannot drift on this default-deny security default.
     private static ToolAudienceProfiles BuildAudienceProfiles(DeploymentPosture posture)
-    {
-        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
-        if (posture == DeploymentPosture.Personal)
-        {
-            profiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-            {
-                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-                {
-                    ["shell_execute"] = ToolApprovalMode.Approval
-                }
-            };
-        }
-
-        return profiles;
-    }
+        => ToolAudienceProfileDefaults.CreateProfilesForPosture(posture);
 
     public void Dispose()
     {

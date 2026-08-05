@@ -23,6 +23,7 @@ public sealed record ShellCommandDecision(bool Allowed, string? DenyReason = nul
 /// </summary>
 public sealed class ShellCommandPolicy
 {
+    private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
     private readonly IReadOnlyList<DenyPattern> _denyPatterns;
     private readonly IReadOnlyList<RawStringPattern> _rawStringPatterns;
 
@@ -122,8 +123,46 @@ public sealed class ShellCommandPolicy
         if (!rawDecision.Allowed)
             return rawDecision;
 
-        var segments = ShellTokenizer.GetAllCommandSegments(command);
-        foreach (var segment in segments)
+        if (OperatingSystem.IsWindows())
+            return EvaluateLegacySegments(command);
+
+        return EvaluateBashAnalysis(command);
+    }
+
+    /// <summary>
+    /// Evaluates a Bash command with the same structural path that production
+    /// uses on Linux and macOS.
+    /// </summary>
+    internal ShellCommandDecision EvaluateBash(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return ShellCommandDecision.Allow();
+
+        var rawDecision = EvaluateRawString(command);
+        return rawDecision.Allowed ? EvaluateBashAnalysis(command) : rawDecision;
+    }
+
+    private ShellCommandDecision EvaluateBashAnalysis(string command)
+    {
+        var analysis = Analyzer.Analyze(command);
+        if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Clauses.Count == 0)
+            return EvaluateLegacySegments(command);
+
+        foreach (var clause in analysis.Clauses)
+        {
+            var decision = EvaluateClause(clause);
+            if (!decision.Allowed)
+                return decision;
+        }
+
+        return ShellCommandDecision.Allow();
+    }
+
+    private ShellCommandDecision EvaluateLegacySegments(string command)
+    {
+        // The approval matcher does not persist unresolved syntax. Keep the
+        // legacy scan here so known deny forms still fail at this boundary.
+        foreach (var segment in ShellTokenizer.GetAllCommandSegments(command))
         {
             var decision = EvaluateSegment(segment);
             if (!decision.Allowed)
@@ -147,6 +186,30 @@ public sealed class ShellCommandPolicy
     private ShellCommandDecision EvaluateSegment(string segment)
     {
         var tokens = ShellTokenizer.Tokenize(segment).ToList();
+        if (tokens.Count == 0)
+            return ShellCommandDecision.Allow();
+
+        foreach (var pattern in _denyPatterns)
+        {
+            if (pattern.Matches(tokens))
+                return ShellCommandDecision.Deny(pattern.Reason, pattern.Category);
+        }
+
+        return ShellCommandDecision.Allow();
+    }
+
+    private ShellCommandDecision EvaluateClause(ShellSyntaxTree.Clause clause)
+    {
+        var tokens = new List<string>(
+            clause.Verb.Tokens.Count + clause.Args.Count + clause.Redirects.Count);
+        tokens.AddRange(clause.Verb.Tokens);
+        tokens.AddRange(clause.Args
+            .Where(static arg => !arg.IsCwdAttribution)
+            .Select(static arg => arg.Raw));
+        tokens.AddRange(clause.Redirects
+            .Where(static redirect => !string.IsNullOrEmpty(redirect.Target))
+            .Select(static redirect => redirect.Target));
+
         if (tokens.Count == 0)
             return ShellCommandDecision.Allow();
 

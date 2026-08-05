@@ -89,6 +89,17 @@ public sealed class ShellCommandPolicyTests
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }
 
+    [Theory]
+    [InlineData("echo safe | netclaw daemon stop")]
+    [InlineData("printf safe | sudo kill -9 123")]
+    [InlineData("bash -c \"echo safe | netclaw daemon stop\"")]
+    public void Denies_pipeline_with_denied_tail(string command)
+    {
+        var decision = _policy.EvaluateBash(command);
+
+        Assert.False(decision.Allowed);
+    }
+
     [Fact]
     public void Allows_compound_of_safe_commands()
     {
@@ -101,9 +112,15 @@ public sealed class ShellCommandPolicyTests
     [Theory]
     [InlineData("bash -c \"netclaw daemon stop\"")]
     [InlineData("bash -lc \"netclaw daemon stop\"")]
+    [InlineData("bash --noprofile -lc \"netclaw daemon stop\"")]
+    [InlineData("env bash -lc \"netclaw daemon stop\"")]
+    [InlineData("command bash -lc \"netclaw daemon stop\"")]
+    [InlineData("timeout 5 bash -lc \"netclaw daemon stop\"")]
+    [InlineData("nice -n 5 bash -lc \"netclaw daemon stop\"")]
+    [InlineData("bash -c \"echo safe\" && bash -lc \"netclaw daemon stop\"")]
     public void Denies_bash_wrapping_denied_command(string command)
     {
-        var decision = _policy.Evaluate(command);
+        var decision = _policy.EvaluateBash(command);
         Assert.False(decision.Allowed);
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }

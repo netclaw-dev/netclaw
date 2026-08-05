@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionsViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -97,12 +97,7 @@ public sealed class SessionsViewModel : ReactiveViewModel
             return true;
         }
 
-        // Escape quits
-        if (keyInfo.Key == ConsoleKey.Escape)
-        {
-            Shutdown();
-            return true;
-        }
+        // Escape is a no-op at the session picker root; Ctrl+Q is the only quit key.
 
         // N starts a new chat (no resume)
         if (keyInfo.Key == ConsoleKey.N && !keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))

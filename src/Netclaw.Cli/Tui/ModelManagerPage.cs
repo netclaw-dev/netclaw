@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ModelManagerPage.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -96,10 +96,10 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 var text = state switch
                 {
                     ModelManagerState.RoleOverview =>
-                        // Embedded in `netclaw config`, Esc backs out to the dashboard; standalone it exits.
+                        // Embedded in `netclaw config`, Esc backs out to the dashboard; standalone Ctrl+Q quits.
                         ViewModel.IsEmbeddedInConfig
                             ? " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [C] Clear  [Esc] Back  [Ctrl+Q] Quit"
-                            : " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [C] Clear  [Esc] Quit",
+                            : " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [C] Clear  [Ctrl+Q] Quit",
                     ModelManagerState.ConfirmAssignment =>
                         " [Enter] Confirm  [Esc] Cancel",
                     _ =>

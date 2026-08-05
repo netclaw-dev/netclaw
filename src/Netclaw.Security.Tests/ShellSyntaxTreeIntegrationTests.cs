@@ -182,6 +182,20 @@ public sealed class ShellSyntaxTreeIntegrationTests
     }
 
     [Fact]
+    public void Command_string_wrapper_marks_inner_clause()
+    {
+        var parser = new BashParser();
+
+        var result = parser.Parse("bash -c \"git status\"");
+
+        Assert.False(result.IsUnparseable);
+        var clause = Assert.Single(result.Clauses);
+        Assert.True(clause.IsCommandStringWrapped);
+        Assert.Equal("git status", clause.Verb.Joined);
+        Assert.Null(clause.Verb.CanonicalVerb);
+    }
+
+    [Fact]
     public void Leading_line_comment_is_stripped_from_clause_extraction()
     {
         // Regression test for ShellSyntaxTree #25 — bash line comments
@@ -272,7 +286,7 @@ public sealed class ShellSyntaxTreeIntegrationTests
     {
         // A control-flow keyword that opens a newline-separated clause makes
         // the whole parse unparseable (control flow is unsupported in v0.1).
-        // ExtractCandidatesViaBashParser maps that to an empty candidate
+        // The Bash analysis maps that to an empty candidate
         // list, so the approval gate fails closed to a Once/Deny prompt.
         var parser = new BashParser();
 

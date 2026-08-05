@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderCreateViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -187,7 +187,7 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
         switch (CurrentState.Value)
         {
             case ReminderCreateState.Title:
-                Shutdown();
+                // Root: Escape is a no-op, Ctrl+Q quits.
                 return;
             case ReminderCreateState.ScheduleType:
                 CurrentState.Value = ReminderCreateState.Title;
@@ -205,7 +205,7 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
                 CurrentState.Value = ReminderCreateState.NotifyInstructions;
                 break;
             case ReminderCreateState.Done:
-                Shutdown();
+                // Terminal state: Escape is a no-op, Ctrl+Q quits.
                 return;
         }
 

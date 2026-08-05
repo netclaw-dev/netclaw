@@ -1059,11 +1059,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                     RouteRequested?.Invoke("/config");
                     Navigate?.Invoke("/config");
                 }
-                else
-                {
-                    // Standalone `netclaw provider`: backing out past the root exits the app.
-                    Shutdown();
-                }
+                // Standalone `netclaw provider`: backing out past the root is a no-op.
+                // Escape is a cancel key, not a quit key; Ctrl+Q quits.
 
                 break;
         }

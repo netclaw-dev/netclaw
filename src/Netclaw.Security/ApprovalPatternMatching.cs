@@ -142,11 +142,9 @@ public static class ApprovalPatternMatching
     /// <summary>
     /// Returns true when this candidate is a pure side-effect clause that
     /// should not be persisted on Always-here/Always-anywhere clicks. The
-    /// rule is verb-in-skip-list AND no path argument. Redirect detection
-    /// (e.g. <c>echo X &gt; /tmp/log</c>) is implicit: a redirect target
-    /// shows up as the candidate's directory via
-    /// <see cref="ShellTokenizer.ExtractFirstPathArgument"/>, so a candidate
-    /// with a non-null Directory is never considered pure side effect.
+    /// rule is verb-in-skip-list AND no effective directory. The shell
+    /// candidate extractor emits a separate directory candidate for each
+    /// redirect target. Thus, <c>echo X &gt; /tmp/log</c> is not exempt.
     /// </summary>
     /// <remarks>
     /// The side-effect verb set

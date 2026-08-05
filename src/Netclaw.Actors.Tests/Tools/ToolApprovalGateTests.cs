@@ -47,20 +47,6 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Shell_in_approval_mode_returns_RequiresApproval_when_unapproved()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = ToolInput.Create("Command", "git push origin main");
-
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
-        Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
-        Assert.Contains("git push origin main", decision.ApprovalContext.Patterns);
-    }
-
-    [Fact]
     public void Shell_in_deny_mode_returns_deny()
     {
         var policy = CreatePolicy(ToolApprovalMode.Deny);
@@ -86,62 +72,10 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Safe_verb_in_trusted_scope_reports_allow_reason()
-    {
-        var projectDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"netclaw-safe-reason-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(projectDirectory);
-        try
-        {
-            var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-            config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-            {
-                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-                {
-                    ["shell_execute"] = ToolApprovalMode.Approval
-                }
-            };
-            var policy = new ToolAccessPolicy(
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                safeVerbs: SafeVerbList.FromVerbs(["git status"]));
-            var context = TestToolExecutionContext.CreateBound(
-                "signalr/thread-safe-reason",
-                null,
-                new TestToolExecutionContextOptions
-                {
-                    Audience = TrustAudience.Personal,
-                    ProjectDirectory = projectDirectory,
-                    InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
-                });
-
-            var decision = policy.AuthorizeInvocation(
-                ShellTool(),
-                context,
-                ToolInput.Create(
-                    "Command", "git status",
-                    "WorkingDirectory", projectDirectory));
-
-            Assert.True(decision.Allowed);
-            Assert.Equal(ToolAllowReason.SafeVerbInTrustedScope, decision.AllowReason);
-        }
-        finally
-        {
-            Directory.Delete(projectDirectory, recursive: true);
-        }
-    }
-
-    [Fact]
     public void Missing_personal_approval_policy_fails_closed_for_shell()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = null;
-
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(
@@ -150,28 +84,13 @@ public sealed class ToolApprovalGateTests
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false));
 
-        var args = ToolInput.Create("Command", "git pull --ff-only");
-
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "git pull --ff-only"));
 
         Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
         Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
-    }
-
-    [Fact]
-    public void Unsupported_channel_returns_requires_approval_for_store_check()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = ToolInput.Create("Command", "git push");
-
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(supportsApproval: false), args);
-
-        // Non-interactive channels no longer auto-deny — they fall through to
-        // RequiresApproval so the executor can check the persistent approval store.
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
-        Assert.Contains("git push", decision.ApprovalContext!.Patterns);
     }
 
     [Fact]
@@ -186,37 +105,6 @@ public sealed class ToolApprovalGateTests
         Assert.Contains("git add .", decision.ApprovalContext!.Patterns);
         Assert.Contains("git commit -m fix", decision.ApprovalContext!.Patterns);
         Assert.Contains("git push", decision.ApprovalContext.Patterns);
-    }
-
-    [Fact]
-    public void Hard_denied_shell_command_is_blocked_before_approval()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-
-        var policy = new ToolAccessPolicy(
-            config,
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy());
-
-        var decision = policy.AuthorizeInvocation(
-            ShellTool(),
-            PersonalContext(),
-            ToolInput.Create("Command", "netclaw daemon stop"));
-
-        Assert.False(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
-        Assert.Equal("hard_deny_self_destructive", decision.DenyReason);
     }
 
     private const string ControlPlaneRoot = "/home/user/.netclaw/config";

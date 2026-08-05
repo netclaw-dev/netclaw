@@ -12,9 +12,9 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Layer 1.5 of the shell approval pipeline (between the hard-deny list and
 /// the interactive approval gate): when both the candidate verb chain is on
-/// the curated <see cref="SafeVerbList"/> AND the candidate's cwd resolves
-/// under one of the audience-aware safe-space roots, the policy short-circuits
-/// to "approved" without prompting the user.
+/// the supplied <see cref="SafeVerbList"/> AND each effective directory is
+/// under an audience-aware safe-space root, the policy grants access without
+/// a prompt.
 ///
 /// Mirrors <see cref="ScopedFileAccessPolicy"/> for the audience model and
 /// the symlink-segment guard. Personal and Team audiences get
@@ -26,7 +26,7 @@ namespace Netclaw.Actors.Tools;
 /// The policy never relaxes the hard-deny list (layer 1) — that runs first
 /// in <see cref="ToolAccessPolicy"/>. It only relaxes the interactive
 /// approval gate (layer 2) for verbs that have been explicitly classified as
-/// read-only by the bundled safe-verbs list and any user-additive override.
+/// read-only by the supplied safe-verbs list.
 /// </summary>
 internal sealed class ScopedShellSafeVerbPolicy
 {
@@ -38,35 +38,29 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     /// <summary>
-    /// Evaluates a candidate (verb, cwd) pair against the safe-verb policy.
+    /// Evaluates a candidate verb and cwd against the safe-verb policy.
     /// Returns <c>true</c> when the gate should short-circuit to allow with
     /// no user prompt; <c>false</c> when the candidate should fall through
     /// to the existing approval gate.
     /// </summary>
     public bool ShortCircuitsApproval(string candidateVerb, string? cwd, ToolInvocationContext context)
-        => AllShortCircuit([candidateVerb], cwd, context);
+        => AllShortCircuit([new ApprovalCandidate(candidateVerb, Directory: null)], cwd, context);
 
     /// <summary>
-    /// Returns true when every candidate verb in <paramref name="candidateVerbs"/>
-    /// is short-circuited by the safe-verb policy under the supplied
-    /// <paramref name="cwd"/>. Used by the gate to bypass the approval prompt
-    /// only when the entire compound is read-only-in-safe-space; any single
-    /// non-safe candidate falls the whole invocation through to the prompt.
-    /// Cwd-and-roots resolution runs once per call rather than per verb,
-    /// so an N-verb compound costs one path-normalize + one symlink-segment
-    /// scan instead of N.
+    /// Returns true when each candidate has a safe verb and a safe effective
+    /// directory. The candidate directory takes precedence over the cwd.
     /// </summary>
-    public bool AllShortCircuit(IReadOnlyList<string> candidateVerbs, string? cwd, ToolInvocationContext context)
+    public bool AllShortCircuit(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        ToolInvocationContext context)
     {
-        if (candidateVerbs.Count == 0)
+        if (candidates.Count == 0)
             return false;
 
-        if (string.IsNullOrWhiteSpace(cwd))
-            return false;
-
-        foreach (var verb in candidateVerbs)
+        foreach (var candidate in candidates)
         {
-            if (string.IsNullOrWhiteSpace(verb) || !_safeVerbs.Contains(verb))
+            if (string.IsNullOrWhiteSpace(candidate.Verb) || !_safeVerbs.Contains(candidate.Verb))
                 return false;
         }
 
@@ -74,33 +68,31 @@ internal sealed class ScopedShellSafeVerbPolicy
         if (safeRoots.Count == 0)
             return false;
 
-        string fullCwd;
-        try
+        foreach (var candidate in candidates)
         {
-            fullCwd = Path.GetFullPath(cwd);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
+            var effectiveDirectory = candidate.Directory ?? cwd;
+            if (string.IsNullOrWhiteSpace(effectiveDirectory))
+                return false;
 
-        foreach (var root in safeRoots)
-        {
-            if (!PathUtility.IsWithinRoot(fullCwd, root))
-                continue;
+            string fullDirectory;
+            try
+            {
+                fullDirectory = Path.GetFullPath(effectiveDirectory);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
 
-            // A planted symlink under a safe-space root could redirect the
-            // cwd into a path outside that root. Refuse the short-circuit if
-            // any segment of the cwd path is a reparse point — the user can
-            // still grant manually via the interactive prompt, where they
-            // will see the literal cwd they are authorizing.
-            if (PathUtility.ContainsSymlinkSegment(root, fullCwd))
-                continue;
+            var isSafe = safeRoots.Any(root =>
+                PathUtility.IsWithinRoot(fullDirectory, root)
+                && !PathUtility.ContainsSymlinkSegment(root, fullDirectory));
 
-            return true;
+            if (!isSafe)
+                return false;
         }
 
-        return false;
+        return true;
     }
 
     /// <summary>

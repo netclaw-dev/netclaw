@@ -196,7 +196,10 @@ public static partial class SessionProtocol
         Timeout,
 
         /// <summary>Error source is unclassified (e.g. compaction failures).</summary>
-        Unknown
+        Unknown,
+
+        /// <summary>The active model cannot accept the complete session input.</summary>
+        InputCompatibility
     }
 
     /// <summary>
