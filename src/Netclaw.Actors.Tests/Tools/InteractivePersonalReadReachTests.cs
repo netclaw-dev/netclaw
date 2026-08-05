@@ -164,7 +164,7 @@ public sealed class InteractivePersonalReadReachTests : IDisposable
                 ProjectDirectory = null,
                 ChannelType = interactive ? "signalr" : "reminder"
             });
-        var tool = new AttachFileTool(new ToolConfig(), new NetclawPaths());
+        var tool = new AttachFileTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
         var args = ToolInput.Create("Path", outsideFile);
 
         var result = await tool.ExecuteAsync(args, context.Invocation, CancellationToken.None);
@@ -179,5 +179,52 @@ public sealed class InteractivePersonalReadReachTests : IDisposable
             Assert.Contains("Error", result);
             Assert.Empty(context.FileAttachments);
         }
+    }
+
+    [Fact]
+    public async Task Attach_tool_denies_control_plane_files_even_with_interactive_reach()
+    {
+        // BLOCKER regression (#1724): attach must use the same hard-deny surface
+        // as file_read/file_list, so interactive Personal reach cannot ship
+        // secrets/keys/db/pid/lock that shell cannot even reference.
+        var secretsPath = Path.Combine(_outsideDir, "secrets.json");
+        await File.WriteAllTextAsync(secretsPath, """{"apiKey":"top-secret"}""", TestContext.Current.CancellationToken);
+
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/s1",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true),
+                ProjectDirectory = null,
+                ChannelType = "signalr"
+            });
+        var tool = new AttachFileTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([secretsPath]));
+        var args = ToolInput.Create("Path", secretsPath);
+
+        var result = await tool.ExecuteAsync(args, context.Invocation, CancellationToken.None);
+
+        Assert.Contains("cannot be read", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(context.FileAttachments);
+    }
+
+    [Fact]
+    public void Set_working_directory_stays_roots_scoped_for_interactive_personal()
+    {
+        // BLOCKER regression (#1724): set_working_directory must NOT inherit
+        // shell-equivalent reach — its declaration widens the safe-verb
+        // auto-approve zone and feeds project identity files into the prompt.
+        var config = BuildPersonalReadRootsConfig(_sessionDir);
+        var policy = new ScopedFileAccessPolicy(config, _paths);
+        var ctx = Ctx(TrustAudience.Personal, autonomous: false);
+
+        var outside = Path.Combine(_outsideDir, "notes.txt");
+
+        // Reads resolve (shell-equivalent reach)...
+        Assert.True(policy.TryResolveReadPath(outside, ctx, out _, out _));
+        // ...but the working-directory declaration stays roots-scoped.
+        Assert.False(policy.TryResolveWorkingDirectory(outside, ctx, out _, out _));
     }
 }

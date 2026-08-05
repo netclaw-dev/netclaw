@@ -169,6 +169,10 @@ public sealed class ToolPathPolicyTests
         };
         var shellIndicators = new[]
         {
+            // ConfigDirectory is a directory-scoped shell indicator in production
+            // (src/Netclaw.Daemon/Program.cs), so the whole config dir is denied
+            // for shell references AND (via the IsReadDenied union) for reads.
+            "/home/user/.netclaw/config",
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/config/webhooks",
             "/home/user/.netclaw/keys",
@@ -223,6 +227,7 @@ public sealed class ToolPathPolicyTests
     // indicator list, so read tools cannot reach control-plane lifecycle files
     // that shell cannot even reference (#1724).
     [Theory]
+    [InlineData("/home/user/.netclaw/config/netclaw.json")]
     [InlineData("/home/user/.netclaw/netclaw.db")]
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
@@ -249,14 +254,15 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
-    public void CommandReferencesDeniedPath_still_allows_ls_of_config_directory()
+    public void CommandReferencesDeniedPath_denies_ls_of_config_directory()
     {
-        // Regression guard: directory-scoped writeDeny entries must not bleed
-        // into the shell substring indicator set, otherwise every shell command
-        // whose text contains ".netclaw/config" would be rejected.
+        // Production includes ConfigDirectory in the shell indicator list
+        // (src/Netclaw.Daemon/Program.cs), so `ls ~/.netclaw/config` is denied
+        // by the substring indicator scan. This mirrors production behavior;
+        // the fixture now includes ConfigDirectory to match.
         var policy = CreateProductionPolicy();
-        Assert.False(policy.CommandReferencesDeniedPath("ls ~/.netclaw/config"));
-        Assert.False(policy.CommandReferencesDeniedPath("stat ~/.netclaw/config"));
+        Assert.True(policy.CommandReferencesDeniedPath("ls ~/.netclaw/config"));
+        Assert.True(policy.CommandReferencesDeniedPath("stat ~/.netclaw/config"));
     }
 
     [Fact]

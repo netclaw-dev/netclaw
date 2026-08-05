@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class AttachFileToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly AttachFileTool _tool = new(new ToolConfig(), new NetclawPaths());
+    private readonly AttachFileTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
     public void Dispose()
     {

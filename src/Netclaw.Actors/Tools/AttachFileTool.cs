@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="AttachFileTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -23,14 +23,16 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 {
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
         [property: Description("Absolute path to the file to attach")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
-    public AttachFileTool(ToolConfig config, NetclawPaths paths)
+    public AttachFileTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+        _pathPolicy = pathPolicy;
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -43,6 +45,12 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 
         if (!_fileAccessPolicy.TryResolveAttachPath(args.Path, context, out var requestedPath, out var accessError))
             return Task.FromResult(accessError);
+
+        // Same hard-deny surface as file_read/file_list: attach must never ship
+        // control-plane files (secrets, keys, webhooks, config, sqlite, pid,
+        // lock, restart manifest) that shell cannot even reference (#1724).
+        if (_pathPolicy.IsReadDenied(requestedPath))
+            return Task.FromResult(FileToolErrors.CredentialReadDenied(requestedPath));
 
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
