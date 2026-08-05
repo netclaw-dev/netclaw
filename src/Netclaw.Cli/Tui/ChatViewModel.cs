@@ -214,7 +214,7 @@ public partial class ChatViewModel : ReactiveViewModel
         }
     }
 
-    public void RequestAppShutdown()
+    public virtual void RequestAppShutdown()
     {
         Shutdown();
     }
@@ -276,6 +276,27 @@ public partial class ChatViewModel : ReactiveViewModel
             return Task.CompletedTask;
 
         return SubmitInteractionSelectionAsync(option.Key.Value);
+    }
+
+    /// <summary>
+    /// Denies the current pending approval interaction, if one exists.
+    /// Maps to the first-class <see cref="ApprovalOptionKeys.Deny"/> wire key,
+    /// so the session records a hard refusal of this call only (no ban on the
+    /// verb for future invocations). Called by the TUI when the user presses
+    /// Escape while an approval prompt is up — Escape means "cancel the
+    /// dialog", not "quit the app" (#1757).
+    /// </summary>
+    public virtual Task DenyPendingInteractionAsync()
+    {
+        if (CurrentInteraction is null)
+            return Task.CompletedTask;
+
+        var denyOption = CurrentInteraction.Options.FirstOrDefault(candidate =>
+            string.Equals(candidate.Key.Value, ApprovalOptionKeys.Deny, StringComparison.Ordinal));
+        if (denyOption is null)
+            return Task.CompletedTask;
+
+        return SubmitInteractionSelectionAsync(denyOption.Key.Value);
     }
 
     /// <summary>
@@ -513,7 +534,7 @@ public partial class ChatViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    private async Task SubmitInteractionSelectionAsync(string selectedKey)
+    protected virtual async Task SubmitInteractionSelectionAsync(string selectedKey)
     {
         if (CurrentInteraction is null)
             return;

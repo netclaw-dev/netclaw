@@ -298,12 +298,19 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             return;
         }
 
-        // Escape: cancel or quit
+        // Escape: cancel or quit. With an approval prompt up, Escape denies
+        // the pending interaction (Termina's default "cancel" semantics, and
+        // the convention every other NetClaw page follows) instead of tearing
+        // down the whole session (#1757). Bare Escape only quits when idle.
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             if (ViewModel.IsGenerating.Value)
             {
                 // TODO: cancel generation when supported
+            }
+            else if (ViewModel.HasPendingInteraction)
+            {
+                _ = ViewModel.DenyPendingInteractionAsync();
             }
             else
             {

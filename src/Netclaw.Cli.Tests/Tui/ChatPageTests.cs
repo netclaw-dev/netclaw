@@ -175,6 +175,65 @@ public sealed class ChatPageTests
     }
 
     [Fact]
+    public async Task Escape_WithPendingInteraction_DeniesInsteadOfQuitting()
+    {
+        // Regression for #1757: pressing Escape during an approval prompt used
+        // to call RequestAppShutdown() and tear down the whole session. It must
+        // now act as a deny on the pending interaction — the session stays
+        // alive and the deny key is what gets submitted to the daemon.
+        // The ordered event list proves the sequence: Escape submits deny,
+        // and only the explicit Ctrl+Q afterwards shuts the app down.
+        var (terminal, app, vm) = CreateHeadlessApp(BuildApproval(LongShellBody), out var input);
+
+        input.EnqueueKey(ConsoleKey.Escape); // deny the approval
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // then quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { "submit:deny", "shutdown" }, vm.LifecycleEvents);
+    }
+
+    [Fact]
+    public async Task Escape_WithNoPendingInteraction_StillQuits()
+    {
+        // Bare Escape with no approval prompt keeps the historical behavior:
+        // it quits the app. Only the approval-prompt case routes to deny.
+        var (terminal, app, vm) = CreateHeadlessApp(seed: null, out var input);
+
+        input.EnqueueKey(ConsoleKey.Escape);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { "shutdown" }, vm.LifecycleEvents);
+    }
+
+    [Fact]
+    public async Task DenyPendingInteraction_NoDenyOption_DoesNotSubmit()
+    {
+        // If an approval interaction somehow lacks a deny option, denying must
+        // be a no-op rather than submitting an unrelated option — and Escape
+        // must still not quit the session.
+        var noDenyOptions = new[]
+        {
+            new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel)
+        };
+        var (terminal, app, vm) = CreateHeadlessApp(
+            BuildApproval(LongShellBody), out var input, options: noDenyOptions);
+
+        input.EnqueueKey(ConsoleKey.Escape); // attempt deny
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // then quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Null(vm.LastSubmittedInteractionKey);
+        Assert.Equal(new[] { "shutdown" }, vm.LifecycleEvents);
+    }
+
+    [Fact]
     public void NewInteraction_ResetsCollapsedState()
     {
         // This case operates directly on the ViewModel — the goal is to
@@ -516,6 +575,28 @@ public sealed class ChatPageTests
     {
         private readonly ToolInteractionRequest? _seed;
 
+        /// <summary>
+        /// Set when the page routes Escape to app shutdown (the pre-#1757
+        /// buggy path). Tests assert this stays false while an approval prompt
+        /// is pending.
+        /// </summary>
+        public bool ShutdownRequested => LifecycleEvents.Contains("shutdown");
+
+        /// <summary>
+        /// Ordered record of ViewModel lifecycle events, in the order they
+        /// happened. Lets tests prove that Escape submitted a deny BEFORE the
+        /// explicit Ctrl+Q quit — the flag alone can't distinguish which key
+        /// requested shutdown.
+        /// </summary>
+        public List<string> LifecycleEvents { get; } = new();
+
+        /// <summary>
+        /// Captures the option key submitted to the daemon. Headless tests
+        /// cannot reach a live daemon, so the submission seam records the key
+        /// the ViewModel resolved and simulates a successful response.
+        /// </summary>
+        public string? LastSubmittedInteractionKey { get; private set; }
+
         public TestChatViewModel(ToolInteractionRequest? seed)
             : base(
                 // 127.0.0.1:1 is never dialed: InitializeSessionAsync is
@@ -538,6 +619,19 @@ public sealed class ChatPageTests
             base.OnActivated();
             if (_seed is not null)
                 SeedPendingInteractionForTesting(_seed);
+        }
+
+        public override void RequestAppShutdown()
+        {
+            LifecycleEvents.Add("shutdown");
+            base.RequestAppShutdown();
+        }
+
+        protected override Task SubmitInteractionSelectionAsync(string selectedKey)
+        {
+            LastSubmittedInteractionKey = selectedKey;
+            LifecycleEvents.Add($"submit:{selectedKey}");
+            return Task.CompletedTask;
         }
     }
 }
