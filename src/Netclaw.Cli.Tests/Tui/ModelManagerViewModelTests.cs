@@ -171,7 +171,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_WritesMetadata()
+    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_OmitsCapabilityOverrides()
     {
         WriteConfig(new Dictionary<string, object>
         {
@@ -207,9 +207,9 @@ public sealed class ModelManagerViewModelTests : IDisposable
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
-        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
-        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
-        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+        Assert.False(main.TryGetProperty("ContextWindow", out _));
+        Assert.False(main.TryGetProperty("InputModalities", out _));
+        Assert.False(main.TryGetProperty("OutputModalities", out _));
     }
 
     [Fact]

@@ -235,17 +235,10 @@ internal static class ModelCommand
             }
         }
 
-        // Only an explicit --context-window short-circuits the probe: it supplies the one datum the
-        // probe would discover, so it is the documented "configure this model manually" escape
-        // hatch. A modality override must NOT skip the probe — the probe also validates the model
-        // exists and discovers the context window, and WriteRole already lets an explicit modality
-        // override win over any discovered value, so it is safe to keep probing. --clear-context-window
-        // likewise keeps the probe: "re-detect" is exactly what the probe does.
-        var manualMetadataSupplied = contextWindow.HasValue;
-
-        DiscoveredModel? discoveredModel = null;
+        // An explicit context window permits a manual model ID.
+        // All other OAuth selections require validation against the live model list.
         var provenance = ModelDiscoverySource.Manual;
-        if (!manualMetadataSupplied && ShouldProbeForMetadata(providerEntry))
+        if (!contextWindow.HasValue && ShouldProbeForMetadata(providerEntry))
         {
             probe ??= ProviderCommand.CreateDefaultRegistry();
             ProviderProbeResult probeResult;
@@ -258,7 +251,7 @@ internal static class ModelCommand
                 return 1;
             }
 
-            discoveredModel = probeResult.Models.FirstOrDefault(m =>
+            var discoveredModel = probeResult.Models.FirstOrDefault(m =>
                 string.Equals(m.ModelId.Value, modelId, StringComparison.OrdinalIgnoreCase));
             if (discoveredModel is null)
             {
@@ -274,9 +267,8 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Definitions own model metadata, so role switches never destroy another model's
-        // operator-owned overrides. Discovery seeds only a new definition; explicit input edits
-        // an existing definition and absence remains runtime detection (#1127, #1610).
+        // Definitions own model metadata. Role switches preserve another model's overrides.
+        // Only explicit operator input persists capability overrides (#1756).
         ModelEntryWriter.WriteRole(
             modelsSection,
             roleKey,
@@ -285,8 +277,7 @@ internal static class ModelCommand
             provenance,
             contextWindowOverride,
             inputOverride,
-            outputOverride,
-            discoveredModel);
+            outputOverride);
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");

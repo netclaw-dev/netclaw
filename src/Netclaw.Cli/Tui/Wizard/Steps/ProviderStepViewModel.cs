@@ -462,10 +462,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         {
             Provider = providerName,
             ModelId = SelectedModelId,
-            ContextWindow = selectedModel?.ContextWindowTokens,
             Provenance = selectedModel is null ? ModelDiscoverySource.Manual : ModelDiscoverySource.Live,
-            InputModalities = selectedModel?.InputModalities,
-            OutputModalities = selectedModel?.OutputModalities,
         };
     }
 

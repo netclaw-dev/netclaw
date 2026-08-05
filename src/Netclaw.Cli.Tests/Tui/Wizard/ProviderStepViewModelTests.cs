@@ -240,7 +240,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ContributeConfig_SelectedDiscoveredModel_CarriesModelMetadata()
+    public void ContributeConfig_SelectedDiscoveredModel_OmitsCapabilityOverrides()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);
         step.SelectedProviderType = "OpenAI";
@@ -258,10 +258,16 @@ public sealed class ProviderStepViewModelTests : IDisposable
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Model);
-        Assert.Equal(512000, builder.Model!.ContextWindow);
-        Assert.Equal(ModelDiscoverySource.Live, builder.Model.Provenance);
-        Assert.Equal(ModelModality.Text | ModelModality.Image, builder.Model.InputModalities);
-        Assert.Equal(ModelModality.Text, builder.Model.OutputModalities);
+        Assert.Equal(ModelDiscoverySource.Live, builder.Model!.Provenance);
+
+        var config = builder.BuildConfigDictionary();
+        var models = (Dictionary<string, object>)config["Models"];
+        var roles = (Dictionary<string, object>)models["Roles"];
+        var definitions = (Dictionary<string, object>)models["Definitions"];
+        var main = (Dictionary<string, object>)definitions[(string)roles["Main"]];
+        Assert.False(main.ContainsKey("ContextWindow"));
+        Assert.False(main.ContainsKey("InputModalities"));
+        Assert.False(main.ContainsKey("OutputModalities"));
     }
 
     [Fact]
@@ -366,7 +372,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ContributeConfig_DiscoveredModelWithoutModalities_PersistsNone()
+    public void ContributeConfig_DiscoveredModelWithoutModalities_OmitsCapabilityOverrides()
     {
         // An openai-compatible /v1/models listing reports no modalities, so the
         // discovered model leaves them unset. The wizard must NOT bake a guessed Text
@@ -386,9 +392,16 @@ public sealed class ProviderStepViewModelTests : IDisposable
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Model);
-        Assert.Equal(32768, builder.Model!.ContextWindow);
-        Assert.Null(builder.Model.InputModalities);
-        Assert.Null(builder.Model.OutputModalities);
+        Assert.Equal(ModelDiscoverySource.Live, builder.Model!.Provenance);
+
+        var config = builder.BuildConfigDictionary();
+        var models = (Dictionary<string, object>)config["Models"];
+        var roles = (Dictionary<string, object>)models["Roles"];
+        var definitions = (Dictionary<string, object>)models["Definitions"];
+        var main = (Dictionary<string, object>)definitions[(string)roles["Main"]];
+        Assert.False(main.ContainsKey("ContextWindow"));
+        Assert.False(main.ContainsKey("InputModalities"));
+        Assert.False(main.ContainsKey("OutputModalities"));
     }
 
     [Fact]
