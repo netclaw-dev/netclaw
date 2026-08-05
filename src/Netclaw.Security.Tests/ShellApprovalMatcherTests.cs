@@ -528,6 +528,45 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
     private static Dictionary<string, object?> Args(string command) => new() { ["Command"] = command };
 
+    private static Dictionary<string, object?> Args(string command, string workingDirectory)
+        => new()
+        {
+            ["Command"] = command,
+            ["WorkingDirectory"] = workingDirectory
+        };
+
+    public static TheoryData<string, string[]> ParserPathScopeCases => new()
+    {
+        {
+            "curl --data=@request.json https://example.invalid/api",
+            ["project"]
+        },
+        {
+            "curl --data=@{external}/request.json https://example.invalid/api",
+            ["external"]
+        },
+        {
+            "curl -D ./headers.txt --data=@{external}/request.json https://example.invalid/api",
+            ["project", "external"]
+        },
+        {
+            "curl -D {external}/headers.txt --data=@request.json https://example.invalid/api",
+            ["external", "project"]
+        },
+        {
+            "curl -D ./headers.txt --data=@request.json https://example.invalid/api",
+            ["project"]
+        },
+        {
+            "curl --data=@{external}/request.json https://example.invalid/api > ./response.json",
+            ["external", "project"]
+        },
+        {
+            "curl --data=@$REQUEST_FILE https://example.invalid/api",
+            []
+        }
+    };
+
     /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
@@ -538,6 +577,37 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     /// runners instead of hiding the gap behind an early-return.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash parser path scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(ParserPathScopeCases))]
+    public void ExtractCandidates_uses_all_parser_path_scopes(
+        string commandTemplate,
+        string[] expectedScopeNames)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-scopes-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var command = commandTemplate.Replace(
+            "{external}",
+            externalDirectory,
+            StringComparison.Ordinal);
+
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, projectDirectory));
+        var expectedDirectories = expectedScopeNames
+            .Select(scope => scope == "project" ? projectDirectory : externalDirectory)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        var actualDirectories = candidates
+            .Select(candidate => candidate.Directory!)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.All(candidates, candidate => Assert.Equal("curl", candidate.Verb));
+        Assert.Equal(expectedDirectories, actualDirectories);
+    }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_strips_path_from_verb()
@@ -957,6 +1027,17 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             approvedEntries,
             cwd: null));
     }
+}
+
+/// <summary>
+/// Supplies source-level Slopwatch suppressions without a runtime package dependency.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+internal sealed class SlopwatchSuppressAttribute(string ruleId, string reason) : Attribute
+{
+    public string RuleId { get; } = ruleId;
+
+    public string Reason { get; } = reason;
 }
 
 public sealed class DefaultApprovalMatcherTests
