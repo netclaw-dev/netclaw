@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpCommandTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -33,6 +33,15 @@ public sealed class McpCommandTests : IDisposable
         _dir.Dispose();
     }
 
+    /// <summary>
+    /// An HTTP client factory whose well-known metadata probes always 404, so
+    /// <c>mcp add</c> tests never touch the network and keep the standard
+    /// permissions-only output.
+    /// </summary>
+    private static Func<HttpClient> NoProbeClientFactory()
+        => () => new HttpClient(new FakeHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)));
+
     [Fact]
     public async Task Add_StdioServer_WritesConfig()
     {
@@ -52,7 +61,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_HttpServer_WritesConfig()
     {
         var args = new[] { "mcp", "add", "--transport", "http", "textforge", "https://textforge.net/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
 
         Assert.Equal(0, exitCode);
 
@@ -111,7 +120,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_WritesEmptyGrantsAndApprovalDefaultsAcrossAudiences()
     {
         var args = new[] { "mcp", "add", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
 
         Assert.Equal(0, exitCode);
 
@@ -214,7 +223,7 @@ public sealed class McpCommandTests : IDisposable
         File.WriteAllText(_paths.NetclawConfigPath, JsonSerializer.Serialize(initial));
 
         var args = new[] { "mcp", "add", "--transport", "http", "new-server", "https://new.example/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
 
         Assert.Equal(0, exitCode);
 
@@ -272,7 +281,7 @@ public sealed class McpCommandTests : IDisposable
         File.WriteAllText(_paths.NetclawConfigPath, JsonSerializer.Serialize(initial));
 
         var args = new[] { "mcp", "add", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
 
         Assert.Equal(0, exitCode);
 
@@ -289,6 +298,147 @@ public sealed class McpCommandTests : IDisposable
 
         // Pre-existing property should still be there.
         Assert.Equal("All", personal.GetProperty("McpServersMode").GetString());
+    }
+
+    // ── Add-time OAuth detection and guidance ──
+
+    private static Func<HttpClient> OAuthProbeClientFactory(
+        bool withRegistrationEndpoint = true,
+        bool withProtectedResource = true)
+    {
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            var url = request.RequestUri!.ToString();
+            if (withProtectedResource && url.EndsWith("/.well-known/oauth-protected-resource/mcp", StringComparison.Ordinal))
+            {
+                return FakeHttpMessageHandler.JsonResponse(new
+                {
+                    resource = "https://mcp.notion.com/mcp",
+                    authorization_servers = new[] { "https://mcp.notion.com" },
+                    scopes_supported = new[] { "default" },
+                    resource_name = "Notion MCP (Beta)"
+                });
+            }
+            if (url.EndsWith("/.well-known/oauth-authorization-server", StringComparison.Ordinal))
+            {
+                var registrationEndpoint = withRegistrationEndpoint ? "https://mcp.notion.com/register" : null;
+                return FakeHttpMessageHandler.JsonResponse(new
+                {
+                    issuer = "https://mcp.notion.com",
+                    registration_endpoint = registrationEndpoint,
+                    token_endpoint_auth_methods_supported = new[] { "none" }
+                });
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        return () => new HttpClient(handler);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Add_HttpOAuthServer_GuidesAuthFirst(bool withRegistrationEndpoint)
+    {
+        var args = new[] { "mcp", "add", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, output: _output, httpClientFactory: OAuthProbeClientFactory(withRegistrationEndpoint));
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("Added MCP server 'notion' (http)", output);
+        Assert.Contains("Detected: this server requires OAuth authorization", output);
+
+        if (withRegistrationEndpoint)
+        {
+            Assert.Contains("Automatic client registration is supported.", output);
+        }
+        else
+        {
+            Assert.Contains("Re-add with a pre-registered client", output);
+            Assert.Contains("--client-id <CLIENT_ID>", output);
+        }
+
+        var authIdx = output.IndexOf("netclaw mcp auth notion", StringComparison.Ordinal);
+        var permissionsIdx = output.LastIndexOf("netclaw mcp permissions", StringComparison.Ordinal);
+        Assert.True(authIdx >= 0, "output should name the auth step");
+        Assert.True(permissionsIdx > authIdx, "auth step should come before the permissions step");
+    }
+
+    [Fact]
+    public async Task Add_HttpServerWithoutOAuthMetadata_KeepsPermissionsOnlyGuidance()
+    {
+        var args = new[] { "mcp", "add", "--transport", "http", "plain", "https://plain.example/mcp" };
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.DoesNotContain("Detected:", output);
+        Assert.DoesNotContain("netclaw mcp auth", output);
+        Assert.Contains("Next: run `netclaw mcp permissions`", output);
+    }
+
+    [Fact]
+    public async Task Add_HttpServerWithAuthorizationHeader_SkipsProbe()
+    {
+        var args = new[] { "mcp", "add", "--transport", "http", "--header", "Authorization: Bearer test-token", "myapi", "https://api.example.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, output: _output, httpClientFactory: () => new HttpClient(
+                new FakeHttpMessageHandler(_ => throw new InvalidOperationException("probe must not run for header-auth servers"))));
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("Detected:", _output.ToString());
+        Assert.DoesNotContain("netclaw mcp auth", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_NoDaemon_PrintsFallbackHint()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, output: _output, httpClientFactory: NoProbeClientFactory());
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("Next:", output);
+        Assert.Contains("1. Authorize:   netclaw mcp auth notion", output);
+        Assert.Contains("--auth: daemon API not available. Run `netclaw mcp auth notion` once the daemon is running.", output);
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_DaemonRejects_PropagatesAuthErrorForAddedServer()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/oauth/start/notion" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, daemonApi, output: _output, httpClientFactory: NoProbeClientFactory());
+
+        // The auth flow must target the added server ('notion'), not the '--auth'
+        // flag position — a wrong name would print "MCP server '--auth' not found."
+        Assert.Equal(1, exitCode);
+        Assert.Contains("HTTP 403 Forbidden", _output.ToString());
+        Assert.Contains("notion", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_OnStdio_Ignored()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "stdio", "local", "--", "npx", "-y", "@local/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("--auth ignored: OAuth is only for HTTP/SSE servers.", output);
+        Assert.Contains("netclaw mcp permissions", output);
     }
 
     [Fact]
@@ -352,7 +502,7 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             ["mcp", "add", "--transport", "http", "textforge", "https://textforge.net/mcp"],
-            _paths, output: _output);
+            _paths, output: _output, httpClientFactory: NoProbeClientFactory());
 
         var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
         {
@@ -549,7 +699,8 @@ public sealed class McpCommandTests : IDisposable
         await McpCommand.RunAsync(
             ["mcp", "add", "--transport", "http", "oauth", "https://mcp.example/mcp"],
             _paths,
-            output: _output);
+            output: _output,
+            httpClientFactory: NoProbeClientFactory());
         var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
         {
             "/api/mcp/oauth/start/oauth" => new HttpResponseMessage(HttpStatusCode.Forbidden),
