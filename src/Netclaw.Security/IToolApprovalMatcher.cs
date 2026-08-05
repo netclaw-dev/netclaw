@@ -349,10 +349,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             _ => staticPrefix[..separator]
         };
 
-        var leafPattern = path[(separator + 1)..];
         var coveringDirectory = ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
         if (coveringDirectory is null
-            || HasMatchingSymlink(coveringDirectory, leafPattern))
+            || ContainsSymlinkEntry(coveringDirectory))
         {
             return null;
         }
@@ -360,7 +359,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return coveringDirectory;
     }
 
-    private static bool HasMatchingSymlink(string directory, string leafPattern)
+    private static bool ContainsSymlinkEntry(string directory)
     {
         if (!Directory.Exists(directory))
             return false;
@@ -369,21 +368,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
             {
-                var name = Path.GetFileName(entry);
-                if (name.StartsWith(".", StringComparison.Ordinal)
-                    && !leafPattern.StartsWith(".", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                // FileSystemName covers '*' and '?'. A bracket expression is
-                // a Bash feature, so inspect every symlink in that directory.
-                var couldMatch = leafPattern.Contains('[', StringComparison.Ordinal)
-                    || System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(
-                        leafPattern,
-                        name,
-                        ignoreCase: false);
-                if (couldMatch && PathUtility.ContainsSymlinkSegment(directory, entry))
+                // Netclaw does not reproduce Bash glob rules here. Unicode,
+                // brackets, and escapes differ from .NET wildcard rules.
+                // Any symlink makes the leaf expansion unsafe to persist.
+                if (PathUtility.ContainsSymlinkSegment(directory, entry))
                     return true;
             }
 

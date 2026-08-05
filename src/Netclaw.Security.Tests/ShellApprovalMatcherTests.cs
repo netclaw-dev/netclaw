@@ -599,6 +599,13 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         { "rm /tmp/*/../../etc/*.bak" }
     };
 
+    public static TheoryData<string, string> SymlinkLeafGlobCases => new()
+    {
+        { "cat artifacts/*.txt", "leak.txt" },
+        { "cat artifacts/?.txt", "😀.txt" },
+        { "cat artifacts/\\.*", ".leak" }
+    };
+
     /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
@@ -688,15 +695,16 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [SlopwatchSuppress("SW001", "This test verifies Bash symlink glob behavior, which does not apply to the Windows shell parser.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void Leaf_glob_that_matches_symlink_fails_closed()
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(SymlinkLeafGlobCases))]
+    public void Leaf_glob_in_directory_with_symlink_fails_closed(string command, string linkName)
     {
         var root = Path.Combine(Path.GetTempPath(), $"netclaw-glob-symlink-{Guid.NewGuid():N}");
         var projectDirectory = Path.Combine(root, "project");
         var artifactsDirectory = Path.Combine(projectDirectory, "artifacts");
         var externalDirectory = Path.Combine(root, "external");
         var externalFile = Path.Combine(externalDirectory, "secret.txt");
-        var link = Path.Combine(artifactsDirectory, "leak.txt");
+        var link = Path.Combine(artifactsDirectory, linkName);
         Directory.CreateDirectory(artifactsDirectory);
         Directory.CreateDirectory(externalDirectory);
         File.WriteAllText(externalFile, "secret");
@@ -704,7 +712,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         try
         {
-            var arguments = Args("cat artifacts/*.txt", projectDirectory);
+            var arguments = Args(command, projectDirectory);
 
             Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
             Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
