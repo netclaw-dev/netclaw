@@ -304,13 +304,24 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         // down the whole session (#1757). Bare Escape only quits when idle.
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            if (ViewModel.IsGenerating.Value)
+            // A pending approval prompt always takes precedence. IsGenerating
+            // is cleared when a ToolInteractionRequest arrives, but the UI
+            // thread can observe a stale value, so the prompt check must come
+            // first — otherwise Escape gets swallowed by the generation-cancel
+            // TODO branch and the user has to press it again.
+            if (ViewModel.HasPendingInteraction)
             {
-                // TODO: cancel generation when supported
-            }
-            else if (ViewModel.HasPendingInteraction)
-            {
+                // Fire-and-forget is safe: SubmitInteractionSelectionAsync
+                // catches daemon exceptions internally and re-presents the
+                // prompt (or shows a reconnect status) on failure.
                 _ = ViewModel.DenyPendingInteractionAsync();
+            }
+            else if (ViewModel.IsGenerating.Value)
+            {
+                // TODO: cancel generation when supported (#1757 follow-up).
+                // For now, tell the user instead of silently eating the key.
+                ViewModel.StatusMessage.Value = "Cancel generation is not supported yet.";
+                ViewModel.RequestRedraw();
             }
             else
             {

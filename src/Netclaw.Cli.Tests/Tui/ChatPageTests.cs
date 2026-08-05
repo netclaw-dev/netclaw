@@ -191,7 +191,46 @@ public sealed class ChatPageTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(new[] { "submit:deny", "shutdown" }, vm.LifecycleEvents);
+        Assert.Equal(new[] { "deny:called", "submit:deny", "shutdown" }, vm.LifecycleEvents);
+    }
+
+    [Fact]
+    public async Task Escape_WithPendingInteractionAndStaleGenerating_Denies()
+    {
+        // The reorder fix: a pending approval prompt must win over the
+        // generation-cancel branch even when IsGenerating still reads true
+        // (stale flag race — the daemon output handler clears it on arrival,
+        // but the UI thread can observe the pre-clear value). Pre-fix, Escape
+        // took the IsGenerating arm, swallowed the key, and only quit after a
+        // second Escape; the prompt was never denied.
+        var (terminal, app, vm) = CreateHeadlessApp(
+            BuildApproval(LongShellBody), out var input, startGenerating: true);
+
+        input.EnqueueKey(ConsoleKey.Escape); // deny the approval
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // then quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { "deny:called", "submit:deny", "shutdown" }, vm.LifecycleEvents);
+    }
+
+    [Fact]
+    public async Task Escape_WhileGenerating_ShowsStatusInsteadOfQuitting()
+    {
+        // Escape during generation can't cancel the turn yet (separate TODO),
+        // but it must NOT quit the app silently and must NOT eat the key
+        // without feedback — the user gets a status message instead.
+        var (terminal, app, vm) = CreateHeadlessApp(seed: null, out var input, startGenerating: true);
+
+        input.EnqueueKey(ConsoleKey.Escape); // no-op + status message
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { "shutdown" }, vm.LifecycleEvents);
+        Assert.Contains("cancel", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -230,7 +269,11 @@ public sealed class ChatPageTests
         await app.RunAsync(cts.Token);
 
         Assert.Null(vm.LastSubmittedInteractionKey);
-        Assert.Equal(new[] { "shutdown" }, vm.LifecycleEvents);
+        // The "deny:called" marker proves Escape routed to the deny path even
+        // though the interaction carried no deny option — the no-op branch
+        // ran, and nothing bogus was submitted. Without the marker this test
+        // would pass vacuously even if the page never called deny at all.
+        Assert.Equal(new[] { "deny:called", "shutdown" }, vm.LifecycleEvents);
     }
 
     [Fact]
@@ -530,7 +573,8 @@ public sealed class ChatPageTests
     private static (VirtualTerminal Terminal, TerminaApplication App, TestChatViewModel Vm)
         CreateHeadlessApp(ToolInteractionRequest? seed, out VirtualInputSource input,
             int width = 120, int height = 40,
-            IReadOnlyList<ToolInteractionOption>? options = null)
+            IReadOnlyList<ToolInteractionOption>? options = null,
+            bool startGenerating = false)
     {
         var terminal = new VirtualTerminal(width, height);
         var virtualInput = new VirtualInputSource();
@@ -553,7 +597,7 @@ public sealed class ChatPageTests
                         : options is null
                             ? seed
                             : seed with { Options = options };
-                    capturedVm = new TestChatViewModel(effectiveSeed);
+                    capturedVm = new TestChatViewModel(effectiveSeed, startGenerating);
                     return capturedVm;
                 });
         });
@@ -574,6 +618,7 @@ public sealed class ChatPageTests
     private sealed class TestChatViewModel : ChatViewModel
     {
         private readonly ToolInteractionRequest? _seed;
+        private readonly bool _startGenerating;
 
         /// <summary>
         /// Set when the page routes Escape to app shutdown (the pre-#1757
@@ -597,7 +642,7 @@ public sealed class ChatPageTests
         /// </summary>
         public string? LastSubmittedInteractionKey { get; private set; }
 
-        public TestChatViewModel(ToolInteractionRequest? seed)
+        public TestChatViewModel(ToolInteractionRequest? seed, bool startGenerating = false)
             : base(
                 // 127.0.0.1:1 is never dialed: InitializeSessionAsync is
                 // overridden to no-op, so the underlying HubConnection stays
@@ -610,6 +655,7 @@ public sealed class ChatPageTests
                 new NetclawPaths())
         {
             _seed = seed;
+            _startGenerating = startGenerating;
         }
 
         protected override Task InitializeSessionAsync() => Task.CompletedTask;
@@ -619,12 +665,23 @@ public sealed class ChatPageTests
             base.OnActivated();
             if (_seed is not null)
                 SeedPendingInteractionForTesting(_seed);
+            // Simulate the stale-flag race: IsGenerating can still read true
+            // right after an interaction lands (the daemon output handler
+            // clears it, but the UI thread can observe the pre-clear value).
+            if (_startGenerating)
+                IsGenerating.Value = true;
         }
 
         public override void RequestAppShutdown()
         {
             LifecycleEvents.Add("shutdown");
             base.RequestAppShutdown();
+        }
+
+        internal override Task DenyPendingInteractionAsync()
+        {
+            LifecycleEvents.Add("deny:called");
+            return base.DenyPendingInteractionAsync();
         }
 
         protected override Task SubmitInteractionSelectionAsync(string selectedKey)
