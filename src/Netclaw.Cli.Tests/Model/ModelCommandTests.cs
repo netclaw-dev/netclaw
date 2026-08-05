@@ -97,7 +97,7 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_OpenAiOAuthModel_StoresLiveDiscoveredMetadata()
+    public async Task Set_OpenAiOAuthModel_DoesNotPersistDiscoveredCapabilities()
     {
         WriteConfig(new Dictionary<string, object>
         {
@@ -130,9 +130,9 @@ public sealed class ModelCommandTests : IDisposable
         var config = ReadConfigFile(_paths.NetclawConfigPath);
         var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
-        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
-        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
-        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+        Assert.False(main.TryGetProperty("ContextWindow", out _));
+        Assert.False(main.TryGetProperty("InputModalities", out _));
+        Assert.False(main.TryGetProperty("OutputModalities", out _));
     }
 
     [Fact]
@@ -479,6 +479,33 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal(65536, main.GetProperty("ContextWindow").GetInt32());
     }
 
+    [Theory]
+    [InlineData("ContextWindow", "65536")]
+    [InlineData("InputModalities", "Text, Image")]
+    [InlineData("OutputModalities", "Text, Audio")]
+    public async Task Set_SameModelWithoutCapabilityOptions_PreservesStoredCapability(
+        string propertyName,
+        string expectedValue)
+    {
+        WriteConfig(WithMainEntry(new Dictionary<string, object>
+        {
+            ["Provider"] = "my-ollama",
+            ["ModelId"] = "qwen3:30b",
+            ["ContextWindow"] = 65536,
+            ["InputModalities"] = "Text, Image",
+            ["OutputModalities"] = "Text, Audio"
+        }));
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = ReadActiveModel(config, "Main");
+        Assert.Equal(expectedValue, main.GetProperty(propertyName).ToString());
+    }
+
     [Fact]
     public async Task Set_ClearContextWindow_RemovesStoredClamp()
     {
@@ -530,8 +557,7 @@ public sealed class ModelCommandTests : IDisposable
             }
         ]);
 
-        // A modality override no longer short-circuits the probe: the probe must still run to
-        // validate the model and discover the context window, while the operator's modality wins.
+        // The probe still validates the model. The operator's modality remains authoritative.
         var exitCode = await ModelCommand.RunAsync(
             ["model", "set", "main", "openai-codex", "gpt-new-codex", "--input-modalities", "Text"],
             _paths, _fakeProbe, output: _output);
@@ -540,9 +566,9 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal(1, _fakeProbe.ProbeCallCount);            // probe ran despite the modality flag
         using var config = ReadConfigFile(_paths.NetclawConfigPath);
         var main = ReadActiveModel(config, "Main");
-        Assert.Equal("Live", main.GetProperty("Provenance").GetString());     // resolved via probe
-        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());   // discovered window captured
-        Assert.Equal("Text", main.GetProperty("InputModalities").GetString());// operator override wins
+        Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        Assert.False(main.TryGetProperty("ContextWindow", out _));
+        Assert.Equal("Text", main.GetProperty("InputModalities").GetString());
     }
 
     [Fact]

@@ -62,23 +62,13 @@ internal static class ModelEntryWriter
     }
 
     /// <summary>
-    /// Write a role's model entry into <paramref name="modelsSection"/> non-destructively.
-    /// Two on-disk attributes are treated as operator-owned overrides that provider discovery
-    /// must never silently clobber on a same-<c>(provider, modelId)</c> re-set:
-    /// <list type="bullet">
-    /// <item><description>
-    /// <c>ContextWindow</c> and the modalities are documented to "take precedence over
-    /// provider-reported capability detection". So the precedence for each is:
-    /// explicit operator input (this call) &gt; existing stored value &gt; probe. A fresh probe
-    /// tops up a first-time set or a model switch, but never overwrites a value already on disk
-    /// — that overwrite was the #1127 loss (a re-set wiped a hand-set modality) and its
-    /// context-window twin (#1610).
-    /// </description></item>
-    /// </list>
-    /// Because the stored value now wins, the operator needs a way to *change* it: an explicit
+    /// Write a role's model entry into <paramref name="modelsSection"/> without data loss.
+    /// <c>ContextWindow</c> and the modalities are operator-owned overrides.
+    /// Provider discovery must not create or change these overrides.
+    /// An explicit
     /// <see cref="ValueOverride{T}.Set"/> replaces it and <see cref="ValueOverride{T}.Clear"/>
-    /// removes it (falling back to runtime detection). Switching a role to a <em>different</em>
-    /// model does not carry the old model's attributes over — they belonged to that model.
+    /// removes it. Runtime capability detection resolves an absent override.
+    /// A model switch does not copy overrides from the old model.
     /// </summary>
     /// <param name="contextWindow">
     /// Operator intent for the context window (set / clear / unset). <c>--context-window</c> sets
@@ -87,10 +77,6 @@ internal static class ModelEntryWriter
     /// </param>
     /// <param name="inputModalities">Operator intent for input modalities (set / clear / unset).</param>
     /// <param name="outputModalities">Operator intent for output modalities (set / clear / unset).</param>
-    /// <param name="discovered">
-    /// The probe result, if a probe ran. Its context window and modalities seed a first-time set
-    /// or a model switch only; an existing stored value wins over them.
-    /// </param>
     internal static void WriteRole(
         Dictionary<string, object> modelsSection,
         string roleKey,
@@ -99,8 +85,7 @@ internal static class ModelEntryWriter
         ModelDiscoverySource? provenance,
         ValueOverride<int> contextWindow,
         ValueOverride<ModelModality> inputModalities,
-        ValueOverride<ModelModality> outputModalities,
-        DiscoveredModel? discovered)
+        ValueOverride<ModelModality> outputModalities)
     {
         var (definitions, roles) = EnsureNamedShape(modelsSection, roleKey);
         var definitionName = FindDefinition(definitions, provider, modelId)
@@ -114,15 +99,11 @@ internal static class ModelEntryWriter
         if (existing?.Provenance is { } priorProvenance && provenance != ModelDiscoverySource.Live)
             provenance = priorProvenance;
 
-        // Precedence for every operator-owned attribute: explicit input > existing stored value
-        // > probe. Collapsing the explicit and discovered values in the caller defeated
-        // preservation, because the probe/picker paths always pass a discovered value, so the
-        // stored value was overwritten on every re-selection.
-        var sameModelEntry = existing is not null;
-        var resolvedWindow = ResolveContextWindow(
-            contextWindow, sameModelEntry, existing?.ContextWindow, discovered?.ContextWindowTokens);
-        var resolvedInput = ResolveModality(inputModalities, sameModelEntry, existing?.InputModalities, discovered?.InputModalities);
-        var resolvedOutput = ResolveModality(outputModalities, sameModelEntry, existing?.OutputModalities, discovered?.OutputModalities);
+        // Explicit operator input wins. Otherwise, the existing operator override remains.
+        // A new definition stays empty so runtime detection owns dynamic capabilities (#1756).
+        var resolvedWindow = contextWindow.Supplied ? contextWindow.Value : existing?.ContextWindow;
+        var resolvedInput = inputModalities.Supplied ? inputModalities.Value : existing?.InputModalities;
+        var resolvedOutput = outputModalities.Supplied ? outputModalities.Value : existing?.OutputModalities;
 
         definitions[definitionName] = BuildModelEntry(
             provider, modelId, provenance, resolvedWindow, resolvedInput, resolvedOutput);
@@ -285,35 +266,6 @@ internal static class ModelEntryWriter
            && left.OutputModalities == right.OutputModalities;
 
     /// <summary>
-    /// Resolves the modality actually written. An explicit operator set or clear wins outright
-    /// (the operator is the authority on a manual override). Otherwise, when the same model already
-    /// has an entry on disk, that entry is honored verbatim — including a deliberately-cleared
-    /// (absent) modality, so a later probe cannot silently resurrect an override the operator
-    /// removed with <c>--clear-modalities</c> (#1610). Provider discovery only seeds a genuine gap:
-    /// a first-time set or a switch to a different model, where no entry exists yet.
-    /// </summary>
-    private static ModelModality? ResolveModality(
-        ValueOverride<ModelModality> @override, bool sameModelEntryExists,
-        ModelModality? existing, ModelModality? discovered)
-        => @override.Supplied
-            ? @override.Value                 // Set(value) → value; Clear → null (key omitted downstream)
-            : sameModelEntryExists ? existing  // same model on disk: honor it, incl. a cleared (null) value
-                : discovered;                  // first set / model switch: seed from discovery
-
-    /// <summary>
-    /// Resolves the context window actually written. Mirrors <see cref="ResolveModality"/> for the
-    /// explicit cases: <c>--context-window</c> (Set) or <c>--clear-context-window</c> (Clear) wins,
-    /// otherwise an existing definition is honored verbatim, including absence. Discovery seeds
-    /// only a new definition. This keeps manual JSON edits and explicit clears stable without a
-    /// hidden tombstone representation.
-    /// </summary>
-    private static int? ResolveContextWindow(
-        ValueOverride<int> @override, bool sameModelEntryExists, int? existing, int? discovered)
-        => @override.Supplied
-            ? @override.Value            // Set(n) → n; Clear → null (drop the clamp → runtime detects)
-            : sameModelEntryExists ? existing : discovered;
-
-    /// <summary>
     /// The role's current entry, but only when it already references the same
     /// <c>(provider, modelId)</c>; null when the role is unset or points at a different
     /// model (whose attributes must not carry over to the newly-set one).
@@ -461,16 +413,9 @@ internal static class ModelEntryWriter
     }
 
     /// <summary>
-    /// Builds the dictionary written under <c>Models[role]</c>.
+    /// Builds a model definition from operator overrides or legacy persisted values.
+    /// Null capability values stay absent so runtime detection can resolve them.
     /// </summary>
-    /// <remarks>
-    /// Modalities are written ONLY when the discovery source genuinely reported them
-    /// (non-null). A null modality means "the provider did not say" — it is
-    /// deliberately omitted so the daemon's capability detection resolves it at
-    /// runtime. Writing a guessed <see cref="ModelModality.Text"/> here would bake a
-    /// permanent override into config that beats real detection on every boot, which
-    /// is exactly what silently demoted multimodal self-hosted models to text-only.
-    /// </remarks>
     internal static Dictionary<string, object> BuildModelEntry(
         string provider,
         string? modelId,
@@ -505,14 +450,14 @@ internal static class ModelEntryWriter
 /// a modality set (<see cref="ModelModality"/>) or the context window (<see cref="int"/>). A plain
 /// <c>T?</c> cannot express it, because two of the three states both resolve to null yet behave
 /// oppositely: "not supplied" must preserve any existing override, while "clear" must win over it.
-/// The tri-state is: <see cref="Unset"/> (leave it to the stored value / discovery),
+/// The tri-state is: <see cref="Unset"/> (leave the stored value unchanged),
 /// <see cref="Set"/> (replace with an explicit value), and <see cref="Clear"/> (remove the override
 /// so runtime detection resolves it).
 /// </summary>
 internal readonly record struct ValueOverride<T>(bool Supplied, T? Value)
     where T : struct
 {
-    /// <summary>Operator said nothing — preserve the stored value, else fall back to discovery.</summary>
+    /// <summary>Operator said nothing. Preserve the stored value.</summary>
     internal static ValueOverride<T> Unset => default;
 
     /// <summary>Operator asked to remove the override so runtime capability detection resolves it.</summary>

@@ -171,7 +171,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_WritesMetadata()
+    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_OmitsCapabilityOverrides()
     {
         WriteConfig(new Dictionary<string, object>
         {
@@ -207,9 +207,53 @@ public sealed class ModelManagerViewModelTests : IDisposable
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var main = ReadActiveModel(config, "Main");
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
-        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
-        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
-        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+        Assert.False(main.TryGetProperty("ContextWindow", out _));
+        Assert.False(main.TryGetProperty("InputModalities", out _));
+        Assert.False(main.TryGetProperty("OutputModalities", out _));
+    }
+
+    [Theory]
+    [InlineData("ContextWindow", "65536")]
+    [InlineData("InputModalities", "Text, Image")]
+    [InlineData("OutputModalities", "Text, Audio")]
+    public async Task ConfirmAssignment_SameModelWithoutCapabilityControls_PreservesStoredCapability(
+        string propertyName,
+        string expectedValue)
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-ollama",
+                    ["ModelId"] = "model-a",
+                    ["ContextWindow"] = 65536,
+                    ["InputModalities"] = "Text, Image",
+                    ["OutputModalities"] = "Text, Audio"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        vm.SelectModel("model-a");
+        vm.ConfirmAssignment();
+
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var main = ReadActiveModel(config, "Main");
+        Assert.Equal(expectedValue, main.GetProperty(propertyName).ToString());
     }
 
     [Fact]

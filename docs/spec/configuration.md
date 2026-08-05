@@ -105,6 +105,13 @@ keys used by model references.
 
 Named model definitions own provider/model identity and metadata. Roles reference definitions,
 so changing Main or Fallback does not destroy overrides belonging to the previous model.
+Capability discovery does not write `ContextWindow`, `InputModalities`, or `OutputModalities`.
+The daemon resolves those dynamic values at startup when the operator leaves them absent.
+
+Older releases can contain discovery snapshots in these override fields. The stored shape
+does not record each field's source. Netclaw preserves these values to protect explicit
+operator overrides. Use `--clear-context-window` and `--clear-modalities` once to restore
+runtime detection for an affected definition.
 
 ```json
 {
@@ -142,7 +149,7 @@ so changing Main or Fallback does not destroy overrides belonging to the previou
 |-------|------|---------|-------------|
 | `Provider` | string | `"local-ollama"` | Key into the `Providers` dictionary. |
 | `ModelId` | string | `"qwen3:30b"` | Model identifier as used by the provider's API. |
-| `ContextWindow` | int? | `null` | Effective runtime context window in tokens. When set, it clamps the detected provider value. If not set, Netclaw uses the provider-reported value when available, otherwise defaults to 32,768. |
+| `ContextWindow` | int? | `null` | Operator override for the runtime context window. When set, it clamps the detected provider value. If not set, Netclaw uses the provider-reported value when available, otherwise defaults to 32,768. Model selection does not persist a discovered value here. |
 | `InputModalities` | string? | `null` | Manual override for input modalities. Comma-separated flags from `Text`, `Image`, `Audio`, `Video` — e.g. `"Text"` or `"Text, Image"`. When set, bypasses automated capability detection. |
 | `OutputModalities` | string? | `null` | Manual override for output modalities. Same form as `InputModalities`. |
 
