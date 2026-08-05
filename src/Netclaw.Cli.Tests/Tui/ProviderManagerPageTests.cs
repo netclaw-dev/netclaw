@@ -34,6 +34,46 @@ public sealed class ProviderManagerPageTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
+    public async Task Escape_AtRoot_DoesNotQuit()
+    {
+        // Regression for #1764: in standalone `netclaw provider`, Escape at the
+        // root used to Shutdown(). It must be a no-op; only Ctrl+Q quits.
+        // Proof: the list survives Escape and a subsequent Delete still works.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["alpha-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434",
+                    ["AuthMethod"] = "None"
+                },
+                ["bravo-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11435",
+                    ["AuthMethod"] = "None"
+                }
+            }
+        });
+
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.Escape);    // must be a no-op at root
+        input.EnqueueKey(ConsoleKey.DownArrow); // move highlight off row 0
+        input.EnqueueKey(ConsoleKey.Delete);    // start remove for highlighted row
+        input.EnqueueKey(ConsoleKey.Enter);     // confirm "Yes, remove"
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.DoesNotContain(vm.DisplayProviders, p => p.ConfiguredName == "bravo-ollama");
+    }
+
+    [Fact]
     public async Task GitHubCopilotEnterpriseInputs_AcceptTypedHostAndApiBase()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);

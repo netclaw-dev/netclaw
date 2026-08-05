@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="StatsViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -42,11 +42,11 @@ public sealed class StatsViewModel : ReactiveViewModel
         try
         {
             Stats = await _api.GetStatsAsync(_days);
-            StatusMessage.Value = " [Q] Quit";
+            StatusMessage.Value = " [Ctrl+Q] Quit";
         }
         catch
         {
-            StatusMessage.Value = " Failed to reach daemon. Is it running?  [Q] Quit";
+            StatusMessage.Value = " Failed to reach daemon. Is it running?  [Ctrl+Q] Quit";
         }
 
         IsLoading.Value = false;
@@ -57,9 +57,9 @@ public sealed class StatsViewModel : ReactiveViewModel
     {
         var keyInfo = key.KeyInfo;
 
-        if (keyInfo.Key == ConsoleKey.Q ||
-            keyInfo.Key == ConsoleKey.Escape ||
-            (keyInfo.Key == ConsoleKey.C && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control)))
+        // Only Ctrl+Q quits. Escape is a no-op at the stats root; plain Q and
+        // Ctrl+C must not kill the view (Ctrl+C is not handled anywhere else in the TUI).
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             Shutdown();
         }

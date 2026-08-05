@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ModelManagerViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -289,11 +289,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
                     RouteRequested?.Invoke("/config");
                     Navigate?.Invoke("/config");
                 }
-                else
-                {
-                    // Standalone `netclaw model`: backing out past the root exits the app.
-                    Shutdown();
-                }
+                // Standalone `netclaw model`: backing out past the root is a no-op.
+                // Escape is a cancel key, not a quit key; Ctrl+Q quits.
 
                 break;
         }

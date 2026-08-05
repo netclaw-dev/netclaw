@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="InitWizardPage.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -235,9 +235,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                             $" [Enter] {doneLabel}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
                     }
 
-                    var backLabel = ViewModel.Orchestrator.CurrentStepIndex.Value == 0 ? "Quit" : "Back";
+                    var backHint = ViewModel.Orchestrator.CurrentStepIndex.Value == 0
+                        ? "" // wizard root: Escape is a no-op, Ctrl+Q quits
+                        : "  [Esc] Back";
                     return (ILayoutNode)new TextNode(
-                        $" [\u2191/\u2193] Navigate  [Enter] Next  [Esc] {backLabel}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
+                        $" [\u2191/\u2193] Navigate  [Enter] Next{backHint}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
                 })
             .AsLayout()
             .Height(1);
@@ -283,11 +285,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var keyInfo = key.KeyInfo;
 
-        // Escape: go back (orchestrator handles sub-step back internally)
+        // Escape: go back (orchestrator handles sub-step back internally).
+        // At the wizard root GoBack() returns false and Escape is a no-op;
+        // Ctrl+Q is the only quit key.
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            if (!ViewModel.GoBack())
-                ViewModel.RequestQuit();
+            ViewModel.GoBack();
             return;
         }
 

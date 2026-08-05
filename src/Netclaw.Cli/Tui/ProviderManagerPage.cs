@@ -138,10 +138,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " Checking providers...  [Ctrl+Q] Quit",
                     ProviderManagerState.List =>
                         // Embedded in `netclaw config`, Esc backs out to the dashboard (Navigate("/config"));
-                        // standalone `netclaw provider`, it exits. Match the footer to the real behavior.
+                        // standalone: Escape is a no-op at root, Ctrl+Q quits.
                         ViewModel.IsEmbeddedInConfig
                             ? " [\u2191/\u2193] Navigate  [Enter] Select  [Delete] Remove  [Esc] Back  [Ctrl+Q] Quit"
-                            : " [\u2191/\u2193] Navigate  [Enter] Select  [Delete] Remove  [Esc] Quit  [Ctrl+Q] Quit",
+                            : " [\u2191/\u2193] Navigate  [Enter] Select  [Delete] Remove  [Ctrl+Q] Quit",
                     ProviderManagerState.AddSelectType =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddName =>

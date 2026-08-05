@@ -119,7 +119,7 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
 
     private LayoutNode BuildKeyBindings()
     {
-        return NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit");
+        return NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Enter] Select  [Ctrl+Q] Quit");
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -131,11 +131,7 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
             return;
         }
 
-        if (keyInfo.Key == ConsoleKey.Escape)
-        {
-            ViewModel.RequestQuit();
-            return;
-        }
+        // Escape is a no-op at the dashboard root; Ctrl+Q is the only quit key.
 
         _entryList?.HandleInput(keyInfo);
         ViewModel.RequestRedraw();
