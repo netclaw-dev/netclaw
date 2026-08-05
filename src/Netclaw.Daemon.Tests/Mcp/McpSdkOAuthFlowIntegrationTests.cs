@@ -837,6 +837,19 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             return new McpClientInitialization(tools.Cast<AIFunction>().ToList());
         }
 
+        public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+            => ListToolsCoreAsync(client, cancellationToken);
+
+        private async ValueTask<IReadOnlyList<AIFunction>> ListToolsCoreAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+            return tools.Cast<AIFunction>().ToList();
+        }
+
         public ValueTask<object?> InvokeAsync(
             AIFunction function,
             AIFunctionArguments? arguments,
