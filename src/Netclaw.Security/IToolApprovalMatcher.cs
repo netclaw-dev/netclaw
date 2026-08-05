@@ -274,6 +274,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
                 continue;
 
+            if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+            {
+                var coveringDirectory = ResolveGlobCoveringDirectory(arg, clauseWorkingDirectory);
+                if (coveringDirectory is null)
+                    return null;
+
+                directories.Add(coveringDirectory);
+                continue;
+            }
+
             // A parser path without a canonical value cannot use the broader
             // cwd grant. Return no candidates so the command fails closed.
             if (string.IsNullOrWhiteSpace(arg.Resolved))
@@ -299,6 +309,44 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static string? ResolveGlobCoveringDirectory(
+        ShellSyntaxTree.Arg arg,
+        string? workingDirectory)
+    {
+        var path = arg.Raw.Trim();
+        if (path.Length >= 2 && path[0] is '\'' or '"' && path[^1] == path[0])
+            path = path[1..^1];
+
+        if (arg.IsFlag)
+        {
+            var valueSeparator = path.IndexOf('=', StringComparison.Ordinal);
+            if (valueSeparator < 0 || valueSeparator == path.Length - 1)
+                return null;
+
+            path = path[(valueSeparator + 1)..];
+        }
+
+        path = path.TrimStart('@');
+        const string fileSystemPrefix = "filesystem::";
+        if (path.StartsWith(fileSystemPrefix, StringComparison.OrdinalIgnoreCase))
+            path = path[fileSystemPrefix.Length..];
+
+        var firstGlob = path.IndexOfAny(['*', '?', '[']);
+        if (firstGlob < 0)
+            return null;
+
+        var staticPrefix = path[..firstGlob];
+        var separator = staticPrefix.LastIndexOf('/');
+        var coveringPath = separator switch
+        {
+            < 0 => ".",
+            0 => "/",
+            _ => staticPrefix[..separator]
+        };
+
+        return ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
     }
 
     private static bool IsAuthorizationPathArg(

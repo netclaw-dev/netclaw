@@ -97,7 +97,7 @@ public sealed class ToolApprovalGateTests
 
     [SlopwatchSuppress("SW001", "This test verifies Bash glob behavior, which does not apply to the Windows shell parser.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void Unresolved_shell_glob_only_offers_one_time_approval_or_deny()
+    public void Static_shell_glob_uses_covering_directory_and_offers_persistent_approval()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create(
@@ -107,10 +107,13 @@ public sealed class ToolApprovalGateTests
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
-        Assert.True(decision.ApprovalContext!.IsMessy);
-        Assert.Equal(
-            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
-            decision.ApprovalContext.Options.Select(option => option.Key.Value));
+        Assert.False(decision.ApprovalContext!.IsMessy);
+        var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
+        Assert.Equal("rm", candidate.Verb);
+        Assert.Equal("/tmp", candidate.Directory);
+        Assert.Contains(
+            decision.ApprovalContext.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
     }
 
     [Fact]

@@ -163,6 +163,9 @@ internal sealed record ShellCommandAnalysis(
     public bool HasDynamicSyntax => Clauses.Any(static clause =>
         clause.Verb.IsDynamic
         || clause.Args.Any(static arg => arg.Kind == ArgKind.DynamicSkip)
-        || clause.Args.Any(static arg => arg.IsPath && string.IsNullOrWhiteSpace(arg.Resolved))
+        || clause.Args.Any(static arg =>
+            arg.IsPath
+            && arg.Kind != ArgKind.Glob
+            && string.IsNullOrWhiteSpace(arg.Resolved))
         || clause.Redirects.Any(static redirect => redirect.IsDynamicSkip));
 }

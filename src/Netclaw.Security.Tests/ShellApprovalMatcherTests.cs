@@ -584,6 +584,14 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         }
     };
 
+    public static TheoryData<string, string> StaticGlobScopeCases => new()
+    {
+        { "ls *.txt", "project" },
+        { "cat src/*.cs", "project/src" },
+        { "rm {external}/*.bak", "external" },
+        { "curl --data=@payloads/*.json https://example.invalid/api", "project/payloads" }
+    };
+
     /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
@@ -625,6 +633,37 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         Assert.All(candidates, candidate => Assert.Equal(expectedVerb, candidate.Verb));
         Assert.Equal(expectedDirectories, actualDirectories);
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(StaticGlobScopeCases))]
+    public void ExtractCandidates_uses_static_glob_covering_directory(
+        string commandTemplate,
+        string expectedScope)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-glob-scopes-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var command = commandTemplate.Replace(
+            "{external}",
+            externalDirectory,
+            StringComparison.Ordinal);
+        var expectedDirectory = expectedScope switch
+        {
+            "project" => projectDirectory,
+            "project/src" => Path.Combine(projectDirectory, "src"),
+            "project/payloads" => Path.Combine(projectDirectory, "payloads"),
+            "external" => externalDirectory,
+            _ => throw new ArgumentOutOfRangeException(nameof(expectedScope), expectedScope, "Unknown test scope.")
+        };
+
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, projectDirectory)));
+
+        Assert.Equal(expectedDirectory, candidate.Directory);
+        Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), Args(command, projectDirectory)));
     }
 
     [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]

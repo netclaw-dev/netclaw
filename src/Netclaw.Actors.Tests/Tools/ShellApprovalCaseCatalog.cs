@@ -239,6 +239,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "safe-verb-context-project-fallback-allows",
+            Bash("cat src/readme.txt", ApprovalDirectoryShape.None),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "safe-verb-context-project-traversal-prompts",
+            Bash("cat ../secret.txt", ApprovalDirectoryShape.None),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
+        Case(
             "safe-verb-session-allows",
             Bash("git status", ApprovalDirectoryShape.Session),
             Approvals.None,
@@ -370,10 +380,20 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "curl"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "unresolved-glob-path-fails-closed",
-            Bash("rm /tmp/*.bak"),
+            "local-glob-allows-safe-verb",
+            Bash("ls *.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "local-glob-reuses-project-grant",
+            Bash("rm artifacts/*.tmp"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:rm")),
+        Case(
+            "external-glob-does-not-reuse-project-grant",
+            Bash($"rm {TemporaryFile("*.bak")}"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
+            ExpectedApproval.Require(["rm"])),
         Case(
             "native-global-option-identity-gap-currently-prompts",
             Bash("git --no-pager status"),

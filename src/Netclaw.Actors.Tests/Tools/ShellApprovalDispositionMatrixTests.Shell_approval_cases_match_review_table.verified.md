@@ -13,6 +13,8 @@
 | hard-deny-beats-stored-grant | Personal | Project | Interactive | netclaw daemon stop | persistent[anywhere]:netclaw daemon stop | Denied | hard_deny_self_destructive | none | Not applicable |
 | compound-hard-deny-denies | Personal | Project | Interactive | git status && netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | safe-verb-project-allows | Personal | Project | Interactive | git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-verb-context-project-fallback-allows | Personal | None | Interactive | cat src/readme.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-verb-context-project-traversal-prompts | Personal | None | Interactive | cat ../secret.txt | none | RequiresApproval | approval required | cat | No |
 | safe-verb-session-allows | Personal | Session | Interactive | git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-verb-external-prompts | Personal | External | Interactive | git status | none | RequiresApproval | approval required | git status | No |
 | safe-verb-external-path-prompts | Personal | Project | Interactive | cat /etc/passwd | none | RequiresApproval | approval required | cat | No |
@@ -39,7 +41,9 @@
 | native-two-project-paths-reuse-grant | Personal | Project | Interactive | curl -D ./headers.txt --data=@request.json https://example.invalid/api | persistent[project]:curl | Allowed | StoredApproval | none | Not applicable |
 | native-option-and-redirect-scopes-all-checked | Personal | Project | Interactive | curl --data=@/etc/passwd https://example.invalid/api > ./response.json | persistent[project]:curl | RequiresApproval | approval required | curl | No |
 | native-dynamic-file-reference-fails-closed | Personal | Project | Interactive | curl --data=@$REQUEST_FILE https://example.invalid/api | persistent[project]:curl | RequiresApproval | approval required | none | Yes |
-| unresolved-glob-path-fails-closed | Personal | Project | Interactive | rm {TempPath}*.bak | persistent[project]:rm | RequiresApproval | approval required | none | Yes |
+| local-glob-allows-safe-verb | Personal | Project | Interactive | ls *.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| local-glob-reuses-project-grant | Personal | Project | Interactive | rm artifacts/*.tmp | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
+| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
 | native-global-option-identity-gap-currently-prompts | Personal | Project | Interactive | git --no-pager status | persistent[project]:git status | RequiresApproval | approval required | git | No |
 | semicolon-sequence-prompts | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git status, git push | No |
 | newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git status, git push | No |
