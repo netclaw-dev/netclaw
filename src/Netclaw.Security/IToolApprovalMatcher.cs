@@ -315,6 +315,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellSyntaxTree.Arg arg,
         string? workingDirectory)
     {
+        if (ShellGlobPath.HasUnresolvedDescendantScope(arg))
+            return null;
+
         var path = arg.Raw.Trim();
         if (path.Length >= 2 && path[0] is '\'' or '"' && path[^1] == path[0])
             path = path[1..^1];

@@ -156,6 +156,19 @@ internal enum ShellAnalysisFailure
     Unresolved
 }
 
+internal static class ShellGlobPath
+{
+    public static bool HasUnresolvedDescendantScope(Arg arg)
+    {
+        if (!arg.IsPath || arg.Kind != ArgKind.Glob)
+            return false;
+
+        var firstGlob = arg.Raw.IndexOfAny(['*', '?', '[']);
+        return firstGlob >= 0
+            && arg.Raw.IndexOf('/', firstGlob + 1) >= 0;
+    }
+}
+
 internal sealed record ShellCommandAnalysis(
     IReadOnlyList<Clause> Clauses,
     ShellAnalysisFailure Failure)
@@ -167,5 +180,8 @@ internal sealed record ShellCommandAnalysis(
             arg.IsPath
             && arg.Kind != ArgKind.Glob
             && string.IsNullOrWhiteSpace(arg.Resolved))
+        // A glob in a directory segment can hide traversal or a symlink.
+        // Only a leaf glob has a fixed directory scope.
+        || clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
         || clause.Redirects.Any(static redirect => redirect.IsDynamicSkip));
 }

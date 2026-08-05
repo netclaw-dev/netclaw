@@ -44,6 +44,8 @@
 | local-glob-allows-safe-verb | Personal | Project | Interactive | ls *.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | local-glob-reuses-project-grant | Personal | Project | Interactive | rm artifacts/*.tmp | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
 | external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
+| glob-traversal-fails-closed | Personal | Project | Interactive | cat */../../secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| glob-intermediate-symlink-scope-fails-closed | Personal | Project | Interactive | cat artifacts/*/secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | native-global-option-identity-gap-currently-prompts | Personal | Project | Interactive | git --no-pager status | persistent[project]:git status | RequiresApproval | approval required | git | No |
 | semicolon-sequence-prompts | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git status, git push | No |
 | newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git status, git push | No |

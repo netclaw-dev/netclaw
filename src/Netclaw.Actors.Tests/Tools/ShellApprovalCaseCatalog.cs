@@ -395,6 +395,16 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Require(["rm"])),
         Case(
+            "glob-traversal-fails-closed",
+            Bash("cat */../../secret.txt"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "glob-intermediate-symlink-scope-fails-closed",
+            Bash("cat artifacts/*/secret.txt"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
             "native-global-option-identity-gap-currently-prompts",
             Bash("git --no-pager status"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git status"),

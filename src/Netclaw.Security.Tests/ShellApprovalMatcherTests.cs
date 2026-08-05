@@ -592,6 +592,13 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         { "curl --data=@payloads/*.json https://example.invalid/api", "project/payloads" }
     };
 
+    public static TheoryData<string> UnsafeGlobScopeCases => new()
+    {
+        { "cat */../../secret.txt" },
+        { "cat artifacts/*/secret.txt" },
+        { "rm /tmp/*/../../etc/*.bak" }
+    };
+
     /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
@@ -664,6 +671,20 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         Assert.Equal(expectedDirectory, candidate.Directory);
         Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), Args(command, projectDirectory)));
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(UnsafeGlobScopeCases))]
+    public void Directory_segment_glob_fails_closed(string command)
+    {
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-unsafe-glob-{Guid.NewGuid():N}");
+        var arguments = Args(command, projectDirectory);
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
     }
 
     [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]
