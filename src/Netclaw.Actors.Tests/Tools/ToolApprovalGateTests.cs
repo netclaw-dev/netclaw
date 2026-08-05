@@ -16,6 +16,8 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public sealed class ToolApprovalGateTests
 {
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private static ToolAccessPolicy CreatePolicy(ToolApprovalMode shellApprovalMode)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
@@ -91,6 +93,24 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Unresolved_shell_glob_only_offers_one_time_approval_or_deny()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var args = ToolInput.Create(
+            "Command", "rm /tmp/*.bak",
+            "WorkingDirectory", "/home/user/project");
+
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+        Assert.True(decision.ApprovalContext!.IsMessy);
+        Assert.Equal(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            decision.ApprovalContext.Options.Select(option => option.Key.Value));
     }
 
     [Fact]

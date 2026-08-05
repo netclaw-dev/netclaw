@@ -254,6 +254,21 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
+            "safe-verb-quoted-external-path-prompts",
+            Bash("cat \"/etc/netclaw.secret\""),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
+        Case(
+            "safe-verb-traversal-external-path-prompts",
+            Bash("cat safe/../../../../../../etc/netclaw.secret"),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
+        Case(
+            "safe-verb-namespaced-external-path-prompts",
+            Bash("cat filesystem::/etc/netclaw.secret"),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
+        Case(
             "safe-verb-external-redirect-prompts",
             Bash($"git status > {TemporaryFile("netclaw-approval-matrix.txt")}"),
             Approvals.None,
@@ -358,7 +373,7 @@ public static class ShellApprovalCases
             "unresolved-glob-path-fails-closed",
             Bash("rm /tmp/*.bak"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
-            ExpectedApproval.Require([], approvalChecks: 0)),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "native-global-option-identity-gap-currently-prompts",
             Bash("git --no-pager status"),

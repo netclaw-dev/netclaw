@@ -241,7 +241,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 continue;
 
             var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
-            var directories = ResolveClauseDirectories(clause, isSideEffectVerb);
+            var directories = ResolveClauseDirectories(clause, isSideEffectVerb, workingDirectory);
             if (directories is null)
                 return [];
 
@@ -258,16 +258,20 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static IReadOnlyList<string?>? ResolveClauseDirectories(
         ShellSyntaxTree.Clause clause,
-        bool isSideEffectVerb)
+        bool isSideEffectVerb,
+        string? workingDirectory)
     {
         var directories = new List<string?>();
+        var clauseWorkingDirectory = clause.Args
+            .FirstOrDefault(arg => arg.IsCwdAttribution)?.Resolved
+            ?? workingDirectory;
 
         // Each parser path is an authorization scope. A grant must cover all
         // scopes, or a later external path could hide behind an earlier local
         // path. The resolved value also handles native forms such as @file.
         foreach (var arg in clause.Args)
         {
-            if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg))
+            if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
                 continue;
 
             // A parser path without a canonical value cannot use the broader
@@ -297,7 +301,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return directories.Distinct(StringComparer.Ordinal).ToList();
     }
 
-    private static bool IsAuthorizationPathArg(ShellSyntaxTree.Arg arg)
+    private static bool IsAuthorizationPathArg(
+        ShellSyntaxTree.Arg arg,
+        string? workingDirectory)
     {
         if (!arg.IsPath)
             return false;
@@ -307,7 +313,32 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         // An internal slash can also name a ref such as feature/x. Native
         // option and @file shapes supply the extra path evidence we need.
-        return arg.IsFlag || arg.Raw.TrimStart('\'', '"').StartsWith('@');
+        if (arg.IsFlag || arg.Raw.TrimStart('\'', '"').StartsWith('@'))
+            return true;
+
+        // Collapse an ambiguous relative token to cwd only when its resolved
+        // path stays there. External paths and symlink paths need exact checks.
+        if (string.IsNullOrWhiteSpace(arg.Resolved)
+            || string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return true;
+        }
+
+        try
+        {
+            var normalizedPath = PathUtility.Normalize(arg.Resolved);
+            if (!PathUtility.IsNormalizedWithinRoot(normalizedPath, workingDirectory))
+                return true;
+
+            return PathUtility.ContainsSymlinkSegment(workingDirectory, normalizedPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or System.Security.SecurityException)
+        {
+            return true;
+        }
     }
 
     private static string? ResolveRedirectDirectory(ShellSyntaxTree.Redirect redirect)

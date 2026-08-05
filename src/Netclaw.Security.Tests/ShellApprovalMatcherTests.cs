@@ -535,35 +535,52 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             ["WorkingDirectory"] = workingDirectory
         };
 
-    public static TheoryData<string, string[]> ParserPathScopeCases => new()
+    public static TheoryData<string, string, string[]> ParserPathScopeCases => new()
     {
         {
             "curl --data=@request.json https://example.invalid/api",
+            "curl",
             ["project"]
         },
         {
             "curl --data=@{external}/request.json https://example.invalid/api",
+            "curl",
             ["external"]
         },
         {
             "curl -D ./headers.txt --data=@{external}/request.json https://example.invalid/api",
+            "curl",
             ["project", "external"]
         },
         {
             "curl -D {external}/headers.txt --data=@request.json https://example.invalid/api",
+            "curl",
             ["external", "project"]
         },
         {
             "curl -D ./headers.txt --data=@request.json https://example.invalid/api",
+            "curl",
             ["project"]
         },
         {
             "curl --data=@{external}/request.json https://example.invalid/api > ./response.json",
+            "curl",
             ["external", "project"]
         },
         {
             "curl --data=@$REQUEST_FILE https://example.invalid/api",
+            "curl",
             []
+        },
+        {
+            "cat \"{external}/secret.txt\"",
+            "cat",
+            ["external"]
+        },
+        {
+            "cat safe/../../external/secret.txt",
+            "cat",
+            ["external"]
         }
     };
 
@@ -583,6 +600,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     [MemberData(nameof(ParserPathScopeCases))]
     public void ExtractCandidates_uses_all_parser_path_scopes(
         string commandTemplate,
+        string expectedVerb,
         string[] expectedScopeNames)
     {
         var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-scopes-{Guid.NewGuid():N}");
@@ -605,8 +623,36 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.All(candidates, candidate => Assert.Equal("curl", candidate.Verb));
+        Assert.All(candidates, candidate => Assert.Equal(expectedVerb, candidate.Verb));
         Assert.Equal(expectedDirectories, actualDirectories);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_keeps_ambiguous_path_when_symlink_can_escape_cwd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var linkDirectory = Path.Combine(projectDirectory, "link");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(linkDirectory, externalDirectory);
+
+        try
+        {
+            var candidate = Assert.Single(_matcher.ExtractCandidates(
+                new ToolName("shell_execute"),
+                Args("cat link/secret.txt", projectDirectory)));
+
+            Assert.Equal("cat", candidate.Verb);
+            Assert.Equal(linkDirectory, candidate.Directory);
+        }
+        finally
+        {
+            Directory.Delete(linkDirectory);
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
