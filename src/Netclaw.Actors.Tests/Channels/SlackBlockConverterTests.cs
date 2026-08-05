@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="SlackBlockConverterTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -454,7 +454,31 @@ public class SlackBlockConverterTests
         var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
 
         var group = Assert.Single(section.Elements.OfType<RichTextUserGroup>());
-        Assert.Equal("subteam^S0123ABC", group.UserGroupId);
+        Assert.Equal("S0123ABC", group.UserGroupId);
+    }
+
+    [Fact]
+    public void UserGroupMention_WithLabel_ProducesRichTextUserGroup()
+    {
+        var blocks = SlackBlockConverter.Convert("Escalate to <@subteam^S0123ABC|oncall> now");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var group = Assert.Single(section.Elements.OfType<RichTextUserGroup>());
+        Assert.Equal("S0123ABC", group.UserGroupId);
+    }
+
+    [Fact]
+    public void PrivateChannelMention_ProducesRichTextChannel()
+    {
+        var blocks = SlackBlockConverter.Convert("Also in <#G0123ABC|private-ops>");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var channel = Assert.Single(section.Elements.OfType<RichTextChannel>());
+        Assert.Equal("G0123ABC", channel.ChannelId);
     }
 
     [Fact]

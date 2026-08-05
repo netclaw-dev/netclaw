@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="SlackBlockConverter.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -377,11 +377,15 @@ public static partial class SlackBlockConverter
     [GeneratedRegex(@"<@([UW][0-9A-Z]+)(?:\|[^>]+)?>")]
     private static partial Regex UserMentionRegex();
 
-    // Slack user-group mention: <@subteam^S0123ABC>.
-    [GeneratedRegex(@"<@(subteam\^[S0-9A-Z]+)>")]
+    // Slack user-group mention: <@subteam^S0123ABC>, optionally with a
+    // label (<@subteam^S0123ABC|oncall>). Captures the bare group ID —
+    // the rich-text usergroup element takes the ID as returned by
+    // usergroups.list, without the subteam^ prefix.
+    [GeneratedRegex(@"<@subteam\^([S0-9A-Z]+)(?:\|[^>]+)?>")]
     private static partial Regex UserGroupMentionRegex();
 
     // Slack channel mention: <#C0123ABC>, optionally with a label.
-    [GeneratedRegex(@"<#(C[0-9A-Z]+)(?:\|[^>]+)?>")]
+    // C = public channel, G = private channel/group DM, D = DM.
+    [GeneratedRegex(@"<#([CGD][0-9A-Z]+)(?:\|[^>]+)?>")]
     private static partial Regex ChannelMentionRegex();
 }
