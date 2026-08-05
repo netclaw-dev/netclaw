@@ -234,13 +234,16 @@ public sealed class ChatPageTests
     }
 
     [Fact]
-    public async Task Escape_WithNoPendingInteraction_StillQuits()
+    public async Task Escape_WithNoPendingInteraction_IsNoOp_CtrlQQuits()
     {
-        // Bare Escape with no approval prompt keeps the historical behavior:
-        // it quits the app. Only the approval-prompt case routes to deny.
+        // Escape is a pure cancel key everywhere — idle it's a no-op, never
+        // a quit. Ctrl+Q is the only quit affordance (#1757). Enqueue Escape
+        // first, then Ctrl+Q; the lifecycle log proves Escape didn't shut
+        // down and only the explicit Ctrl+Q did.
         var (terminal, app, vm) = CreateHeadlessApp(seed: null, out var input);
 
-        input.EnqueueKey(ConsoleKey.Escape);
+        input.EnqueueKey(ConsoleKey.Escape); // idle: no-op
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // quit
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);

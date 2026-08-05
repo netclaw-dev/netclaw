@@ -298,10 +298,10 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             return;
         }
 
-        // Escape: cancel or quit. With an approval prompt up, Escape denies
-        // the pending interaction (Termina's default "cancel" semantics, and
-        // the convention every other NetClaw page follows) instead of tearing
-        // down the whole session (#1757). Bare Escape only quits when idle.
+        // Escape is a cancel key everywhere — never quits. With an approval
+        // prompt up it denies the pending interaction (#1757); while
+        // generating it shows a status message (cancel not supported yet);
+        // idle it's a no-op. Ctrl+Q is the only quit affordance.
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             // A pending approval prompt always takes precedence. IsGenerating
@@ -323,10 +323,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 ViewModel.StatusMessage.Value = "Cancel generation is not supported yet.";
                 ViewModel.RequestRedraw();
             }
-            else
-            {
-                ViewModel.RequestAppShutdown();
-            }
+            // else: idle — no-op. The status bar advertises [Ctrl+Q] Quit.
 
             return;
         }
