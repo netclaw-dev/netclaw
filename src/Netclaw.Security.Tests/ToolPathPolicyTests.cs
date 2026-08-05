@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -219,9 +219,29 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsReadDenied(path));
     }
 
+    // The read deny surface is the union of the read deny list and the shell
+    // indicator list, so read tools cannot reach control-plane lifecycle files
+    // that shell cannot even reference (#1724).
     [Theory]
-    [InlineData("/home/user/.netclaw/config/netclaw.json")]
     [InlineData("/home/user/.netclaw/netclaw.db")]
+    [InlineData("/home/user/.netclaw/netclaw.pid")]
+    [InlineData("/home/user/.netclaw/netclaw.lock")]
+    [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
+    public void IsReadDenied_blocks_control_plane_files(string path)
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsReadDenied(path));
+    }
+
+    // The fixture deliberately omits ConfigDirectory from shellIndicators (see
+    // CommandReferencesDeniedPath_still_allows_ls_of_config_directory), so
+    // config-dir files are not asserted read-denied here. Production wiring in
+    // src/Netclaw.Daemon/Program.cs includes paths.ConfigDirectory in the shell
+    // indicator list, which makes the whole config dir read-denied in practice.
+    [Theory]
+    [InlineData("/home/user/repositories/foo.cs")]
+    [InlineData("/tmp/notes.txt")]
+    [InlineData("/home/user/downloads/report.pdf")]
     public void IsReadDenied_allows_non_sensitive_paths(string path)
     {
         var policy = CreateProductionPolicy();

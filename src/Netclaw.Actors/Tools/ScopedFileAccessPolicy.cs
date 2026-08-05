@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ScopedFileAccessPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -36,6 +36,17 @@ internal sealed class ScopedFileAccessPolicy
     public bool TryResolveReadPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error);
 
+    /// <summary>
+    /// True when an interactive Personal-audience session gets shell-equivalent
+    /// file reach: read and attach tools resolve outside the configured roots,
+    /// matching the approval-gated shell surface. Autonomous sessions, Team,
+    /// and Public audiences are never granted this — they keep their
+    /// roots-scoped or fail-closed behavior.
+    /// </summary>
+    public static bool HasInteractivePersonalReach(ToolInvocationContext context)
+        => context.Audience == TrustAudience.Personal
+           && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
+
     public bool TryResolveWritePath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error);
 
@@ -69,6 +80,7 @@ internal sealed class ScopedFileAccessPolicy
 
         var profile = _profileResolver.ResolveProfile(context);
         var access = GetAccessProfile(profile, accessKind);
+        var audience = context.Audience;
 
         if (access.Mode == ToolFilesystemMode.All)
         {
@@ -86,13 +98,25 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        var audience = context.Audience;
         var label = GetAudienceLabel(audience);
 
         if (access.Mode == ToolFilesystemMode.None)
         {
             error = $"Error: {label} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
             return false;
+        }
+
+        // Interactive Personal-audience reads are shell-equivalent: shell reaches
+        // any path in an interactive session (approval gate + ToolPathPolicy hard
+        // deny), so read/attach tools do too. This kills the shell-workaround
+        // (cat, cp-into-session) for legitimate out-of-roots files. The hard deny
+        // surface still applies inside the tools via ToolPathPolicy.IsReadDenied,
+        // and autonomous sessions never reach this branch — InteractiveApproval
+        // is Unavailable there, so they clamp to the zone or fail closed below.
+        if (accessKind is AccessKind.Read or AccessKind.Attach && HasInteractivePersonalReach(context))
+        {
+            error = string.Empty;
+            return true;
         }
 
         var roots = ResolveAndMergeRoots(access, context, audience, accessKind);

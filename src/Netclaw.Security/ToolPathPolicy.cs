@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -13,7 +13,9 @@ namespace Netclaw.Security;
 /// <remarks>
 /// Three independent deny surfaces: write (<see cref="IsDenied"/>), read
 /// (<see cref="IsReadDenied"/>), and shell indicators
-/// (<see cref="CommandReferencesDeniedPath"/>). The shell indicator list must
+/// (<see cref="CommandReferencesDeniedPath"/>). Read denies the union of the
+/// read deny list and the shell indicator list, so file tools cannot reach the
+/// control plane that shell cannot reference. The shell indicator list must
 /// stay narrow — file-level only — because that path does a raw substring scan
 /// against the command text, so directory-scoped entries would block legitimate
 /// commands whose arguments happen to contain the directory name.
@@ -97,11 +99,13 @@ public sealed class ToolPathPolicy
         => IsDeniedAgainst(path, _writeDeniedPaths);
 
     /// <summary>
-    /// Returns true if the given path is denied for read by policy. Narrower
-    /// than <see cref="IsDenied"/>: only covers files that leak credentials.
+    /// Returns true if the given path is denied for read by policy. Covers the
+    /// credential-leaking surfaces (secrets, keys, webhooks) plus the shell
+    /// indicator list (config dir, sqlite DB, pid, lock, restart manifest), so
+    /// read tools cannot reach files that shell cannot even reference.
     /// </summary>
     public bool IsReadDenied(string path)
-        => IsDeniedAgainst(path, _readDeniedPaths);
+        => IsDeniedAgainst(path, _readDeniedPaths) || IsDeniedAgainst(path, _shellDeniedPaths);
 
     private static bool IsDeniedAgainst(string path, HashSet<string> deniedSet)
     {

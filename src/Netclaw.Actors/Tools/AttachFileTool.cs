@@ -47,10 +47,18 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
 
+        // Interactive Personal-audience sessions get shell-equivalent reach:
+        // shell can attach anything it can read, so the session-proximity
+        // restriction is lifted for them. The out-of-session file is still
+        // copied into this session's attachments directory below, preserving
+        // delivery semantics. Non-interactive, Team, and Public sessions keep
+        // the proximity gate.
+        var interactivePersonalReach = ScopedFileAccessPolicy.HasInteractivePersonalReach(context);
+
         var requestedInCurrentSession = PathUtility.IsWithinRoot(requestedPath, sessionDir);
         var requestedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(requestedPath, sessionRoot);
 
-        if (!requestedInCurrentSession && !requestedInSessionRoot)
+        if (!interactivePersonalReach && !requestedInCurrentSession && !requestedInSessionRoot)
         {
             return Task.FromResult(
                 $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
@@ -63,7 +71,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
         var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
 
-        if (!resolvedInCurrentSession && !resolvedInSessionRoot)
+        if (!interactivePersonalReach && !resolvedInCurrentSession && !resolvedInSessionRoot)
         {
             return Task.FromResult(
                 $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
