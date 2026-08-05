@@ -386,7 +386,7 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "local-glob-reuses-project-grant",
-            Bash("rm artifacts/*.tmp"),
+            Bash("rm *.tmp"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:rm")),
         Case(

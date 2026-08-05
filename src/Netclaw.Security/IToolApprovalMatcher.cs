@@ -349,7 +349,55 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             _ => staticPrefix[..separator]
         };
 
-        return ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
+        var leafPattern = path[(separator + 1)..];
+        var coveringDirectory = ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
+        if (coveringDirectory is null
+            || HasMatchingSymlink(coveringDirectory, leafPattern))
+        {
+            return null;
+        }
+
+        return coveringDirectory;
+    }
+
+    private static bool HasMatchingSymlink(string directory, string leafPattern)
+    {
+        if (!Directory.Exists(directory))
+            return false;
+
+        try
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var name = Path.GetFileName(entry);
+                if (name.StartsWith(".", StringComparison.Ordinal)
+                    && !leafPattern.StartsWith(".", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // FileSystemName covers '*' and '?'. A bracket expression is
+                // a Bash feature, so inspect every symlink in that directory.
+                var couldMatch = leafPattern.Contains('[', StringComparison.Ordinal)
+                    || System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(
+                        leafPattern,
+                        name,
+                        ignoreCase: false);
+                if (couldMatch && PathUtility.ContainsSymlinkSegment(directory, entry))
+                    return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or IOException
+                                   or NotSupportedException
+                                   or UnauthorizedAccessException
+                                   or System.Security.SecurityException)
+        {
+            // The matcher cannot prove the expansion stays in the fixed scope.
+            return true;
+        }
     }
 
     private static bool IsAuthorizationPathArg(
@@ -659,8 +707,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (OperatingSystem.IsWindows())
             return ShellTokenizer.IsMessyCompoundCommand(command);
 
-        var analysis = TryAnalyzeCommand(command, GetWorkingDirectory(arguments));
-        return analysis is null || analysis.HasDynamicSyntax;
+        var workingDirectory = GetWorkingDirectory(arguments);
+        var analysis = TryAnalyzeCommand(command, workingDirectory);
+        if (analysis is null || analysis.HasDynamicSyntax)
+            return true;
+
+        return analysis.Clauses
+            .SelectMany(static clause => clause.Args)
+            .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+            .Any(arg => ResolveGlobCoveringDirectory(arg, workingDirectory) is null);
     }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)

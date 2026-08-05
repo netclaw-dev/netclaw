@@ -687,6 +687,34 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
     }
 
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Leaf_glob_that_matches_symlink_fails_closed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-glob-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var artifactsDirectory = Path.Combine(projectDirectory, "artifacts");
+        var externalDirectory = Path.Combine(root, "external");
+        var externalFile = Path.Combine(externalDirectory, "secret.txt");
+        var link = Path.Combine(artifactsDirectory, "leak.txt");
+        Directory.CreateDirectory(artifactsDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(externalFile, "secret");
+        File.CreateSymbolicLink(link, externalFile);
+
+        try
+        {
+            var arguments = Args("cat artifacts/*.txt", projectDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+            Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_keeps_ambiguous_path_when_symlink_can_escape_cwd()
