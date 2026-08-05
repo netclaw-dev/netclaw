@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackBlockConverter.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -277,6 +277,20 @@ public static partial class SlackBlockConverter
                 : new RichTextLink { Url = url };
         });
 
+        // Slack-native mentions passed through by the agent: <@U...>
+        // user, <@subteam^S...> user group, <#C...> channel. Without
+        // explicit rich-text elements the Block Kit surface renders
+        // the syntax as literal text (the mrkdwn Text fallback handles
+        // them natively, but blocks win on every modern client).
+        TryMatch(UserMentionRegex(), text, ref best, (m) =>
+            new RichTextUser { UserId = m.Groups[1].Value });
+
+        TryMatch(UserGroupMentionRegex(), text, ref best, (m) =>
+            new RichTextUserGroup { UserGroupId = m.Groups[1].Value });
+
+        TryMatch(ChannelMentionRegex(), text, ref best, (m) =>
+            new RichTextChannel { ChannelId = m.Groups[1].Value });
+
         if (best.Element is null)
             return (0, 0, null, null);
 
@@ -357,4 +371,22 @@ public static partial class SlackBlockConverter
     // Ordered list prefix: 1. or 2. etc.
     [GeneratedRegex(@"^\d+\.\s")]
     private static partial Regex OrderedListPrefix();
+
+    // Slack user mention: <@U0123ABC> or <@W0123ABC>, optionally with a
+    // fallback label (<@U0123ABC|david>).
+    [GeneratedRegex(@"<@([UW][0-9A-Z]+)(?:\|[^>]+)?>")]
+    private static partial Regex UserMentionRegex();
+
+    // Slack user-group mention: <!subteam^S0123ABC> (the form Slack
+    // documents and emits) or <@subteam^S0123ABC> (agent-style),
+    // optionally with a fallback label (<!subteam^S0123ABC|@eng-team>).
+    // Captures the bare group ID only — Slack's usergroup_id does not
+    // include the subteam^ prefix.
+    [GeneratedRegex(@"<[!@]subteam\^([0-9A-Z]+)(?:\|[^>]+)?>")]
+    private static partial Regex UserGroupMentionRegex();
+
+    // Slack channel mention: <#C0123ABC> or <#G0123ABC> (private channels
+    // and group DMs), optionally with a label.
+    [GeneratedRegex(@"<#([CGD][0-9A-Z]+)(?:\|[^>]+)?>")]
+    private static partial Regex ChannelMentionRegex();
 }
