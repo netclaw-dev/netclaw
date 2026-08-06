@@ -40,14 +40,14 @@ internal readonly record struct McpProbeResult(
 /// </summary>
 internal static class McpCommand
 {
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null, Func<HttpClient>? httpClientFactory = null)
+    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
-            "add" => await RunAddAsync(args, paths, writer, daemonApi, httpClientFactory),
+            "add" => await RunAddAsync(args, paths, writer, daemonApi),
             "auth" => await RunAuthAsync(args, paths, daemonApi, writer),
             "list" => await RunListAsync(paths, daemonApi, writer),
             "get" => RunGet(args, paths, writer),
@@ -65,8 +65,7 @@ internal static class McpCommand
         string[] args,
         NetclawPaths paths,
         TextWriter writer,
-        DaemonApi? daemonApi = null,
-        Func<HttpClient>? httpClientFactory = null)
+        DaemonApi? daemonApi = null)
     {
         // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] [--auth] <name> [command/url] [-- args...]
         string? transport = null;
@@ -253,34 +252,22 @@ internal static class McpCommand
         }
         writer.WriteLine("Approval defaults: Personal=Auto, Team=Approval, Public=Deny");
 
-        // OAuth-protected servers cannot connect until they are authorized, and the
-        // permissions TUI needs a connected server to list tools. When the endpoint
-        // advertises OAuth (or the operator explicitly asked with --auth), surface
-        // the auth step before the permissions step.
-        var probe = await ProbeOAuthRequirementAsync(transport, headers, commandOrUrl, httpClientFactory);
-        var showAuthFirst = transport is not "stdio" && (probe?.OAuthRequired == true || runAuth);
-        if (showAuthFirst)
+        // The daemon owns OAuth discovery (RFC 9728/8414, via McpOAuthClientRegistrar).
+        // The CLI does not probe the endpoint, so it cannot know in advance whether a
+        // given HTTP/SSE server requires OAuth. Print the hint unconditionally for any
+        // HTTP/SSE server that has no explicit Authorization header: stdio servers run
+        // local commands and never use OAuth, and a server with a static Authorization
+        // header is already using its own credentials.
+        var hasAuthorizationHeader = headers.Keys.Any(
+            key => string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase));
+        var showOAuthHint = transport is not "stdio" && !hasAuthorizationHeader;
+
+        if (showOAuthHint)
         {
             writer.WriteLine();
-            if (probe?.OAuthRequired == true)
-            {
-                if (probe.DynamicRegistrationAvailable)
-                {
-                    writer.WriteLine("Detected: this server requires OAuth authorization.");
-                    writer.WriteLine("          Automatic client registration is supported.");
-                }
-                else
-                {
-                    writer.WriteLine("Detected: this server requires OAuth authorization, but does not support");
-                    writer.WriteLine("          automatic client registration. Re-add with a pre-registered client:");
-                    writer.WriteLine($"          netclaw mcp add --transport {transport} --client-id <CLIENT_ID> "
-                        + $"[--scope <SCOPES>] {serverName.Value} {commandOrUrl}");
-                }
-            }
-            writer.WriteLine();
-            writer.WriteLine("Next:");
-            writer.WriteLine($"  1. Authorize:   netclaw mcp auth {serverName.Value}");
-            writer.WriteLine("  2. Grant tools: netclaw mcp permissions");
+            writer.WriteLine("Next steps:");
+            writer.WriteLine($"  - If this server requires OAuth, authorize first: netclaw mcp auth {serverName.Value}");
+            writer.WriteLine("  - Then grant tools: netclaw mcp permissions");
         }
         else
         {
@@ -308,44 +295,6 @@ internal static class McpCommand
         }
 
         return 0;
-    }
-
-    /// <summary>
-    /// Best-effort OAuth capability probe for a newly added server. Skips stdio
-    /// transports and servers that carry an explicit Authorization header (those
-    /// use static credentials, not OAuth). Returns <c>null</c> when the endpoint
-    /// does not advertise OAuth or the probe fails, so callers can print the
-    /// standard permissions-only guidance.
-    /// </summary>
-    private static async Task<McpOAuthProbeResult?> ProbeOAuthRequirementAsync(
-        string transport,
-        Dictionary<string, string> headers,
-        string? commandOrUrl,
-        Func<HttpClient>? httpClientFactory)
-    {
-        if (transport is "stdio" || string.IsNullOrWhiteSpace(commandOrUrl))
-            return null;
-
-        if (headers.Keys.Any(key => string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)))
-            return null;
-
-        var client = httpClientFactory?.Invoke()
-            ?? new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-
-        try
-        {
-            return await McpOAuthProbe.DetectAsync(commandOrUrl, client, CancellationToken.None);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or UriFormatException)
-        {
-            // Never let a probe failure fail the add.
-            return null;
-        }
-        finally
-        {
-            if (httpClientFactory is null)
-                client.Dispose();
-        }
     }
 
     /// <summary>
@@ -1459,8 +1408,8 @@ internal static class McpCommand
         writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
         writer.WriteLine("               dynamic client registration.");
         writer.WriteLine();
-        writer.WriteLine("On add, HTTP/SSE servers are probed for RFC 9728 OAuth metadata. When the");
-        writer.WriteLine("server requires OAuth, the output leads with the authorization step.");
+        writer.WriteLine("On add, HTTP/SSE servers without an Authorization header print a hint to run");
+        writer.WriteLine("`netclaw mcp auth` first. The daemon detects OAuth requirements at auth time.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
