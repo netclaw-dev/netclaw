@@ -1,9 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpCommand.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text;
@@ -46,7 +47,7 @@ internal static class McpCommand
 
         return subcommand switch
         {
-            "add" => RunAdd(args, paths, writer),
+            "add" => await RunAddAsync(args, paths, writer, daemonApi),
             "auth" => await RunAuthAsync(args, paths, daemonApi, writer),
             "list" => await RunListAsync(paths, daemonApi, writer),
             "get" => RunGet(args, paths, writer),
@@ -60,15 +61,20 @@ internal static class McpCommand
         };
     }
 
-    internal static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
+    internal static async Task<int> RunAddAsync(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter writer,
+        DaemonApi? daemonApi = null)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] <name> [command/url] [-- args...]
+        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] [--auth] <name> [command/url] [-- args...]
         string? transport = null;
         string? oauthClientId = null;
         string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
         var grantAll = false;
+        var runAuth = false;
         string? commandOrUrl = null;
         string[]? commandArgs = null;
 
@@ -93,6 +99,12 @@ internal static class McpCommand
             if (args[i] == "--grant-all")
             {
                 grantAll = true;
+                continue;
+            }
+
+            if (args[i] == "--auth")
+            {
+                runAuth = true;
                 continue;
             }
 
@@ -239,7 +251,49 @@ internal static class McpCommand
             writer.WriteLine("          until you opt in via `netclaw mcp permissions`.");
         }
         writer.WriteLine("Approval defaults: Personal=Auto, Team=Approval, Public=Deny");
-        writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{serverName.Value}'.");
+
+        // The daemon owns OAuth discovery (RFC 9728/8414, via McpOAuthClientRegistrar).
+        // The CLI does not probe the endpoint, so it cannot know in advance whether a
+        // given HTTP/SSE server requires OAuth. Print the hint unconditionally for any
+        // HTTP/SSE server that has no explicit Authorization header: stdio servers run
+        // local commands and never use OAuth, and a server with a static Authorization
+        // header is already using its own credentials.
+        var hasAuthorizationHeader = headers.Keys.Any(
+            key => string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase));
+        var showOAuthHint = transport is not "stdio" && !hasAuthorizationHeader;
+
+        if (showOAuthHint)
+        {
+            writer.WriteLine();
+            writer.WriteLine("Next steps:");
+            writer.WriteLine($"  - If this server requires OAuth, authorize first: netclaw mcp auth {serverName.Value}");
+            writer.WriteLine("  - Then grant tools: netclaw mcp permissions");
+        }
+        else
+        {
+            writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{serverName.Value}'.");
+        }
+
+        if (runAuth && transport is not "stdio")
+        {
+            if (daemonApi is null)
+            {
+                writer.WriteLine();
+                writer.WriteLine("--auth: daemon API not available. Run `netclaw mcp auth "
+                    + $"{serverName.Value}` once the daemon is running.");
+            }
+            else
+            {
+                writer.WriteLine();
+                return await RunAuthAsync(["mcp", "auth", serverName.Value], paths, daemonApi, writer);
+            }
+        }
+        else if (runAuth && transport is "stdio")
+        {
+            writer.WriteLine();
+            writer.WriteLine("--auth ignored: OAuth is only for HTTP/SSE servers.");
+        }
+
         return 0;
     }
 
@@ -1350,6 +1404,12 @@ internal static class McpCommand
         writer.WriteLine("  --grant-all  CI escape hatch. Skip the empty-grants writes and leave tool");
         writer.WriteLine("               grants null (legacy \"all pass\" behavior). Approval defaults");
         writer.WriteLine("               (Personal=Approval, Team=Approval, Public=Deny) are still written.");
+        writer.WriteLine("  --auth       Start the OAuth flow immediately after adding (HTTP/SSE only).");
+        writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
+        writer.WriteLine("               dynamic client registration.");
+        writer.WriteLine();
+        writer.WriteLine("On add, HTTP/SSE servers without an Authorization header print a hint to run");
+        writer.WriteLine("`netclaw mcp auth` first. The daemon detects OAuth requirements at auth time.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");

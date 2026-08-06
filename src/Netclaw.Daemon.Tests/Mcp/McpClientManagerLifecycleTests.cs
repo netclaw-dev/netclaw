@@ -487,11 +487,18 @@ public sealed class McpClientManagerLifecycleTests
         IOperationalNotificationSink notificationSink)
         => new(runtime, timeProvider, notificationSink);
 
-    private sealed class ManagerHarness : IAsyncDisposable
+    internal sealed class ManagerHarness : IAsyncDisposable
     {
         private readonly McpOAuthFlowBroker _flowBroker;
         private bool _stopFailureObserved;
         private bool _managerDisposed;
+
+        public ManagerHarness(
+            ControlledMcpClientRuntime runtime,
+            FakeTimeProvider timeProvider)
+            : this(runtime, timeProvider, NullNotificationSink.Instance)
+        {
+        }
 
         public ManagerHarness(
             ControlledMcpClientRuntime runtime,
@@ -555,7 +562,7 @@ public sealed class McpClientManagerLifecycleTests
         }
     }
 
-    private sealed class ControlledMcpClientRuntime : IMcpClientRuntime
+    internal sealed class ControlledMcpClientRuntime : IMcpClientRuntime
     {
         private readonly ConcurrentQueue<ClientPlan> _plans = new();
         private readonly ConcurrentDictionary<McpClient, ClientPlan> _clients = new();
@@ -598,6 +605,23 @@ public sealed class McpClientManagerLifecycleTests
             if (plan.Initialize is not null)
                 await plan.Initialize(cancellationToken);
 
+            var functions = BuildFunctions(plan);
+            return new McpClientInitialization(functions.Values.ToList());
+        }
+
+        public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.RefreshCountStorage);
+            if (plan.ListFailure is not null)
+                return ValueTask.FromException<IReadOnlyList<AIFunction>>(plan.ListFailure);
+            return ValueTask.FromResult<IReadOnlyList<AIFunction>>(BuildFunctions(plan).Values.ToList());
+        }
+
+        private IReadOnlyDictionary<string, AIFunction> BuildFunctions(ClientPlan plan)
+        {
             var functions = new Dictionary<string, AIFunction>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in plan.ToolNames)
             {
@@ -606,7 +630,7 @@ public sealed class McpClientManagerLifecycleTests
                 _functions[function] = plan;
             }
 
-            return new McpClientInitialization(functions.Values.ToList());
+            return functions;
         }
 
         public async ValueTask<object?> InvokeAsync(
@@ -632,15 +656,17 @@ public sealed class McpClientManagerLifecycleTests
         }
     }
 
-    private sealed class ClientPlan(params string[] toolNames)
+    internal sealed class ClientPlan(params string[] toolNames)
     {
-        public string[] ToolNames { get; } = toolNames;
+        public string[] ToolNames { get; set; } = toolNames;
 
         public Func<CancellationToken, Task>? Initialize { get; init; }
 
         public Func<int, CancellationToken, Task<object?>>? Invoke { get; init; }
 
         public Exception? DisposeFailure { get; init; }
+
+        public Exception? ListFailure { get; set; }
 
         public TaskCompletionSource Created { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -654,9 +680,13 @@ public sealed class McpClientManagerLifecycleTests
 
         public int DisposeCountStorage;
 
+        public int RefreshCountStorage;
+
         public int InvocationCount => Volatile.Read(ref InvocationCountStorage);
 
         public int DisposeCount => Volatile.Read(ref DisposeCountStorage);
+
+        public int RefreshCount => Volatile.Read(ref RefreshCountStorage);
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink

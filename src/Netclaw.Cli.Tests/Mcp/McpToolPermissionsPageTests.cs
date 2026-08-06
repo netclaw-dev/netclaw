@@ -356,6 +356,44 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     }
 
     [Fact]
+    public async Task ToolGrid_RightArrowOnScrolledToolRow_PreservesScrollPosition()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input, height: 18);
+
+        var tools = Enumerable.Range(1, 50)
+            .Select(i => $"tool-{i:00}")
+            .ToList();
+
+        vm.InitializeForTests(new McpServerName("notion"), tools);
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        if (!vm.IsServerAllowedForSelectedAudience())
+            vm.ToggleServerAccess();
+
+        // Cursor starts at row 0. Move to row 38:
+        // row 0 = Audience, row 1 = Server enabled, row 2 = Server default,
+        // row 3 = tool-01, so row 38 = tool-36.
+        for (var i = 0; i < 38; i++)
+            input.EnqueueKey(ConsoleKey.DownArrow);
+
+        input.EnqueueKey(ConsoleKey.RightArrow);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("tool-36"),
+            $"Expected scrolled/focused row to remain visible after RightArrow. Screen:\n{terminal}");
+        Assert.False(terminal.Contains("tool-01"),
+            $"Expected scroll not to reset to the top after RightArrow. Screen:\n{terminal}");
+        AssertLineHasBackground(terminal, "tool-36", Color.Cyan);
+
+        var (mode, inherited) = vm.GetEffectiveMode(new ToolName("tool-36"));
+        Assert.Equal(ToolApprovalMode.Auto, mode);
+        Assert.False(inherited);
+    }
+
+    [Fact]
     public async Task Loading_Escape_QuitsInsteadOfStalling()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
@@ -371,9 +409,9 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, McpToolPermissionsViewModel Vm)
-        CreateHeadlessApp(out VirtualInputSource input)
+        CreateHeadlessApp(out VirtualInputSource input, int width = 120, int height = 40)
     {
-        var terminal = new VirtualTerminal(120, 40);
+        var terminal = new VirtualTerminal(width, height);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
 

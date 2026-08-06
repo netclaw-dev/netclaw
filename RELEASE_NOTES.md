@@ -1,5 +1,12 @@
 # NetClaw Release Notes
 
+## 0.25.4 (2026-08-06)
+
+### Bug Fixes
+- **MCP: live tool catalog refresh** — The daemon now re-lists healthy MCP servers' tool catalogs on a throttled cadence, so servers that add, remove, rename, or edit tools mid-session become visible to the model without a disconnect + reconnect ([#1771](https://github.com/netclaw-dev/netclaw/pull/1771))
+- **MCP permissions: scroll position preserved** — Editing tool-grid rows with the left/right keys no longer jumps the scroll position back to the top ([#1775](https://github.com/netclaw-dev/netclaw/pull/1775))
+- **Shell approvals: static fd-dup redirects allowed** — `2>&1` and similar static file-descriptor duplications are no longer classified as dynamic shell syntax, so safe commands like `git status 2>&1` skip the approval prompt ([#1776](https://github.com/netclaw-dev/netclaw/pull/1776))
+
 ## 0.25.3 (2026-08-05)
 
 ### Features
