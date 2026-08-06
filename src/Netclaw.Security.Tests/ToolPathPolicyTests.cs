@@ -270,7 +270,27 @@ public sealed class ToolPathPolicyTests
             // Lexically this path lives in scratch/link, outside any denied
             // root — only segment-walk symlink resolution catches it.
             var viaLink = Path.Combine(linkDir, "netclaw.json");
-            Assert.True(policy.IsReadDenied(viaLink));
+
+            // Diagnostic (#1724): when this assert fails on Windows, the message
+            // must show WHICH form diverges — the \\?\ extended prefix or an 8.3
+            // short/long-name mismatch — so the deny fix targets the real cause.
+            // linkResolved mirrors exactly what ToolPathPolicy.TryResolveSymlinksInPath
+            // appends: DirectoryInfo(link).ResolveLinkTarget(returnFinalTarget: true).FullName.
+            var linkResolved = new DirectoryInfo(linkDir)
+                .ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? "<null>";
+            var candidateCanonical = Path.Combine(linkResolved, "netclaw.json");
+            var deniedFull = Path.GetFullPath(deniedDir);
+            var diagnostic =
+                "IsReadDenied returned false for a symlinked-directory traversal.\n" +
+                $"  input viaLink                   = {viaLink}\n" +
+                $"  Path.GetFullPath(viaLink)       = {Path.GetFullPath(viaLink)}\n" +
+                $"  link ResolveLinkTarget.FullName = {linkResolved}\n" +
+                $"  candidateCanonical              = {candidateCanonical}\n" +
+                $"  input deniedDir                 = {deniedDir}\n" +
+                $"  Path.GetFullPath(deniedDir)     = {deniedFull}\n" +
+                "  candidate.StartsWith(denied, OrdinalIgnoreCase) = " +
+                candidateCanonical.StartsWith(deniedFull, StringComparison.OrdinalIgnoreCase);
+            Assert.True(policy.IsReadDenied(viaLink), diagnostic);
         }
         catch (UnauthorizedAccessException)
         {
