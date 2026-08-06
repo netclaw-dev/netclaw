@@ -247,6 +247,11 @@ public sealed class ShellCommandPolicy
         if (tokens.Count == 0)
             return ShellCommandDecision.Allow();
 
+        // The PowerShell parser rejects unsupported module-qualified cmdlets.
+        // The legacy scan must still apply hard denies to their cmdlet names.
+        if (_environment.Grammar == ShellGrammar.PowerShell)
+            tokens[0] = ShellExecutionEnvironment.NormalizePowerShellVerb(tokens[0]);
+
         foreach (var pattern in _denyPatterns)
         {
             if (pattern.Matches(tokens))

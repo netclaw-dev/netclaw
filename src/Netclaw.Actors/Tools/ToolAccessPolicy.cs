@@ -370,7 +370,7 @@ public sealed class ToolAccessPolicy
             && !isMessy
             && candidateVerbs.Count > 0
             && _safeVerbPolicy.AllShortCircuit(candidates, context.Approval.Cwd, context.Invocation)
-            && OperationStaysInSafeSpace(arguments, context))
+            && OperationStaysInSafeSpace(analysisArguments, context))
         {
             return ToolAccessDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
         }
