@@ -78,7 +78,8 @@ public static partial class ReminderScheduleParser
                 if (!CronScheduleHelper.TryParse(scheduleValue))
                 {
                     return (null,
-                        $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday).");
+                        $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday), " +
+                        "optionally preceded by 'CRON_TZ=<time-zone-id>' to evaluate the schedule in a specific time zone.");
                 }
 
                 return (new ReminderSchedule

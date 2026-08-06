@@ -147,6 +147,61 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Schedule_cron_with_cron_tz_prefix_preserves_expression()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "cron-tz-check",
+                ["Name"] = "cron-tz-check",
+                ["Prompt"] = "Daily local-time check",
+                ["ScheduleType"] = "cron",
+                ["Schedule"] = "CRON_TZ=Europe/Brussels 0 9 * * *",
+                ["DeliveryKind"] = "none"
+            }, TestToolExecutionContext.CreateUnbound());
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
+        // The full prefixed expression is stored as-is so re-scheduling keeps the zone
+        Assert.Equal("CRON_TZ=Europe/Brussels 0 9 * * *", cmd.Definition.Schedule.CronExpression);
+
+        probe.Reply(new ReminderSavedResponse(
+            cmd.Definition.Id,
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: new DateTimeOffset(2026, 8, 7, 7, 0, 0, TimeSpan.Zero)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Rejects_cron_with_unknown_cron_tz_zone()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "bad-tz",
+            ["Name"] = "bad-tz",
+            ["Prompt"] = "Test",
+            ["ScheduleType"] = "cron",
+            ["Schedule"] = "CRON_TZ=Not/AZone 0 9 * * *",
+            ["DeliveryKind"] = "none"
+        }, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
+
+        Assert.Contains("Error:", result);
+        Assert.Contains("Invalid cron expression", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Rejects_invalid_cron_expression()
     {
         var probe = CreateTestProbe();
