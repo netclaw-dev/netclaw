@@ -581,6 +581,11 @@ static void ConfigureDaemonServices(
         paths.SecretsPath,
         paths.KeysDirectory,
         paths.SqliteDbPath,
+        // SQLite sidecars mirror the shell indicator list — they hold the same
+        // raw page data as the DB and must not be writable through tools either.
+        paths.SqliteDbPath + "-wal",
+        paths.SqliteDbPath + "-shm",
+        paths.SqliteDbPath + "-journal",
         paths.PidFilePath,
         paths.LockFilePath,
         paths.RestartManifestPath,
