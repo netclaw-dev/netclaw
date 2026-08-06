@@ -148,6 +148,40 @@ public sealed class McpCatalogRefreshTests
     }
 
     [Fact]
+    public async Task EmptyCatalogRefresh_RollsBackThrottleSoNextTickRetries()
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new McpClientManagerLifecycleTests.ClientPlan("tool_a", "tool_b"));
+        var time = new FakeTimeProvider(InitialTime);
+        await using var harness = CreateHarness(runtime, time);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        time.Advance(McpClientManager.CatalogRefreshInterval);
+        plan.ToolNames = []; // server now reports no tools
+        Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+        Assert.Equal(1, plan.RefreshCount);
+
+        // The last-good, previously non-empty catalog stays published.
+        var snapshotAfterEmpty = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(ServerName));
+        Assert.Equal(1, snapshotAfterEmpty.Generation);
+        Assert.Equal(2, snapshotAfterEmpty.ToolFunctions.Count);
+        AssertPublishedTools(harness, "tool_a", "tool_b");
+
+        // The claim was rolled back, so a 30s advance allows an immediate retry rather
+        // than forcing a 5-minute wait. The server recovers with a changed catalog, so
+        // the re-list runs and the snapshot generation bumps.
+        plan.ToolNames = ["tool_a", "tool_b", "tool_c"];
+        time.Advance(TimeSpan.FromSeconds(30));
+        Assert.True(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+        Assert.Equal(2, plan.RefreshCount);
+
+        var snapshotAfterRecovery = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(ServerName));
+        Assert.Equal(2, snapshotAfterRecovery.Generation);
+        Assert.Equal(3, snapshotAfterRecovery.ToolFunctions.Count);
+        AssertPublishedTools(harness, "tool_a", "tool_b", "tool_c");
+    }
+
+    [Fact]
     public async Task RefreshOnUnknownServer_IsNoOp()
     {
         var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();

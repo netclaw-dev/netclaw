@@ -273,6 +273,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // transient: keep the last good snapshot, retry on the next poll window.
             if (functions.Count == 0 && current.ToolFunctions.Count > 0)
             {
+                // Roll back the throttle claim so the next 30s tick retries instead of
+                // waiting 5 minutes, matching the failed-refresh path below.
+                lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
                 _logger.LogWarning(
                     "MCP server '{Name}' catalog refresh returned no tools; keeping {ToolCount} existing tool(s)",
                     current.Name.Value,
