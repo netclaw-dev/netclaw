@@ -8,10 +8,10 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.25.2</VersionPrefix>
+    <VersionPrefix>0.25.4</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <PackageReleaseNotes>
-      Features: Provider manager supports deleting providers from the list; First-party DeepSeek provider with full provider lifecycle, model catalog, and TUI integration. Dependencies: OllamaSharp 5.4.30, Grpc.Tools 2.83.0.
+      Bug fixes: MCP tool catalog changes on connected servers are detected and refreshed automatically; MCP permissions tool-grid scroll position preserved when editing rows; static fd-dup redirects (2&amp;>1) no longer treated as dynamic shell syntax. 
     </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>

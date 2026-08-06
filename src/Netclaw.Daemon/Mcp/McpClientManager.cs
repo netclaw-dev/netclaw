@@ -3,16 +3,22 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Net;
 using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -41,6 +47,20 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private bool _stopping;
     private bool _disposed;
     private Task? _stopTask;
+
+    /// <summary>
+    /// Minimum time between catalog refresh polls on a healthy connection. The
+    /// reconnection service ticks every 30 seconds; this throttle keeps the
+    /// re-list RPC quiet on stable servers while still converging within a few
+    /// minutes of a live catalog change.
+    /// </summary>
+    internal static readonly TimeSpan CatalogRefreshInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Bounds a single catalog re-list so a server that stops answering cannot stall
+    /// the poll loop, block a reconnect on the per-server gate, or delay shutdown.
+    /// </summary>
+    internal static readonly TimeSpan CatalogRefreshTimeout = TimeSpan.FromSeconds(15);
 
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
@@ -174,6 +194,154 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             return false;
 
         return await ReconnectAsync(lifecycle, entry, observed, ct, null);
+    }
+
+    /// <summary>
+    /// Re-lists a connected server's tools on the live client and republishes the
+    /// snapshot when the catalog changed. Throttled to <see cref="CatalogRefreshInterval"/>
+    /// per server. A failed refresh never empties the catalog: the last good snapshot
+    /// and generation stay published until a later refresh succeeds, and transport-level
+    /// failures are left to the invocation path and the reconnection service to handle.
+    /// </summary>
+    public async Task<bool> TryRefreshCatalogAsync(McpServerName serverName, CancellationToken ct = default)
+    {
+        if (IsStopping
+            || !_serverEntries.TryGetValue(serverName.Value, out var entry)
+            || !entry.Enabled)
+            return false;
+
+        if (!_servers.TryGetValue(serverName, out var lifecycle)
+            || lifecycle.Snapshot is not { IsConnected: true })
+            return false;
+
+        using var candidateCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            ct, _lifetimeCancellation.Token);
+        candidateCancellation.CancelAfter(CatalogRefreshTimeout);
+        try
+        {
+            await lifecycle.Gate.WaitAsync(candidateCancellation.Token);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (IsStopping)
+                return false;
+
+            var snapshot = lifecycle.Snapshot;
+            if (snapshot is not { IsConnected: true })
+                return false;
+
+            if (_flowBroker.TryGetActive(snapshot.Name, out _))
+                return false;
+
+            if (!lifecycle.TryClaimCatalogRefresh(
+                    _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    (long)CatalogRefreshInterval.TotalMilliseconds,
+                    out var previousRefreshMs))
+            {
+                return false;
+            }
+
+            return await RefreshCatalogCoreAsync(
+                lifecycle, entry, snapshot, previousRefreshMs, candidateCancellation.Token);
+        }
+        finally
+        {
+            lifecycle.Gate.Release();
+        }
+    }
+
+    private async Task<bool> RefreshCatalogCoreAsync(
+        McpServerLifecycle lifecycle,
+        McpServerEntry entry,
+        McpServerSnapshot current,
+        long previousRefreshMs,
+        CancellationToken ct)
+    {
+        try
+        {
+            var tools = await _clientRuntime.ListToolsAsync(current.Client!, ct);
+            var functions = CreateFunctionMap(tools);
+
+            // A server that was serving tools now reports none. Publishing an empty
+            // catalog would wipe the model-visible index, and the server is still
+            // Connected so the invocation path can't rescue it either. Treat it as
+            // transient: keep the last good snapshot, retry on the next poll window.
+            if (functions.Count == 0 && current.ToolFunctions.Count > 0)
+            {
+                // Roll back the throttle claim so the next 30s tick retries instead of
+                // waiting 5 minutes, matching the failed-refresh path below.
+                lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+                _logger.LogWarning(
+                    "MCP server '{Name}' catalog refresh returned no tools; keeping {ToolCount} existing tool(s)",
+                    current.Name.Value,
+                    current.ToolFunctions.Count);
+                return false;
+            }
+
+            var fingerprint = ComputeCatalogFingerprint(functions.Values);
+            if (string.Equals(fingerprint, current.CatalogFingerprint, StringComparison.Ordinal))
+                return false;
+
+            var publishedTools = ToolRegistrationExtensions.PrepareMcpTools(
+                current.Name.Value,
+                tools,
+                entry.GrantCategory,
+                this,
+                _maxToolDescriptionChars,
+                _maxToolSchemaWarnChars,
+                _logger);
+            LogToolDrift(current.Name, tools);
+
+            McpServerSnapshot replacement;
+            lock (_shutdownSync)
+            {
+                if (_stopping)
+                    return false;
+
+                replacement = current with
+                {
+                    ToolFunctions = functions,
+                    Generation = checked(current.Generation + 1),
+                    Status = new McpServerStatus(
+                        current.Name,
+                        McpConnectionState.Connected,
+                        functions.Count,
+                        null,
+                        current.Status.LastErrorAt),
+                    CatalogFingerprint = fingerprint,
+                };
+                // Connection first, tools second — same ordering as the connect path.
+                lifecycle.Publish(replacement);
+                _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
+            }
+
+            _logger.LogInformation(
+                "MCP server '{Name}' catalog refreshed as generation {Generation} ({ToolCount} tools)",
+                current.Name.Value,
+                replacement.Generation,
+                functions.Count);
+            return true;
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Invariant: a failed refresh must never empty the catalog. Roll back the
+            // throttle claim so the next 30s tick retries instead of waiting 5 minutes.
+            lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+            _logger.LogWarning(ex,
+                "MCP server '{Name}' catalog refresh failed; keeping generation {Generation} unchanged",
+                current.Name.Value,
+                current.Generation);
+            return false;
+        }
     }
 
     internal async Task<McpOAuthStartResponse> StartAuthorizationAsync(
@@ -388,6 +556,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var initialization = await _clientRuntime.InitializeAsync(candidate, ct);
             var tools = initialization.Tools;
             var functions = CreateFunctionMap(tools);
+            var catalogFingerprint = ComputeCatalogFingerprint(functions.Values);
             var publishedTools = ToolRegistrationExtensions.PrepareMcpTools(
                 current.Name.Value,
                 tools,
@@ -430,11 +599,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     candidate,
                     functions,
                     checked(current.Generation + 1),
-                    connectedStatus);
+                    connectedStatus,
+                    catalogFingerprint);
                 // Connection first, tools second. A tool the model can see is then always
                 // dispatchable, because dispatch resolves it from this snapshot.
                 lifecycle.Publish(replacement);
                 _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
+                // The connect path just listed the catalog; skip the next poll window.
+                lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
                 candidate = null;
                 oauthCache = null;
             }
@@ -1202,6 +1374,61 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new ReadOnlyDictionary<string, AIFunction>(map);
     }
 
+    /// <summary>
+    /// Computes a content checksum over the model-visible surface of a server's tool
+    /// catalog: name, description, input schema, and return schema of every tool.
+    /// Order-independent (tools are sorted by name) and schema-canonical (object keys
+    /// sorted, whitespace normalized), so a server reordering either is not mistaken
+    /// for a change. Equal fingerprints mean the catalog is unchanged; any add, remove,
+    /// rename, or schema edit changes the checksum.
+    /// </summary>
+    internal static string ComputeCatalogFingerprint(IEnumerable<AIFunction> tools)
+    {
+        using var stream = new MemoryStream();
+        foreach (var tool in tools.OrderBy(t => t.Name, StringComparer.Ordinal))
+        {
+            WriteField(stream, tool.Name);
+            WriteField(stream, tool.Description ?? string.Empty);
+            WriteField(stream, CanonicalSchema(tool.JsonSchema));
+            WriteField(stream, tool.ReturnJsonSchema is { } returnSchema ? CanonicalSchema(returnSchema) : string.Empty);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+    }
+
+    /// <summary>Canonicalizes a schema (sorted object keys, normalized whitespace) so
+    /// semantically identical schemas hash the same. Exposed for tests.</summary>
+    internal static string CanonicalSchema(JsonElement schema)
+    {
+        if (schema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return string.Empty;
+
+        return CanonicalNode(schema)?.ToJsonString() ?? string.Empty;
+    }
+
+    private static JsonNode? CanonicalNode(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => new JsonObject(element.EnumerateObject()
+            .OrderBy(property => property.Name, StringComparer.Ordinal)
+            .Select(property => new KeyValuePair<string, JsonNode?>(property.Name, CanonicalNode(property.Value)))),
+        JsonValueKind.Array => new JsonArray(element.EnumerateArray().Select(CanonicalNode).ToArray()),
+        JsonValueKind.String => JsonValue.Create(element.GetString()),
+        JsonValueKind.Number => JsonValue.Create(element),
+        JsonValueKind.True => JsonValue.Create(true),
+        JsonValueKind.False => JsonValue.Create(false),
+        JsonValueKind.Null => null,
+        _ => JsonValue.Create(element.GetRawText()),
+    };
+
+    private static void WriteField(Stream stream, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+        stream.Write(length);
+        stream.Write(bytes);
+    }
+
     private void LogToolDrift(McpServerName serverName, IReadOnlyList<AIFunction> discoveredTools)
     {
         var profiles = _toolConfig.AudienceProfiles;
@@ -1288,6 +1515,11 @@ internal interface IMcpClientRuntime
         McpClient client,
         CancellationToken cancellationToken);
 
+    /// <summary>Re-lists a connected client's tools from the server (no reconnect).</summary>
+    ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+        McpClient client,
+        CancellationToken cancellationToken);
+
     ValueTask<object?> InvokeAsync(
         AIFunction function,
         AIFunctionArguments? arguments,
@@ -1308,8 +1540,16 @@ internal sealed class McpClientRuntime : IMcpClientRuntime
         McpClient client,
         CancellationToken cancellationToken)
     {
+        var tools = await ListToolsAsync(client, cancellationToken);
+        return new McpClientInitialization(tools);
+    }
+
+    public async ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+        McpClient client,
+        CancellationToken cancellationToken)
+    {
         var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-        return new McpClientInitialization(tools.Cast<AIFunction>().ToList());
+        return tools.Cast<AIFunction>().ToList();
     }
 
     public ValueTask<object?> InvokeAsync(
@@ -1331,12 +1571,35 @@ internal sealed record McpClientCandidate(
 internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
 {
     private McpServerSnapshot? _snapshot = initialSnapshot;
+    private long _lastCatalogRefreshMs;
 
     public SemaphoreSlim Gate { get; } = new(1, 1);
 
     public McpServerSnapshot? Snapshot => Volatile.Read(ref _snapshot);
 
     public void Publish(McpServerSnapshot? snapshot) => Volatile.Write(ref _snapshot, snapshot);
+
+    /// <summary>
+    /// Claims the next catalog refresh slot when <paramref name="minIntervalMs"/> has
+    /// elapsed since the last refresh or connect. Callers hold <see cref="Gate"/>, so a
+    /// plain field is sufficient. Outputs the previous claim so a failed attempt can roll
+    /// back and retry sooner than the full interval.
+    /// </summary>
+    public bool TryClaimCatalogRefresh(long nowMs, long minIntervalMs, out long previousMs)
+    {
+        previousMs = _lastCatalogRefreshMs;
+        if (nowMs - previousMs < minIntervalMs)
+            return false;
+
+        _lastCatalogRefreshMs = nowMs;
+        return true;
+    }
+
+    /// <summary>Restores the claim timestamp after a failed refresh so the next tick retries.</summary>
+    public void RollbackCatalogRefreshClaim(long previousMs) => _lastCatalogRefreshMs = previousMs;
+
+    /// <summary>Records a successful catalog refresh (or connect) so the poll throttle starts from now.</summary>
+    public void MarkCatalogRefreshed(long nowMs) => _lastCatalogRefreshMs = nowMs;
 }
 
 internal sealed record McpServerSnapshot(
@@ -1344,7 +1607,8 @@ internal sealed record McpServerSnapshot(
     McpClient? Client,
     IReadOnlyDictionary<string, AIFunction> ToolFunctions,
     long Generation,
-    McpServerStatus Status)
+    McpServerStatus Status,
+    string CatalogFingerprint = "")
 {
     private static readonly IReadOnlyDictionary<string, AIFunction> EmptyFunctions =
         new ReadOnlyDictionary<string, AIFunction>(new Dictionary<string, AIFunction>());

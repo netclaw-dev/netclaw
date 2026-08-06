@@ -36,6 +36,31 @@ public sealed class ShellCommandAnalysisTests
         Assert.True(analysis.HasDynamicSyntax);
     }
 
+    [Theory]
+    [InlineData("git status 2>&1")]
+    [InlineData("git status 2>&123")]
+    [InlineData("git status 2>&1-")]
+    [InlineData("git status 2>&-")]
+    public void Static_file_descriptor_redirect_is_not_dynamic(string command)
+    {
+        var analysis = _analyzer.Analyze(command);
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+    }
+
+    [Theory]
+    [InlineData("git status 2>&$FD")]
+    [InlineData("git status >&$FD")]
+    [InlineData("git status 2>&${FD}")]
+    public void Dynamic_file_descriptor_redirect_stays_dynamic(string command)
+    {
+        var analysis = _analyzer.Analyze(command);
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax);
+    }
+
     [Fact]
     public void Background_list_fails_closed_when_parser_omits_its_tail()
     {

@@ -183,5 +183,36 @@ internal sealed record ShellCommandAnalysis(
         // A glob in a directory segment can hide traversal or a symlink.
         // Only a leaf glob has a fixed directory scope.
         || clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
-        || clause.Redirects.Any(static redirect => redirect.IsDynamicSkip));
+        // An fd-dup target (&1, &2, &-) is a static file-descriptor number,
+        // not a dynamic token: ShellSyntaxTree marks it IsDynamicSkip to mean
+        // "do not path-resolve", but it carries no unresolved syntax and no
+        // filesystem scope (ResolveRedirectDirectory skips &-prefixed targets).
+        // Treating it as dynamic fails the whole command closed to an approval
+        // prompt for every `2>&1`-shaped command, even fully safe ones.
+        || clause.Redirects.Any(static redirect =>
+            redirect.IsDynamicSkip
+            && !IsStaticFileDescriptor(redirect.Target)));
+
+    /// <summary>
+    /// Returns true only for the static file-descriptor targets that
+    /// ShellSyntaxTree 0.2 recognizes: &amp;N, &amp;N-, and &amp;-.
+    /// </summary>
+    private static bool IsStaticFileDescriptor(string target)
+    {
+        if (target == "&-")
+            return true;
+
+        if (target.Length < 2 || target[0] != '&')
+            return false;
+
+        var index = 1;
+        while (index < target.Length && char.IsAsciiDigit(target[index]))
+            index++;
+
+        if (index == 1)
+            return false;
+
+        return index == target.Length
+               || index == target.Length - 1 && target[index] == '-';
+    }
 }
