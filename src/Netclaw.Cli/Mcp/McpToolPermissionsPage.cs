@@ -87,7 +87,19 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         });
 
         ViewModel.StateVersion
-            .Subscribe(_ => _contentNode.Invalidate())
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid
+                    && _toolRowsNode is not null)
+                {
+                    _gridHeaderRowsNode?.Invalidate();
+                    _toolRowsNode.Invalidate();
+                }
+                else
+                {
+                    _contentNode.Invalidate();
+                }
+            })
             .DisposeWith(Subscriptions);
 
         return _contentNode.Fill();
