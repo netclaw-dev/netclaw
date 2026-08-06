@@ -496,10 +496,25 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "fd-close-redirect-safe-verb-allows",
+            Bash("git status 2>&-"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "fd-move-redirect-safe-verb-allows",
+            Bash("git status 2>&1-"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
             "fd-dup-redirect-mutating-no-grant-prompts-not-messy",
             Bash("git push origin dev 2>&1 | tail -2"),
             Approvals.None,
             ExpectedApproval.Require(["git push origin dev", "tail"], isMessy: false)),
+        Case(
+            "dynamic-fd-redirect-fails-closed",
+            Bash("git status 2>&$FD"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "background-list-prompts-for-mutating-tail",
             Bash("git status & git push"),

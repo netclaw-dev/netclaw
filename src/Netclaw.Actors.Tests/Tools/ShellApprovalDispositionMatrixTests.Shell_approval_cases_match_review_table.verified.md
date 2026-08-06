@@ -64,7 +64,10 @@
 | dynamic-redirect-fails-closed | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | none | Yes |
 | fd-dup-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&1 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-dup-redirect-safe-pipeline-allows | Personal | Project | Interactive | git log --oneline -5 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| fd-close-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| fd-move-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-dup-redirect-mutating-no-grant-prompts-not-messy | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev, tail | No |
+| dynamic-fd-redirect-fails-closed | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
 | background-list-prompts-for-mutating-tail | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
 | unbalanced-quote-fails-closed | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
 | multiline-argument-prompts | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
