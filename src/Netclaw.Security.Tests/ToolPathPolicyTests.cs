@@ -246,30 +246,89 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsReadDenied(path));
     }
 
-    [Fact]
-    public void IsReadDenied_blocks_symlinked_directory_traversal()
+    public enum SymlinkTraversalShape
     {
-        // Regression (#1724): a symlinked INTERMEDIATE directory into a denied
-        // location must not bypass IsReadDenied. Shell catches this via
-        // TryResolveSymlinksInPath; the read side must too, since interactive
-        // Personal reads have IsReadDenied as their sole backstop.
+        SingleSymlinkedDirectory,
+        MultiDepthSymlinkChain,
+        DotDotTraversalAfterResolvedLink,
+    }
+
+    // Regression (#1724): a symlinked INTERMEDIATE directory into a denied
+    // location must not bypass IsReadDenied. Shell catches this via
+    // TryResolveSymlinksInPath; the read side must too, since interactive
+    // Personal reads have IsReadDenied as their sole backstop.
+    [Theory]
+    [InlineData(SymlinkTraversalShape.SingleSymlinkedDirectory)]
+    [InlineData(SymlinkTraversalShape.MultiDepthSymlinkChain)]
+    [InlineData(SymlinkTraversalShape.DotDotTraversalAfterResolvedLink)]
+    public void IsReadDenied_blocks_symlinked_directory_traversal(SymlinkTraversalShape shape)
+    {
         var scratch = Path.Combine(Path.GetTempPath(), $"netclaw-symlink-{Guid.NewGuid():N}");
         var deniedDir = Path.Combine(scratch, "denied");
-        var linkDir = Path.Combine(scratch, "link");
         Directory.CreateDirectory(deniedDir);
         File.WriteAllText(Path.Combine(deniedDir, "netclaw.json"), """{"secret":true}""");
 
+        var createdLinks = new List<string>();
+
         try
         {
-            Directory.CreateSymbolicLink(linkDir, deniedDir);
+            string viaLink;
+
+            switch (shape)
+            {
+                case SymlinkTraversalShape.SingleSymlinkedDirectory:
+                {
+                    var linkDir = Path.Combine(scratch, "link");
+                    Directory.CreateSymbolicLink(linkDir, deniedDir);
+                    createdLinks.Add(linkDir);
+
+                    // Lexically this path lives in scratch/link, outside any
+                    // denied root — only segment-walk symlink resolution
+                    // catches it.
+                    viaLink = Path.Combine(linkDir, "netclaw.json");
+                    break;
+                }
+
+                case SymlinkTraversalShape.MultiDepthSymlinkChain:
+                {
+                    // linkA -> linkB -> deniedDir. A resolver that only
+                    // follows one hop would stop at linkB; the walk must
+                    // reach the final real target.
+                    var linkB = Path.Combine(scratch, "linkB");
+                    var linkA = Path.Combine(scratch, "linkA");
+                    Directory.CreateSymbolicLink(linkB, deniedDir);
+                    Directory.CreateSymbolicLink(linkA, linkB);
+                    createdLinks.Add(linkB);
+                    createdLinks.Add(linkA);
+
+                    viaLink = Path.Combine(linkA, "netclaw.json");
+                    break;
+                }
+
+                case SymlinkTraversalShape.DotDotTraversalAfterResolvedLink:
+                {
+                    var linkDir = Path.Combine(scratch, "link");
+                    Directory.CreateSymbolicLink(linkDir, deniedDir);
+                    createdLinks.Add(linkDir);
+
+                    // "nested" need not exist: Path.GetFullPath collapses the
+                    // ".." lexically before any symlink is resolved, leaving
+                    // "link/netclaw.json" — the link segment itself survives
+                    // the collapse untouched, so resolution still lands
+                    // inside deniedDir. Locks in that a decoy ".." placed
+                    // after the link cannot be used to dodge the walk.
+                    viaLink = Path.Combine(linkDir, "nested", "..", "netclaw.json");
+                    break;
+                }
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(shape), shape, null);
+            }
 
             // Deny the REAL deniedDir (fixture paths don't exist on disk, and
             // symlink resolution needs an on-disk target to resolve).
             var policy = new ToolPathPolicy([deniedDir]);
 
-            // Lexically this path lives in scratch/link, outside any denied
-            // root — only segment-walk symlink resolution catches it.
-            var viaLink = Path.Combine(linkDir, "netclaw.json");
             Assert.True(policy.IsReadDenied(viaLink));
         }
         catch (UnauthorizedAccessException)
@@ -278,8 +337,12 @@ public sealed class ToolPathPolicyTests
         }
         finally
         {
-            if (Directory.Exists(linkDir) && new DirectoryInfo(linkDir).LinkTarget is not null)
-                Directory.Delete(linkDir);
+            foreach (var link in createdLinks)
+            {
+                if (Directory.Exists(link) && new DirectoryInfo(link).LinkTarget is not null)
+                    Directory.Delete(link);
+            }
+
             if (Directory.Exists(scratch))
                 Directory.Delete(scratch, recursive: true);
         }

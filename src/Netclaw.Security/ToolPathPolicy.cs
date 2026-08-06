@@ -61,8 +61,20 @@ public sealed class ToolPathPolicy
             // checks canonicalize the *candidate* path (TryResolveSymlinksInPath /
             // TryResolveSymlinkTarget); without the resolved denied form here, a
             // candidate resolving to /private/etc/... would slip past a /etc deny.
-            if (TryResolveSymlinksInPath(normalized, out var canonical))
-                set.Add(canonical);
+            //
+            // Construction skips a resolution failure (the lexical form above is
+            // still added); the deny CHECKS fail closed on the same failure. A
+            // startup-time resolution throw must not crash the process, and the
+            // lexical entry alone still denies exact and lexical-child matches.
+            try
+            {
+                if (TryResolveSymlinksInPath(normalized, out var canonical))
+                    set.Add(canonical);
+            }
+            catch
+            {
+                // Skip: this path's canonical form just does not get added.
+            }
         }
 
         return set;
@@ -115,19 +127,30 @@ public sealed class ToolPathPolicy
         if (PathUtility.TryNormalize(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
             return true;
 
-        // TryResolveSymlinkTarget only resolves the final path element. A path
-        // whose INTERMEDIATE directory is a symlink into a denied location
-        // (e.g. /tmp/x -> ~/.netclaw/config, then /tmp/x/netclaw.json) would
-        // slip past that check. Mirror the shell side (CommandReferencesDeniedPath)
-        // by also walking the path segment by segment — same infrastructure.
-        if (TryResolveSymlinkTarget(path, out var resolvedTarget)
-            && IsDeniedNormalized(resolvedTarget, deniedSet))
+        try
         {
+            // TryResolveSymlinkTarget only resolves the final path element. A path
+            // whose INTERMEDIATE directory is a symlink into a denied location
+            // (e.g. /tmp/x -> ~/.netclaw/config, then /tmp/x/netclaw.json) would
+            // slip past that check. Mirror the shell side (CommandReferencesDeniedPath)
+            // by also walking the path segment by segment — same infrastructure.
+            if (TryResolveSymlinkTarget(path, out var resolvedTarget)
+                && IsDeniedNormalized(resolvedTarget, deniedSet))
+            {
+                return true;
+            }
+
+            return TryResolveSymlinksInPath(path, out var canonical)
+                && IsDeniedNormalized(canonical, deniedSet);
+        }
+        catch
+        {
+            // This method is the SOLE backstop for interactive Personal reads
+            // (IsReadDenied has no other gate above it). An undetermined
+            // resolution must deny, not silently allow — the same defect class
+            // as the double-drive fail-open fixed for #1724. Fail closed.
             return true;
         }
-
-        return TryResolveSymlinksInPath(path, out var canonical)
-            && IsDeniedNormalized(canonical, deniedSet);
     }
 
     /// <summary>
@@ -168,11 +191,23 @@ public sealed class ToolPathPolicy
             // approved root and waves it through, and the static path check
             // here would never see /etc unless we resolve link targets along
             // every component of the path.
-            if (normalized is not null
-                && TryResolveSymlinksInPath(normalized, out var canonical)
-                && IsDeniedNormalized(canonical, _shellDeniedPaths))
+            if (normalized is not null)
             {
-                return true;
+                try
+                {
+                    if (TryResolveSymlinksInPath(normalized, out var canonical)
+                        && IsDeniedNormalized(canonical, _shellDeniedPaths))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // Fail closed: an undetermined resolution means we cannot
+                    // rule out this token reaching a denied path via symlink,
+                    // so treat the command as referencing one.
+                    return true;
+                }
             }
 
             var expanded = PathUtility.ExpandHome(token);
@@ -232,104 +267,96 @@ public sealed class ToolPathPolicy
         return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
     }
 
+    // Callers own exception policy here on purpose: BuildNormalizedSet (startup)
+    // skips a failed resolution, while the deny-check call sites (IsDeniedAgainst,
+    // CommandReferencesDeniedPath) fail closed. A blanket catch here would hide
+    // that distinction and force every caller back to the same (wrong) answer.
     private static bool TryResolveSymlinksInPath(string path, out string canonical)
     {
         canonical = string.Empty;
         if (string.IsNullOrEmpty(path))
             return false;
 
-        try
+        // Walk the path component by component, resolving any directory
+        // or file symlinks encountered. ResolveLinkTarget(returnFinalTarget:
+        // true) follows the chain to a non-link, but only operates on the
+        // entity it's invoked against — it does not see symlinks earlier
+        // in the path. Hence the explicit segment walk.
+        var fullPath = Path.GetFullPath(path);
+        // Seed the builder with the full root (drive + separator on Windows,
+        // "/" on Unix) and split only the REMAINDER after the root. Splitting
+        // the whole path re-emits the drive segment ("C:"), which the root
+        // already provides — appending it again yields "C:\C:\Users\..." so
+        // every Directory.Exists/File.Exists probe below misses and symlink
+        // resolution silently no-ops, failing the deny open. See #1724.
+        var root = Path.GetPathRoot(fullPath) ?? string.Empty;
+        var remainder = fullPath.Length > root.Length ? fullPath[root.Length..] : string.Empty;
+        var segments = remainder.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var sb = new StringBuilder();
+        sb.Append(root);
+
+        foreach (var segment in segments)
         {
-            // Walk the path component by component, resolving any directory
-            // or file symlinks encountered. ResolveLinkTarget(returnFinalTarget:
-            // true) follows the chain to a non-link, but only operates on the
-            // entity it's invoked against — it does not see symlinks earlier
-            // in the path. Hence the explicit segment walk.
-            var fullPath = Path.GetFullPath(path);
-            // Seed the builder with the full root (drive + separator on Windows,
-            // "/" on Unix) and split only the REMAINDER after the root. Splitting
-            // the whole path re-emits the drive segment ("C:"), which the root
-            // already provides — appending it again yields "C:\C:\Users\..." so
-            // every Directory.Exists/File.Exists probe below misses and symlink
-            // resolution silently no-ops, failing the deny open. See #1724.
-            var root = Path.GetPathRoot(fullPath) ?? string.Empty;
-            var remainder = fullPath.Length > root.Length ? fullPath[root.Length..] : string.Empty;
-            var segments = remainder.Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-            var sb = new StringBuilder();
-            sb.Append(root);
+            if (sb.Length > 0 && sb[^1] != Path.DirectorySeparatorChar)
+                sb.Append(Path.DirectorySeparatorChar);
+            sb.Append(segment);
 
-            foreach (var segment in segments)
+            var partial = sb.ToString();
+            if (Directory.Exists(partial))
             {
-                if (sb.Length > 0 && sb[^1] != Path.DirectorySeparatorChar)
-                    sb.Append(Path.DirectorySeparatorChar);
-                sb.Append(segment);
-
-                var partial = sb.ToString();
-                if (Directory.Exists(partial))
+                var target = new DirectoryInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
+                if (target is not null)
                 {
-                    var target = new DirectoryInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                    if (target is not null)
-                    {
-                        sb.Clear();
-                        sb.Append(target.FullName);
-                    }
-                }
-                else if (File.Exists(partial))
-                {
-                    var target = new FileInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                    if (target is not null)
-                    {
-                        sb.Clear();
-                        sb.Append(target.FullName);
-                    }
-
-                    break;
+                    sb.Clear();
+                    sb.Append(target.FullName);
                 }
             }
+            else if (File.Exists(partial))
+            {
+                var target = new FileInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
+                if (target is not null)
+                {
+                    sb.Clear();
+                    sb.Append(target.FullName);
+                }
 
-            canonical = PathUtility.Normalize(sb.ToString());
-            return !string.IsNullOrEmpty(canonical) && !string.Equals(canonical, PathUtility.Normalize(fullPath), StringComparison.Ordinal);
+                break;
+            }
         }
-        catch
-        {
-            return false;
-        }
+
+        canonical = PathUtility.Normalize(sb.ToString());
+        return !string.IsNullOrEmpty(canonical) && !string.Equals(canonical, PathUtility.Normalize(fullPath), StringComparison.Ordinal);
     }
 
+    // Only IsDeniedAgainst calls this; it owns exception policy (fails closed).
+    // See the comment on TryResolveSymlinksInPath for why this does not catch.
     private static bool TryResolveSymlinkTarget(string path, out string normalizedTarget)
     {
         normalizedTarget = string.Empty;
 
-        try
+        if (File.Exists(path))
         {
-            if (File.Exists(path))
-            {
-                var target = new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true);
-                if (target is null)
-                    return false;
+            var target = new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true);
+            if (target is null)
+                return false;
 
-                normalizedTarget = PathUtility.Normalize(target.FullName);
-                return true;
-            }
-
-            if (Directory.Exists(path))
-            {
-                var target = new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true);
-                if (target is null)
-                    return false;
-
-                normalizedTarget = PathUtility.Normalize(target.FullName);
-                return true;
-            }
-
-            return false;
+            normalizedTarget = PathUtility.Normalize(target.FullName);
+            return true;
         }
-        catch
+
+        if (Directory.Exists(path))
         {
-            return false;
+            var target = new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true);
+            if (target is null)
+                return false;
+
+            normalizedTarget = PathUtility.Normalize(target.FullName);
+            return true;
         }
+
+        return false;
     }
 
     private static bool LooksLikePath(string token)
