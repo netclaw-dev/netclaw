@@ -355,7 +355,6 @@ public sealed class McpToolPermissionsPageTests : IDisposable
             $"Expected 'Server default' row not overwritten by tool list. Screen:\n{terminal}");
     }
 
-
     [Fact]
     public async Task ToolGrid_RightArrowOnScrolledToolRow_PreservesScrollPosition()
     {
