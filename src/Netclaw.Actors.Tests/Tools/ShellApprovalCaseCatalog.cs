@@ -486,6 +486,21 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "fd-dup-redirect-safe-verb-allows",
+            Bash("git status 2>&1"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "fd-dup-redirect-safe-pipeline-allows",
+            Bash("git log --oneline -5 2>&1 | tail -20"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "fd-dup-redirect-mutating-no-grant-prompts-not-messy",
+            Bash("git push origin dev 2>&1 | tail -2"),
+            Approvals.None,
+            ExpectedApproval.Require(["git push origin dev", "tail"], isMessy: false)),
+        Case(
             "background-list-prompts-for-mutating-tail",
             Bash("git status & git push"),
             Approvals.None,
