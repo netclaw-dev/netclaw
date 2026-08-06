@@ -1,5 +1,27 @@
 # NetClaw Release Notes
 
+## 0.25.3 (2026-08-05)
+
+### Features
+- **Pre-execution authorization decisions** — Tool execution now reports the authorization decision with its reason (e.g. `ApprovalExemptShellCandidates`, `StoredApproval`) instead of a bare outcome ([#1745](https://github.com/netclaw-dev/netclaw/pull/1745))
+
+### Bug Fixes
+- **TUI: Escape no longer quits the app** — Escape is now a no-op at the root of every TUI page; Ctrl+Q is the only quit key. Fixes accidental app exit ([#1765](https://github.com/netclaw-dev/netclaw/pull/1765))
+- **TUI: Escape denies pending approvals** — Escape during an approval prompt now denies the request instead of quitting the app ([#1760](https://github.com/netclaw-dev/netclaw/pull/1760))
+- **Slack mention rendering** — `<@user>`, `<@subteam^group>`, and `<#channel>` mentions now render as rich-text elements, including labeled and bang forms and private-channel usergroups ([#1763](https://github.com/netclaw-dev/netclaw/pull/1763))
+- **Model capability discovery no longer pollutes config** — Runtime-discovered context window and modality capabilities are no longer persisted to config; operator overrides stay authoritative ([#1761](https://github.com/netclaw-dev/netclaw/pull/1761))
+- **Incompatible session history degrades gracefully** — Restored history containing media the active model can't accept is stripped with a warning instead of failing the turn; newly supplied incompatible media is hard-rejected with a clear error ([#1729](https://github.com/netclaw-dev/netclaw/pull/1729))
+- **`doctor` shell approval fallback aligned** — The tool-audience doctor check now matches the actual Personal-profile shell approval behavior ([#1744](https://github.com/netclaw-dev/netclaw/pull/1744))
+- **Shell approvals fail closed** — Shell tool execution now fails closed when no approval candidates are produced ([#1747](https://github.com/netclaw-dev/netclaw/pull/1747))
+- **Regex timeout race removed** — Prompt-injection regex matching is now race-free and culture-invariant ([#1748](https://github.com/netclaw-dev/netclaw/pull/1748))
+- **Bash approval analysis gaps fixed** — Shell syntax analysis expanded to close approval bypass gaps across hosts ([#1753](https://github.com/netclaw-dev/netclaw/pull/1753))
+- **Shell path approval scope hardened** — Every parsed shell path is checked against the approval scope; nested globs fail closed and symlink glob matches are rejected ([#1768](https://github.com/netclaw-dev/netclaw/pull/1768))
+
+### Dependency Updates
+- **Bump ShellSyntaxTree** — 0.2.0-alpha → 0.2.0-beta.1
+- **Bump SkiaSharp** — 4.150.1 → 4.151.0
+- **Bump CsCheck** — 4.7.0 → 4.8.0
+
 ## 0.25.2 (2026-08-01)
 
 ### Features

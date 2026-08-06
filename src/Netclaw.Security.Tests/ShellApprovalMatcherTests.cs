@@ -528,6 +528,84 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
     private static Dictionary<string, object?> Args(string command) => new() { ["Command"] = command };
 
+    private static Dictionary<string, object?> Args(string command, string workingDirectory)
+        => new()
+        {
+            ["Command"] = command,
+            ["WorkingDirectory"] = workingDirectory
+        };
+
+    public static TheoryData<string, string, string[]> ParserPathScopeCases => new()
+    {
+        {
+            "curl --data=@request.json https://example.invalid/api",
+            "curl",
+            ["project"]
+        },
+        {
+            "curl --data=@{external}/request.json https://example.invalid/api",
+            "curl",
+            ["external"]
+        },
+        {
+            "curl -D ./headers.txt --data=@{external}/request.json https://example.invalid/api",
+            "curl",
+            ["project", "external"]
+        },
+        {
+            "curl -D {external}/headers.txt --data=@request.json https://example.invalid/api",
+            "curl",
+            ["external", "project"]
+        },
+        {
+            "curl -D ./headers.txt --data=@request.json https://example.invalid/api",
+            "curl",
+            ["project"]
+        },
+        {
+            "curl --data=@{external}/request.json https://example.invalid/api > ./response.json",
+            "curl",
+            ["external", "project"]
+        },
+        {
+            "curl --data=@$REQUEST_FILE https://example.invalid/api",
+            "curl",
+            []
+        },
+        {
+            "cat \"{external}/secret.txt\"",
+            "cat",
+            ["external"]
+        },
+        {
+            "cat safe/../../external/secret.txt",
+            "cat",
+            ["external"]
+        }
+    };
+
+    public static TheoryData<string, string> StaticGlobScopeCases => new()
+    {
+        { "ls *.txt", "project" },
+        { "cat src/*.cs", "project/src" },
+        { "rm {external}/*.bak", "external" },
+        { "curl --data=@payloads/*.json https://example.invalid/api", "project/payloads" }
+    };
+
+    public static TheoryData<string> UnsafeGlobScopeCases => new()
+    {
+        { "cat */../../secret.txt" },
+        { "cat artifacts/*/secret.txt" },
+        { "rm /tmp/*/../../etc/*.bak" }
+    };
+
+    public static TheoryData<string, string> SymlinkLeafGlobCases => new()
+    {
+        { "cat artifacts/*.txt", "leak.txt" },
+        { "cat artifacts/?.txt", "😀.txt" },
+        { "cat artifacts/\\.*", ".leak" }
+    };
+
     /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
@@ -538,6 +616,140 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     /// runners instead of hiding the gap behind an early-return.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash parser path scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(ParserPathScopeCases))]
+    public void ExtractCandidates_uses_all_parser_path_scopes(
+        string commandTemplate,
+        string expectedVerb,
+        string[] expectedScopeNames)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-scopes-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var command = commandTemplate.Replace(
+            "{external}",
+            externalDirectory,
+            StringComparison.Ordinal);
+
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, projectDirectory));
+        var expectedDirectories = expectedScopeNames
+            .Select(scope => scope == "project" ? projectDirectory : externalDirectory)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        var actualDirectories = candidates
+            .Select(candidate => candidate.Directory!)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.All(candidates, candidate => Assert.Equal(expectedVerb, candidate.Verb));
+        Assert.Equal(expectedDirectories, actualDirectories);
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(StaticGlobScopeCases))]
+    public void ExtractCandidates_uses_static_glob_covering_directory(
+        string commandTemplate,
+        string expectedScope)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-glob-scopes-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var command = commandTemplate.Replace(
+            "{external}",
+            externalDirectory,
+            StringComparison.Ordinal);
+        var expectedDirectory = expectedScope switch
+        {
+            "project" => projectDirectory,
+            "project/src" => Path.Combine(projectDirectory, "src"),
+            "project/payloads" => Path.Combine(projectDirectory, "payloads"),
+            "external" => externalDirectory,
+            _ => throw new ArgumentOutOfRangeException(nameof(expectedScope), expectedScope, "Unknown test scope.")
+        };
+
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, projectDirectory)));
+
+        Assert.Equal(expectedDirectory, candidate.Directory);
+        Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), Args(command, projectDirectory)));
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(UnsafeGlobScopeCases))]
+    public void Directory_segment_glob_fails_closed(string command)
+    {
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-unsafe-glob-{Guid.NewGuid():N}");
+        var arguments = Args(command, projectDirectory);
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink glob behavior, which does not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(SymlinkLeafGlobCases))]
+    public void Leaf_glob_in_directory_with_symlink_fails_closed(string command, string linkName)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-glob-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var artifactsDirectory = Path.Combine(projectDirectory, "artifacts");
+        var externalDirectory = Path.Combine(root, "external");
+        var externalFile = Path.Combine(externalDirectory, "secret.txt");
+        var link = Path.Combine(artifactsDirectory, linkName);
+        Directory.CreateDirectory(artifactsDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(externalFile, "secret");
+        File.CreateSymbolicLink(link, externalFile);
+
+        try
+        {
+            var arguments = Args(command, projectDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+            Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_keeps_ambiguous_path_when_symlink_can_escape_cwd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var linkDirectory = Path.Combine(projectDirectory, "link");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(linkDirectory, externalDirectory);
+
+        try
+        {
+            var candidate = Assert.Single(_matcher.ExtractCandidates(
+                new ToolName("shell_execute"),
+                Args("cat link/secret.txt", projectDirectory)));
+
+            Assert.Equal("cat", candidate.Verb);
+            Assert.Equal(linkDirectory, candidate.Directory);
+        }
+        finally
+        {
+            Directory.Delete(linkDirectory);
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_strips_path_from_verb()
@@ -957,6 +1169,17 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             approvedEntries,
             cwd: null));
     }
+}
+
+/// <summary>
+/// Supplies source-level Slopwatch suppressions without a runtime package dependency.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+internal sealed class SlopwatchSuppressAttribute(string ruleId, string reason) : Attribute
+{
+    public string RuleId { get; } = ruleId;
+
+    public string Reason { get; } = reason;
 }
 
 public sealed class DefaultApprovalMatcherTests

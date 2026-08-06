@@ -86,8 +86,21 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             };
         });
 
+        // ToolGrid updates invalidate only the header and rows, so the scroll container persists and keeps its scroll position.
         ViewModel.StateVersion
-            .Subscribe(_ => _contentNode.Invalidate())
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid
+                    && _toolRowsNode is not null)
+                {
+                    _gridHeaderRowsNode?.Invalidate();
+                    _toolRowsNode.Invalidate();
+                }
+                else
+                {
+                    _contentNode.Invalidate();
+                }
+            })
             .DisposeWith(Subscriptions);
 
         return _contentNode.Fill();
