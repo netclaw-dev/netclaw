@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -250,8 +250,12 @@ public sealed class ToolPathPolicy
                 [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                 StringSplitOptions.RemoveEmptyEntries);
             var sb = new StringBuilder();
+            // Preserve the full root (drive letter + separator on Windows, "/"
+            // on Unix) — appending a bare separator yields "\Users\..." on
+            // Windows, so every Directory.Exists/File.Exists probe below would
+            // miss and symlink resolution would silently no-op.
             if (Path.IsPathRooted(fullPath))
-                sb.Append(Path.DirectorySeparatorChar);
+                sb.Append(Path.GetPathRoot(fullPath));
 
             foreach (var segment in segments)
             {
