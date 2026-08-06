@@ -66,18 +66,28 @@ public sealed class ToolPathPolicy
             // still added); the deny CHECKS fail closed on the same failure. A
             // startup-time resolution throw must not crash the process, and the
             // lexical entry alone still denies exact and lexical-child matches.
-            try
-            {
-                if (TryResolveSymlinksInPath(normalized, out var canonical))
-                    set.Add(canonical);
-            }
-            catch
-            {
-                // Skip: this path's canonical form just does not get added.
-            }
+            if (TryResolveCanonicalForDenySet(normalized, out var canonical))
+                set.Add(canonical);
         }
 
         return set;
+    }
+
+    // Construction-only: resolve a denied path's canonical form, but never crash the
+    // policy build if resolution throws. The lexical form is already in the set, and
+    // the runtime deny checks (IsDeniedAgainst / CommandReferencesDeniedPath) fail
+    // CLOSED on a resolution exception — so swallowing here is safe for construction.
+    private static bool TryResolveCanonicalForDenySet(string path, out string canonical)
+    {
+        try
+        {
+            return TryResolveSymlinksInPath(path, out canonical);
+        }
+        catch
+        {
+            canonical = string.Empty;
+            return false;
+        }
     }
 
     private static HashSet<string> BuildCommandIndicators(IEnumerable<string> paths)
