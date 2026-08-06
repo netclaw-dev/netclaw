@@ -11,7 +11,7 @@
     <VersionPrefix>0.25.4</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <PackageReleaseNotes>
-      Bug fixes: MCP tool catalog changes on connected servers are detected and refreshed automatically; MCP permissions tool-grid scroll position preserved when editing rows; static fd-dup redirects (2>&1) no longer treated as dynamic shell syntax. 
+      Bug fixes: MCP tool catalog changes on connected servers are detected and refreshed automatically; MCP permissions tool-grid scroll position preserved when editing rows; static fd-dup redirects (2&amp;>1) no longer treated as dynamic shell syntax. 
     </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
