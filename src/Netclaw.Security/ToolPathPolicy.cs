@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -15,10 +15,10 @@ namespace Netclaw.Security;
 /// (<see cref="IsReadDenied"/>), and shell indicators
 /// (<see cref="CommandReferencesDeniedPath"/>). Read denies the union of the
 /// read deny list and the shell indicator list, so file tools cannot reach the
-/// control plane that shell cannot reference. The shell indicator list must
-/// stay narrow — file-level only — because that path does a raw substring scan
-/// against the command text, so directory-scoped entries would block legitimate
-/// commands whose arguments happen to contain the directory name.
+/// control plane that shell cannot reference. The shell indicator list is
+/// scanned as raw substrings of the command text, so directory-scoped entries
+/// (e.g. the config dir) over-block commands whose text merely mentions them —
+/// that is the accepted trade-off for keeping the control plane unreachable.
 /// </remarks>
 public sealed class ToolPathPolicy
 {
@@ -115,8 +115,19 @@ public sealed class ToolPathPolicy
         if (PathUtility.TryNormalize(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
             return true;
 
-        return TryResolveSymlinkTarget(path, out var resolvedTarget)
-            && IsDeniedNormalized(resolvedTarget, deniedSet);
+        // TryResolveSymlinkTarget only resolves the final path element. A path
+        // whose INTERMEDIATE directory is a symlink into a denied location
+        // (e.g. /tmp/x -> ~/.netclaw/config, then /tmp/x/netclaw.json) would
+        // slip past that check. Mirror the shell side (CommandReferencesDeniedPath)
+        // by also walking the path segment by segment — same infrastructure.
+        if (TryResolveSymlinkTarget(path, out var resolvedTarget)
+            && IsDeniedNormalized(resolvedTarget, deniedSet))
+        {
+            return true;
+        }
+
+        return TryResolveSymlinksInPath(path, out var canonical)
+            && IsDeniedNormalized(canonical, deniedSet);
     }
 
     /// <summary>

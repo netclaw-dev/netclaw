@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -177,6 +177,11 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/config/webhooks",
             "/home/user/.netclaw/keys",
             "/home/user/.netclaw/netclaw.db",
+            // SQLite sidecars mirror production (Program.cs) — the path-boundary
+            // matcher would otherwise allow netclaw.db-wal/journal/shm reads.
+            "/home/user/.netclaw/netclaw.db-wal",
+            "/home/user/.netclaw/netclaw.db-shm",
+            "/home/user/.netclaw/netclaw.db-journal",
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
@@ -229,6 +234,9 @@ public sealed class ToolPathPolicyTests
     [Theory]
     [InlineData("/home/user/.netclaw/config/netclaw.json")]
     [InlineData("/home/user/.netclaw/netclaw.db")]
+    [InlineData("/home/user/.netclaw/netclaw.db-wal")]
+    [InlineData("/home/user/.netclaw/netclaw.db-shm")]
+    [InlineData("/home/user/.netclaw/netclaw.db-journal")]
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
     [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
@@ -238,11 +246,49 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsReadDenied(path));
     }
 
-    // The fixture deliberately omits ConfigDirectory from shellIndicators (see
-    // CommandReferencesDeniedPath_still_allows_ls_of_config_directory), so
-    // config-dir files are not asserted read-denied here. Production wiring in
-    // src/Netclaw.Daemon/Program.cs includes paths.ConfigDirectory in the shell
-    // indicator list, which makes the whole config dir read-denied in practice.
+    [Fact]
+    public void IsReadDenied_blocks_symlinked_directory_traversal()
+    {
+        // Regression (#1724): a symlinked INTERMEDIATE directory into a denied
+        // location must not bypass IsReadDenied. Shell catches this via
+        // TryResolveSymlinksInPath; the read side must too, since interactive
+        // Personal reads have IsReadDenied as their sole backstop.
+        var scratch = Path.Combine(Path.GetTempPath(), $"netclaw-symlink-{Guid.NewGuid():N}");
+        var deniedDir = Path.Combine(scratch, "denied");
+        var linkDir = Path.Combine(scratch, "link");
+        Directory.CreateDirectory(deniedDir);
+        File.WriteAllText(Path.Combine(deniedDir, "netclaw.json"), """{"secret":true}""");
+
+        try
+        {
+            Directory.CreateSymbolicLink(linkDir, deniedDir);
+
+            // Deny the REAL deniedDir (fixture paths don't exist on disk, and
+            // symlink resolution needs an on-disk target to resolve).
+            var policy = new ToolPathPolicy([deniedDir]);
+
+            // Lexically this path lives in scratch/link, outside any denied
+            // root — only segment-walk symlink resolution catches it.
+            var viaLink = Path.Combine(linkDir, "netclaw.json");
+            Assert.True(policy.IsReadDenied(viaLink));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return; // Windows without developer mode
+        }
+        finally
+        {
+            if (Directory.Exists(linkDir) && new DirectoryInfo(linkDir).LinkTarget is not null)
+                Directory.Delete(linkDir);
+            if (Directory.Exists(scratch))
+                Directory.Delete(scratch, recursive: true);
+        }
+    }
+
+    // The fixture mirrors production (Program.cs): ConfigDirectory is a
+    // directory-scoped shell indicator, so the whole config dir is read-denied
+    // via the IsReadDenied union. Sidecar files (db-wal/db-shm/db-journal) are
+    // also in the fixture, matching the production shell indicator list.
     [Theory]
     [InlineData("/home/user/repositories/foo.cs")]
     [InlineData("/tmp/notes.txt")]

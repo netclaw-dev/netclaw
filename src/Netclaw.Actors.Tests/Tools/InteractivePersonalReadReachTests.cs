@@ -184,7 +184,7 @@ public sealed class InteractivePersonalReadReachTests : IDisposable
     [Fact]
     public async Task Attach_tool_denies_control_plane_files_even_with_interactive_reach()
     {
-        // BLOCKER regression (#1724): attach must use the same hard-deny surface
+        // Regression (#1724): attach must use the same hard-deny surface
         // as file_read/file_list, so interactive Personal reach cannot ship
         // secrets/keys/db/pid/lock that shell cannot even reference.
         var secretsPath = Path.Combine(_outsideDir, "secrets.json");
@@ -213,7 +213,7 @@ public sealed class InteractivePersonalReadReachTests : IDisposable
     [Fact]
     public void Set_working_directory_stays_roots_scoped_for_interactive_personal()
     {
-        // BLOCKER regression (#1724): set_working_directory must NOT inherit
+        // Regression (#1724): set_working_directory must NOT inherit
         // shell-equivalent reach — its declaration widens the safe-verb
         // auto-approve zone and feeds project identity files into the prompt.
         var config = BuildPersonalReadRootsConfig(_sessionDir);
@@ -226,5 +226,57 @@ public sealed class InteractivePersonalReadReachTests : IDisposable
         Assert.True(policy.TryResolveReadPath(outside, ctx, out _, out _));
         // ...but the working-directory declaration stays roots-scoped.
         Assert.False(policy.TryResolveWorkingDirectory(outside, ctx, out _, out _));
+    }
+
+    [Fact]
+    public void Set_working_directory_stays_roots_scoped_for_default_mode_all()
+    {
+        // Regression (#1724): the opt-out must also hold for the DEFAULT
+        // Personal profile (Mode.All) — the most common configuration. The
+        // Mode.All interactive blanket grant must not leak into the
+        // working-directory declaration.
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var ctx = Ctx(TrustAudience.Personal, autonomous: false);
+
+        var outside = Path.Combine(_outsideDir, "notes.txt");
+
+        // Reads resolve under Mode.All interactive...
+        Assert.True(policy.TryResolveReadPath(outside, ctx, out _, out _));
+        // ...but the working-directory declaration clamps to the autonomous zone.
+        Assert.False(policy.TryResolveWorkingDirectory(outside, ctx, out _, out _));
+    }
+
+    public static TheoryData<bool, bool> AttachRootsModeCases => new()
+    {
+        // interactive, expectedAllow
+        { true, true },
+        { false, false },
+    };
+
+    [Theory]
+    [MemberData(nameof(AttachRootsModeCases))]
+    public void Attach_reach_roots_mode_matches_expected(bool interactive, bool expectedAllow)
+    {
+        // Regression (#1724): the new Roots-mode attach branch must actually be
+        // exercised — the main matrix hardens only ReadFiles, so its attach rows
+        // hit the Mode.All branch. This pins the AccessKind.Attach clause.
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_sessionDir]
+        };
+        config.AudienceProfiles.Personal.AttachFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_sessionDir]
+        };
+        var policy = new ScopedFileAccessPolicy(config, _paths);
+        var ctx = Ctx(TrustAudience.Personal, autonomous: !interactive);
+
+        var path = Path.Combine(_outsideDir, "report.png");
+        var allowed = policy.TryResolveAttachPath(path, ctx, out _, out _);
+
+        Assert.Equal(expectedAllow, allowed);
     }
 }

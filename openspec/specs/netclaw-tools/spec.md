@@ -333,6 +333,30 @@ references needed to recreate the handoff nudge during recovery.
 PDF extraction, OCR, audio transcription, and video keyframe extraction SHALL NOT
 be built into `file_read`.
 
+### Requirement: Attachment tool reach
+
+The system SHALL provide an `attach_file` first-party tool that sends a file to
+the user. Non-interactive, Team, and Public sessions SHALL only attach files
+inside the current session directory or a sibling Netclaw session directory.
+Interactive Personal-audience sessions get shell-equivalent reach: any path that
+resolves through the read-access policy SHALL be attachable, and the file SHALL
+be copied into the current session's attachments directory before delivery.
+
+All audiences SHALL apply the `ToolPathPolicy` read-deny surface to attached
+files: a path that `IsReadDenied` (credentials, keys, secrets, control-plane
+state, or the shell indicator list) SHALL NOT be attachable, even when the
+proximity restriction is lifted.
+
+### Requirement: Working directory declaration stays scoped
+
+The system SHALL provide a `set_working_directory` first-party tool that sets
+the session's project root. Its target SHALL be resolved through the read-access
+policy WITHOUT interactive Personal shell-equivalent reach: the working
+directory widens the shell safe-verb auto-approve zone and loads project
+identity files into the system prompt, so it SHALL be clamped to the autonomous
+zone (session directory, project directory, and global read roots) in every
+audience and mode.
+
 #### Scenario: Text file read preserves existing behavior
 
 - **GIVEN** a readable text file using UTF-8, UTF-16/UTF-32 Unicode, or Windows-1252

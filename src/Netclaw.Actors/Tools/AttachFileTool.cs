@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="AttachFileTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -76,6 +76,13 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult($"Error: File not found: {requestedPath}");
 
         var resolvedPath = ResolveFinalPath(requestedPath);
+
+        // Defense-in-depth: re-check the deny against the symlink-resolved
+        // target so any future divergence between requestedPath and resolvedPath
+        // cannot widen attach's surface.
+        if (_pathPolicy.IsReadDenied(resolvedPath))
+            return Task.FromResult(FileToolErrors.CredentialReadDenied(resolvedPath));
+
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
         var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
 

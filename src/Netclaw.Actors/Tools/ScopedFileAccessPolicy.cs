@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ScopedFileAccessPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -40,7 +40,9 @@ internal sealed class ScopedFileAccessPolicy
     /// Resolves a path for <c>set_working_directory</c>. Deliberately does NOT
     /// grant interactive Personal shell-equivalent reach: the working directory
     /// becomes the safe-verb auto-approve zone and feeds project identity files
-    /// into the system prompt, so it stays roots-scoped even when reads are not.
+    /// into the system prompt, so it is clamped to the autonomous zone (session
+    /// dir + project dir + global read roots) in every mode, even the default
+    /// <c>Mode.All</c> Personal profile.
     /// </summary>
     public bool TryResolveWorkingDirectory(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, allowInteractivePersonalReach: false);
@@ -100,9 +102,15 @@ internal sealed class ScopedFileAccessPolicy
             // granted blanket filesystem access. Interactive channels keep the
             // blanket grant — the live approval gate is their backstop. This is the
             // single seam that covers shell (via TryResolveWritePath) and every file
-            // tool at once.
-            if (context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
+            // tool at once. set_working_directory opts out (allowInteractivePersonalReach
+            // == false) and is clamped to the autonomous zone even for default
+            // Mode.All profiles: its declaration widens the safe-verb auto-approve
+            // zone and feeds project identity files into the system prompt.
+            if (!allowInteractivePersonalReach
+                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
+            {
                 return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+            }
 
             error = string.Empty;
             return true;
