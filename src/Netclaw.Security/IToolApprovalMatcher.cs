@@ -241,7 +241,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 continue;
 
             var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
-            foreach (var directory in ResolveClauseDirectories(clause, isSideEffectVerb))
+            var directories = ResolveClauseDirectories(clause, isSideEffectVerb, workingDirectory);
+            if (directories is null)
+                return [];
+
+            foreach (var directory in directories)
             {
                 var key = (verb.ToLowerInvariant(), directory);
                 if (seen.Add(key))
@@ -252,42 +256,47 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return candidates;
     }
 
-    private static IReadOnlyList<string?> ResolveClauseDirectories(
+    private static IReadOnlyList<string?>? ResolveClauseDirectories(
         ShellSyntaxTree.Clause clause,
-        bool isSideEffectVerb)
+        bool isSideEffectVerb,
+        string? workingDirectory)
     {
         var directories = new List<string?>();
+        var clauseWorkingDirectory = clause.Args
+            .FirstOrDefault(arg => arg.IsCwdAttribution)?.Resolved
+            ?? workingDirectory;
 
-        // First explicit path arg wins — that's the candidate's own
-        // operand, e.g. `dotnet test /home/user/repos/Foo`. Only the
-        // anchored-path predicate from the legacy tokenizer counts (/, ~/,
-        // ./, ../ and the bare ~/./..), so `feature/freshdesk-cli-skill`
-        // and other internal-slash tokens stay as args, not directories.
-        // The IsPathToken classification runs on the raw user-facing form
-        // so branch names whose Resolved happens to look path-like don't
-        // get misclassified; once classified as a path, we persist the
-        // parser-resolved absolute path when available so it compares
-        // string-equal to cwd-attributed directories produced by other
-        // clauses (otherwise `cd ~/x && verb` produces "2 directories" in
-        // the approval prompt even though both refer to the same folder).
+        // Each parser path is an authorization scope. A grant must cover all
+        // scopes, or a later external path could hide behind an earlier local
+        // path. The resolved value also handles native forms such as @file.
         foreach (var arg in clause.Args)
         {
-            if (arg.IsCwdAttribution)
+            if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
                 continue;
 
-            var raw = arg.Raw;
-            if (string.IsNullOrEmpty(raw))
-                continue;
-
-            if (raw.StartsWith('-'))
-                continue;
-
-            if (ShellTokenizer.IsPathToken(raw))
+            if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
             {
-                var canonical = !string.IsNullOrEmpty(arg.Resolved) ? arg.Resolved : raw;
-                directories.Add(ShellTokenizer.ApplyFileParentRule(canonical));
-                break;
+                var coveringDirectory = ResolveGlobCoveringDirectory(arg, clauseWorkingDirectory);
+                if (coveringDirectory is null)
+                    return null;
+
+                directories.Add(coveringDirectory);
+                continue;
             }
+
+            // A parser path without a canonical value cannot use the broader
+            // cwd grant. Return no candidates so the command fails closed.
+            if (string.IsNullOrWhiteSpace(arg.Resolved))
+                return null;
+
+            directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved));
+        }
+
+        foreach (var redirect in clause.Redirects)
+        {
+            var directory = ResolveRedirectDirectory(redirect);
+            if (directory is not null)
+                directories.Add(directory);
         }
 
         if (directories.Count == 0)
@@ -299,14 +308,124 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             directories.Add(cwdAttribution);
         }
 
-        foreach (var redirect in clause.Redirects)
+        return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static string? ResolveGlobCoveringDirectory(
+        ShellSyntaxTree.Arg arg,
+        string? workingDirectory)
+    {
+        if (ShellGlobPath.HasUnresolvedDescendantScope(arg))
+            return null;
+
+        var path = arg.Raw.Trim();
+        if (path.Length >= 2 && path[0] is '\'' or '"' && path[^1] == path[0])
+            path = path[1..^1];
+
+        if (arg.IsFlag)
         {
-            var directory = ResolveRedirectDirectory(redirect);
-            if (directory is not null)
-                directories.Add(directory);
+            var valueSeparator = path.IndexOf('=', StringComparison.Ordinal);
+            if (valueSeparator < 0 || valueSeparator == path.Length - 1)
+                return null;
+
+            path = path[(valueSeparator + 1)..];
         }
 
-        return directories.Distinct(StringComparer.Ordinal).ToList();
+        path = path.TrimStart('@');
+        const string fileSystemPrefix = "filesystem::";
+        if (path.StartsWith(fileSystemPrefix, StringComparison.OrdinalIgnoreCase))
+            path = path[fileSystemPrefix.Length..];
+
+        var firstGlob = path.IndexOfAny(['*', '?', '[']);
+        if (firstGlob < 0)
+            return null;
+
+        var staticPrefix = path[..firstGlob];
+        var separator = staticPrefix.LastIndexOf('/');
+        var coveringPath = separator switch
+        {
+            < 0 => ".",
+            0 => "/",
+            _ => staticPrefix[..separator]
+        };
+
+        var coveringDirectory = ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
+        if (coveringDirectory is null
+            || ContainsSymlinkEntry(coveringDirectory))
+        {
+            return null;
+        }
+
+        return coveringDirectory;
+    }
+
+    private static bool ContainsSymlinkEntry(string directory)
+    {
+        if (!Directory.Exists(directory))
+            return false;
+
+        try
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                // Netclaw does not reproduce Bash glob rules here. Unicode,
+                // brackets, and escapes differ from .NET wildcard rules.
+                // Any symlink makes the leaf expansion unsafe to persist.
+                if (PathUtility.ContainsSymlinkSegment(directory, entry))
+                    return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or IOException
+                                   or NotSupportedException
+                                   or UnauthorizedAccessException
+                                   or System.Security.SecurityException)
+        {
+            // The matcher cannot prove the expansion stays in the fixed scope.
+            return true;
+        }
+    }
+
+    private static bool IsAuthorizationPathArg(
+        ShellSyntaxTree.Arg arg,
+        string? workingDirectory)
+    {
+        if (!arg.IsPath)
+            return false;
+
+        if (ShellTokenizer.IsPathToken(arg.Raw) || !arg.Raw.Contains('/', StringComparison.Ordinal))
+            return true;
+
+        // An internal slash can also name a ref such as feature/x. Native
+        // option and @file shapes supply the extra path evidence we need.
+        if (arg.IsFlag || arg.Raw.TrimStart('\'', '"').StartsWith('@'))
+            return true;
+
+        // Collapse an ambiguous relative token to cwd only when its resolved
+        // path stays there. External paths and symlink paths need exact checks.
+        if (string.IsNullOrWhiteSpace(arg.Resolved)
+            || string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return true;
+        }
+
+        try
+        {
+            var normalizedPath = PathUtility.Normalize(arg.Resolved);
+            if (!PathUtility.IsNormalizedWithinRoot(normalizedPath, workingDirectory))
+                return true;
+
+            return PathUtility.ContainsSymlinkSegment(workingDirectory, normalizedPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or System.Security.SecurityException)
+        {
+            return true;
+        }
     }
 
     private static string? ResolveRedirectDirectory(ShellSyntaxTree.Redirect redirect)
@@ -576,8 +695,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (OperatingSystem.IsWindows())
             return ShellTokenizer.IsMessyCompoundCommand(command);
 
-        var analysis = TryAnalyzeCommand(command, GetWorkingDirectory(arguments));
-        return analysis is null || analysis.HasDynamicSyntax;
+        var workingDirectory = GetWorkingDirectory(arguments);
+        var analysis = TryAnalyzeCommand(command, workingDirectory);
+        if (analysis is null || analysis.HasDynamicSyntax)
+            return true;
+
+        return analysis.Clauses
+            .SelectMany(static clause => clause.Args)
+            .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+            .Any(arg => ResolveGlobCoveringDirectory(arg, workingDirectory) is null);
     }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
