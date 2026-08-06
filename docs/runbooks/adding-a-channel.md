@@ -152,6 +152,7 @@ public sealed class XxxChannelOptions : IRemoteChatChannelOptions
     public bool AllowDirectMessages { get; init; }
     public bool MentionOnly { get; init; } = true;
     public bool MentionRequiredInDm { get; init; }
+    public bool MentionRequiredInThread { get; init; }
     public string[] AllowedChannelIds { get; init; } = [];
     public string[] AllowedUserIds { get; init; } = [];
     // ... platform-specific knobs (see MattermostChannelOptions.cs)

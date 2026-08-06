@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackRoutingPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -12,6 +12,7 @@ internal static class SlackRoutingPolicy
         bool mentionOnly,
         bool allowDirectMessages,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool threadExists,
         bool containsBotMention)
     {
@@ -52,7 +53,11 @@ internal static class SlackRoutingPolicy
         }
 
         if (threadExists)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return SlackRoutingDecision.Ignore(SlackRoutingIgnoreReason.ThreadMentionRequired);
             return SlackRoutingDecision.ContinueOnly;
+        }
 
         // Thread reply where the actor was lost (e.g. daemon restart):
         // the message has a ThreadTs different from its EventTs, meaning
@@ -61,7 +66,11 @@ internal static class SlackRoutingPolicy
         var isThreadReply = message.ThreadTs is { } threadTs
             && !string.Equals(threadTs.Value, message.EventTs.Value, StringComparison.Ordinal);
         if (isThreadReply)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return SlackRoutingDecision.Ignore(SlackRoutingIgnoreReason.ThreadMentionRequired);
             return SlackRoutingDecision.StartOrContinue;
+        }
 
         if (!mentionOnly)
             return SlackRoutingDecision.StartOrContinue;
@@ -87,6 +96,7 @@ internal enum SlackRoutingIgnoreReason
     UnsupportedSubtype,
     DmNotAllowed,
     DmMentionRequired,
+    ThreadMentionRequired,
     ChannelMentionRequired
 }
 
@@ -119,6 +129,7 @@ internal sealed record SlackRoutingDecision(
             SlackRoutingIgnoreReason.UnsupportedSubtype => "routing_policy_ignore:UnsupportedSubtype",
             SlackRoutingIgnoreReason.DmNotAllowed => "routing_policy_ignore:DmNotAllowed",
             SlackRoutingIgnoreReason.DmMentionRequired => "routing_policy_ignore:DmMentionRequired",
+            SlackRoutingIgnoreReason.ThreadMentionRequired => "routing_policy_ignore:ThreadMentionRequired",
             SlackRoutingIgnoreReason.ChannelMentionRequired => "routing_policy_ignore:ChannelMentionRequired",
             _ => "routing_policy_ignore",
         };

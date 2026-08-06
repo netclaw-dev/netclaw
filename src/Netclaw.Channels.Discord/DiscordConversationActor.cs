@@ -70,6 +70,7 @@ internal sealed class DiscordConversationActor : ChannelConversationActor<Discor
             _dependencies.Options.MentionOnly,
             _dependencies.Options.AllowDirectMessages,
             _dependencies.Options.MentionRequiredInDm,
+            _dependencies.Options.MentionRequiredInThread,
             threadExists,
             message.ContainsBotMention);
 

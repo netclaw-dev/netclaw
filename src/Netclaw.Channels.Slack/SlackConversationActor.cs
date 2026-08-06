@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackConversationActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -66,6 +66,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 _dependencies.Options.MentionOnly,
                 _dependencies.Options.AllowDirectMessages,
                 _dependencies.Options.MentionRequiredInDm,
+                _dependencies.Options.MentionRequiredInThread,
                 threadExists,
                 containsMention);
 

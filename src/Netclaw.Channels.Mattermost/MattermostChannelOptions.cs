@@ -31,6 +31,13 @@ public sealed class MattermostChannelOptions : IRemoteChatChannelOptions
 
     public bool MentionRequiredInDm { get; init; }
 
+    /// <summary>
+    /// If true, thread replies require a bot mention even when the thread
+    /// already has an active session. Default is false — once a thread has
+    /// an active session, follow-up replies are processed without a mention.
+    /// </summary>
+    public bool MentionRequiredInThread { get; init; } = false;
+
     public string[] AllowedChannelIds { get; init; } = [];
 
     public string[] AllowedUserIds { get; init; } = [];

@@ -25,6 +25,7 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
         Assert.False(options.MentionRequiredInDm);
+        Assert.False(options.MentionRequiredInThread);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }
@@ -49,6 +50,7 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
         Assert.False(options.MentionRequiredInDm);
+        Assert.False(options.MentionRequiredInThread);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }

@@ -22,6 +22,7 @@ public sealed class MattermostChannelOptionsDefaultsTests
 
         Assert.False(options.Enabled);
         Assert.False(options.AllowDirectMessages);
+        Assert.False(options.MentionRequiredInThread);
         Assert.Null(options.ServerUrl);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
@@ -47,6 +48,7 @@ public sealed class MattermostChannelOptionsDefaultsTests
         Assert.Equal("https://mattermost.example.com", options.ServerUrl);
         Assert.Equal("abcdefghij1234567890abcdef", options.DefaultChannelId);
         Assert.False(options.AllowDirectMessages);
+        Assert.False(options.MentionRequiredInThread);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }

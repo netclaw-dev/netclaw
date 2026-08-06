@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackChannelOptions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,6 +31,13 @@ public sealed class SlackChannelOptions : IRemoteChatChannelOptions
     /// Only applies when <see cref="AllowDirectMessages"/> is true.
     /// </summary>
     public bool MentionRequiredInDm { get; init; } = false;
+
+    /// <summary>
+    /// If true, thread replies require a bot mention even when the thread
+    /// already has an active session. Default is false — once a thread has
+    /// an active session, follow-up replies are processed without a mention.
+    /// </summary>
+    public bool MentionRequiredInThread { get; init; } = false;
 
     public string[] AllowedChannelIds { get; init; } = [];
 
