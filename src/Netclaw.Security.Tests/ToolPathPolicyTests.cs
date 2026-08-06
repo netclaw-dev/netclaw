@@ -270,64 +270,7 @@ public sealed class ToolPathPolicyTests
             // Lexically this path lives in scratch/link, outside any denied
             // root — only segment-walk symlink resolution catches it.
             var viaLink = Path.Combine(linkDir, "netclaw.json");
-
-            // Diagnostic (#1724): replicate ToolPathPolicy.TryResolveSymlinksInPath
-            // step by step so a Windows failure pins the exact diverging call. Each
-            // segment logs Directory/File existence, the ResolveLinkTarget outcome
-            // (target, null, or a thrown exception), and how the rebuilt path
-            // evolves. The message prints only when the assert fails.
-            var separators = new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
-            var trace = new System.Text.StringBuilder();
-            trace.Append("IsReadDenied returned false. Replicated TryResolveSymlinksInPath walk:\n");
-            trace.Append($"  [step2] File.Exists(viaLink)={File.Exists(viaLink)} Dir.Exists(viaLink)={Directory.Exists(viaLink)}\n");
-            try
-            {
-                var fullPath = Path.GetFullPath(viaLink);
-                trace.Append($"  fullPath = {fullPath}\n");
-                var segments = fullPath.Split(separators, StringSplitOptions.RemoveEmptyEntries);
-                var sb = new System.Text.StringBuilder();
-                if (Path.IsPathRooted(fullPath))
-                    sb.Append(Path.GetPathRoot(fullPath));
-                trace.Append($"  root = '{sb}'\n");
-                foreach (var segment in segments)
-                {
-                    if (sb.Length > 0 && sb[^1] != Path.DirectorySeparatorChar)
-                        sb.Append(Path.DirectorySeparatorChar);
-                    sb.Append(segment);
-                    var partial = sb.ToString();
-                    var dirExists = Directory.Exists(partial);
-                    var fileExists = !dirExists && File.Exists(partial);
-                    var linkStep = "no-resolve";
-                    try
-                    {
-                        if (dirExists)
-                        {
-                            var target = new DirectoryInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                            if (target is not null) { linkStep = $"DIR-link -> {target.FullName}"; sb.Clear(); sb.Append(target.FullName); }
-                        }
-                        else if (fileExists)
-                        {
-                            var target = new FileInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                            if (target is not null) { linkStep = $"FILE-link -> {target.FullName}"; sb.Clear(); sb.Append(target.FullName); }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        linkStep = $"THREW {ex.GetType().Name}: {ex.Message}";
-                    }
-                    trace.Append($"  seg '{segment}': dirExists={dirExists} fileExists={fileExists} -> {linkStep}  sb='{sb}'\n");
-                    if (fileExists) break;
-                }
-                trace.Append($"  walked            = {sb}\n");
-                trace.Append($"  Normalize(walked) = {Path.GetFullPath(sb.ToString()).TrimEnd(separators)}\n");
-                trace.Append($"  Normalize(input)  = {fullPath.TrimEnd(separators)}\n");
-            }
-            catch (Exception ex)
-            {
-                trace.Append($"  WALK-LEVEL EXCEPTION {ex.GetType().Name}: {ex.Message}\n");
-            }
-
-            Assert.True(policy.IsReadDenied(viaLink), trace.ToString());
+            Assert.True(policy.IsReadDenied(viaLink));
         }
         catch (UnauthorizedAccessException)
         {

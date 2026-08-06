@@ -246,16 +246,19 @@ public sealed class ToolPathPolicy
             // entity it's invoked against — it does not see symlinks earlier
             // in the path. Hence the explicit segment walk.
             var fullPath = Path.GetFullPath(path);
-            var segments = fullPath.Split(
+            // Seed the builder with the full root (drive + separator on Windows,
+            // "/" on Unix) and split only the REMAINDER after the root. Splitting
+            // the whole path re-emits the drive segment ("C:"), which the root
+            // already provides — appending it again yields "C:\C:\Users\..." so
+            // every Directory.Exists/File.Exists probe below misses and symlink
+            // resolution silently no-ops, failing the deny open. See #1724.
+            var root = Path.GetPathRoot(fullPath) ?? string.Empty;
+            var remainder = fullPath.Length > root.Length ? fullPath[root.Length..] : string.Empty;
+            var segments = remainder.Split(
                 [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                 StringSplitOptions.RemoveEmptyEntries);
             var sb = new StringBuilder();
-            // Preserve the full root (drive letter + separator on Windows, "/"
-            // on Unix) — appending a bare separator yields "\Users\..." on
-            // Windows, so every Directory.Exists/File.Exists probe below would
-            // miss and symlink resolution would silently no-op.
-            if (Path.IsPathRooted(fullPath))
-                sb.Append(Path.GetPathRoot(fullPath));
+            sb.Append(root);
 
             foreach (var segment in segments)
             {
