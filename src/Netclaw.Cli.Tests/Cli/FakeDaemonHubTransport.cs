@@ -18,12 +18,18 @@ namespace Netclaw.Cli.Tests.Cli;
 internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
 {
     private readonly object _gate = new();
-    private readonly Func<object?[], SessionEnsureResultDto> _ensureResponder = DefaultEnsureResponder();
     private volatile bool _connected;
     private Action<SessionOutputDto>? _outputHandler;
 
     /// <summary>Override to make <see cref="StartAsync"/> fail (throw) or delay.</summary>
     public Func<CancellationToken, Task>? StartHook { get; set; }
+
+    /// <summary>
+    /// Controls the EnsureSession result. The default creates a session on the
+    /// first no-id call and re-attaches (echoes) a supplied id. Override to model
+    /// a transient re-attach failure (throw) or a server restart (return a new id).
+    /// </summary>
+    public Func<object?[], SessionEnsureResultDto> EnsureSessionResponder { get; set; } = DefaultEnsureResponder();
 
     /// <summary>Override to make a value-less RPC (SendMessage / RespondToInteraction) delay or fail.</summary>
     public Func<string, object?[], CancellationToken, Task>? VoidInvokeHook { get; set; }
@@ -49,6 +55,12 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
         lock (_gate)
             StartAttempts++;
 
+        // Mirror SignalR: StartAsync on a live connection is illegal. This makes a
+        // "reconnect re-calls StartAsync while still connected" defect observable.
+        if (_connected)
+            throw new InvalidOperationException(
+                "The HubConnection cannot be started while it is not in the 'Disconnected' state.");
+
         if (StartHook is not null)
             await StartHook(cancellationToken);
 
@@ -60,7 +72,7 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
         Record(methodName, args);
 
         if (methodName == "EnsureSession")
-            return Task.FromResult((TResult)(object)_ensureResponder(args));
+            return Task.FromResult((TResult)(object)EnsureSessionResponder(args));
 
         throw new InvalidOperationException($"FakeDaemonHubTransport has no value result for '{methodName}'.");
     }

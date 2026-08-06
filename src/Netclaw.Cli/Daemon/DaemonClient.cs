@@ -65,9 +65,11 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly Channel<ClientCommand> _mailbox;
+    private readonly Channel<DaemonConnectionEvent> _eventChannel;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly IDisposable _outputRegistration;
     private readonly Task _ownerTask;
+    private readonly Task _eventPumpTask;
 
     // Owner-only state — read and written solely inside the owner loop, so it
     // needs no lock or volatile.
@@ -114,6 +116,8 @@ public sealed class DaemonClient : IAsyncDisposable
         _rpcTimeout = rpcTimeout ?? DefaultRpcTimeout;
         _mailbox = Channel.CreateUnbounded<ClientCommand>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        _eventChannel = Channel.CreateUnbounded<DaemonConnectionEvent>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
         _outputRegistration = _transport.On<SessionOutputDto>(
             "ReceiveOutput",
@@ -121,9 +125,17 @@ public sealed class DaemonClient : IAsyncDisposable
         _transport.Closed += OnTransportClosed;
 
         _ownerTask = Task.Run(RunAsync);
+        _eventPumpTask = Task.Run(EventPumpAsync);
     }
 
     public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+
+    /// <summary>
+    /// Connection lifecycle events. They are delivered on a dedicated pump, not
+    /// the client's command loop, so a subscriber that blocks or reenters the
+    /// client cannot stall daemon calls for other callers. Delivery is still
+    /// synchronous per event — offload heavy work onto a scheduler if needed.
+    /// </summary>
     public Observable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
 
     public bool IsConnected => _transport.IsConnected;
@@ -131,7 +143,7 @@ public sealed class DaemonClient : IAsyncDisposable
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
         var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await PostAsync(new ConnectCommand(ack), cancellationToken);
+        await PostAsync(new ConnectCommand(ack, cancellationToken), cancellationToken);
         await ack.Task.WaitAsync(cancellationToken);
     }
 
@@ -161,7 +173,7 @@ public sealed class DaemonClient : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var reply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await PostAsync(new EnsureSessionCommand(channelType, init, reply), cancellationToken);
+        await PostAsync(new EnsureSessionCommand(channelType, init, reply, cancellationToken), cancellationToken);
         return await reply.Task.WaitAsync(cancellationToken);
     }
 
@@ -171,7 +183,7 @@ public sealed class DaemonClient : IAsyncDisposable
             throw new InvalidOperationException("Only non-empty text messages are currently supported.");
 
         var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await PostAsync(new SendCommand(text, ack), cancellationToken);
+        await PostAsync(new SendCommand(text, ack, cancellationToken), cancellationToken);
         await ack.Task.WaitAsync(cancellationToken);
     }
 
@@ -184,7 +196,7 @@ public sealed class DaemonClient : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedKey);
 
         var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await PostAsync(new RespondCommand(callId, selectedKey, ack), cancellationToken);
+        await PostAsync(new RespondCommand(callId, selectedKey, ack, cancellationToken), cancellationToken);
         await ack.Task.WaitAsync(cancellationToken);
     }
 
@@ -201,8 +213,12 @@ public sealed class DaemonClient : IAsyncDisposable
         _lifetime.Cancel();
 
         // RunAsync ends normally when the writer completes; it never rethrows
-        // cancellation, so awaiting it here cannot throw.
+        // cancellation, so awaiting it here cannot throw. Await it before
+        // completing the event channel so no late Publish is dropped.
         await _ownerTask.ConfigureAwait(false);
+
+        _eventChannel.Writer.TryComplete();
+        await _eventPumpTask.ConfigureAwait(false);
 
         _outputRegistration.Dispose();
         await _transport.DisposeAsync().ConfigureAwait(false);
@@ -273,27 +289,39 @@ public sealed class DaemonClient : IAsyncDisposable
         switch (command)
         {
             case ConnectCommand c:
-                await EnsureConnectedAsync();
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
                 c.Ack.TrySetResult();
                 break;
+            }
 
             case EnsureSessionCommand c:
-                c.Reply.TrySetResult(await EnsureSessionCoreAsync(c));
+            {
+                using var op = LinkOperation(c.Token);
+                c.Reply.TrySetResult(await EnsureSessionCoreAsync(c, op.Token));
                 break;
+            }
 
             case SendCommand c:
-                await EnsureConnectedAsync();
-                await ReattachIfNeededAsync();
-                await InvokeAsync("SendMessage", [RequireSession(), c.Text]);
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
+                await ReattachIfNeededAsync(op.Token);
+                await InvokeAsync("SendMessage", [RequireSession(), c.Text], op.Token);
                 c.Ack.TrySetResult();
                 break;
+            }
 
             case RespondCommand c:
-                await EnsureConnectedAsync();
-                await ReattachIfNeededAsync();
-                await InvokeAsync("RespondToInteraction", [RequireSession(), c.CallId, c.SelectedKey]);
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
+                await ReattachIfNeededAsync(op.Token);
+                await InvokeAsync("RespondToInteraction", [RequireSession(), c.CallId, c.SelectedKey], op.Token);
                 c.Ack.TrySetResult();
                 break;
+            }
 
             case TransportDroppedCommand c:
                 await HandleTransportDroppedAsync(c.Error);
@@ -301,16 +329,23 @@ public sealed class DaemonClient : IAsyncDisposable
         }
     }
 
-    private async Task<string> EnsureSessionCoreAsync(EnsureSessionCommand command)
+    // Links the caller's token with the client lifetime so the owner aborts an
+    // in-flight hub call when the caller cancels — the behavior the old client
+    // had by threading the token straight into InvokeCoreAsync.
+    private CancellationTokenSource LinkOperation(CancellationToken callerToken)
+        => CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, callerToken);
+
+    private async Task<string> EnsureSessionCoreAsync(EnsureSessionCommand command, CancellationToken operationToken)
     {
         ApplyInit(command.Init);
         _channelType = command.ChannelType;
 
-        await EnsureConnectedAsync();
+        await EnsureConnectedAsync(operationToken);
 
         var result = await InvokeAsync<SessionEnsureResultDto>(
             "EnsureSession",
-            [_sessionId, command.ChannelType.ToWireValue()]);
+            [_sessionId, command.ChannelType.ToWireValue()],
+            operationToken);
 
         _sessionId = result.SessionId;
         _sessionAttached = true;
@@ -345,7 +380,7 @@ public sealed class DaemonClient : IAsyncDisposable
     /// A new connection has no server-side session binding, so a session-scoped
     /// RPC would otherwise fail with "session not attached".
     /// </summary>
-    private async Task ReattachIfNeededAsync()
+    private async Task ReattachIfNeededAsync(CancellationToken operationToken)
     {
         if (_sessionAttached)
             return;
@@ -354,7 +389,8 @@ public sealed class DaemonClient : IAsyncDisposable
 
         var result = await InvokeAsync<SessionEnsureResultDto>(
             "EnsureSession",
-            [_sessionId, channelType.ToWireValue()]);
+            [_sessionId, channelType.ToWireValue()],
+            operationToken);
         _sessionId = result.SessionId;
         _sessionAttached = true;
     }
@@ -368,7 +404,7 @@ public sealed class DaemonClient : IAsyncDisposable
     /// and Connected on success. Throws on exhaustion so the driving command
     /// faults fast instead of hanging.
     /// </summary>
-    private async Task EnsureConnectedAsync()
+    private async Task EnsureConnectedAsync(CancellationToken operationToken)
     {
         if (_transport.IsConnected)
             return;
@@ -384,7 +420,7 @@ public sealed class DaemonClient : IAsyncDisposable
                 ? $"Reconnecting to daemon at {_daemonEndpoint}..."
                 : $"Connecting to daemon at {_daemonEndpoint}...");
 
-        await ConnectThroughDelaysAsync();
+        await ConnectThroughDelaysAsync(operationToken);
         _hasConnected = true;
 
         Publish(
@@ -398,20 +434,20 @@ public sealed class DaemonClient : IAsyncDisposable
     /// One pass over <see cref="_reconnectDelays"/>: delay, then a single
     /// StartAsync. Returns on the first success; throws on exhaustion.
     /// </summary>
-    private async Task ConnectThroughDelaysAsync()
+    private async Task ConnectThroughDelaysAsync(CancellationToken operationToken)
     {
         Exception? lastError = null;
         foreach (var delay in _reconnectDelays)
         {
             if (delay > TimeSpan.Zero)
-                await Task.Delay(delay, _timeProvider, _lifetime.Token);
+                await Task.Delay(delay, _timeProvider, operationToken);
 
             try
             {
-                await _transport.StartAsync(_lifetime.Token);
+                await _transport.StartAsync(operationToken);
                 return;
             }
-            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -438,17 +474,23 @@ public sealed class DaemonClient : IAsyncDisposable
     /// </summary>
     private async Task HandleTransportDroppedAsync(Exception? error)
     {
-        // Nothing to recover: no session was ever established, or a lazy
-        // EnsureConnected already brought the transport back.
-        if (_sessionId is null || _channelType is not { } channelType)
-            return;
+        // A foreground command may have already reconnected before this drop
+        // notification was processed; then the drop is moot.
         if (_transport.IsConnected)
             return;
 
         _sessionAttached = false;
+
+        // Report the drop unconditionally, like the old Closed handler — the TUI
+        // clears readiness on this even before a session exists.
         Publish(
             DaemonConnectionState.TransportClosed,
             $"Connection to daemon at {_daemonEndpoint} dropped: {error?.Message ?? "connection closed"}");
+
+        // Only the reconnect loop needs a session to re-attach. Without one there
+        // is nothing to recover, so leave the transport for the next command.
+        if (_sessionId is null || _channelType is not { } channelType)
+            return;
 
         Exception? lastError = null;
         for (var attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
@@ -467,11 +509,18 @@ public sealed class DaemonClient : IAsyncDisposable
 
             try
             {
-                await _transport.StartAsync(_lifetime.Token);
+                // Guard StartAsync: a prior attempt may have connected the
+                // transport but failed the re-attach RPC. Calling StartAsync on
+                // an already-connected HubConnection throws "not in the
+                // Disconnected state" — which would falsely exhaust the budget on
+                // a live socket. Retry only the re-attach in that case.
+                if (!_transport.IsConnected)
+                    await _transport.StartAsync(_lifetime.Token);
 
                 var result = await InvokeAsync<SessionEnsureResultDto>(
                     "EnsureSession",
-                    [_sessionId, channelType.ToWireValue()]);
+                    [_sessionId, channelType.ToWireValue()],
+                    _lifetime.Token);
                 _sessionId = result.SessionId;
                 _sessionAttached = true;
 
@@ -506,20 +555,22 @@ public sealed class DaemonClient : IAsyncDisposable
     private TimeSpan BackoffFor(int attempt)
         => _reconnectDelays[Math.Min(attempt - 1, _reconnectDelays.Length - 1)];
 
-    private async Task<TResult> InvokeAsync<TResult>(string method, object?[] args)
+    private async Task<TResult> InvokeAsync<TResult>(string method, object?[] args, CancellationToken operationToken)
     {
         using var timeoutCts = new CancellationTokenSource(_rpcTimeout, _timeProvider);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, timeoutCts.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(operationToken, timeoutCts.Token);
         return await _transport.InvokeAsync<TResult>(method, args, linked.Token);
     }
 
-    private async Task InvokeAsync(string method, object?[] args)
+    private async Task InvokeAsync(string method, object?[] args, CancellationToken operationToken)
     {
         using var timeoutCts = new CancellationTokenSource(_rpcTimeout, _timeProvider);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, timeoutCts.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(operationToken, timeoutCts.Token);
         await _transport.InvokeAsync(method, args, linked.Token);
     }
 
+    // Runs on the owner loop. Events go to a channel drained by EventPumpAsync so
+    // subscriber code never executes on the owner thread.
     private void Publish(
         DaemonConnectionState state,
         string message,
@@ -527,16 +578,24 @@ public sealed class DaemonClient : IAsyncDisposable
         int? maxAttempts = null,
         int? secondsUntilRetry = null)
     {
-        if (_disposed)
-            return;
-
-        _connectionSubject.OnNext(new DaemonConnectionEvent(
+        _eventChannel.Writer.TryWrite(new DaemonConnectionEvent(
             state,
             _daemonEndpoint,
             message,
             attempt,
             maxAttempts,
             secondsUntilRetry));
+    }
+
+    private async Task EventPumpAsync()
+    {
+        // Deliver connection events off the owner thread. A subscriber that blocks
+        // (or reenters the client) here stalls only this pump, not the command
+        // mailbox — so Send/EnsureSession/Respond keep flowing and a reentrant
+        // call cannot deadlock the owner. The pump ends when DisposeAsync
+        // completes the event channel.
+        await foreach (var evt in _eventChannel.Reader.ReadAllAsync().ConfigureAwait(false))
+            _connectionSubject.OnNext(evt);
     }
 
     private static void Fault(ClientCommand command, Exception ex)
@@ -580,19 +639,21 @@ public sealed class DaemonClient : IAsyncDisposable
 
     private abstract record ClientCommand;
 
-    private sealed record ConnectCommand(TaskCompletionSource Ack) : ClientCommand;
+    private sealed record ConnectCommand(TaskCompletionSource Ack, CancellationToken Token) : ClientCommand;
 
     private sealed record EnsureSessionCommand(
         ChannelType ChannelType,
         SessionInit Init,
-        TaskCompletionSource<string> Reply) : ClientCommand;
+        TaskCompletionSource<string> Reply,
+        CancellationToken Token) : ClientCommand;
 
-    private sealed record SendCommand(string Text, TaskCompletionSource Ack) : ClientCommand;
+    private sealed record SendCommand(string Text, TaskCompletionSource Ack, CancellationToken Token) : ClientCommand;
 
     private sealed record RespondCommand(
         string CallId,
         string SelectedKey,
-        TaskCompletionSource Ack) : ClientCommand;
+        TaskCompletionSource Ack,
+        CancellationToken Token) : ClientCommand;
 
     private sealed record TransportDroppedCommand(Exception? Error) : ClientCommand;
 

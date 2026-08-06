@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
 using Netclaw.Cli.Daemon;
 using R3;
 using Xunit;
@@ -133,6 +134,116 @@ public sealed class DaemonClientReconnectTests
         await client.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAnyAsync<Exception>(() => pendingSend);
+    }
+
+    [Fact]
+    public async Task Reconnect_recovers_when_the_first_reattach_fails_then_succeeds()
+    {
+        var transport = new FakeDaemonHubTransport();
+        await using var client = new DaemonClient(
+            "http://localhost",
+            transport,
+            reconnectDelays: ImmediateDelays,
+            rpcTimeout: TimeSpan.FromSeconds(5));
+
+        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+
+        // On reconnect the transport comes up, but the first re-attach RPC fails
+        // transiently; the second succeeds. The client must retry only the
+        // re-attach, not StartAsync on the now-connected transport.
+        var failNextReattach = true;
+        transport.EnsureSessionResponder = args =>
+        {
+            if (args[0] is string requested)
+            {
+                if (failNextReattach)
+                {
+                    failNextReattach = false;
+                    throw new InvalidOperationException("session not ready");
+                }
+
+                return new SessionEnsureResultDto(requested, false);
+            }
+
+            return new SessionEnsureResultDto("fake/session", true);
+        };
+
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State is DaemonConnectionState.Connected
+                && evt.Message.Contains("Reconnected", StringComparison.Ordinal))
+                reconnected.TrySetResult();
+        });
+
+        transport.RaiseClosed();
+
+        // Must recover to Connected, not falsely go terminal Disconnected on a
+        // live socket.
+        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.True(client.IsConnected);
+    }
+
+    [Fact]
+    public async Task Reconnect_after_server_restart_adopts_the_new_session_id()
+    {
+        var transport = new FakeDaemonHubTransport();
+        await using var client = new DaemonClient(
+            "http://localhost",
+            transport,
+            reconnectDelays: ImmediateDelays,
+            rpcTimeout: TimeSpan.FromSeconds(5));
+
+        var firstId = await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+
+        // The daemon restarted and forgot the session: EnsureSession now returns
+        // a brand-new id (Created=true) instead of echoing the requested one.
+        const string newId = "fake/session-after-restart";
+        transport.EnsureSessionResponder = _ => new SessionEnsureResultDto(newId, true);
+
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State is DaemonConnectionState.Connected
+                && evt.Message.Contains("Reconnected", StringComparison.Ordinal))
+                reconnected.TrySetResult();
+        });
+
+        transport.RaiseClosed();
+        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // The client must adopt the server's new id for subsequent sends.
+        await client.SendAsync("hi", TestContext.Current.CancellationToken);
+        var lastSend = transport.Invocations.Last(i => i.Method == "SendMessage");
+        Assert.Equal(newId, lastSend.Args[0]);
+        Assert.NotEqual(firstId, (string?)lastSend.Args[0]);
+    }
+
+    [Fact]
+    public async Task A_blocking_connection_event_subscriber_does_not_stall_commands()
+    {
+        // release is declared first so it disposes last — after the client's
+        // event pump has fully drained.
+        using var release = new ManualResetEventSlim(false);
+        var transport = new FakeDaemonHubTransport();
+        await using var client = new DaemonClient(
+            "http://localhost",
+            transport,
+            reconnectDelays: ImmediateDelays,
+            rpcTimeout: TimeSpan.FromSeconds(5));
+
+        // This subscriber blocks the event pump indefinitely.
+        using var sub = client.ConnectionEvents.Subscribe(_ => release.Wait());
+
+        // Commands must still complete, because events are delivered off the
+        // owner thread. If they were on the owner thread, these would hang.
+        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await client.SendAsync("hi", TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // Unblock the pump so DisposeAsync can drain it and finish.
+        release.Set();
     }
 
     // Simulates a hub RPC whose response never arrives: it completes only when
