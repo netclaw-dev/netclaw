@@ -392,6 +392,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
+        // Re-arm thread-history hydration on a tap-gated mention so the gap the tap
+        // held since the last completed turn is backfilled. Under MentionRequiredInThread
+        // the conversation actor forwards only mentions here, so every inbound is a
+        // deliberate re-entry. Guard on no in-flight turn (cursor not lagging) to
+        // preserve the PR #733 no-duplicate invariant; ApplyDeferredHydrationAsync
+        // no-ops when the computed gap is empty.
+        if (!_hydrationPending
+            && _pendingCursorSnowflake is null
+            && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
+        {
+            _hydrationPending = true;
+        }
+
         if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
             input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
 

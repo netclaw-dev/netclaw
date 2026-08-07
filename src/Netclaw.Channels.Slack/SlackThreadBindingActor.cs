@@ -402,6 +402,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return;
             }
 
+            // Re-arm thread-history hydration on a tap-gated mention so the gap the
+            // tap held since the last completed turn is backfilled. Under
+            // MentionRequiredInThread the conversation actor forwards only mentions
+            // here, so every inbound is a deliberate re-entry. Guard on no in-flight
+            // turn (cursor not lagging) to preserve the PR #733 no-duplicate invariant;
+            // BuildInputWithDeferredHydrationAsync no-ops when the computed gap is empty.
+            if (!_hydrationPending
+                && _pendingCursorTs is null
+                && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
+            {
+                _hydrationPending = true;
+            }
+
             var buildResult = _hydrationPending
                 && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options)
                 ? await BuildInputWithDeferredHydrationAsync(message, contents, currentTs, inboundCts.Token)
