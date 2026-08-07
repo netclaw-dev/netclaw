@@ -31,9 +31,9 @@
 
 ## 6. Docs and skills
 
-- [ ] 6.1 Update the per-channel config docs (`docs/spec/configuration.md` and the per-channel integration docs) to describe the per-channel value and the removal of the connector-wide bool.
-- [ ] 6.2 Update the `netclaw-operations` system skill (config format area) and bump its `metadata.version` (System Skills Sync Rule).
-- [ ] 6.3 Update netclaw-website issue #115 with the final per-channel behavior and the history-read note.
+- [x] 6.1 Update the per-channel config docs (`docs/spec/configuration.md`, the three channel integration pages, `slack-acl-policy.md`, and the adding-a-channel runbook) to describe the per-channel value and the removal of the connector-wide bool.
+- [x] 6.2 No change needed: the `netclaw-operations` skill covers operational tasks (scheduling, doctor, approvals, MCP), not channel config format — there is no section documenting per-channel channel settings, so shoehorning this in would be out of place. The config reference lives in `docs/`.
+- [x] 6.3 Updated netclaw-website issue #115 with the final per-channel behavior and the backfill-on-mention note.
 
 ## 7. Quality gates and OpenSpec close-out
 
@@ -41,5 +41,5 @@
 - [ ] 7.2 `dotnet slopwatch analyze` reports no new violations.
 - [ ] 7.3 `./scripts/Add-FileHeaders.ps1 -Verify` confirms copyright headers on all `.cs` files.
 - [ ] 7.4 `./scripts/smoke/run-smoke.sh light` passes, including the new `EditAudience` tape.
-- [ ] 7.5 `./evals/run-evals.sh` passes (the `netclaw-operations` skill content changed).
+- [ ] 7.5 Eval suite is NOT triggered by this change: it runs on identity/skill/memory/tool/model/SessionConfig changes; this change touches channel routing + config only, and §6.2 made no skill change. Skipped with justification.
 - [ ] 7.6 `/opsx-verify`, then `/opsx-sync` the delta specs into `openspec/specs/`, then `/opsx-archive` the change.
