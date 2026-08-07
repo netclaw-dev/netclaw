@@ -168,5 +168,11 @@ cat > "$MANIFEST_PATH" << EOF
 }
 EOF
 
+# Plain-text channel pointers — the zero-parse interface for installers.
+# Deno/kubectl/Go-style: a one-line file per channel. Written alongside the
+# manifest so the publish workflow uploads them to the feed root.
+printf '%s\n' "$LATEST" > "$(dirname "$MANIFEST_PATH")/latest"
+printf '%s\n' "$LATEST_PRERELEASE" > "$(dirname "$MANIFEST_PATH")/latest-prerelease"
+
 ASSET_COUNT=$(echo "$ASSETS" | grep -c '"component"' || echo 0)
 echo "Generated $MANIFEST_PATH for v${VERSION} with ${ASSET_COUNT} asset(s)"

@@ -5,6 +5,10 @@ on:
     tags:
       - '*'
 
+concurrency:
+  group: release-feed
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -462,6 +466,20 @@ jobs:
         npm install wrangler@3.90.0 --include=optional
         echo "$(pwd)/node_modules/.bin" >> $GITHUB_PATH
 
+    - name: Upload per-version checksum files to R2
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: |
+        for f in ./checksums/checksums-*.txt; do
+          [ -f "$f" ] || continue
+          rid=$(basename "$f" .txt | sed 's/^checksums-//')
+          wrangler r2 object put \
+            "netclaw-releases/${{ github.ref_name }}/checksums-$rid.txt" \
+            --file="$f" \
+            --content-type=text/plain
+        done
+
     - name: Upload release manifest to R2
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -513,6 +531,25 @@ jobs:
         netclaw-releases/install.ps1
         --file=./feeds/releases/install.ps1
         --content-type=text/plain
+
+    # Publish mutable channel pointers last. All archives and checksum files
+    # must exist before a client can resolve this version from the feed.
+    - name: Upload plain-text channel pointers to R2
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/latest
+        --file=./feeds/releases/latest
+        --content-type=text/plain
+        --cache-control="public, max-age=60, s-maxage=60"
+        &&
+        wrangler r2 object put
+        netclaw-releases/latest-prerelease
+        --file=./feeds/releases/latest-prerelease
+        --content-type=text/plain
+        --cache-control="public, max-age=60, s-maxage=60"
 
     - name: Cleanup signing key
       if: always()

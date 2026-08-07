@@ -41,23 +41,30 @@ mkdir -p "$SERVE/$VERSION" "$SHIM" "$WORK/checksums" "$WORK/bin"
 SERVER_PID=""
 # generate-release-manifest.sh always writes to this fixed path; back up any
 # pre-existing file and restore it on exit so the working tree is left clean.
+# It also writes the plain-text channel pointers (latest, latest-prerelease).
 MANIFEST_DEST="$ROOT_DIR/feeds/releases/manifest.json"
 MANIFEST_BACKUP="$WORK/manifest.json.backup"
 MANIFEST_PREEXISTING=false
-if [ -f "$MANIFEST_DEST" ]; then
-  cp "$MANIFEST_DEST" "$MANIFEST_BACKUP"
-  MANIFEST_PREEXISTING=true
-fi
+for feed_file in manifest.json latest latest-prerelease; do
+  if [ -f "$ROOT_DIR/feeds/releases/$feed_file" ]; then
+    cp "$ROOT_DIR/feeds/releases/$feed_file" "$WORK/$feed_file.backup"
+    MANIFEST_PREEXISTING=true
+  else
+    touch "$WORK/$feed_file.absent"
+  fi
+done
 
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
-  if [ "$MANIFEST_PREEXISTING" = true ]; then
-    cp "$MANIFEST_BACKUP" "$MANIFEST_DEST"
-  else
-    rm -f "$MANIFEST_DEST"
-  fi
+  for feed_file in manifest.json latest latest-prerelease; do
+    if [ -f "$WORK/$feed_file.backup" ]; then
+      cp "$WORK/$feed_file.backup" "$ROOT_DIR/feeds/releases/$feed_file"
+    elif [ -f "$WORK/$feed_file.absent" ]; then
+      rm -f "$ROOT_DIR/feeds/releases/$feed_file"
+    fi
+  done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -110,6 +117,18 @@ rm -f "$MANIFEST_DEST"
 # latest (newest stable) + latestPrerelease (newest of all) across both.
 bash "$MANIFEST_GEN" "$VERSION"      "$WORK/checksums-$VERSION"      "$BASE_URL" >/dev/null
 bash "$MANIFEST_GEN" "$BETA_VERSION" "$WORK/checksums-$BETA_VERSION" "$BASE_URL" >/dev/null
+
+if [ "$(tr -d '\r\n' < "$ROOT_DIR/feeds/releases/latest")" = "$VERSION" ]; then
+  pass "feed: latest pointer selects the newest stable version"
+else
+  fail "feed: latest pointer has an unexpected value"
+fi
+if [ "$(tr -d '\r\n' < "$ROOT_DIR/feeds/releases/latest-prerelease")" = "$BETA_VERSION" ]; then
+  pass "feed: latest-prerelease pointer selects the newest version"
+else
+  fail "feed: latest-prerelease pointer has an unexpected value"
+fi
+
 cp "$MANIFEST_DEST" "$SERVE/manifest.json"
 python3 - "$SERVE/manifest.json" "$SERVE/manifest-rid-first.json" <<'PY'
 import json

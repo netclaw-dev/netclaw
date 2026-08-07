@@ -44,7 +44,9 @@ public class ToolArgumentValidatorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
     }
 
     private static ToolExecutionContext PersonalContext(string sessionDir)
@@ -271,7 +273,17 @@ public class ToolArgumentValidatorTests
         var fakeTool = AIFunctionFactory.Create(() => "mcp-result", "store");
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
-        var executor = new DispatchingToolExecutor(registry);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         string result;
         try
@@ -303,7 +315,17 @@ public class ToolArgumentValidatorTests
         var fakeTool = AIFunctionFactory.Create(() => "mcp-result", "store");
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
-        var executor = new DispatchingToolExecutor(registry);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var rejection = executor.ValidateToolCall(new FunctionCallContent(
             "call-mcp", "memorizer/store", new Dictionary<string, object?>

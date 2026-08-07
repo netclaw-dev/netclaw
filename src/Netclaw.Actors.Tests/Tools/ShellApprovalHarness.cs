@@ -125,6 +125,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
             shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),

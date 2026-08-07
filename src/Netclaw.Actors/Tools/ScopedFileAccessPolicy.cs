@@ -36,6 +36,28 @@ internal sealed class ScopedFileAccessPolicy
     public bool TryResolveReadPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error);
 
+    /// <summary>
+    /// Resolves a path for <c>set_working_directory</c>. Deliberately does NOT
+    /// grant interactive Personal shell-equivalent reach: the working directory
+    /// becomes the safe-verb auto-approve zone and feeds project identity files
+    /// into the system prompt, so it is clamped to the autonomous zone (session
+    /// dir + project dir + global read roots) in every mode, even the default
+    /// <c>Mode.All</c> Personal profile.
+    /// </summary>
+    public bool TryResolveWorkingDirectory(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
+        => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, allowInteractivePersonalReach: false);
+
+    /// <summary>
+    /// True when an interactive Personal-audience session gets shell-equivalent
+    /// file reach: read and attach tools resolve outside the configured roots,
+    /// matching the approval-gated shell surface. Autonomous sessions, Team,
+    /// and Public audiences are never granted this — they keep their
+    /// roots-scoped or fail-closed behavior.
+    /// </summary>
+    internal static bool HasInteractivePersonalReach(ToolInvocationContext context)
+        => context.Audience == TrustAudience.Personal
+           && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
+
     public bool TryResolveWritePath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error);
 
@@ -54,7 +76,8 @@ internal sealed class ScopedFileAccessPolicy
         ToolInvocationContext context,
         AccessKind accessKind,
         out string fullPath,
-        out string error)
+        out string error,
+        bool allowInteractivePersonalReach = true)
     {
         try
         {
@@ -69,6 +92,7 @@ internal sealed class ScopedFileAccessPolicy
 
         var profile = _profileResolver.ResolveProfile(context);
         var access = GetAccessProfile(profile, accessKind);
+        var audience = context.Audience;
 
         if (access.Mode == ToolFilesystemMode.All)
         {
@@ -78,21 +102,43 @@ internal sealed class ScopedFileAccessPolicy
             // granted blanket filesystem access. Interactive channels keep the
             // blanket grant — the live approval gate is their backstop. This is the
             // single seam that covers shell (via TryResolveWritePath) and every file
-            // tool at once.
-            if (context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
+            // tool at once. set_working_directory opts out (allowInteractivePersonalReach
+            // == false) and is clamped to the autonomous zone even for default
+            // Mode.All profiles: its declaration widens the safe-verb auto-approve
+            // zone and feeds project identity files into the system prompt.
+            if (!allowInteractivePersonalReach
+                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
+            {
                 return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+            }
 
             error = string.Empty;
             return true;
         }
 
-        var audience = context.Audience;
         var label = GetAudienceLabel(audience);
 
         if (access.Mode == ToolFilesystemMode.None)
         {
             error = $"Error: {label} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
             return false;
+        }
+
+        // Interactive Personal-audience reads are shell-equivalent: shell reaches
+        // any path in an interactive session (approval gate + ToolPathPolicy hard
+        // deny), so read/attach tools do too. This kills the shell-workaround
+        // (cat, cp-into-session) for legitimate out-of-roots files. The hard deny
+        // surface still applies inside the tools via ToolPathPolicy.IsReadDenied
+        // (file_read, file_list, attach_file), and autonomous sessions never reach
+        // this branch — InteractiveApproval is Unavailable there, so they clamp to
+        // the zone or fail closed below. set_working_directory opts out via
+        // TryResolveWorkingDirectory because its reach widens the safe-verb zone.
+        if (allowInteractivePersonalReach
+            && accessKind is (AccessKind.Read or AccessKind.Attach)
+            && HasInteractivePersonalReach(context))
+        {
+            error = string.Empty;
+            return true;
         }
 
         var roots = ResolveAndMergeRoots(access, context, audience, accessKind);
