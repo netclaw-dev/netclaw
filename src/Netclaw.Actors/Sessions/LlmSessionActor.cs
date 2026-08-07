@@ -4324,6 +4324,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // ApprovedOnce has no durable grant at all; broader scopes still
                 // record their durable grant separately. This only authorizes the
                 // immediate re-drive, matching the live pipeline and the sub-agent.
+                // See https://github.com/netclaw-dev/netclaw/issues/1802.
                 preSeed[call.CallId.Value] = resolved.Pending.Patterns;
             }
 

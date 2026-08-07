@@ -568,7 +568,8 @@ internal sealed class SessionToolExecutionPipeline
             if (decision.IsApprovalGrant())
             {
                 // Retry execution now that approval is granted. Seed the one-time
-                // bypass for the just-approved call regardless of scope. Broader
+                // bypass for the just-approved call regardless of scope
+                // (https://github.com/netclaw-dev/netclaw/issues/1802). Broader
                 // scopes (session/always) DO get a durable grant recorded by the
                 // session actor, but that grant can legitimately not cover every
                 // candidate: a piped command's standalone verbs (base64, head) have

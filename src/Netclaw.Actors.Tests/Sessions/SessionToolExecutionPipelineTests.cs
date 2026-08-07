@@ -139,13 +139,12 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Approved_always_seeds_the_immediate_retry_bypass_so_a_partially_covered_command_still_runs()
     {
-        // Regression for the "approved command still throws" trigger. A piped
-        // command's standalone verbs (e.g. base64, head) have no path argument, so
-        // "Always here" cannot persist a directory-scoped grant for them — by
-        // design. The user's click must still run THIS call once, via the one-time
-        // bypass. The bug: the pipeline seeded that bypass only for ApprovedOnce, so
-        // ApprovedSession/ApprovedAlways re-hit the gate on retry and failed the
-        // turn. This fake re-requires approval until the retry carries the bypass.
+        // Regression for the "approved command still throws" trigger
+        // (https://github.com/netclaw-dev/netclaw/issues/1802): the pipeline seeded
+        // the one-time retry bypass only for ApprovedOnce, so a command approved
+        // with ApprovedSession/ApprovedAlways whose durable grant does not cover
+        // every verb re-hit the gate on retry and failed the turn. This fake
+        // re-requires approval until the immediate retry carries the bypass.
         var executor = new BypassRequiredOnRetryExecutor();
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("approved-always-bypass-probe");
