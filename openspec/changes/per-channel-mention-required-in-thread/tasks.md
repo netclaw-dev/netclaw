@@ -1,21 +1,21 @@
 ## 1. Baseline (precondition)
 
-- [ ] 1.1 Merge PR #1783 (connector-wide `MentionRequiredInThread`) to `dev`.
-- [ ] 1.2 Rebase `feature/mention-required-in-thread-per-channel` onto the updated `dev`; confirm the connector bool is present as the #1783 baseline the change deletes.
-- [ ] 1.3 Confirm the OpenSpec artifacts still pass `openspec validate --strict` after the rebase.
+- [x] 1.1 Merge PR #1783 (connector-wide `MentionRequiredInThread`) to `dev`.
+- [x] 1.2 Rebase `feature/mention-required-in-thread-per-channel` onto the updated `dev`; confirm the connector bool is present as the #1783 baseline the change deletes.
+- [x] 1.3 Confirm the OpenSpec artifacts still pass `openspec validate --strict` after the rebase.
 
 ## 2. Per-channel config storage
 
-- [ ] 2.1 Add a per-channel `MentionRequiredInThread` value to `SlackChannelOptions`, `DiscordChannelOptions`, and `MattermostChannelOptions`, using the existing per-channel-map pattern (mirror `ChannelAudiences`). Keep `AllowedChannelIds` and `ChannelAudiences` additive — no shape migration.
-- [ ] 2.2 Update `netclaw-config.v1.schema.json`: add the per-channel value to all three channel sections; remove the connector-wide `MentionRequiredInThread`. Respect `additionalProperties: false` (Configuration Schema Sync Rule).
-- [ ] 2.3 Delete the connector-wide `MentionRequiredInThread`: the property on the three options classes and its schema entry. No migration — it was never deployed. Its #1783 routing reads move to the per-channel resolution in §3.1; land the deletion with §3.1 so the build stays green.
-- [ ] 2.4 Binding test: a config with per-channel `MentionRequiredInThread` values binds to the options; a channel with no entry resolves to `false`.
+- [x] 2.1 Add a per-channel `MentionRequiredInThread` value to `SlackChannelOptions`, `DiscordChannelOptions`, and `MattermostChannelOptions`, using the existing per-channel-map pattern (mirror `ChannelAudiences`). Keep `AllowedChannelIds` and `ChannelAudiences` additive — no shape migration.
+- [x] 2.2 Update `netclaw-config.v1.schema.json`: add the per-channel value to all three channel sections; remove the connector-wide `MentionRequiredInThread`. Respect `additionalProperties: false` (Configuration Schema Sync Rule).
+- [x] 2.3 Delete the connector-wide `MentionRequiredInThread`: the property on the three options classes and its schema entry. No migration — it was never deployed. Its #1783 routing reads move to the per-channel resolution in §3.1; land the deletion with §3.1 so the build stays green.
+- [x] 2.4 Binding test: a config with per-channel `MentionRequiredInThread` values binds to the options; a channel with no entry resolves to `false`.
 
 ## 3. Routing gate (per-channel resolution)
 
-- [ ] 3.1 In each conversation actor (`SlackConversationActor`, `DiscordConversationActor`, `MattermostConversationActor`), resolve the effective per-channel `MentionRequiredInThread` for the message channel (default `false` when unset) and pass the resolved bool into `RoutingPolicy.Evaluate`. Keep the routing policy a pure function.
-- [ ] 3.2 Verify the routing behavior: an un-mentioned message in an active thread is held (not turned) when on; a mention creates the turn; a channel with no value keeps the active-session bypass; the value never grants access.
-- [ ] 3.3 Extend the cross-channel routing contract tests to resolve the per-channel value (on and off) across all three fixtures.
+- [x] 3.1 In each conversation actor (`SlackConversationActor`, `DiscordConversationActor`, `MattermostConversationActor`), resolve the effective per-channel `MentionRequiredInThread` for the message channel (default `false` when unset) and pass the resolved bool into `RoutingPolicy.Evaluate`. Keep the routing policy a pure function.
+- [x] 3.2 Verify the routing behavior: an un-mentioned message in an active thread is held (not turned) when on; a mention creates the turn; a channel with no value keeps the active-session bypass; the value never grants access.
+- [x] 3.3 Extend the cross-channel routing contract tests to resolve the per-channel value (on and off) across all three fixtures.
 
 ## 4. Backfill re-trigger on mention
 
