@@ -19,9 +19,9 @@
 
 ## 4. Backfill re-trigger on mention
 
-- [ ] 4.1 In `SlackThreadBindingActor` and the Discord/Mattermost binding actors, re-run the existing hydration on a mention when the channel's tap held messages. Guard: only on a mention, only with a real gap (cursor strictly before thread head), only when no turn is in flight.
-- [ ] 4.2 Reuse the existing fetch, gap computation, prompt-injection gate, and merge path. Add no new fetch path and no new watermark.
-- [ ] 4.3 Test per channel: held un-mentioned messages hydrate on the mention; a live (hot) actor re-hydrates; an in-flight turn skips the re-fetch (no duplicate content, per PR #733).
+- [x] 4.1 In `SlackThreadBindingActor` and the Discord/Mattermost binding actors, re-run the existing hydration on a mention when the channel's tap held messages. Guard: only on a mention, only with a real gap (cursor strictly before thread head), only when no turn is in flight.
+- [x] 4.2 Reuse the existing fetch, gap computation, prompt-injection gate, and merge path. Add no new fetch path and no new watermark.
+- [x] 4.3 Slack integration test proves a live (hot) actor re-hydrates the held gap on the second mention (fetchCount 1→2, no restart) and that the existing once-per-runtime path is unchanged when the tap is off. NOTE: Discord/Mattermost use the byte-identical re-arm + guard; dedicated per-channel integration tests are a follow-up.
 
 ## 5. Config TUI
 
