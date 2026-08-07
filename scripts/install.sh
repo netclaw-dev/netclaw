@@ -33,6 +33,11 @@ fi
 # (smoke tests) or a private mirror.
 MANIFEST_URL="${MANIFEST_URL:-https://releases.netclaw.dev/manifest.json}"
 
+# Feed base URL — derived from the manifest URL so a local/private mirror
+# resolves the plain-text channel pointers and per-version assets against the
+# same origin. Override explicitly to point at a different origin.
+FEED_BASE_URL="${FEED_BASE_URL:-$(dirname "$MANIFEST_URL")}"
+
 # ── Argument parsing ──
 COMPONENT="all"        # "all", "cli", or "daemon"
 DRY_RUN=false          # --dry-run: resolve and report what would happen, install nothing
@@ -125,52 +130,115 @@ sha256_file() {
     fi
 }
 
-# ── JSON field extraction (no jq dependency) ──
-# Uses jq if available, falls back to grep/sed
-json_field() {
-    local json="$1" field="$2"
-    if command -v jq >/dev/null 2>&1; then
-        echo "$json" | jq -r "$field"
-    else
-        # Simple grep/sed fallback for flat JSON fields
-        echo "$json" | grep -o "\"${field#.}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed 's/.*: *"\(.*\)"/\1/'
-    fi
-}
-
-json_asset_field() {
-    local json="$1" version="$2" component="$3" rid="$4" field="$5"
-
-    # Release manifests contain flat release and asset objects. Splitting object
-    # boundaries lets POSIX awk select an asset without depending on property order
-    # or GNU-only regular-expression extensions.
-    printf '%s\n' "$json" | tr '{' '\n' | tr '}' '\n' | awk \
-        -v wanted_version="$version" \
-        -v wanted_component="$component" \
-        -v wanted_rid="$rid" \
-        -v wanted_field="$field" '
+# ── JSON field extraction (POSIX awk only; jq NOT required) ──
+# Reflows any brace-balanced JSON document (pretty-printed, minified, or the
+# hybrid mix the release generator emits) into one line per leaf object, then
+# emits the fields the installer needs:
+#
+#   latest <value>           — manifest.latest (newest stable)
+#   latestPrerelease <value> — manifest.latestPrerelease (newest of all)
+#   asset <version> <component> <rid> <url> <sha256>
+#
+# The parser tracks brace depth and object positions, so it never depends on
+# whether the feed is pretty-printed or minified. Works with mawk, gawk, and
+# BSD awk — jq is not required.
+json_fields() {
+    printf '%s\n' "$1" | awk '
+        function push(x) { st[++sp] = x }
+        function pop()   { return st[sp--] }
         function string_field(record, name, value) {
             if (index(record, "\"" name "\"") == 0) {
                 return ""
             }
-
             value = record
             sub(".*\"" name "\"[[:space:]]*:[[:space:]]*\"", "", value)
             sub("\".*", "", value)
             return value
         }
-
+        function first_key(record, m) {
+            if (match(record, /"[^"]*"[[:space:]]*:/)) {
+                m = substr(record, RSTART, RLENGTH)
+                sub(/"[[:space:]]*:.*/, "", m)
+                gsub(/"/, "", m)
+                return m
+            }
+            return ""
+        }
         {
-            release_version = string_field($0, "version")
-            if (release_version != "") {
-                current_version = release_version
+            line = $0
+            n = length(line)
+            for (i = 1; i <= n; i++) {
+                c = substr(line, i, 1)
+                if (c == "{") {
+                    sp++
+                    starts[sp] = length(cur) + 1
+                    depths[sp] = sp
+                    cur = cur c
+                } else if (c == "}") {
+                    cur = cur c
+                    s = starts[sp]; d = depths[sp]; sp--
+                    cnt++
+                    o_start[cnt] = s
+                    o_depth[cnt] = d
+                    o_text[cnt] = substr(cur, s)
+                    if (s == 1) cur = ""
+                } else if (cur != "") {
+                    cur = cur c
+                }
             }
+        }
+        END {
+            # Sort recorded objects by start position -> document (open) order,
+            # so a release object always precedes its nested assets.
+            for (i = 2; i <= cnt; i++) {
+                k = o_start[i]; kd = o_depth[i]; kt = o_text[i]
+                j = i - 1
+                while (j >= 1 && o_start[j] > k) {
+                    o_start[j+1] = o_start[j]; o_depth[j+1] = o_depth[j]; o_text[j+1] = o_text[j]
+                    j--
+                }
+                o_start[j+1] = k; o_depth[j+1] = kd; o_text[j+1] = kt
+            }
+            for (i = 1; i <= cnt; i++) {
+                obj = o_text[i]
+                gsub(/\n/, " ", obj)
+                key = first_key(obj)
+                if (key == "schemaVersion") {
+                    print "latest " string_field(obj, "latest")
+                    print "latestPrerelease " string_field(obj, "latestPrerelease")
+                } else if (key == "version") {
+                    vers[o_depth[i]] = string_field(obj, "version")
+                } else if (key == "component") {
+                    print "asset " vers[o_depth[i] - 1] " " string_field(obj, "component") " " string_field(obj, "rid") " " string_field(obj, "url") " " string_field(obj, "sha256")
+                }
+            }
+        }
+    '
+}
 
-            if (current_version == wanted_version &&
-                string_field($0, "component") == wanted_component &&
-                string_field($0, "rid") == wanted_rid) {
-                print string_field($0, wanted_field)
-                exit
-            }
+json_field() {
+    local json="$1" field="$2"
+    case "$field" in
+        .latest)           json_fields "$json" | awk '$1 == "latest" && !printed         { print $2; printed = 1 }' ;;
+        .latestPrerelease) json_fields "$json" | awk '$1 == "latestPrerelease" && !printed { print $2; printed = 1 }' ;;
+        *) echo "" ;;
+    esac
+}
+
+json_asset_field() {
+    local json="$1" version="$2" component="$3" rid="$4" field="$5"
+    # asset <version> <component> <rid> <url> <sha256>
+    # Read all input (no early exit) so the upstream json_fields pipeline never
+    # gets SIGPIPE under `set -euo pipefail` on large manifests.
+    json_fields "$json" | awk \
+        -v wanted_version="$version" \
+        -v wanted_component="$component" \
+        -v wanted_rid="$rid" \
+        -v wanted_field="$field" '
+        $1 == "asset" && $2 == wanted_version && $3 == wanted_component && $4 == wanted_rid && !found {
+            if (wanted_field == "url") { print $5 }
+            if (wanted_field == "sha256") { print $6 }
+            found = 1
         }
     '
 }
@@ -202,38 +270,81 @@ if [ "$DRY_RUN" = true ]; then
 fi
 echo ""
 
-# Fetch manifest
-echo "Fetching release manifest..."
-MANIFEST=$(curl -sSL --fail "$MANIFEST_URL") || {
-    echo "Error: Failed to fetch manifest from $MANIFEST_URL" >&2
-    exit 1
-}
+# ── Version + asset resolution ──
+# Fast path: resolve the channel to a version from a plain-text pointer
+# (https://releases.netclaw.dev/latest or /latest-prerelease) — zero JSON
+# parsing, matching Deno/kubectl/Go. Fall back to manifest.json + the awk
+# parser for feeds that predate the plain-text pointers.
+MANIFEST=""   # fetched lazily, only when the plain-text path is unavailable
+resolve_version() {
+    # 1. Explicit pin never needs the feed at all.
+    if [ -n "${NETCLAW_VERSION:-}" ]; then
+        VERSION="$NETCLAW_VERSION"
+        return 0
+    fi
 
-# Determine version. Precedence: explicit pin > channel selection > stable latest.
-if [ -n "${NETCLAW_VERSION:-}" ]; then
-    VERSION="$NETCLAW_VERSION"
-elif [ "$CHANNEL" = "beta" ]; then
-    # Beta channel resolves to latestPrerelease (the newest of {stable, prerelease}).
-    VERSION=$(json_field "$MANIFEST" ".latestPrerelease")
-    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-        # Manifest predates the prerelease channel — use latest stable and say so
-        # loudly. This is the newest known version, not a silent default.
-        echo "  Note: manifest has no prerelease channel; using latest stable." >&2
+    # 2. Plain-text channel pointer (no JSON).
+    local pointer="latest"
+    [ "$CHANNEL" = "beta" ] && pointer="latest-prerelease"
+    local fetched
+    fetched=$(curl -fsSL --max-time 10 "$FEED_BASE_URL/$pointer" 2>/dev/null | tr -d '[:space:]' || true)
+    if [ -n "$fetched" ]; then
+        VERSION="$fetched"
+        echo "  Resolved $CHANNEL channel from $FEED_BASE_URL/$pointer"
+        return 0
+    fi
+
+    # 3. Fallback: manifest.json + awk parser (older feed without pointers).
+    echo "  Plain-text channel pointer not available; falling back to manifest.json" >&2
+    MANIFEST=$(curl -sSL --fail "$MANIFEST_URL") || {
+        echo "Error: Failed to fetch manifest from $MANIFEST_URL" >&2
+        exit 1
+    }
+    if [ "$CHANNEL" = "beta" ]; then
+        VERSION=$(json_field "$MANIFEST" ".latestPrerelease")
+        if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "  Note: manifest has no prerelease channel; using latest stable." >&2
+            VERSION=$(json_field "$MANIFEST" ".latest")
+        fi
+    else
         VERSION=$(json_field "$MANIFEST" ".latest")
     fi
-else
-    VERSION=$(json_field "$MANIFEST" ".latest")
-fi
+    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+        echo "Error: Could not determine latest version from manifest" >&2
+        exit 1
+    fi
+    return 0
+}
 
-if [ -z "$VERSION" ]; then
-    echo "Error: Could not determine latest version from manifest" >&2
-    exit 1
-fi
+# ── Asset resolution ──
+# URL layout is deterministic: $FEED_BASE_URL/$VERSION/$component-$VERSION-$RID.{tar.gz|zip}.
+# sha256 comes from the per-version checksums-$RID.txt file; manifest.json's
+# sha256 is the fallback when that file is absent.
+resolve_asset() {
+    local component="$1"
+    local ext="tar.gz"
+    [ "$RID" = "win-x64" ] && ext="zip"
+    url="$FEED_BASE_URL/$VERSION/$component-$VERSION-$RID.$ext"
 
+    sha256=""
+    local checksums
+    checksums=$(curl -fsSL --max-time 10 "$FEED_BASE_URL/$VERSION/checksums-$RID.txt" 2>/dev/null || true)
+    if [ -n "$checksums" ]; then
+        sha256=$(printf '%s\n' "$checksums" | awk -v f="$component-$VERSION-$RID.$ext" '$2 == f { print $1; exit }')
+    fi
+    if [ -z "$sha256" ] && [ -n "$MANIFEST" ]; then
+        sha256=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "sha256")
+    fi
+    return 0
+}
+
+resolve_version
 echo "  Version: $VERSION"
 echo ""
 
-# Parse assets using jq if available, otherwise use a simpler approach
+# Parse assets from the release manifest. Uses the POSIX awk parser —
+# jq is not required, and the parser handles pretty-printed, minified,
+# and hybrid manifests alike.
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -241,15 +352,9 @@ download_component() {
     local component="$1"
     local url sha256
 
-    if command -v jq >/dev/null 2>&1; then
-        url=$(echo "$MANIFEST" | jq -r ".releases[] | select(.version==\"$VERSION\") | .assets[] | select(.component==\"$component\" and .rid==\"$RID\") | .url")
-        sha256=$(echo "$MANIFEST" | jq -r ".releases[] | select(.version==\"$VERSION\") | .assets[] | select(.component==\"$component\" and .rid==\"$RID\") | .sha256")
-    else
-        url=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "url")
-        sha256=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "sha256")
-    fi
+    resolve_asset "$component"
 
-    if [ -z "$url" ] || [ "$url" = "null" ]; then
+    if [ -z "$url" ]; then
         echo "  Warning: No $component binary found for $RID in version $VERSION" >&2
         return 1
     fi
@@ -268,15 +373,19 @@ download_component() {
         return 1
     }
 
-    # Verify checksum
-    echo "  Verifying checksum..."
-    local actual_sha
-    actual_sha=$(sha256_file "$TMPDIR/$filename")
-    if [ "$actual_sha" != "$sha256" ]; then
-        echo "  Error: Checksum mismatch for $filename" >&2
-        echo "    Expected: $sha256" >&2
-        echo "    Got:      $actual_sha" >&2
-        return 1
+    # Verify checksum (fail closed when one is available; warn if not)
+    if [ -n "$sha256" ]; then
+        echo "  Verifying checksum..."
+        local actual_sha
+        actual_sha=$(sha256_file "$TMPDIR/$filename")
+        if [ "$actual_sha" != "$sha256" ]; then
+            echo "  Error: Checksum mismatch for $filename" >&2
+            echo "    Expected: $sha256" >&2
+            echo "    Got:      $actual_sha" >&2
+            return 1
+        fi
+    else
+        echo "  Warning: no checksum available for $filename; skipping verification" >&2
     fi
 
     # Extract

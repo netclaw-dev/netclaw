@@ -227,7 +227,7 @@ fi
 # are in reverse order. A private mirror need not preserve JSON property order.
 NO_JQ_BIN="$WORK/no-jq-bin"
 mkdir -p "$NO_JQ_BIN"
-for cmd in awk bash curl cut grep head mktemp rm sed sha256sum shasum tar tr uname; do
+for cmd in awk bash curl cut dirname grep head mktemp rm sed sha256sum shasum tar tr uname; do
   command_path=$(command -v "$cmd" 2>/dev/null || true)
   if [ -n "$command_path" ]; then
     ln -s "$command_path" "$NO_JQ_BIN/$cmd"
