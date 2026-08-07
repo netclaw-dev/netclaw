@@ -208,7 +208,7 @@ json_fields() {
                     print "latestPrerelease " string_field(obj, "latestPrerelease")
                 } else if (key == "version") {
                     vers[o_depth[i]] = string_field(obj, "version")
-                } else if (key == "component") {
+                } else if (index(obj, "\"component\"") > 0) {
                     print "asset " vers[o_depth[i] - 1] " " string_field(obj, "component") " " string_field(obj, "rid") " " string_field(obj, "url") " " string_field(obj, "sha256")
                 }
             }
@@ -275,11 +275,14 @@ echo ""
 # (https://releases.netclaw.dev/latest or /latest-prerelease) — zero JSON
 # parsing, matching Deno/kubectl/Go. Fall back to manifest.json + the awk
 # parser for feeds that predate the plain-text pointers.
-MANIFEST=""   # fetched lazily, only when the plain-text path is unavailable
+MANIFEST=""   # fetched lazily, only when a legacy asset fallback is required
+USE_MANIFEST_ASSET_FALLBACK=false
 resolve_version() {
-    # 1. Explicit pin never needs the feed at all.
+    # 1. An explicit pin skips channel resolution. The legacy manifest remains
+    # available as an asset checksum fallback when no per-version file exists.
     if [ -n "${NETCLAW_VERSION:-}" ]; then
         VERSION="$NETCLAW_VERSION"
+        USE_MANIFEST_ASSET_FALLBACK=true
         return 0
     fi
 
@@ -296,6 +299,7 @@ resolve_version() {
 
     # 3. Fallback: manifest.json + awk parser (older feed without pointers).
     echo "  Plain-text channel pointer not available; falling back to manifest.json" >&2
+    USE_MANIFEST_ASSET_FALLBACK=true
     MANIFEST=$(curl -sSL --fail "$MANIFEST_URL") || {
         echo "Error: Failed to fetch manifest from $MANIFEST_URL" >&2
         exit 1
@@ -319,7 +323,8 @@ resolve_version() {
 # ── Asset resolution ──
 # URL layout is deterministic: $FEED_BASE_URL/$VERSION/$component-$VERSION-$RID.{tar.gz|zip}.
 # sha256 comes from the per-version checksums-$RID.txt file; manifest.json's
-# sha256 is the fallback when that file is absent.
+# sha256 is the fallback when the legacy feed path is active. Every archive
+# requires a checksum before the installer can continue.
 resolve_asset() {
     local component="$1"
     local ext="tar.gz"
@@ -335,6 +340,22 @@ resolve_asset() {
     if [ -z "$sha256" ] && [ -n "$MANIFEST" ]; then
         sha256=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "sha256")
     fi
+
+    if [ -z "$sha256" ] \
+        && [ "$USE_MANIFEST_ASSET_FALLBACK" = true ] \
+        && [ -z "$MANIFEST" ]; then
+        if ! MANIFEST=$(curl -sSL --fail "$MANIFEST_URL"); then
+            echo "  Error: Failed to fetch manifest from $MANIFEST_URL" >&2
+            return 1
+        fi
+        sha256=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "sha256")
+    fi
+
+    if [ -z "$sha256" ]; then
+        echo "  Error: No checksum found for $component-$VERSION-$RID.$ext" >&2
+        return 1
+    fi
+
     return 0
 }
 
@@ -352,7 +373,9 @@ download_component() {
     local component="$1"
     local url sha256
 
-    resolve_asset "$component"
+    if ! resolve_asset "$component"; then
+        return 1
+    fi
 
     if [ -z "$url" ]; then
         echo "  Warning: No $component binary found for $RID in version $VERSION" >&2
@@ -373,19 +396,15 @@ download_component() {
         return 1
     }
 
-    # Verify checksum (fail closed when one is available; warn if not)
-    if [ -n "$sha256" ]; then
-        echo "  Verifying checksum..."
-        local actual_sha
-        actual_sha=$(sha256_file "$TMPDIR/$filename")
-        if [ "$actual_sha" != "$sha256" ]; then
-            echo "  Error: Checksum mismatch for $filename" >&2
-            echo "    Expected: $sha256" >&2
-            echo "    Got:      $actual_sha" >&2
-            return 1
-        fi
-    else
-        echo "  Warning: no checksum available for $filename; skipping verification" >&2
+    # Verify every archive before extraction.
+    echo "  Verifying checksum..."
+    local actual_sha
+    actual_sha=$(sha256_file "$TMPDIR/$filename")
+    if [ "$actual_sha" != "$sha256" ]; then
+        echo "  Error: Checksum mismatch for $filename" >&2
+        echo "    Expected: $sha256" >&2
+        echo "    Got:      $actual_sha" >&2
+        return 1
     fi
 
     # Extract

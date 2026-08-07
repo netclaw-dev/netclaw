@@ -134,6 +134,26 @@ else
   fail "real install: checksum was NOT verified"
 fi
 
+# A resolved pointer without a checksum must fail closed before any install.
+CHECKSUM_FILE="$SERVE/$VERSION/checksums-$RID.txt"
+CHECKSUM_BACKUP="$WORK/checksums-$RID.txt.backup"
+mv "$CHECKSUM_FILE" "$CHECKSUM_BACKUP"
+set +e
+missing_checksum_out=$(PATH="$NO_JQ_BIN" INSTALL_DIR="$WORK/missing-checksum-install" \
+  MANIFEST_URL="$BASE_URL/manifest.json" \
+  bash "$INSTALL_SH" daemon --dry-run 2>&1)
+missing_checksum_rc=$?
+set -e
+mv "$CHECKSUM_BACKUP" "$CHECKSUM_FILE"
+if [ "$missing_checksum_rc" -ne 0 ] \
+    && echo "$missing_checksum_out" | grep -q "No checksum found" \
+    && [ ! -e "$WORK/missing-checksum-install" ]; then
+  pass "security: pointer path rejects a missing checksum"
+else
+  fail "security: pointer path accepted a missing checksum"
+  echo "$missing_checksum_out" | indent
+fi
+
 # ── 7. Beta channel: resolves from /latest-prerelease ────────────────────────
 echo "=== dry run (beta channel, no jq/python3) ==="
 set +e
