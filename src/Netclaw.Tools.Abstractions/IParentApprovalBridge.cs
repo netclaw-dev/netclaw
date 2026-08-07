@@ -40,6 +40,23 @@ public enum ParentApprovalDecision
 }
 
 /// <summary>
+/// Extensions over <see cref="ParentApprovalDecision"/>.
+/// </summary>
+public static class ParentApprovalDecisionExtensions
+{
+    /// <summary>
+    /// True when the sub-agent's parent decision grants execution (any approve
+    /// scope). Mirrors <c>ApprovalDecision.IsApprovalGrant</c> so the sub-agent
+    /// loop classifies approve scopes identically to the parent session paths.
+    /// </summary>
+    public static bool IsApprovalGrant(this ParentApprovalDecision decision)
+        => decision is ParentApprovalDecision.ApprovedOnce
+            or ParentApprovalDecision.ApprovedSession
+            or ParentApprovalDecision.ApprovedAlways
+            or ParentApprovalDecision.ApprovedEverywhere;
+}
+
+/// <summary>
 /// Thrown when a sub-agent needs parent approval but the parent session cannot
 /// safely emit an approval prompt with complete authority context.
 /// </summary>

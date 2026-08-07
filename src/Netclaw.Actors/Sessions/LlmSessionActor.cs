@@ -4315,10 +4315,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!_resolvedToolApprovals.TryGetValue(call.CallId.Value, out var resolved))
                 continue;
 
-            if (resolved.Decision is ApprovalDecision.ApprovedOnce
-                or ApprovalDecision.ApprovedSession
-                or ApprovalDecision.ApprovedAlways
-                or ApprovalDecision.ApprovedEverywhere)
+            if (resolved.Decision.IsApprovalGrant())
             {
                 // Pre-seed the one-time bypass for the just-approved call so the
                 // re-drive runs it once even when its durable grant (if any) does

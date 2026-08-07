@@ -565,10 +565,7 @@ internal sealed class SessionToolExecutionPipeline
 
             sw.Stop();
 
-            if (decision is ApprovalDecision.ApprovedOnce
-                or ApprovalDecision.ApprovedSession
-                or ApprovalDecision.ApprovedAlways
-                or ApprovalDecision.ApprovedEverywhere)
+            if (decision.IsApprovalGrant())
             {
                 // Retry execution now that approval is granted. Seed the one-time
                 // bypass for the just-approved call regardless of scope. Broader
