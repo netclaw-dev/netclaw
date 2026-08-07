@@ -8,10 +8,10 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.25.3</VersionPrefix>
+    <VersionPrefix>0.25.4</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <PackageReleaseNotes>
-      Features: Tool execution reports pre-execution authorization decisions with reasons. Bug fixes: Escape is no-op at TUI root (Ctrl+Q quits) and denies pending approvals; Slack user/group/channel mentions render as rich text; runtime model capabilities no longer persisted to config; incompatible session history degrades gracefully; doctor shell approval fallback aligned; shell approvals fail closed, regex timeout race removed, Bash approval gaps fixed, every parsed shell path checked against approval scope. Dependencies: ShellSyntaxTree 0.2.0-beta.1, SkiaSharp 4.151.0, CsCheck 4.8.0.
+      Bug fixes: MCP tool catalog changes on connected servers are detected and refreshed automatically; MCP permissions tool-grid scroll position preserved when editing rows; static fd-dup redirects (2&amp;>1) no longer treated as dynamic shell syntax. 
     </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
