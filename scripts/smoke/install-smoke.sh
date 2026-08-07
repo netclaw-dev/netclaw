@@ -41,23 +41,30 @@ mkdir -p "$SERVE/$VERSION" "$SHIM" "$WORK/checksums" "$WORK/bin"
 SERVER_PID=""
 # generate-release-manifest.sh always writes to this fixed path; back up any
 # pre-existing file and restore it on exit so the working tree is left clean.
+# It also writes the plain-text channel pointers (latest, latest-prerelease).
 MANIFEST_DEST="$ROOT_DIR/feeds/releases/manifest.json"
 MANIFEST_BACKUP="$WORK/manifest.json.backup"
 MANIFEST_PREEXISTING=false
-if [ -f "$MANIFEST_DEST" ]; then
-  cp "$MANIFEST_DEST" "$MANIFEST_BACKUP"
-  MANIFEST_PREEXISTING=true
-fi
+for feed_file in manifest.json latest latest-prerelease; do
+  if [ -f "$ROOT_DIR/feeds/releases/$feed_file" ]; then
+    cp "$ROOT_DIR/feeds/releases/$feed_file" "$WORK/$feed_file.backup"
+    MANIFEST_PREEXISTING=true
+  else
+    touch "$WORK/$feed_file.absent"
+  fi
+done
 
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
-  if [ "$MANIFEST_PREEXISTING" = true ]; then
-    cp "$MANIFEST_BACKUP" "$MANIFEST_DEST"
-  else
-    rm -f "$MANIFEST_DEST"
-  fi
+  for feed_file in manifest.json latest latest-prerelease; do
+    if [ -f "$WORK/$feed_file.backup" ]; then
+      cp "$WORK/$feed_file.backup" "$ROOT_DIR/feeds/releases/$feed_file"
+    elif [ -f "$WORK/$feed_file.absent" ]; then
+      rm -f "$ROOT_DIR/feeds/releases/$feed_file"
+    fi
+  done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
