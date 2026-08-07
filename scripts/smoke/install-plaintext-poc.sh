@@ -7,9 +7,8 @@
 #        /latest-prerelease       → "0.0.1-beta1"    (plain text)
 #        /0.0.0/<component>-<version>-<rid>.tar.gz    (binary tarballs)
 #        /0.0.0/checksums-<rid>.txt                   (per-RID checksums)
-#        /manifest.json                               (still present, but unused in happy path)
-#   2. Runs scripts/install.sh against it with jq hidden from PATH.
-#   3. Asserts: version resolved from /latest (not manifest), assets downloaded
+#   2. Runs scripts/install.sh against it without JSON tools.
+#   3. Asserts: version resolved from /latest, assets downloaded
 #      from deterministic URLs, checksums verified, binaries installed.
 #
 # Usage: bash scripts/smoke/install-plaintext-poc.sh
@@ -75,21 +74,21 @@ if ! curl -sf --retry 30 --retry-delay 1 --retry-connrefused "$BASE_URL/latest" 
   exit 1
 fi
 
-# ── 4. Hide jq + python3 so the installer MUST use the plain-text path ────────
-NO_JQ_BIN="$WORK/no-jq-bin"
-mkdir -p "$NO_JQ_BIN"
+# ── 4. Use a PATH that excludes JSON tools ───────────────────────────────────
+NO_JSON_BIN="$WORK/no-json-bin"
+mkdir -p "$NO_JSON_BIN"
 for cmd in awk basename bash cat chmod cp curl cut dirname find grep gzip head mkdir mktemp rm sed sha256sum tar touch tr uname; do
   command_path=$(command -v "$cmd" 2>/dev/null || true)
   if [ -n "$command_path" ]; then
-    ln -s "$command_path" "$NO_JQ_BIN/$cmd"
+    ln -s "$command_path" "$NO_JSON_BIN/$cmd"
   fi
 done
 
-# ── 5. Dry run: version must resolve from /latest (NOT manifest.json) ─────────
-echo "=== dry run (stable, no jq/python3) ==="
+# ── 5. Dry run: version must resolve from /latest ─────────────────────────────
+echo "=== dry run (stable, no JSON tools) ==="
 set +e
-dry_out=$(PATH="$NO_JQ_BIN" INSTALL_DIR="$WORK/dry-install" \
-  MANIFEST_URL="$BASE_URL/manifest.json" \
+dry_out=$(PATH="$NO_JSON_BIN" INSTALL_DIR="$WORK/dry-install" \
+  FEED_BASE_URL="$BASE_URL" \
   bash "$INSTALL_SH" --dry-run 2>&1)
 dry_rc=$?
 set -e
@@ -105,13 +104,13 @@ else
 fi
 
 # ── 6. Real install: download + checksum verify + extract + install ──────────
-echo "=== real install (stable, no jq/python3) ==="
+echo "=== real install (stable, no JSON tools) ==="
 INSTALL_HOME="$WORK/install-home"
 INSTALL_DIR="$INSTALL_HOME/.netclaw/bin"
 mkdir -p "$INSTALL_HOME"
 set +e
-install_out=$(PATH="$NO_JQ_BIN" HOME="$INSTALL_HOME" \
-  MANIFEST_URL="$BASE_URL/manifest.json" INSTALL_DIR="$INSTALL_DIR" \
+install_out=$(PATH="$NO_JSON_BIN" HOME="$INSTALL_HOME" \
+  FEED_BASE_URL="$BASE_URL" INSTALL_DIR="$INSTALL_DIR" \
   bash "$INSTALL_SH" 2>&1)
 install_rc=$?
 set -e
@@ -134,19 +133,39 @@ else
   fail "real install: checksum was NOT verified"
 fi
 
+# A missing pointer must fail. The shell installer must not read a manifest.
+POINTER_FILE="$SERVE/latest"
+POINTER_BACKUP="$WORK/latest.backup"
+mv "$POINTER_FILE" "$POINTER_BACKUP"
+set +e
+missing_pointer_out=$(PATH="$NO_JSON_BIN" INSTALL_DIR="$WORK/missing-pointer-install" \
+  FEED_BASE_URL="$BASE_URL" \
+  bash "$INSTALL_SH" daemon --dry-run 2>&1)
+missing_pointer_rc=$?
+set -e
+mv "$POINTER_BACKUP" "$POINTER_FILE"
+if [ "$missing_pointer_rc" -ne 0 ] \
+    && echo "$missing_pointer_out" | grep -q "Failed to fetch release channel" \
+    && [ ! -e "$WORK/missing-pointer-install" ]; then
+  pass "security: missing pointer fails without a manifest fallback"
+else
+  fail "security: missing pointer did not fail closed"
+  echo "$missing_pointer_out" | indent
+fi
+
 # A resolved pointer without a checksum must fail closed before any install.
 CHECKSUM_FILE="$SERVE/$VERSION/checksums-$RID.txt"
 CHECKSUM_BACKUP="$WORK/checksums-$RID.txt.backup"
 mv "$CHECKSUM_FILE" "$CHECKSUM_BACKUP"
 set +e
-missing_checksum_out=$(PATH="$NO_JQ_BIN" INSTALL_DIR="$WORK/missing-checksum-install" \
-  MANIFEST_URL="$BASE_URL/manifest.json" \
+missing_checksum_out=$(PATH="$NO_JSON_BIN" INSTALL_DIR="$WORK/missing-checksum-install" \
+  FEED_BASE_URL="$BASE_URL" \
   bash "$INSTALL_SH" daemon --dry-run 2>&1)
 missing_checksum_rc=$?
 set -e
 mv "$CHECKSUM_BACKUP" "$CHECKSUM_FILE"
 if [ "$missing_checksum_rc" -ne 0 ] \
-    && echo "$missing_checksum_out" | grep -q "No checksum found" \
+    && echo "$missing_checksum_out" | grep -q "Failed to fetch checksum file" \
     && [ ! -e "$WORK/missing-checksum-install" ]; then
   pass "security: pointer path rejects a missing checksum"
 else
@@ -155,10 +174,10 @@ else
 fi
 
 # ── 7. Beta channel: resolves from /latest-prerelease ────────────────────────
-echo "=== dry run (beta channel, no jq/python3) ==="
+echo "=== dry run (beta channel, no JSON tools) ==="
 set +e
-beta_out=$(PATH="$NO_JQ_BIN" INSTALL_DIR="$WORK/beta-install" \
-  MANIFEST_URL="$BASE_URL/manifest.json" \
+beta_out=$(PATH="$NO_JSON_BIN" INSTALL_DIR="$WORK/beta-install" \
+  FEED_BASE_URL="$BASE_URL" \
   bash "$INSTALL_SH" --dry-run --channel beta 2>&1)
 beta_rc=$?
 set -e
@@ -172,10 +191,10 @@ else
 fi
 
 # ── 8. Pinned version: no feed resolution needed at all ──────────────────────
-echo "=== dry run (pinned NETCLAW_VERSION, no jq/python3) ==="
+echo "=== dry run (pinned NETCLAW_VERSION, no JSON tools) ==="
 set +e
-pin_out=$(PATH="$NO_JQ_BIN" INSTALL_DIR="$WORK/pin-install" \
-  MANIFEST_URL="$BASE_URL/manifest.json" NETCLAW_VERSION="$BETA_VERSION" \
+pin_out=$(PATH="$NO_JSON_BIN" INSTALL_DIR="$WORK/pin-install" \
+  FEED_BASE_URL="$BASE_URL" NETCLAW_VERSION="$BETA_VERSION" \
   bash "$INSTALL_SH" --dry-run 2>&1)
 pin_rc=$?
 set -e

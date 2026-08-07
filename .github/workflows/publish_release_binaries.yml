@@ -510,18 +510,6 @@ jobs:
         --file=./feeds/releases/manifest.pub
         --content-type=text/plain
 
-    # install.sh is the unified Unix installer — it handles Linux AND macOS
-    # (uname -s -> darwin -> osx-arm64). There is intentionally one Unix script.
-    - name: Upload Unix (Linux + macOS) install script to R2
-      env:
-        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      run: >
-        wrangler r2 object put
-        netclaw-releases/install.sh
-        --file=./feeds/releases/install.sh
-        --content-type=text/x-shellscript
-
     - name: Upload Windows install script to R2
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -532,8 +520,8 @@ jobs:
         --file=./feeds/releases/install.ps1
         --content-type=text/plain
 
-    # Publish mutable channel pointers last. All archives and checksum files
-    # must exist before a client can resolve this version from the feed.
+    # Publish mutable channel pointers after all archives and checksum files.
+    # The Unix installer follows, so a new shell script always has its feed.
     - name: Upload plain-text channel pointers to R2
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -550,6 +538,18 @@ jobs:
         --file=./feeds/releases/latest-prerelease
         --content-type=text/plain
         --cache-control="public, max-age=60, s-maxage=60"
+
+    # install.sh is the unified Unix installer — it handles Linux AND macOS
+    # (uname -s -> darwin -> osx-arm64). There is intentionally one Unix script.
+    - name: Upload Unix (Linux + macOS) install script to R2
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/install.sh
+        --file=./feeds/releases/install.sh
+        --content-type=text/x-shellscript
 
     - name: Cleanup signing key
       if: always()
