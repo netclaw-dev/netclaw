@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # config-mention-thread.tape post-tape assertion.
 #
-# Validates that toggling the per-channel mention rule On for C01 on the
-# EditAudience leaf and applying it persists
+# Validates that toggling the per-channel mention rule On for C01 with Space on
+# the Channels & Permissions list (autosave, no detail leaf) persists
 # Slack.MentionRequiredInThreadByChannel.C01 = true.
 
 set -euo pipefail

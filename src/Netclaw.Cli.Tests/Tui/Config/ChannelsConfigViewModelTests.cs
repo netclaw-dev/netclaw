@@ -304,7 +304,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             .index;
 
         vm.MoveChannelRow(doneIndex);
-        vm.OpenSelectedChannelAudience();
+        vm.ActivateSelectedChannelRow();
 
         Assert.Equal(ChannelsConfigScreen.AdapterMenu, vm.Screen.Value);
         Assert.Equal("Done adding channels. Completed changes are already saved.", vm.Status.Value.Text);
@@ -839,24 +839,6 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Edit_channel_audience_writes_channel_audiences()
-    {
-        WriteChannelConfig();
-        WriteChannelSecrets();
-        using var vm = CreateViewModel();
-        vm.OpenAdapterManagement(ChannelType.Slack);
-
-        vm.OpenSelectedChannelAudience();
-        vm.MoveAudienceSelection(1); // C01 Team -> Public.
-        vm.ApplyAudienceSelection();
-        await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
-        Assert.Equal("public", ToStringDictionary(audiencesRaw)["C01"]);
-    }
-
-    [Fact]
     public void Cycling_channel_audience_autosaves_without_an_explicit_save()
     {
         WriteChannelConfig();
@@ -879,10 +861,10 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Mention_required_in_thread_round_trips_through_load_leaf_and_save()
+    public void Require_mention_loads_on_the_row_and_toggles_with_autosave()
     {
-        // A per-channel MentionRequiredInThreadByChannel rule for C1 must (1) load, (2) surface in the
-        // audience leaf via EditingMentionRequired, and (3) survive the autosave that Apply triggers.
+        // A per-channel MentionRequiredInThreadByChannel rule for C1 must (1) load and surface on the
+        // channel row, and (2) toggle + autosave from the list (Space), with no explicit save.
         File.WriteAllText(_paths.NetclawConfigPath,
             """
             {
@@ -900,21 +882,27 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.OpenAdapterManagement(ChannelType.Slack);
 
-        // The load surfaced the rule: opening C1's audience leaf shows the mention rule as On.
         var c1Index = vm.GetChannelRows()
             .Select((row, index) => (row, index))
             .Single(entry => entry.row.Id == "C1")
             .index;
         vm.MoveChannelRow(c1Index);
-        vm.OpenSelectedChannelAudience();
-        Assert.Equal(ChannelsConfigScreen.EditAudience, vm.Screen.Value);
-        Assert.True(vm.EditingMentionRequired);
 
-        // Applying the leaf autosaves; the rule persists true for C1.
-        vm.ApplyAudienceSelection();
+        // The load surfaced the rule on the channel row.
+        Assert.True(vm.GetChannelRows()[c1Index].MentionRequired);
 
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.MentionRequiredInThreadByChannel.C1", out var mentionRaw));
+        // Space toggles it off. A false rule is stored as absence of the key (the
+        // map holds only true entries), matching the runtime default.
+        vm.ToggleSelectedChannelMentionRequired();
+        Assert.False(vm.GetChannelRows()[c1Index].MentionRequired);
+        var offConfig = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.False(ConfigFileHelper.TryGetPathValue(offConfig, "Slack.MentionRequiredInThreadByChannel.C1", out _));
+
+        // Space again toggles it back on; the rule autosaves as true.
+        vm.ToggleSelectedChannelMentionRequired();
+        Assert.True(vm.GetChannelRows()[c1Index].MentionRequired);
+        var onConfig = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(onConfig, "Slack.MentionRequiredInThreadByChannel.C1", out var mentionRaw));
         Assert.True(Assert.IsType<bool>(mentionRaw));
     }
 

@@ -34,10 +34,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private readonly Dictionary<ChannelType, Dictionary<string, TrustAudience>> _channelAudiences = [];
     private readonly Dictionary<ChannelType, Dictionary<string, bool>> _channelMentionRequired = [];
     private ChannelType _activeAdapterType = ChannelType.Slack;
-    private string? _editingAudienceId;
-    private string? _editingAudienceLabel;
-    private bool _editingAudienceIsDm;
-    private bool _editingMentionRequired;
     private int _managementMenuIndex;
     private int _channelRowIndex;
     private int _audienceSelectionIndex;
@@ -591,7 +587,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 IsDirectMessage: false,
                 IsAddAction: false,
                 IsDoneAction: false,
-                IsUnresolved: unresolved.Contains(channelId)));
+                IsUnresolved: unresolved.Contains(channelId),
+                MentionRequired: GetChannelMentionRequired(_activeAdapterType, channelId)));
         }
 
         if (GetAllowDirectMessages(_activeAdapterType))
@@ -635,7 +632,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    internal void OpenSelectedChannelAudience()
+    internal void ActivateSelectedChannelRow()
     {
         var rows = GetChannelRows();
         if (rows.Count == 0)
@@ -643,24 +640,31 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         var row = rows[_channelRowIndex];
         if (row.IsAddAction)
-        {
             BeginAddChannel();
-            return;
-        }
-
-        if (row.IsDoneAction)
-        {
+        else if (row.IsDoneAction)
             FinishChannelPermissions();
-            return;
-        }
 
-        _editingAudienceId = row.Id;
-        _editingAudienceLabel = row.DisplayName;
-        _editingAudienceIsDm = row.IsDirectMessage;
-        _editingMentionRequired = GetChannelMentionRequired(_activeAdapterType, row.Id);
-        _audienceSelectionIndex = AudienceIndex(row.Audience);
-        Screen.Value = ChannelsConfigScreen.EditAudience;
-        NotifyContentChanged();
+        // A channel or DM row has no detail page: audience is set inline with
+        // left/right and the thread mention rule with Space.
+    }
+
+    internal void ToggleSelectedChannelMentionRequired()
+    {
+        var rows = GetChannelRows();
+        if (rows.Count == 0)
+            return;
+
+        var row = rows[_channelRowIndex];
+        // The thread mention rule applies only to real channels. A DM is
+        // one-to-one, and the add/done rows are actions.
+        if (row.IsAction || row.IsDirectMessage)
+            return;
+
+        var next = !GetChannelMentionRequired(_activeAdapterType, row.Id);
+        SetChannelMentionRequired(_activeAdapterType, row.Id, next);
+        // Autosave like the audience toggle: without an immediate save an Esc
+        // would silently discard it (the next load resets from disk).
+        AutosaveCompletedAction($"{row.DisplayName} require @mention {(next ? "on" : "off")} and saved.");
     }
 
     internal void ChangeSelectedChannelAudience(int delta)
@@ -787,35 +791,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     {
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
         Status.Value = new ConfigStatusMessage("Done adding channels. Completed changes are already saved.", ConfigStatusTone.Neutral);
-        NotifyContentChanged();
-    }
-
-    internal string? EditingAudienceLabel => _editingAudienceLabel;
-    internal string? EditingAudienceId => _editingAudienceId;
-    internal bool EditingAudienceIsDm => _editingAudienceIsDm;
-    internal bool EditingMentionRequired => _editingMentionRequired;
-
-    internal void MoveAudienceSelection(int delta)
-    {
-        _audienceSelectionIndex = Wrap(_audienceSelectionIndex + delta, AudienceOptions.Count);
-        NotifyContentChanged();
-    }
-
-    internal void ToggleEditingMentionRequired()
-    {
-        _editingMentionRequired = !_editingMentionRequired;
-        NotifyContentChanged();
-    }
-
-    internal void ApplyAudienceSelection()
-    {
-        if (string.IsNullOrWhiteSpace(_editingAudienceId))
-            return;
-
-        SetChannelAudience(_activeAdapterType, _editingAudienceId, AudienceOptions[_audienceSelectionIndex]);
-        SetChannelMentionRequired(_activeAdapterType, _editingAudienceId, _editingMentionRequired);
-        Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        AutosaveCompletedAction($"Updated {_editingAudienceLabel} audience and saved.");
         NotifyContentChanged();
     }
 
@@ -1583,7 +1558,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             ChannelsConfigScreen.AdapterMenu => ChannelsConfigScreen.Picker,
             ChannelsConfigScreen.ChannelPermissions => ChannelsConfigScreen.AdapterMenu,
-            ChannelsConfigScreen.EditAudience => ChannelsConfigScreen.ChannelPermissions,
             ChannelsConfigScreen.AddChannel => ChannelsConfigScreen.ChannelPermissions,
             ChannelsConfigScreen.AllowedUsers => ChannelsConfigScreen.AdapterMenu,
             ChannelsConfigScreen.DirectMessages => ChannelsConfigScreen.AdapterMenu,
@@ -2022,7 +1996,6 @@ internal enum ChannelsConfigScreen
     Picker,
     AdapterMenu,
     ChannelPermissions,
-    EditAudience,
     AddChannel,
     AllowedUsers,
     DirectMessages,
@@ -2054,7 +2027,8 @@ internal sealed record ChannelPermissionRow(
     bool IsDirectMessage,
     bool IsAddAction,
     bool IsDoneAction,
-    bool IsUnresolved = false)
+    bool IsUnresolved = false,
+    bool MentionRequired = false)
 {
     internal bool IsAction => IsAddAction || IsDoneAction;
 }

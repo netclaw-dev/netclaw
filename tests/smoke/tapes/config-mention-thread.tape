@@ -1,10 +1,10 @@
-# config-mention-thread.tape - toggle per-channel MentionRequiredInThread on the
-# EditAudience leaf in `netclaw config`.
+# config-mention-thread.tape - toggle per-channel Require @mention on the
+# Channels & Permissions list in `netclaw config`.
 #
 # Exercises:
 #   netclaw config -> Channels -> configured Slack -> Manage channels and permissions
-#   -> Enter a channel -> EditAudience leaf -> Space toggles "Mention required in
-#   thread" Off -> On -> Enter applies (autosave).
+#   -> Channels & Permissions list -> Space toggles "Require @mention" Off -> On on
+#   the focused channel row (autosaves; no detail leaf).
 
 Output "/tmp/tape-config-mention-thread.gif"
 
@@ -31,23 +31,17 @@ Enter
 Wait+Screen@10s /Slack is configured/
 Wait+Screen@10s /Manage channels and permissions/
 
-# Open Manage channels and permissions -> channel list.
+# Open Manage channels and permissions -> channel list. C01 is the focused row
+# and its mention rule starts Off.
 Enter
 Wait+Screen@10s /Channels & Permissions/
 Wait+Screen@10s /C01/
+Wait+Screen@10s /Require @mention: Off/
 
-# Enter the focused channel's detail leaf. The mention rule starts Off.
-Enter
-Wait+Screen@10s /Who is this channel for/
-Wait+Screen@10s /Mention required in thread: Off/
-
-# Space toggles the mention rule On.
+# Space toggles the mention rule On on the focused row and autosaves (no leaf).
 Space
-Wait+Screen@10s /Mention required in thread: On/
-
-# Enter applies and autosaves, returning to the channel list.
-Enter
-Wait+Screen@10s /audience and saved/
+Wait+Screen@10s /Require @mention: On/
+Wait+Screen@10s /require @mention on and saved/
 
 # Quit the config TUI.
 Ctrl+Q
