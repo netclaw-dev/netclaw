@@ -22,7 +22,7 @@ public sealed class MattermostChannelOptionsDefaultsTests
 
         Assert.False(options.Enabled);
         Assert.False(options.AllowDirectMessages);
-        Assert.False(options.MentionRequiredInThread);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Null(options.ServerUrl);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
@@ -48,8 +48,29 @@ public sealed class MattermostChannelOptionsDefaultsTests
         Assert.Equal("https://mattermost.example.com", options.ServerUrl);
         Assert.Equal("abcdefghij1234567890abcdef", options.DefaultChannelId);
         Assert.False(options.AllowDirectMessages);
-        Assert.False(options.MentionRequiredInThread);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
+    }
+
+    [Fact]
+    public void BindsPerChannelMentionRequiredInThread_AndResolvesPerChannel()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Mattermost:MentionRequiredInThreadByChannel:chan1"] = "true",
+            ["Mattermost:MentionRequiredInThreadByChannel:chan2"] = "false"
+        };
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        var options = configuration.GetSection("Mattermost").Get<MattermostChannelOptions>() ?? new MattermostChannelOptions();
+
+        Assert.True(options.MentionRequiredInThreadFor("chan1"));
+        Assert.False(options.MentionRequiredInThreadFor("chan2"));
+        // A channel with no entry defaults to false.
+        Assert.False(options.MentionRequiredInThreadFor("chan3"));
     }
 }

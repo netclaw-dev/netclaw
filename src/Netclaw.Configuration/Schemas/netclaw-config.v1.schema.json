@@ -19,7 +19,7 @@
         "MentionOnly": { "type": "boolean" },
         "AllowDirectMessages": { "type": "boolean" },
         "MentionRequiredInDm": { "type": "boolean" },
-        "MentionRequiredInThread": { "type": "boolean" },
+        "MentionRequiredInThreadByChannel": { "type": "object", "additionalProperties": { "type": "boolean" } },
         "AllowedChannelIds": {
           "type": "array",
           "items": { "type": "string" }
@@ -47,7 +47,7 @@
         "AllowDirectMessages": { "type": "boolean" },
         "MentionOnly": { "type": "boolean", "default": true },
         "MentionRequiredInDm": { "type": "boolean", "default": false },
-        "MentionRequiredInThread": { "type": "boolean", "default": false },
+        "MentionRequiredInThreadByChannel": { "type": "object", "additionalProperties": { "type": "boolean" } },
         "AllowedChannelIds": {
           "type": "array",
           "items": { "type": "string" }
@@ -77,7 +77,7 @@
         "AllowDirectMessages": { "type": "boolean" },
         "MentionOnly": { "type": "boolean", "default": true },
         "MentionRequiredInDm": { "type": "boolean", "default": false },
-        "MentionRequiredInThread": { "type": "boolean", "default": false },
+        "MentionRequiredInThreadByChannel": { "type": "object", "additionalProperties": { "type": "boolean" } },
         "AllowedChannelIds": {
           "type": "array",
           "items": { "type": "string" }

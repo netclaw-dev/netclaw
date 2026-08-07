@@ -25,7 +25,7 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
         Assert.False(options.MentionRequiredInDm);
-        Assert.False(options.MentionRequiredInThread);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }
@@ -50,8 +50,29 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
         Assert.False(options.MentionRequiredInDm);
-        Assert.False(options.MentionRequiredInThread);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
+    }
+
+    [Fact]
+    public void BindsPerChannelMentionRequiredInThread_AndResolvesPerChannel()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Slack:MentionRequiredInThreadByChannel:C1"] = "true",
+            ["Slack:MentionRequiredInThreadByChannel:C2"] = "false"
+        };
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        var options = configuration.GetSection("Slack").Get<SlackChannelOptions>() ?? new SlackChannelOptions();
+
+        Assert.True(options.MentionRequiredInThreadFor("C1"));
+        Assert.False(options.MentionRequiredInThreadFor("C2"));
+        // A channel with no entry defaults to false.
+        Assert.False(options.MentionRequiredInThreadFor("C3"));
     }
 }
