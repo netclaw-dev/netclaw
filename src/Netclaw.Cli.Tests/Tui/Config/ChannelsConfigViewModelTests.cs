@@ -879,6 +879,46 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Mention_required_in_thread_round_trips_through_load_leaf_and_save()
+    {
+        // A per-channel MentionRequiredInThreadByChannel rule for C1 must (1) load, (2) surface in the
+        // audience leaf via EditingMentionRequired, and (3) survive the autosave that Apply triggers.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Slack": {
+                "Enabled": true,
+                "SocketMode": true,
+                "AllowedChannelIds": ["C1"],
+                "ChannelAudiences": { "C1": "team" },
+                "MentionRequiredInThreadByChannel": { "C1": true }
+              }
+            }
+            """);
+        WriteChannelSecrets();
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Slack);
+
+        // The load surfaced the rule: opening C1's audience leaf shows the mention rule as On.
+        var c1Index = vm.GetChannelRows()
+            .Select((row, index) => (row, index))
+            .Single(entry => entry.row.Id == "C1")
+            .index;
+        vm.MoveChannelRow(c1Index);
+        vm.OpenSelectedChannelAudience();
+        Assert.Equal(ChannelsConfigScreen.EditAudience, vm.Screen.Value);
+        Assert.True(vm.EditingMentionRequired);
+
+        // Applying the leaf autosaves; the rule persists true for C1.
+        vm.ApplyAudienceSelection();
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.MentionRequiredInThreadByChannel.C1", out var mentionRaw));
+        Assert.True(Assert.IsType<bool>(mentionRaw));
+    }
+
+    [Fact]
     public async Task Direct_message_audience_is_saved_without_touching_channels()
     {
         WriteChannelConfig();

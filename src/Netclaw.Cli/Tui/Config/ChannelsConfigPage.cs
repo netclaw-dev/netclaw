@@ -189,6 +189,12 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 focused));
         }
 
+        var mentionState = ViewModel.EditingMentionRequired ? "On" : "Off";
+        layout = layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(new TextNode($"  Mention required in thread: {mentionState}").WithForeground(Color.White))
+            .WithChild(Hint("  [Space] toggles whether a thread reply must mention the bot."));
+
         return layout;
     }
 
@@ -296,7 +302,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 {
                     ChannelsConfigScreen.AdapterMenu => "  Manage this adapter without re-entering credentials.",
                     ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience or activates Done. a adds a channel. Delete removes the selected channel.",
-                    ChannelsConfigScreen.EditAudience => "  Select the audience profile for this channel.",
+                    ChannelsConfigScreen.EditAudience => "  Select the audience profile for this channel. Space toggles the thread mention rule.",
                     ChannelsConfigScreen.AddChannel => "  Enter applies the channel draft. Esc cancels.",
                     ChannelsConfigScreen.AllowedUsers => "  Use comma-separated user IDs. Blank means unrestricted users in allowed channels.",
                     ChannelsConfigScreen.DirectMessages => "  Space toggles DMs. Left/right changes the DM audience.",
@@ -329,7 +335,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 {
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit/Done  [a] Add  [Del] Remove  [Esc] Menu",
-                    ChannelsConfigScreen.EditAudience => " [↑/↓] Navigate  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
+                    ChannelsConfigScreen.EditAudience => " [↑/↓] Audience  [Space] Mention rule  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AddChannel => " [Type] Channel  [Enter] Resolve & add  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AllowedUsers => " [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.DirectMessages => " [↑/↓] Navigate  [Space] Toggle  [←/→] Audience  [Enter] Apply  [Esc] Menu",
@@ -527,6 +533,9 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 break;
             case ConsoleKey.DownArrow:
                 ViewModel.MoveAudienceSelection(1);
+                break;
+            case ConsoleKey.Spacebar:
+                ViewModel.ToggleEditingMentionRequired();
                 break;
             case ConsoleKey.Enter:
                 ViewModel.ApplyAudienceSelection();
