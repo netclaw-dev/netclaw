@@ -117,6 +117,18 @@ rm -f "$MANIFEST_DEST"
 # latest (newest stable) + latestPrerelease (newest of all) across both.
 bash "$MANIFEST_GEN" "$VERSION"      "$WORK/checksums-$VERSION"      "$BASE_URL" >/dev/null
 bash "$MANIFEST_GEN" "$BETA_VERSION" "$WORK/checksums-$BETA_VERSION" "$BASE_URL" >/dev/null
+
+if [ "$(tr -d '\r\n' < "$ROOT_DIR/feeds/releases/latest")" = "$VERSION" ]; then
+  pass "feed: latest pointer selects the newest stable version"
+else
+  fail "feed: latest pointer has an unexpected value"
+fi
+if [ "$(tr -d '\r\n' < "$ROOT_DIR/feeds/releases/latest-prerelease")" = "$BETA_VERSION" ]; then
+  pass "feed: latest-prerelease pointer selects the newest version"
+else
+  fail "feed: latest-prerelease pointer has an unexpected value"
+fi
+
 cp "$MANIFEST_DEST" "$SERVE/manifest.json"
 python3 - "$SERVE/manifest.json" "$SERVE/manifest-rid-first.json" <<'PY'
 import json
