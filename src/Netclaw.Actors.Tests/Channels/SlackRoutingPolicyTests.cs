@@ -27,6 +27,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: true);
 
@@ -48,6 +49,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: true,
             containsBotMention: false);
 
@@ -69,6 +71,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: true);
 
@@ -90,6 +93,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: false,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -111,6 +115,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: false,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -132,6 +137,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: true,
             containsBotMention: false);
 
@@ -150,6 +156,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: false,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -168,6 +175,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: false,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -185,6 +193,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -214,6 +223,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -241,6 +251,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -271,6 +282,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -302,6 +314,7 @@ public class SlackRoutingPolicyTests
             mentionOnly: false,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: false);
 

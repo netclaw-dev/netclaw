@@ -71,6 +71,9 @@ Supported Mattermost settings:
   mention it in non-DM channels
 - `MentionRequiredInDm` - when `true`, a mention is required even in DMs;
   defaults to `false`
+- `MentionRequiredInThread` - when `true`, thread replies require a mention even
+  when the thread already has an active session; defaults to `false` (follow-ups
+  in an active thread are routed without a mention)
 - `AllowedChannelIds` - allow-list for non-DM channel traffic
 - `AllowedUserIds` - optional user allow-list (empty means no user filter)
 - `ChannelAudiences` - optional audience override map; keys are channel IDs or

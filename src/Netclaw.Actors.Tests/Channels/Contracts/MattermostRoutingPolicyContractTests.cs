@@ -13,6 +13,7 @@ public sealed class MattermostRoutingPolicyContractTests : RoutingPolicyContract
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool isDm,
         bool containsMention,
         bool threadExists,
@@ -34,7 +35,7 @@ public sealed class MattermostRoutingPolicyContractTests : RoutingPolicyContract
             ReceivedAt: TimeProvider.System.GetUtcNow());
 
         var decision = MattermostRoutingPolicy.Evaluate(
-            message, mentionOnly, allowDm, mentionRequiredInDm, threadExists, containsMention);
+            message, mentionOnly, allowDm, mentionRequiredInDm, mentionRequiredInThread, threadExists, containsMention);
 
         var kind = decision.Kind switch
         {
@@ -51,6 +52,7 @@ public sealed class MattermostRoutingPolicyContractTests : RoutingPolicyContract
             MattermostRoutingIgnoreReason.NoContent => RoutingIgnoreReason.NoContent,
             MattermostRoutingIgnoreReason.DmNotAllowed => RoutingIgnoreReason.DmNotAllowed,
             MattermostRoutingIgnoreReason.DmMentionRequired => RoutingIgnoreReason.DmMentionRequired,
+            MattermostRoutingIgnoreReason.ThreadMentionRequired => RoutingIgnoreReason.ThreadMentionRequired,
             MattermostRoutingIgnoreReason.ChannelMentionRequired => RoutingIgnoreReason.ChannelMentionRequired,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(decision), decision.IgnoreReason, "Unmapped Mattermost routing ignore reason.")

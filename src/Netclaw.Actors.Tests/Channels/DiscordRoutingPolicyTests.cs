@@ -39,6 +39,7 @@ public class DiscordRoutingPolicyTests
             mentionOnly: true,
             allowDirectMessages: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             threadExists: false,
             containsBotMention: true);
 

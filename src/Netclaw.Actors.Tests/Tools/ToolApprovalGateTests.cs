@@ -35,7 +35,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
     }
 
     private static ToolExecutionContext PersonalContext(bool supportsApproval = true, string sessionId = "signalr/thread-1") =>
@@ -84,7 +86,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
 
         var decision = policy.AuthorizeInvocation(
             ShellTool(),
@@ -143,6 +147,8 @@ public sealed class ToolApprovalGateTests
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
+            shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             fileApprovalMatcher: new FilePathApprovalMatcher(ControlPlaneRoot));
     }
 
@@ -300,7 +306,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
     }
 
     private static McpToolAdapter McpTool(string serverName, string toolName)
@@ -466,7 +474,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Command", "git pull --ff-only");
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
@@ -539,7 +549,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
 
         var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("file_read", "content");
         var subagentCtx = PersonalContext(supportsApproval: false);
@@ -566,7 +578,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
 
         var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("file_read", "content");
         var decision = policy.AuthorizeInvocation(tool, PersonalContext());
@@ -595,7 +609,9 @@ public sealed class ToolApprovalGateTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([]));
 
         var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("store_memory", "ok");
         var subagentCtx = PersonalContext(supportsApproval: false);
@@ -811,6 +827,8 @@ public sealed class ToolApprovalGateTests
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
+            shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             shellTrustZonePolicy: trustZone);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
@@ -847,6 +865,8 @@ public sealed class ToolApprovalGateTests
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
+            shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             shellTrustZonePolicy: trustZone);
     }
 

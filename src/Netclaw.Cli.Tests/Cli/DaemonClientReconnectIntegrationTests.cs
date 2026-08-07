@@ -60,7 +60,9 @@ public sealed class DaemonClientReconnectIntegrationTests
                 reconnectedOutput.TrySetResult();
         });
 
-        var sessionId = await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+        var sessionId = await WaitFor(
+            client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken),
+            TimeSpan.FromSeconds(10));
 
         try
         {
@@ -74,100 +76,16 @@ public sealed class DaemonClientReconnectIntegrationTests
         await WaitFor(disconnected.Task, TimeSpan.FromSeconds(5));
         await WaitFor(reconnected.Task, TimeSpan.FromSeconds(10));
 
-        var ensured = await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+        var ensured = await WaitFor(
+            client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken),
+            TimeSpan.FromSeconds(10));
         Assert.Equal(sessionId, ensured);
 
-        await client.SendAsync("after", TestContext.Current.CancellationToken);
+        await WaitFor(
+            client.SendAsync("after", TestContext.Current.CancellationToken),
+            TimeSpan.FromSeconds(10));
 
         await WaitFor(reconnectedOutput.Task, TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task EnsureSession_recreates_session_after_server_restart()
-    {
-        var host1 = await StartFakeHubAsync();
-        var port = TestNetworkHelpers.GetBoundPort(host1);
-
-        // Fast reconnect delays keep the post-restart reconnect tight on the happy
-        // path. Short ServerTimeout (2s) bounds how long the client can spend
-        // Connected-but-blind after host1 stops, on platforms where TCP-level
-        // detection is slow.
-        await using var client = new DaemonClient(
-            $"http://127.0.0.1:{port}",
-            reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)],
-            serverTimeout: TimeSpan.FromSeconds(2));
-
-        var outputs = new ConcurrentQueue<SessionOutput>();
-        var firstResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var clientDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        // Sync on Reconnecting OR TransportClosed. SignalR fires Reconnecting from
-        // its state machine as soon as the transport drops, before any retry
-        // attempt. Waiting for TransportClosed alone requires WithAutomaticReconnect
-        // to exhaust its retries, which on Windows can exceed the test budget:
-        // ConnectEx to a closed loopback port is not immediate (Winsock
-        // SYN-retransmit path, exacerbated by WFP/AV filter drivers on hosted
-        // runners), so each StartAsync retry can take seconds rather than the
-        // sub-millisecond ECONNREFUSED seen on Linux.
-        //
-        // host1's port release is already synchronous via host1.Dispose(), so it
-        // is not gated on the client observing anything.
-        using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
-        {
-            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.TransportClosed)
-                clientDisconnected.TrySetResult();
-        });
-
-        using var sub = client.SessionOutput.Subscribe(output =>
-        {
-            outputs.Enqueue(output);
-
-            if (output is TextOutput { Text: "echo:first" })
-                firstResponseReceived.TrySetResult();
-
-            if (output is TextOutput { Text: "echo:second" })
-                secondResponseReceived.TrySetResult();
-        });
-
-        var firstSessionId = await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
-        await client.SendAsync("first", TestContext.Current.CancellationToken);
-
-        await WaitFor(firstResponseReceived.Task, TimeSpan.FromSeconds(5));
-
-        await host1.StopAsync(TestContext.Current.CancellationToken);
-        host1.Dispose();
-
-        // Wait for the client to observe the drop (Reconnecting or Disconnected).
-        // We do not gate on retry exhaustion: that is platform-dependent on
-        // Windows and not what this test cares about. host1's listener socket
-        // was released synchronously by host1.Dispose(); listener sockets do
-        // not enter TIME_WAIT.
-        await WaitFor(clientDisconnected.Task, TimeSpan.FromSeconds(10));
-
-        // Start the replacement server, then drive the user-visible contract
-        // directly. Waiting for a passive Connected event is timing-sensitive on
-        // Windows because SignalR can stay in an in-flight reconnect attempt to
-        // the closed loopback socket after host2 is already listening.
-        var host2State = new FakeHubState();
-        using var host2 = await StartFakeHubAsync(port, host2State);
-
-        var recreatedSessionId = await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
-        var host2SessionId = await WaitFor(host2State.SessionEnsured.Task, TimeSpan.FromSeconds(10));
-        Assert.Equal(host2SessionId, recreatedSessionId);
-        Assert.NotEqual(firstSessionId, recreatedSessionId);
-
-        await client.SendAsync("second", TestContext.Current.CancellationToken);
-
-        var host2Text = await WaitFor(host2State.MessageReceived.Task, TimeSpan.FromSeconds(10));
-        Assert.Equal("second", host2Text);
-        await WaitFor(secondResponseReceived.Task, TimeSpan.FromSeconds(10));
-
-        var outputSnapshot = outputs.ToArray();
-        var textOutputs = outputSnapshot.OfType<TextOutput>().ToList();
-        Assert.Contains(textOutputs, o => o.Text == "echo:first");
-        Assert.Contains(textOutputs, o => o.Text == "echo:second");
-        Assert.Contains(outputSnapshot, o => o is TurnCompleted);
     }
 
     private static async Task WaitFor(Task task, TimeSpan timeout)

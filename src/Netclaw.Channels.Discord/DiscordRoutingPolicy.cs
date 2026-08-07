@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscordRoutingPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -12,6 +12,7 @@ internal static class DiscordRoutingPolicy
         bool mentionOnly,
         bool allowDirectMessages,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool threadExists,
         bool containsBotMention)
     {
@@ -29,13 +30,21 @@ internal static class DiscordRoutingPolicy
         }
 
         if (threadExists)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return DiscordRoutingDecision.Ignore(DiscordRoutingIgnoreReason.ThreadMentionRequired);
             return DiscordRoutingDecision.ContinueOnly;
+        }
 
         // Thread reply where the actor was lost (e.g. daemon restart):
         // the message is in a Discord thread, so re-create the session
         // binding and continue the persisted session.
         if (message.IsInThread)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return DiscordRoutingDecision.Ignore(DiscordRoutingIgnoreReason.ThreadMentionRequired);
             return DiscordRoutingDecision.StartOrContinue;
+        }
 
         if (!mentionOnly)
             return DiscordRoutingDecision.StartOrContinue;
@@ -58,6 +67,7 @@ internal enum DiscordRoutingIgnoreReason
     NoContent,
     DmNotAllowed,
     DmMentionRequired,
+    ThreadMentionRequired,
     ChannelMentionRequired
 }
 
@@ -84,6 +94,7 @@ internal sealed record DiscordRoutingDecision(
             DiscordRoutingIgnoreReason.NoContent => "routing_policy_ignore:NoContent",
             DiscordRoutingIgnoreReason.DmNotAllowed => "routing_policy_ignore:DmNotAllowed",
             DiscordRoutingIgnoreReason.DmMentionRequired => "routing_policy_ignore:DmMentionRequired",
+            DiscordRoutingIgnoreReason.ThreadMentionRequired => "routing_policy_ignore:ThreadMentionRequired",
             DiscordRoutingIgnoreReason.ChannelMentionRequired => "routing_policy_ignore:ChannelMentionRequired",
             _ => "routing_policy_ignore",
         };
