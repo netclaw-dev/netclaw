@@ -570,13 +570,18 @@ internal sealed class SessionToolExecutionPipeline
                 or ApprovalDecision.ApprovedAlways
                 or ApprovalDecision.ApprovedEverywhere)
             {
-                // Retry execution now that approval is granted
-                // (Approve-once is retried through transient context state; broader scopes
-                // are also recorded by the session actor into the shared approval service.)
-                if (decision == ApprovalDecision.ApprovedOnce)
-                {
-                    context.Approval.SeedOneTimeApproval(tc.Name, ctx.Patterns);
-                }
+                // Retry execution now that approval is granted. Seed the one-time
+                // bypass for the just-approved call regardless of scope. Broader
+                // scopes (session/always) DO get a durable grant recorded by the
+                // session actor, but that grant can legitimately not cover every
+                // candidate: a piped command's standalone verbs (base64, head) have
+                // no path argument and so are never persisted directory-scoped
+                // (by design). Without the transient bypass, the immediate retry
+                // re-hits the gate and fails a call the user just approved. This
+                // matches the sub-agent loop (SubAgentActor), which seeds for every
+                // approved scope. The bypass is per-call, pattern-scoped, and
+                // cleared after the attempt, so it cannot leak to any other call.
+                context.Approval.SeedOneTimeApproval(tc.Name, ctx.Patterns);
 
                 sw = Stopwatch.StartNew();
                 if (meta is { Background: true }
