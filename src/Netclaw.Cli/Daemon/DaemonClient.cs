@@ -1,12 +1,12 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonClient.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.SignalR.Client;
 using R3;
-using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -18,9 +18,25 @@ namespace Netclaw.Cli.Daemon;
 /// Maintains connection state, session attachment across reconnects,
 /// and exposes mapped <see cref="SessionOutput"/> events for the TUI.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The client runs a single owner loop over a command mailbox. The loop is the
+/// ONLY code that touches the transport, <c>_sessionId</c>, and
+/// <c>_channelType</c>. Public methods and the transport <c>Closed</c> callback
+/// post commands; the loop runs one at a time. This removes the locks the older
+/// design needed to referee two reconnect authorities and a foreground caller
+/// all racing for one connection.
+/// </para>
+/// <para>
+/// Two single-writer event streams sit outside the loop and stay lock-free:
+/// the owner is the only writer of <see cref="ConnectionEvents"/>, and the
+/// transport's serialized <c>ReceiveOutput</c> callback is the only writer of
+/// <see cref="SessionOutput"/>.
+/// </para>
+/// </remarks>
 public sealed class DaemonClient : IAsyncDisposable
 {
-    public static readonly Actors.Channels.ChannelType TuiChannelType = Actors.Channels.ChannelType.Tui;
+    public static readonly ChannelType TuiChannelType = ChannelType.Tui;
 
     internal static readonly TimeSpan[] DefaultReconnectDelays =
     [
@@ -30,27 +46,39 @@ public sealed class DaemonClient : IAsyncDisposable
         TimeSpan.FromSeconds(10)
     ];
 
-    private readonly TimeSpan[] _reconnectDelays;
-    private readonly HubConnection _connection;
+    // Upper bound on any single hub RPC. It is a backstop, not the primary
+    // liveness signal (SignalR ServerTimeout still applies on the real
+    // transport). It guarantees a lost response can never park a caller
+    // indefinitely — the failure mode that hung the TUI in the old design.
+    internal static readonly TimeSpan DefaultRpcTimeout = TimeSpan.FromSeconds(60);
+
+    // Bounds the background reconnect after a drop before it gives up with a
+    // terminal Disconnected. The initial/lazy connect uses the shorter
+    // _reconnectDelays pass instead.
+    private const int MaxReconnectAttempts = 20;
+
+    private readonly IDaemonHubTransport _transport;
     private readonly string _daemonEndpoint;
-    private readonly string _hubUrl;
-    private readonly Func<Task<string?>>? _accessTokenProvider;
+    private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan[] _reconnectDelays;
+    private readonly TimeSpan _rpcTimeout;
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
-    private readonly TimeProvider _timeProvider;
-    private readonly SemaphoreSlim _connectGate = new(1, 1);
-    private readonly SemaphoreSlim _sessionGate = new(1, 1);
-    private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly object _reconnectCtsLock = new();
+    private readonly Channel<ClientCommand> _mailbox;
+    private readonly Channel<DaemonConnectionEvent> _eventChannel;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly IDisposable _outputRegistration;
+    private readonly Task _ownerTask;
+    private readonly Task _eventPumpTask;
 
+    // Owner-only state — read and written solely inside the owner loop, so it
+    // needs no lock or volatile.
     private string? _sessionId;
-    private Actors.Channels.ChannelType? _channelType;
+    private ChannelType? _channelType;
     private bool _hasConnected;
+    private bool _sessionAttached;
 
-    // volatile: read from SignalR callback threads (Reconnected/Closed handlers)
-    // and ReconnectLoopAsync continuations; written by DisposeAsync.
     private volatile bool _disposed;
-    private CancellationTokenSource? _reconnectCts;
 
     public DaemonClient(
         string daemonEndpoint,
@@ -58,240 +86,95 @@ public sealed class DaemonClient : IAsyncDisposable
         TimeSpan[]? reconnectDelays = null,
         TimeSpan? serverTimeout = null,
         Func<Task<string?>>? accessTokenProvider = null)
+        : this(
+            daemonEndpoint,
+            SignalRDaemonHubTransport.Create(
+                BuildHubUrl(NormalizeEndpoint(daemonEndpoint)),
+                accessTokenProvider,
+                serverTimeout),
+            timeProvider,
+            reconnectDelays,
+            rpcTimeout: null)
     {
-        if (string.IsNullOrWhiteSpace(daemonEndpoint))
-            throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
+    }
 
-        _daemonEndpoint = daemonEndpoint.TrimEnd('/');
-        _hubUrl = BuildHubUrl(_daemonEndpoint);
+    /// <summary>
+    /// Test seam: injects a controllable transport so the reconnect and session
+    /// state machine runs without real SignalR or sockets.
+    /// </summary>
+    internal DaemonClient(
+        string daemonEndpoint,
+        IDaemonHubTransport transport,
+        TimeProvider? timeProvider = null,
+        TimeSpan[]? reconnectDelays = null,
+        TimeSpan? rpcTimeout = null)
+    {
+        _daemonEndpoint = NormalizeEndpoint(daemonEndpoint);
+        _transport = transport;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _reconnectDelays = reconnectDelays ?? DefaultReconnectDelays;
-        _accessTokenProvider = accessTokenProvider;
+        _rpcTimeout = rpcTimeout ?? DefaultRpcTimeout;
+        _mailbox = Channel.CreateUnbounded<ClientCommand>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        _eventChannel = Channel.CreateUnbounded<DaemonConnectionEvent>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
-        _connection = new HubConnectionBuilder()
-            .ConfigureAccessToken(_hubUrl, _accessTokenProvider)
-            .WithAutomaticReconnect(_reconnectDelays)
-            .Build();
+        _outputRegistration = _transport.On<SessionOutputDto>(
+            "ReceiveOutput",
+            dto => _outputSubject.OnNext(FromDto(dto)));
+        _transport.Closed += OnTransportClosed;
 
-        if (serverTimeout is { } timeout)
-            _connection.ServerTimeout = timeout;
-
-        _connection.On<SessionOutputDto>("ReceiveOutput", dto =>
-        {
-            _outputSubject.OnNext(FromDto(dto));
-        });
-
-        _connection.Reconnected += async _ =>
-        {
-            if (_disposed)
-                return;
-
-            // SignalR's built-in auto-reconnect has restored the transport. Re-attach
-            // the session before announcing Connected so consumers that act on
-            // Connected (the TUI re-runs EnsureSession) observe a live session.
-            //
-            // A re-attach failure must NOT be swallowed: SignalR invokes Reconnected
-            // fire-and-forget, so a thrown exception would vanish and strand consumers
-            // in a stale Reconnecting state on a transport that is actually up. Hand
-            // off to the supervised ReconnectLoopAsync instead — it short-circuits the
-            // already-connected transport and retries EnsureSession past transient
-            // failures, emitting a terminal Disconnected only if it truly exhausts its
-            // budget. This makes the built-in reconnect path as resilient as the
-            // manual Closed-handler path.
-            if (_channelType is { } ct)
-            {
-                try
-                {
-                    await EnsureSessionInternalAsync(ct, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    _connectionSubject.OnNext(new DaemonConnectionEvent(
-                        DaemonConnectionState.Reconnecting,
-                        _daemonEndpoint,
-                        $"Reconnected to {_daemonEndpoint} but session re-attach failed: {ex.Message}. Retrying..."));
-                    await ReconnectLoopAsync();
-                    return;
-                }
-            }
-
-            _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.Connected,
-                _daemonEndpoint,
-                $"Reconnected to daemon at {_daemonEndpoint}."));
-        };
-
-        _connection.Reconnecting += ex =>
-        {
-            var reason = ex?.Message ?? "connection dropped";
-            _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.Reconnecting,
-                _daemonEndpoint,
-                $"Reconnecting to {_daemonEndpoint}: {reason}"));
-            return Task.CompletedTask;
-        };
-
-        _connection.Closed += async ex =>
-        {
-            if (_disposed)
-                return;
-
-            var reason = ex?.Message ?? "connection closed";
-            // TransportClosed, not Disconnected: SignalR's built-in auto-reconnect
-            // has given up, but ReconnectLoopAsync takes over immediately below. This
-            // is a transient handoff — a Reconnecting follows within microseconds.
-            // Only ReconnectLoopAsync's exhaustion branch emits terminal Disconnected.
-            _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.TransportClosed,
-                _daemonEndpoint,
-                $"Connection to daemon at {_daemonEndpoint} dropped: {reason}"));
-
-            if (!string.IsNullOrWhiteSpace(_sessionId))
-                await ReconnectLoopAsync();
-        };
+        _ownerTask = Task.Run(RunAsync);
+        _eventPumpTask = Task.Run(EventPumpAsync);
     }
 
     public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+
+    /// <summary>
+    /// Connection lifecycle events. They are delivered on a dedicated pump, not
+    /// the client's command loop, so a subscriber that blocks or reenters the
+    /// client cannot stall daemon calls for other callers. Delivery is still
+    /// synchronous per event — offload heavy work onto a scheduler if needed.
+    /// </summary>
     public Observable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
 
-    public bool IsConnected => _connection.State is HubConnectionState.Connected;
+    public bool IsConnected => _transport.IsConnected;
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
-        if (IsConnected)
-            return;
-
-        // Cancel any in-flight background reconnect loop so it doesn't race
-        // with this explicit connect attempt.
-        CancelReconnectLoop();
-
-        await _connectGate.WaitAsync(cancellationToken);
-        try
-        {
-            if (IsConnected)
-                return;
-
-            // Another reconnect/start sequence may already be in-flight
-            // (e.g. the built-in auto-reconnect). Wait for it to settle.
-            if (_connection.State is not HubConnectionState.Disconnected)
-            {
-                await WaitForStableConnectionStateAsync(cancellationToken);
-                if (IsConnected)
-                    return;
-            }
-
-            _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.Connecting,
-                _daemonEndpoint,
-                $"Connecting to daemon at {_daemonEndpoint}..."));
-
-            Exception? lastError = null;
-            foreach (var delay in _reconnectDelays)
-            {
-                if (delay > TimeSpan.Zero)
-                    await Task.Delay(delay, cancellationToken);
-
-                try
-                {
-                    // Re-check state immediately before StartAsync. The auto-reconnect
-                    // or a concurrent reconnect attempt may have changed the state since
-                    // we last checked. StartAsync requires Disconnected state.
-                    if (_connection.State is not HubConnectionState.Disconnected)
-                    {
-                        await WaitForStableConnectionStateAsync(cancellationToken);
-                        if (IsConnected)
-                        {
-                            _hasConnected = true;
-                            return;
-                        }
-                    }
-
-                    await _connection.StartAsync(cancellationToken);
-
-                    _connectionSubject.OnNext(new DaemonConnectionEvent(
-                        DaemonConnectionState.Connected,
-                        _daemonEndpoint,
-                        _hasConnected
-                            ? $"Reconnected to daemon at {_daemonEndpoint}."
-                            : $"Connected to daemon at {_daemonEndpoint}."));
-                    _hasConnected = true;
-                    return;
-                }
-                catch (InvalidOperationException ex) when (
-                    ex.Message.Contains("is not in the Disconnected state", StringComparison.Ordinal))
-                {
-                    // The HubConnection state changed between our check and the
-                    // StartAsync call (e.g. auto-reconnect kicked in concurrently).
-                    // Wait for the state to settle and check if it connected.
-                    await WaitForStableConnectionStateAsync(cancellationToken);
-                    if (IsConnected)
-                    {
-                        _hasConnected = true;
-                        return;
-                    }
-
-                    lastError = ex;
-                }
-                catch (Exception ex)
-                {
-                    lastError = ex;
-                }
-            }
-
-            if (IsAuthenticationFailure(lastError))
-                throw new InvalidOperationException(
-                    "Authentication failed: the daemon rejected the bearer token. " +
-                    "Run 'netclaw pair <endpoint>' to re-pair this device.", lastError);
-
-            throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
-        }
-        finally
-        {
-            _connectGate.Release();
-        }
+        var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await PostAsync(new ConnectCommand(ack, cancellationToken), cancellationToken);
+        await ack.Task.WaitAsync(cancellationToken);
     }
 
-    private async Task WaitForStableConnectionStateAsync(CancellationToken cancellationToken)
-    {
-        var deadline = _timeProvider.GetUtcNow().AddSeconds(15);
-        while (_timeProvider.GetUtcNow() < deadline)
-        {
-            if (_connection.State is HubConnectionState.Connected or HubConnectionState.Disconnected)
-                return;
-
-            await Task.Delay(100, cancellationToken);
-        }
-    }
-
-    public async Task<string> CreateSessionAsync(
-        Actors.Channels.ChannelType channelType,
+    public Task<string> CreateSessionAsync(
+        ChannelType channelType,
         CancellationToken cancellationToken = default)
-    {
-        _channelType = channelType;
-        _sessionId = null;
-        return await EnsureSessionInternalAsync(channelType, cancellationToken);
-    }
+        => EnsureSessionAsync(channelType, SessionInit.Create, cancellationToken);
 
-    public async Task<string> EnsureSessionAsync(
-        Actors.Channels.ChannelType channelType,
+    public Task<string> EnsureSessionAsync(
+        ChannelType channelType,
         CancellationToken cancellationToken = default)
-    {
-        _channelType = channelType;
-        return await EnsureSessionInternalAsync(channelType, cancellationToken);
-    }
+        => EnsureSessionAsync(channelType, SessionInit.Keep, cancellationToken);
 
     /// <summary>
     /// Sets the session ID for subsequent calls so that <c>EnsureSession</c>
     /// attaches to (or rehydrates) an existing session instead of creating a new one.
     /// </summary>
-    public async Task<string> ResumeSessionAsync(
+    public Task<string> ResumeSessionAsync(
         string sessionId,
-        Actors.Channels.ChannelType channelType,
+        ChannelType channelType,
         CancellationToken cancellationToken = default)
+        => EnsureSessionAsync(channelType, SessionInit.Attach(sessionId), cancellationToken);
+
+    private async Task<string> EnsureSessionAsync(
+        ChannelType channelType,
+        SessionInit init,
+        CancellationToken cancellationToken)
     {
-        _channelType = channelType;
-        _sessionId = sessionId;
-        return await EnsureSessionInternalAsync(channelType, cancellationToken);
+        var reply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await PostAsync(new EnsureSessionCommand(channelType, init, reply, cancellationToken), cancellationToken);
+        return await reply.Task.WaitAsync(cancellationToken);
     }
 
     public async Task SendAsync(string text, CancellationToken cancellationToken = default)
@@ -299,31 +182,9 @@ public sealed class DaemonClient : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(text))
             throw new InvalidOperationException("Only non-empty text messages are currently supported.");
 
-        // Hold the session gate while reading _sessionId to prevent reading
-        // a stale value during a concurrent EnsureSessionInternalAsync call
-        // (e.g. from the Reconnected handler racing with an explicit EnsureSessionAsync).
-        string sessionId;
-        await _sessionGate.WaitAsync(cancellationToken);
-        try
-        {
-            await ConnectAsync(cancellationToken);
-
-            sessionId = _sessionId
-                ?? throw new InvalidOperationException(
-                    "Session not initialized. Call CreateSessionAsync first.");
-        }
-        finally
-        {
-            _sessionGate.Release();
-        }
-
-        // The daemon derives the session's trust context server-side from the
-        // authenticated SignalR principal — the client only supplies message
-        // text, never trust fields.
-        await _connection.InvokeCoreAsync(
-            "SendMessage",
-            [sessionId, text],
-            cancellationToken);
+        var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await PostAsync(new SendCommand(text, ack, cancellationToken), cancellationToken);
+        await ack.Task.WaitAsync(cancellationToken);
     }
 
     public async Task RespondToInteractionAsync(
@@ -334,266 +195,480 @@ public sealed class DaemonClient : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(callId);
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedKey);
 
-        string sessionId;
-        await _sessionGate.WaitAsync(cancellationToken);
-        try
-        {
-            await ConnectAsync(cancellationToken);
-
-            sessionId = _sessionId
-                ?? throw new InvalidOperationException(
-                    "Session not initialized. Call CreateSessionAsync first.");
-        }
-        finally
-        {
-            _sessionGate.Release();
-        }
-
-        await _connection.InvokeCoreAsync(
-            "RespondToInteraction",
-            [sessionId, callId, selectedKey],
-            cancellationToken);
+        var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await PostAsync(new RespondCommand(callId, selectedKey, ack, cancellationToken), cancellationToken);
+        await ack.Task.WaitAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
     {
-        _disposed = true;
-        _outputSubject.Dispose();
-        _connectionSubject.Dispose();
-        CancelReconnectLoop();
-        _lifetimeCts.Cancel();
-        _lifetimeCts.Dispose();
-        await _connection.DisposeAsync();
-        _connectGate.Dispose();
-        _sessionGate.Dispose();
-    }
-
-    /// <summary>
-    /// Cancels any active reconnect loop. Called by <see cref="ConnectAsync"/>
-    /// so an explicit caller supersedes background reconnect attempts and avoids
-    /// two concurrent paths racing to call <c>StartAsync</c>.
-    /// </summary>
-    private void CancelReconnectLoop()
-    {
-        lock (_reconnectCtsLock)
-        {
-            if (_reconnectCts is { IsCancellationRequested: false } cts)
-            {
-                cts.Cancel();
-                cts.Dispose();
-                _reconnectCts = null;
-            }
-        }
-    }
-
-    private async Task ReconnectLoopAsync()
-    {
         if (_disposed)
             return;
+        _disposed = true;
 
-        CancellationTokenSource loopCts;
-        lock (_reconnectCtsLock)
+        // Stop accepting commands, then cancel the loop and every in-flight
+        // await. Await the owner before touching the transport or the subjects
+        // so nothing races the teardown — the owner is the only writer of both.
+        _mailbox.Writer.TryComplete();
+        _lifetime.Cancel();
+
+        // RunAsync ends normally when the writer completes; it never rethrows
+        // cancellation, so awaiting it here cannot throw. Await it before
+        // completing the event channel so no late Publish is dropped.
+        await _ownerTask.ConfigureAwait(false);
+
+        _eventChannel.Writer.TryComplete();
+        await _eventPumpTask.ConfigureAwait(false);
+
+        _outputRegistration.Dispose();
+        await _transport.DisposeAsync().ConfigureAwait(false);
+        _outputSubject.Dispose();
+        _connectionSubject.Dispose();
+        _lifetime.Dispose();
+    }
+
+    private Task OnTransportClosed(Exception? error)
+    {
+        // Runs on a transport callback thread. Only hand off to the owner.
+        _mailbox.Writer.TryWrite(new TransportDroppedCommand(error));
+        return Task.CompletedTask;
+    }
+
+    private async Task PostAsync(ClientCommand command, CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DaemonClient));
+
+        try
         {
-            // If a previous reconnect loop is still alive, cancel it.
-            if (_reconnectCts is { IsCancellationRequested: false } existing)
-            {
-                existing.Cancel();
-                existing.Dispose();
-            }
-
-            loopCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
-            _reconnectCts = loopCts;
+            await _mailbox.Writer.WriteAsync(command, cancellationToken);
         }
-
-        var token = loopCts.Token;
-
-        const int maxAttempts = 20;
-        var attempts = 0;
-        while (!_disposed && !token.IsCancellationRequested)
+        catch (ChannelClosedException)
         {
-            attempts++;
-            try
-            {
-                _connectionSubject.OnNext(new DaemonConnectionEvent(
-                    DaemonConnectionState.Reconnecting,
-                    _daemonEndpoint,
-                    $"Retrying daemon connection at {_daemonEndpoint} (attempt {attempts}/{maxAttempts})...",
-                    attempts,
-                    maxAttempts,
-                    0));
-
-                await ReconnectConnectAsync(token);
-
-                // Re-attach the session before publishing Connected. The
-                // Reconnected handler already follows this order; mirroring it
-                // here eliminates the race window where a test (or other caller)
-                // observes Connected and calls EnsureSessionAsync concurrently
-                // with this still-running EnsureSessionInternalAsync call.
-                if (_channelType is { } ct2)
-                    await EnsureSessionInternalAsync(ct2, token);
-
-                _connectionSubject.OnNext(new DaemonConnectionEvent(
-                    DaemonConnectionState.Connected,
-                    _daemonEndpoint,
-                    $"Reconnected to daemon at {_daemonEndpoint}."));
-
-                return;
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                // The reconnect loop was superseded by an explicit ConnectAsync call
-                // or the client is being disposed. Exit gracefully.
-                return;
-            }
-            catch when (!_disposed && !token.IsCancellationRequested)
-            {
-                if (attempts >= maxAttempts)
-                {
-                    _connectionSubject.OnNext(new DaemonConnectionEvent(
-                        DaemonConnectionState.Disconnected,
-                        _daemonEndpoint,
-                        $"Unable to reconnect to daemon at {_daemonEndpoint} after {maxAttempts} attempts.",
-                        attempts,
-                        maxAttempts,
-                        0));
-                    return;
-                }
-
-                for (var countdown = 2; countdown > 0; countdown--)
-                {
-                    _connectionSubject.OnNext(new DaemonConnectionEvent(
-                        DaemonConnectionState.Reconnecting,
-                        _daemonEndpoint,
-                        $"Retrying daemon connection at {_daemonEndpoint} (attempt {attempts + 1}/{maxAttempts}) in {countdown}s...",
-                        attempts + 1,
-                        maxAttempts,
-                        countdown));
-
-                    await Task.Delay(TimeSpan.FromSeconds(1), token);
-                }
-            }
+            throw new ObjectDisposedException(nameof(DaemonClient));
         }
     }
 
-    /// <summary>
-    /// Internal connect path used by the reconnect loop. Unlike the public
-    /// <see cref="ConnectAsync"/>, this does NOT call <see cref="CancelReconnectLoop"/>
-    /// (which would cancel itself) and uses the semaphore normally.
-    /// </summary>
-    private async Task ReconnectConnectAsync(CancellationToken cancellationToken)
-    {
-        if (IsConnected)
-            return;
+    // ----- the single owner loop -----
 
-        await _connectGate.WaitAsync(cancellationToken);
+    private async Task RunAsync()
+    {
+        // The reader ends when DisposeAsync completes the writer, so the loop
+        // needs no cancellation token. A command already in flight when dispose
+        // cancels _lifetime faults fast through the per-command catch below.
         try
         {
-            if (IsConnected)
-                return;
-
-            if (_connection.State is not HubConnectionState.Disconnected)
+            await foreach (var command in _mailbox.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                await WaitForStableConnectionStateAsync(cancellationToken);
-                if (IsConnected)
-                    return;
-            }
-
-            Exception? lastError = null;
-            foreach (var delay in _reconnectDelays)
-            {
-                if (delay > TimeSpan.Zero)
-                    await Task.Delay(delay, cancellationToken);
-
                 try
                 {
-                    if (_connection.State is not HubConnectionState.Disconnected)
-                    {
-                        await WaitForStableConnectionStateAsync(cancellationToken);
-                        if (IsConnected)
-                        {
-                            _hasConnected = true;
-                            return;
-                        }
-                    }
-
-                    await _connection.StartAsync(cancellationToken);
-                    _hasConnected = true;
-                    return;
+                    await ProcessAsync(command).ConfigureAwait(false);
                 }
-                catch (InvalidOperationException ex) when (
-                    ex.Message.Contains("is not in the Disconnected state", StringComparison.Ordinal))
+                catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
                 {
-                    await WaitForStableConnectionStateAsync(cancellationToken);
-                    if (IsConnected)
-                    {
-                        _hasConnected = true;
-                        return;
-                    }
-
-                    lastError = ex;
+                    Fault(command, new ObjectDisposedException(nameof(DaemonClient)));
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    lastError = ex;
+                    // Fault only this caller; the owner keeps serving the mailbox.
+                    Fault(command, ex);
                 }
             }
-
-            if (IsAuthenticationFailure(lastError))
-                throw new InvalidOperationException(
-                    "Authentication failed: the daemon rejected the bearer token. " +
-                    "Run 'netclaw pair <endpoint>' to re-pair this device.", lastError);
-
-            throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
         }
         finally
         {
-            _connectGate.Release();
+            // Fault anything still queued so no caller waits forever.
+            while (_mailbox.Reader.TryRead(out var pending))
+                Fault(pending, new ObjectDisposedException(nameof(DaemonClient)));
+        }
+    }
+
+    private async Task ProcessAsync(ClientCommand command)
+    {
+        switch (command)
+        {
+            case ConnectCommand c:
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
+                c.Ack.TrySetResult();
+                break;
+            }
+
+            case EnsureSessionCommand c:
+            {
+                using var op = LinkOperation(c.Token);
+                c.Reply.TrySetResult(await EnsureSessionCoreAsync(c, op.Token));
+                break;
+            }
+
+            case SendCommand c:
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
+                await ReattachIfNeededAsync(op.Token);
+                await InvokeAsync("SendMessage", [RequireSession(), c.Text], op.Token);
+                c.Ack.TrySetResult();
+                break;
+            }
+
+            case RespondCommand c:
+            {
+                using var op = LinkOperation(c.Token);
+                await EnsureConnectedAsync(op.Token);
+                await ReattachIfNeededAsync(op.Token);
+                await InvokeAsync("RespondToInteraction", [RequireSession(), c.CallId, c.SelectedKey], op.Token);
+                c.Ack.TrySetResult();
+                break;
+            }
+
+            case TransportDroppedCommand c:
+                await HandleTransportDroppedAsync(c.Error);
+                break;
+        }
+    }
+
+    // Links the caller's token with the client lifetime so the owner aborts an
+    // in-flight hub call when the caller cancels — the behavior the old client
+    // had by threading the token straight into InvokeCoreAsync.
+    private CancellationTokenSource LinkOperation(CancellationToken callerToken)
+        => CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, callerToken);
+
+    private async Task<string> EnsureSessionCoreAsync(EnsureSessionCommand command, CancellationToken operationToken)
+    {
+        ApplyInit(command.Init);
+        _channelType = command.ChannelType;
+
+        await EnsureConnectedAsync(operationToken);
+
+        var result = await InvokeAsync<SessionEnsureResultDto>(
+            "EnsureSession",
+            [_sessionId, command.ChannelType.ToWireValue()],
+            operationToken);
+
+        _sessionId = result.SessionId;
+        _sessionAttached = true;
+
+        if (result.Created)
+        {
+            Publish(
+                DaemonConnectionState.Connected,
+                $"Created a new daemon session at {_daemonEndpoint}.");
+        }
+
+        return result.SessionId;
+    }
+
+    private void ApplyInit(SessionInit init)
+    {
+        switch (init.Kind)
+        {
+            case SessionInitKind.Create:
+                _sessionId = null;
+                break;
+            case SessionInitKind.Attach:
+                _sessionId = init.SessionId;
+                break;
+            case SessionInitKind.Keep:
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Re-attaches the current session to a freshly (re)connected transport.
+    /// A new connection has no server-side session binding, so a session-scoped
+    /// RPC would otherwise fail with "session not attached".
+    /// </summary>
+    private async Task ReattachIfNeededAsync(CancellationToken operationToken)
+    {
+        if (_sessionAttached)
+            return;
+        if (_sessionId is null || _channelType is not { } channelType)
+            return;
+
+        var result = await InvokeAsync<SessionEnsureResultDto>(
+            "EnsureSession",
+            [_sessionId, channelType.ToWireValue()],
+            operationToken);
+        _sessionId = result.SessionId;
+        _sessionAttached = true;
+    }
+
+    private string RequireSession()
+        => _sessionId
+           ?? throw new InvalidOperationException("Session not initialized. Call CreateSessionAsync first.");
+
+    /// <summary>
+    /// Ensures the transport is up. Emits Connecting/Reconnecting at the start
+    /// and Connected on success. Throws on exhaustion so the driving command
+    /// faults fast instead of hanging.
+    /// </summary>
+    private async Task EnsureConnectedAsync(CancellationToken operationToken)
+    {
+        if (_transport.IsConnected)
+            return;
+
+        var recovery = _hasConnected;
+
+        // A fresh transport connection carries no server-side session binding.
+        _sessionAttached = false;
+
+        Publish(
+            recovery ? DaemonConnectionState.Reconnecting : DaemonConnectionState.Connecting,
+            recovery
+                ? $"Reconnecting to daemon at {_daemonEndpoint}..."
+                : $"Connecting to daemon at {_daemonEndpoint}...");
+
+        await ConnectThroughDelaysAsync(operationToken);
+        _hasConnected = true;
+
+        Publish(
+            DaemonConnectionState.Connected,
+            recovery
+                ? $"Reconnected to daemon at {_daemonEndpoint}."
+                : $"Connected to daemon at {_daemonEndpoint}.");
+    }
+
+    /// <summary>
+    /// One pass over <see cref="_reconnectDelays"/>: delay, then a single
+    /// StartAsync. Returns on the first success; throws on exhaustion.
+    /// </summary>
+    private async Task ConnectThroughDelaysAsync(CancellationToken operationToken)
+    {
+        Exception? lastError = null;
+        foreach (var delay in _reconnectDelays)
+        {
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, _timeProvider, operationToken);
+
+            try
+            {
+                await _transport.StartAsync(operationToken);
+                return;
+            }
+            catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsAuthenticationFailure(ex))
+            {
+                throw new InvalidOperationException(
+                    "Authentication failed: the daemon rejected the bearer token. " +
+                    "Run 'netclaw pair <endpoint>' to re-pair this device.", ex);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
+    }
+
+    /// <summary>
+    /// The single reconnect authority. Runs after the transport drops: retries
+    /// StartAsync with <see cref="_timeProvider"/>-driven backoff, re-attaches
+    /// the session, and emits a terminal Disconnected only if it exhausts its
+    /// budget.
+    /// </summary>
+    private async Task HandleTransportDroppedAsync(Exception? error)
+    {
+        // A foreground command may have already reconnected before this drop
+        // notification was processed; then the drop is moot.
+        if (_transport.IsConnected)
+            return;
+
+        _sessionAttached = false;
+
+        // Report the drop unconditionally, like the old Closed handler — the TUI
+        // clears readiness on this even before a session exists.
+        Publish(
+            DaemonConnectionState.TransportClosed,
+            $"Connection to daemon at {_daemonEndpoint} dropped: {error?.Message ?? "connection closed"}");
+
+        // Only the reconnect loop needs a session to re-attach. Without one there
+        // is nothing to recover, so leave the transport for the next command.
+        if (_sessionId is null || _channelType is not { } channelType)
+            return;
+
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
+        {
+            _lifetime.Token.ThrowIfCancellationRequested();
+
+            if (attempt > 1)
+                await Task.Delay(BackoffFor(attempt), _timeProvider, _lifetime.Token);
+
+            Publish(
+                DaemonConnectionState.Reconnecting,
+                $"Retrying daemon connection at {_daemonEndpoint} (attempt {attempt}/{MaxReconnectAttempts})...",
+                attempt,
+                MaxReconnectAttempts,
+                0);
+
+            try
+            {
+                // Guard StartAsync: a prior attempt may have connected the
+                // transport but failed the re-attach RPC. Calling StartAsync on
+                // an already-connected HubConnection throws "not in the
+                // Disconnected state" — which would falsely exhaust the budget on
+                // a live socket. Retry only the re-attach in that case.
+                if (!_transport.IsConnected)
+                    await _transport.StartAsync(_lifetime.Token);
+
+                var result = await InvokeAsync<SessionEnsureResultDto>(
+                    "EnsureSession",
+                    [_sessionId, channelType.ToWireValue()],
+                    _lifetime.Token);
+                _sessionId = result.SessionId;
+                _sessionAttached = true;
+
+                Publish(
+                    DaemonConnectionState.Connected,
+                    $"Reconnected to daemon at {_daemonEndpoint}.");
+                return;
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Transient failure — record it, then back off and retry. On the
+                // last attempt, surface why the reconnect gave up.
+                lastError = ex;
+                if (attempt >= MaxReconnectAttempts)
+                {
+                    Publish(
+                        DaemonConnectionState.Disconnected,
+                        $"Unable to reconnect to daemon at {_daemonEndpoint} after {MaxReconnectAttempts} attempts: {lastError.Message}",
+                        attempt,
+                        MaxReconnectAttempts,
+                        0);
+                    return;
+                }
+            }
+        }
+    }
+
+    private TimeSpan BackoffFor(int attempt)
+        => _reconnectDelays[Math.Min(attempt - 1, _reconnectDelays.Length - 1)];
+
+    private async Task<TResult> InvokeAsync<TResult>(string method, object?[] args, CancellationToken operationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(_rpcTimeout, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(operationToken, timeoutCts.Token);
+        return await _transport.InvokeAsync<TResult>(method, args, linked.Token);
+    }
+
+    private async Task InvokeAsync(string method, object?[] args, CancellationToken operationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(_rpcTimeout, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(operationToken, timeoutCts.Token);
+        await _transport.InvokeAsync(method, args, linked.Token);
+    }
+
+    // Runs on the owner loop. Events go to a channel drained by EventPumpAsync so
+    // subscriber code never executes on the owner thread.
+    private void Publish(
+        DaemonConnectionState state,
+        string message,
+        int? attempt = null,
+        int? maxAttempts = null,
+        int? secondsUntilRetry = null)
+    {
+        _eventChannel.Writer.TryWrite(new DaemonConnectionEvent(
+            state,
+            _daemonEndpoint,
+            message,
+            attempt,
+            maxAttempts,
+            secondsUntilRetry));
+    }
+
+    private async Task EventPumpAsync()
+    {
+        // Deliver connection events off the owner thread. A subscriber that blocks
+        // (or reenters the client) here stalls only this pump, not the command
+        // mailbox — so Send/EnsureSession/Respond keep flowing and a reentrant
+        // call cannot deadlock the owner. The pump ends when DisposeAsync
+        // completes the event channel.
+        await foreach (var evt in _eventChannel.Reader.ReadAllAsync().ConfigureAwait(false))
+            _connectionSubject.OnNext(evt);
+    }
+
+    private static void Fault(ClientCommand command, Exception ex)
+    {
+        switch (command)
+        {
+            case ConnectCommand c:
+                c.Ack.TrySetException(ex);
+                break;
+            case EnsureSessionCommand c:
+                c.Reply.TrySetException(ex);
+                break;
+            case SendCommand c:
+                c.Ack.TrySetException(ex);
+                break;
+            case RespondCommand c:
+                c.Ack.TrySetException(ex);
+                break;
+            case TransportDroppedCommand:
+                // No caller awaits a transport-drop notification.
+                break;
         }
     }
 
     private static bool IsAuthenticationFailure(Exception? ex) =>
         ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized };
 
-    private static string BuildHubUrl(string endpoint)
+    private static string NormalizeEndpoint(string endpoint)
     {
-        var trimmed = endpoint.TrimEnd('/');
-        return $"{trimmed}/hub/session";
+        if (string.IsNullOrWhiteSpace(endpoint))
+            throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(endpoint));
+
+        return endpoint.TrimEnd('/');
     }
 
-    private async Task<string> EnsureSessionInternalAsync(
-        Actors.Channels.ChannelType channelType,
-        CancellationToken cancellationToken)
+    private static string BuildHubUrl(string endpoint) => $"{endpoint.TrimEnd('/')}/hub/session";
+
+    internal static SessionOutput FromDto(SessionOutputDto dto) => SessionOutputDtoMapper.FromDto(dto);
+
+    // ----- command mailbox contract -----
+
+    private abstract record ClientCommand;
+
+    private sealed record ConnectCommand(TaskCompletionSource Ack, CancellationToken Token) : ClientCommand;
+
+    private sealed record EnsureSessionCommand(
+        ChannelType ChannelType,
+        SessionInit Init,
+        TaskCompletionSource<string> Reply,
+        CancellationToken Token) : ClientCommand;
+
+    private sealed record SendCommand(string Text, TaskCompletionSource Ack, CancellationToken Token) : ClientCommand;
+
+    private sealed record RespondCommand(
+        string CallId,
+        string SelectedKey,
+        TaskCompletionSource Ack,
+        CancellationToken Token) : ClientCommand;
+
+    private sealed record TransportDroppedCommand(Exception? Error) : ClientCommand;
+
+    private enum SessionInitKind
     {
-        await _sessionGate.WaitAsync(cancellationToken);
-        try
-        {
-            await ConnectAsync(cancellationToken);
-
-            var result = await _connection.InvokeCoreAsync<SessionEnsureResultDto>(
-                "EnsureSession",
-                [_sessionId, channelType.ToWireValue()],
-                cancellationToken);
-
-            _sessionId = result.SessionId;
-
-            if (result.Created)
-            {
-                _connectionSubject.OnNext(new DaemonConnectionEvent(
-                    DaemonConnectionState.Connected,
-                    _daemonEndpoint,
-                    $"Created a new daemon session at {_daemonEndpoint}."));
-            }
-
-            return result.SessionId;
-        }
-        finally
-        {
-            _sessionGate.Release();
-        }
+        Create,
+        Keep,
+        Attach
     }
 
-    internal static SessionOutput FromDto(SessionOutputDto dto)
+    private readonly record struct SessionInit(SessionInitKind Kind, string? SessionId)
     {
-        return SessionOutputDtoMapper.FromDto(dto);
+        public static readonly SessionInit Create = new(SessionInitKind.Create, null);
+        public static readonly SessionInit Keep = new(SessionInitKind.Keep, null);
+
+        public static SessionInit Attach(string sessionId) => new(SessionInitKind.Attach, sessionId);
     }
 }
