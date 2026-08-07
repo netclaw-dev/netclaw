@@ -41,5 +41,5 @@
 - [x] 7.2 `dotnet slopwatch analyze` reports no new violations (0 issues).
 - [x] 7.3 `./scripts/Add-FileHeaders.ps1 -Verify` confirms copyright headers on all `.cs` files.
 - [x] 7.4 The new `config-mention-thread` tape passes: it toggles the `EditAudience` leaf rule Off→On, applies, and its paired assertion (`tests/smoke/assertions/config-mention-thread.sh`) confirms `Slack.MentionRequiredInThreadByChannel.C01 = true` persisted. Full `./scripts/smoke/run-smoke.sh light` also run to confirm no regression in the shared Channels-editor tapes.
-- [ ] 7.5 Eval suite is NOT triggered by this change: it runs on identity/skill/memory/tool/model/SessionConfig changes; this change touches channel routing + config only, and §6.2 made no skill change. Skipped with justification.
-- [ ] 7.6 `/opsx-verify`, then `/opsx-sync` the delta specs into `openspec/specs/`, then `/opsx-archive` the change.
+- [x] 7.5 Eval suite is NOT triggered by this change: it runs on identity/skill/memory/tool/model/SessionConfig changes; this change touches channel routing + config only, and §6.2 made no skill change. Skipped with justification.
+- [x] 7.6 `openspec validate --strict` passed (verify); `openspec archive` syncs the delta specs into `openspec/specs/` and moves the change to `openspec/changes/archive/`.
