@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -212,6 +213,8 @@ public class ToolRegistryTests
                 TrustAudience.Public,
                 ShellExecutionMode.Off,
                 UsedStrictFallback: true),
+            shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             featureGates: new FeatureGates(SubAgentsEnabled: false, SchedulingEnabled: false));
 
         var index = registry.GenerateCompressedIndex(TrustAudience.Public, policy);

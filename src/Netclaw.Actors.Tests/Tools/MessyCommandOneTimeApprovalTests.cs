@@ -64,7 +64,9 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             UsedStrictFallback: false));
         services.AddSingleton<ToolAccessPolicy>(sp => new ToolAccessPolicy(
             sp.GetRequiredService<ToolConfig>(),
-            sp.GetRequiredService<EffectivePolicyDefaults>()));
+            sp.GetRequiredService<EffectivePolicyDefaults>(),
+            new Netclaw.Security.ShellCommandPolicy(),
+            new Netclaw.Security.ToolPathPolicy([])));
 
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(toolConfig, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());

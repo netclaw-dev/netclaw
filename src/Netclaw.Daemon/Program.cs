@@ -670,8 +670,8 @@ static void ConfigureDaemonServices(
         toolConfig,
         effectivePolicyDefaults,
         shellCommandPolicy,
-        fileApprovalMatcher,
         toolPathPolicy,
+        fileApprovalMatcher,
         featureGates,
         shellTrustZonePolicy,
         safeVerbs);

@@ -909,7 +909,8 @@ public class SkillToolTests : IDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         return new SubAgentSpawner(
             new NoOpChatClientProvider(),

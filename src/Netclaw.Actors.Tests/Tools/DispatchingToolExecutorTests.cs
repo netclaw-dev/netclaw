@@ -43,7 +43,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var restrictedConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         restrictedConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -65,7 +67,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
     }
 
     [Fact]
@@ -340,7 +344,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var toolCall = new FunctionCallContent(
             "call-shell-profile-deny", "shell_execute",
@@ -375,7 +381,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.Off,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var toolCall = new FunctionCallContent(
             "call-shell-off", "shell_execute",
@@ -522,7 +530,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)),
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])),
             approvalService);
         var call = new FunctionCallContent(
             "call-partial-approval",
@@ -569,7 +579,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)),
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])),
             logger: logger);
         var call = new FunctionCallContent(
             "call-authorization-telemetry",
@@ -717,7 +729,9 @@ public class DispatchingToolExecutorTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-webhook-tools-{Guid.NewGuid():N}"));
@@ -749,7 +763,9 @@ public class DispatchingToolExecutorTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-public-tools-{Guid.NewGuid():N}"));
@@ -785,7 +801,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var toolCall = new FunctionCallContent("call-mcp-deny", "memorizer/search_memories", ToolInput.Empty());
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
@@ -827,7 +845,9 @@ public class DispatchingToolExecutorTests
                         DeploymentPosture.Personal,
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false)),
+                        UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([])),
                 approvalService);
 
             var toolCall = new FunctionCallContent(
@@ -892,7 +912,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var toolCall = new FunctionCallContent(
             "call-approve-once-bypass",
@@ -962,6 +984,8 @@ public class DispatchingToolExecutorTests
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
                         UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([]),
                     fileApprovalMatcher: new FilePathApprovalMatcher(controlPlaneRoot)));
 
             var toolCall = new FunctionCallContent(
@@ -1036,7 +1060,9 @@ public class DispatchingToolExecutorTests
                         DeploymentPosture.Personal,
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false)),
+                        UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([])),
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-filtered", null, new TestToolExecutionContextOptions
@@ -1118,7 +1144,9 @@ public class DispatchingToolExecutorTests
                         DeploymentPosture.Personal,
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false)),
+                        UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([])),
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-audit", null, new TestToolExecutionContextOptions
@@ -1183,7 +1211,9 @@ public class DispatchingToolExecutorTests
                         DeploymentPosture.Personal,
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false)),
+                        UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([])),
                 approvalService);
 
             var toolCall = new FunctionCallContent(
@@ -1291,7 +1321,9 @@ public class DispatchingToolExecutorTests
                         DeploymentPosture.Personal,
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false)),
+                        UsedStrictFallback: false),
+                    new ShellCommandPolicy(),
+                    new ToolPathPolicy([])),
                 approvalService);
 
             // The LLM emits tool_use with the sanitized alias — mirror that
@@ -1375,7 +1407,9 @@ public class DispatchingToolExecutorTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)),
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])),
             new UnexpectedApprovalService());
     }
 

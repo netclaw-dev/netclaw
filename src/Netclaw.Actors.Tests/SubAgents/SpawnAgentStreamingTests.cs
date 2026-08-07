@@ -52,7 +52,8 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         // The sub-agent resolves "file_read" from this registry; the fake LLM
         // never calls it — it just has to resolve so the spawn proceeds.
@@ -145,7 +146,8 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
         registry.Register(new FakeNetclawTool("file_read", "stub content"));
