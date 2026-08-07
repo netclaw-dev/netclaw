@@ -43,9 +43,12 @@
 | native-dynamic-file-reference-fails-closed | Personal | Project | Interactive | curl --data=@$REQUEST_FILE https://example.invalid/api | persistent[project]:curl | RequiresApproval | approval required | none | Yes |
 | local-glob-allows-safe-verb | Personal | Project | Interactive | ls *.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | local-glob-reuses-project-grant | Personal | Project | Interactive | rm *.tmp | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
-| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
+| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}netclaw-ext-glob/*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
 | glob-traversal-fails-closed | Personal | Project | Interactive | cat */../../secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | glob-intermediate-symlink-scope-fails-closed | Personal | Project | Interactive | cat artifacts/*/secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| directory-listing-glob-in-project-auto-allows | Personal | Project | Interactive | ls -d subdirs/*/ | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| directory-listing-glob-external-offers-persistent-grant | Personal | External | Interactive | ls -d subdirs/*/ | none | RequiresApproval | approval required | ls | No |
+| directory-listing-glob-pipeline-offers-persistent-grant | Personal | External | Interactive | ls -d subdirs/*/ \| xargs -n1 basename | none | RequiresApproval | approval required | ls, xargs | No |
 | native-global-option-identity-gap-currently-prompts | Personal | Project | Interactive | git --no-pager status | persistent[project]:git status | RequiresApproval | approval required | git | No |
 | semicolon-sequence-prompts | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git status, git push | No |
 | newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git status, git push | No |

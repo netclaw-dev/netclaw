@@ -607,6 +607,35 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     };
 
     /// <summary>
+    /// Directory-listing globs: a trailing slash restricts the wildcard to
+    /// directories (<c>foo/*/</c>) but adds no descendant path segment — every
+    /// match is still a direct child of the covering directory <c>foo</c>. These
+    /// MUST resolve to that covering directory and stay persistable, exactly like
+    /// the leaf glob <c>foo/*</c>. Regression for the 0.25.3 change that swept the
+    /// directory-listing idiom into the one-shot-only "complex command" bucket
+    /// (the <c>ls -d .../immovlan/*/ | xargs -n1 basename</c> report).
+    /// </summary>
+    public static TheoryData<string, string> DirectoryOnlyTrailingSlashGlobCases => new()
+    {
+        { "ls -d artifacts/*/", "artifacts" },
+        { "ls artifacts/*/", "artifacts" },
+        { "ls -d workspaces/immovlan/*/", "workspaces/immovlan" }
+    };
+
+    /// <summary>
+    /// A trailing slash relaxes ONLY the directory-listing case (<c>foo/*/</c>).
+    /// A glob with a real path segment after the wildcard still hides the matched
+    /// segment's identity — a symlink or traversal the covering directory cannot
+    /// bound — so it MUST stay one-shot even when it also ends in a slash. Guards
+    /// the fix against over-reaching past a single trailing slash.
+    /// </summary>
+    public static TheoryData<string> TrailingSlashWithRealSegmentStaysMessyCases => new()
+    {
+        { "cat artifacts/*/deeper/" },
+        { "ls artifacts/*/*/" }
+    };
+
+    /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
     /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
@@ -713,6 +742,82 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         try
         {
             var arguments = Args(command, projectDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+            Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash directory-glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(DirectoryOnlyTrailingSlashGlobCases))]
+    public void ExtractCandidates_trailing_slash_directory_glob_resolves_covering_directory(
+        string command,
+        string expectedRelativeScope)
+    {
+        // The directory-listing idiom `foo/*/` must scope to the covering
+        // directory `foo` and stay persistable — not degrade to a one-shot
+        // "complex command". Currently fails (the trailing slash trips the
+        // descendant-scope guard); passes once `foo/*/` normalizes to `foo/*`.
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-trailing-slash-glob-{Guid.NewGuid():N}");
+        var expectedDirectory = expectedRelativeScope
+            .Split('/')
+            .Aggregate(projectDirectory, Path.Combine);
+        var arguments = Args(command, projectDirectory);
+
+        var candidate = Assert.Single(
+            _matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+
+        Assert.Equal("ls", candidate.Verb);
+        Assert.Equal(expectedDirectory, candidate.Directory);
+        Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(TrailingSlashWithRealSegmentStaysMessyCases))]
+    public void Trailing_slash_does_not_rescue_real_descendant_segment(string command)
+    {
+        // A trailing slash after a real intermediate segment (`foo/*/deeper/`)
+        // or a second wildcard (`foo/*/*/`) must NOT be mistaken for the benign
+        // directory-listing case — the matched segment is still unbounded, so
+        // these stay one-shot both before and after the fix.
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-trailing-descendant-{Guid.NewGuid():N}");
+        var arguments = Args(command, projectDirectory);
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Trailing_slash_directory_glob_with_symlink_child_fails_closed()
+    {
+        // `foo/*/` reduces to the covering directory `foo`. The symlink scan of
+        // `foo` must still fail the command closed — the trailing-slash
+        // relaxation must not remove the symlink protection a leaf glob already
+        // enforces. A fix that skips the covering-directory scan for `foo/*/`
+        // would surface a candidate here and flip IsMessy to false.
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-trailing-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var artifactsDirectory = Path.Combine(projectDirectory, "artifacts");
+        var externalDirectory = Path.Combine(root, "external");
+        var link = Path.Combine(artifactsDirectory, "escape");
+        Directory.CreateDirectory(artifactsDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(link, externalDirectory);
+
+        try
+        {
+            var arguments = Args("ls -d artifacts/*/", projectDirectory);
 
             Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
             Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));

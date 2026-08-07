@@ -390,8 +390,12 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:rm")),
         Case(
+            // Use an isolated temp subdirectory as the covering directory, not
+            // the shared system temp root: a symlink child there (e.g. an IDE
+            // socket) trips ContainsSymlinkEntry and fails the glob closed,
+            // which is correct behavior but not what this case exercises.
             "external-glob-does-not-reuse-project-grant",
-            Bash($"rm {TemporaryFile("*.bak")}"),
+            Bash($"rm {TemporaryFile("netclaw-ext-glob/*.bak")}"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Require(["rm"])),
         Case(
@@ -404,6 +408,30 @@ public static class ShellApprovalCases
             Bash("cat artifacts/*/secret.txt"),
             Approvals.PersistentAnywhere("cat"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // Directory-listing idiom `foo/*/`: a trailing slash filters the glob to
+        // directories but stays a direct-child scope, so it is NOT a "complex
+        // command". Inside the trusted tree a read-only safe verb auto-allows
+        // (silent, no prompt) exactly like the leaf glob `ls *.txt`.
+        Case(
+            "directory-listing-glob-in-project-auto-allows",
+            Bash("ls -d subdirs/*/"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        // Outside the trusted tree the same command prompts — but now with a
+        // persistent grant scoped to the covering directory, not one-shot only.
+        // This is the reported regression (0.25.3 flipped it to complex-command).
+        Case(
+            "directory-listing-glob-external-offers-persistent-grant",
+            Bash("ls -d subdirs/*/", ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["ls"], isMessy: false)),
+        // The exact reported command: the pipe folds into one approval unit and
+        // the directory glob no longer forces the whole pipeline one-shot.
+        Case(
+            "directory-listing-glob-pipeline-offers-persistent-grant",
+            Bash("ls -d subdirs/*/ | xargs -n1 basename", ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["ls", "xargs"], isMessy: false)),
         Case(
             "native-global-option-identity-gap-currently-prompts",
             Bash("git --no-pager status"),

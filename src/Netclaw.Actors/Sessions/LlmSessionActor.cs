@@ -4315,10 +4315,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!_resolvedToolApprovals.TryGetValue(call.CallId.Value, out var resolved))
                 continue;
 
-            if (resolved.Decision == ApprovalDecision.ApprovedOnce)
+            if (resolved.Decision.IsApprovalGrant())
             {
-                // ApprovedOnce has no persisted grant. Pre-seed only this call
-                // so the re-drive skips the gate once without broadening approval.
+                // Pre-seed the one-time bypass for the just-approved call so the
+                // re-drive runs it once even when its durable grant (if any) does
+                // not cover every candidate verb — e.g. a piped command's standalone
+                // verbs (base64, head) are never persisted directory-scoped.
+                // ApprovedOnce has no durable grant at all; broader scopes still
+                // record their durable grant separately. This only authorizes the
+                // immediate re-drive, matching the live pipeline and the sub-agent.
+                // See https://github.com/netclaw-dev/netclaw/issues/1802.
                 preSeed[call.CallId.Value] = resolved.Pending.Patterns;
             }
 
