@@ -54,7 +54,13 @@ The tool SHALL validate that the target path is a real directory,
 resolve it to an absolute path, and validate it against the audience
 trust profile's read-allowed roots. The tool SHALL be profile-managed
 so that audiences without directory navigation privileges (Public,
-Team by default) cannot use it.
+Team by default) cannot use it. The working-directory declaration is
+deliberately NOT granted interactive Personal shell-equivalent reach
+(netclaw-dev/netclaw#1724): it SHALL be clamped to the autonomous zone
+(session directory, project directory, and configured global read
+roots) in every audience and mode, because declaring a working
+directory widens the shell safe-verb auto-approve zone and loads
+project identity files into the system prompt.
 
 The tool description visible to the model SHALL frame the tool as
 "declare your project root and expand your trusted scope so shell
@@ -92,11 +98,17 @@ approval friction depends on doing so when the work is project-scoped.
 - **THEN** the project directory remains unchanged
 - **AND** the tool returns an error indicating the directory does not exist
 
-#### Scenario: Personal audience allows any valid directory
+#### Scenario: Personal audience clamps to the autonomous zone
 
 - **GIVEN** a session with personal audience (`ToolFilesystemMode.All`)
-- **WHEN** the agent invokes `set_working_directory` with any valid directory
-- **THEN** the project directory is updated
+- **AND** the target directory is outside the autonomous zone
+  (session directory, project directory, and configured global read roots)
+- **WHEN** the agent invokes `set_working_directory` with that valid directory
+- **THEN** the project directory is NOT updated
+- **AND** the tool returns an error indicating the target is outside the
+  session, project, or configured autonomous roots
+- **AND** `file_read` / `file_list` / `attach_file` on the same path still
+  resolve (interactive Personal shell-equivalent reach, netclaw-dev/netclaw#1724)
 
 #### Scenario: set_working_directory not exposed to public audience
 

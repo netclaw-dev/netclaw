@@ -157,7 +157,10 @@ create, modify, or remove any filesystem entry.
 same scoped read-access policy used by `file_read`, so the directories an
 audience may list are exactly that audience's resolved read roots. A target
 outside the audience's read roots SHALL be denied, and the denial message
-SHALL NOT disclose configured root paths.
+SHALL NOT disclose configured root paths. Interactive Personal-audience
+sessions are the exception: they get shell-equivalent reach, so a target
+outside the read roots SHALL resolve when the session is interactive and the
+audience is Personal. Autonomous sessions keep the hard denial.
 
 #### Scenario: Team session lists a directory within its read roots
 
@@ -309,7 +312,11 @@ supported values. The applied filter SHALL be echoed in the result.
 
 The system SHALL provide a `file_read` first-party tool that authorizes the
 requested path through the audience-scoped read-file policy before inspecting or
-reading bytes. Text-like files SHALL return decoded text for UTF-8, UTF-16/UTF-32
+reading bytes. Interactive Personal-audience sessions are the exception: they
+get shell-equivalent reach, so a path outside the read roots SHALL resolve when
+the session is interactive and the audience is Personal. Autonomous sessions
+keep the hard denial. Text-like files SHALL return decoded text for UTF-8,
+UTF-16/UTF-32
 Unicode, and common Windows-1252 text files using the existing offset/limit and
 output-truncation behavior.
 
@@ -325,6 +332,30 @@ references needed to recreate the handoff nudge during recovery.
 
 PDF extraction, OCR, audio transcription, and video keyframe extraction SHALL NOT
 be built into `file_read`.
+
+### Requirement: Attachment tool reach
+
+The system SHALL provide an `attach_file` first-party tool that sends a file to
+the user. Non-interactive, Team, and Public sessions SHALL only attach files
+inside the current session directory or a sibling Netclaw session directory.
+Interactive Personal-audience sessions get shell-equivalent reach: any path that
+resolves through the read-access policy SHALL be attachable, and the file SHALL
+be copied into the current session's attachments directory before delivery.
+
+All audiences SHALL apply the `ToolPathPolicy` read-deny surface to attached
+files: a path that `IsReadDenied` (credentials, keys, secrets, control-plane
+state, or the shell indicator list) SHALL NOT be attachable, even when the
+proximity restriction is lifted.
+
+### Requirement: Working directory declaration stays scoped
+
+The system SHALL provide a `set_working_directory` first-party tool that sets
+the session's project root. Its target SHALL be resolved through the read-access
+policy WITHOUT interactive Personal shell-equivalent reach: the working
+directory widens the shell safe-verb auto-approve zone and loads project
+identity files into the system prompt, so it SHALL be clamped to the autonomous
+zone (session directory, project directory, and global read roots) in every
+audience and mode.
 
 #### Scenario: Text file read preserves existing behavior
 

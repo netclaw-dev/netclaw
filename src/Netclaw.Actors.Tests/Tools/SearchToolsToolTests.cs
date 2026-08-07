@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -220,7 +221,9 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -255,7 +258,9 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {

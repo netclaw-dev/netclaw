@@ -26,22 +26,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor
     private readonly IToolApprovalService? _approvalService;
     private readonly ILogger _logger;
 
-    public DispatchingToolExecutor(ToolRegistry registry, ILogger<DispatchingToolExecutor>? logger = null)
-        : this(
-            registry,
-            new ToolAccessPolicy(
-                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
-                new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-                new ShellCommandPolicy()),
-            approvalService: null,
-            logger)
-    {
-    }
-
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
         IToolApprovalService? approvalService = null, ILogger<DispatchingToolExecutor>? logger = null)
     {

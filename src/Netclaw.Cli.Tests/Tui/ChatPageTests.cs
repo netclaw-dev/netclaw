@@ -458,7 +458,9 @@ public sealed class ChatPageTests
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false));
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
         var executionContext = new ToolExecutionContext(
             new ToolRunScope
             {

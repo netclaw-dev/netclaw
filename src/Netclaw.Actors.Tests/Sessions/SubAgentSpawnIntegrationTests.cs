@@ -147,7 +147,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
         var subAgentRegistry = new SubAgentDefinitionRegistry();
         var subAgentPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-subagents-{Guid.NewGuid():N}"));
         subAgentPaths.EnsureDirectoriesExist();
@@ -194,6 +195,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         services.AddSingleton(spawner);
         services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(
             registry,
+            toolAccessPolicy,
+            approvalService: null,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<DispatchingToolExecutor>.Instance));
     }
 

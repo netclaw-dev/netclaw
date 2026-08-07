@@ -154,7 +154,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     public SubAgentActor(
         SubAgentDefinition definition,
         IChatClient chatClient,
-        ToolAccessPolicy? toolAccessPolicy = null,
+        ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService = null,
         int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null)
@@ -163,17 +163,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), maxToolIterations,
                 "Sub-agent tool iteration budget must be greater than zero.");
 
+        // A sub-agent must run under a fully-wired access policy — never a
+        // degraded default that drops the deny-list / protected-path checks.
+        // Callers (SubAgentSpawner) inject the session's real policy; the
+        // non-nullable parameter enforces it.
         _definition = definition;
         _chatClient = chatClient;
         _sessionMetrics = sessionMetrics;
-        _toolAccessPolicy = toolAccessPolicy ?? new ToolAccessPolicy(
-            new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy());
+        _toolAccessPolicy = toolAccessPolicy;
         _approvalService = approvalService;
         _maxToolIterations = maxToolIterations;
         _log = Context.GetLogger();
@@ -194,7 +191,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     public static Props CreateProps(
         SubAgentDefinition definition,
         IChatClient chatClient,
-        ToolAccessPolicy? toolAccessPolicy = null,
+        ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService = null,
         int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null)
