@@ -1,0 +1,45 @@
+## 1. Baseline (precondition)
+
+- [ ] 1.1 Merge PR #1783 (connector-wide `MentionRequiredInThread`) to `dev`.
+- [ ] 1.2 Rebase `feature/mention-required-in-thread-per-channel` onto the updated `dev`; confirm the connector bool is present as the #1783 baseline the change deletes.
+- [ ] 1.3 Confirm the OpenSpec artifacts still pass `openspec validate --strict` after the rebase.
+
+## 2. Per-channel config storage
+
+- [ ] 2.1 Add a per-channel `MentionRequiredInThread` value to `SlackChannelOptions`, `DiscordChannelOptions`, and `MattermostChannelOptions`, using the existing per-channel-map pattern (mirror `ChannelAudiences`). Keep `AllowedChannelIds` and `ChannelAudiences` additive — no shape migration.
+- [ ] 2.2 Update `netclaw-config.v1.schema.json`: add the per-channel value to all three channel sections; remove the connector-wide `MentionRequiredInThread`. Respect `additionalProperties: false` (Configuration Schema Sync Rule).
+- [ ] 2.3 Delete the connector-wide `MentionRequiredInThread`: the property on the three options classes and its schema entry. No migration — it was never deployed. Its #1783 routing reads move to the per-channel resolution in §3.1; land the deletion with §3.1 so the build stays green.
+- [ ] 2.4 Binding test: a config with per-channel `MentionRequiredInThread` values binds to the options; a channel with no entry resolves to `false`.
+
+## 3. Routing gate (per-channel resolution)
+
+- [ ] 3.1 In each conversation actor (`SlackConversationActor`, `DiscordConversationActor`, `MattermostConversationActor`), resolve the effective per-channel `MentionRequiredInThread` for the message channel (default `false` when unset) and pass the resolved bool into `RoutingPolicy.Evaluate`. Keep the routing policy a pure function.
+- [ ] 3.2 Verify the routing behavior: an un-mentioned message in an active thread is held (not turned) when on; a mention creates the turn; a channel with no value keeps the active-session bypass; the value never grants access.
+- [ ] 3.3 Extend the cross-channel routing contract tests to resolve the per-channel value (on and off) across all three fixtures.
+
+## 4. Backfill re-trigger on mention
+
+- [ ] 4.1 In `SlackThreadBindingActor` and the Discord/Mattermost binding actors, re-run the existing hydration on a mention when the channel's tap held messages. Guard: only on a mention, only with a real gap (cursor strictly before thread head), only when no turn is in flight.
+- [ ] 4.2 Reuse the existing fetch, gap computation, prompt-injection gate, and merge path. Add no new fetch path and no new watermark.
+- [ ] 4.3 Test per channel: held un-mentioned messages hydrate on the mention; a live (hot) actor re-hydrates; an in-flight turn skips the re-fetch (no duplicate content, per PR #733).
+
+## 5. Config TUI
+
+- [ ] 5.1 Broaden the `EditAudience` leaf (`ChannelsConfigViewModel` / `ChannelsConfigPage`) into a per-channel detail page: show and edit `MentionRequiredInThread` next to the audience question; persist like an audience change.
+- [ ] 5.2 Seed `MentionRequiredInThread` at channel-add time from the assigned audience: `true` for Team or Public, off for Personal or a DM.
+- [ ] 5.3 Add a native smoke tape covering the `EditAudience` leaf toggle and the add-time seed (Testing Guidelines and Automation Floor).
+
+## 6. Docs and skills
+
+- [ ] 6.1 Update the per-channel config docs (`docs/spec/configuration.md` and the per-channel integration docs) to describe the per-channel value and the removal of the connector-wide bool.
+- [ ] 6.2 Update the `netclaw-operations` system skill (config format area) and bump its `metadata.version` (System Skills Sync Rule).
+- [ ] 6.3 Update netclaw-website issue #115 with the final per-channel behavior and the history-read note.
+
+## 7. Quality gates and OpenSpec close-out
+
+- [ ] 7.1 `dotnet build Netclaw.slnx` is clean; the routing, config, backfill, and TUI test selections are green.
+- [ ] 7.2 `dotnet slopwatch analyze` reports no new violations.
+- [ ] 7.3 `./scripts/Add-FileHeaders.ps1 -Verify` confirms copyright headers on all `.cs` files.
+- [ ] 7.4 `./scripts/smoke/run-smoke.sh light` passes, including the new `EditAudience` tape.
+- [ ] 7.5 `./evals/run-evals.sh` passes (the `netclaw-operations` skill content changed).
+- [ ] 7.6 `/opsx-verify`, then `/opsx-sync` the delta specs into `openspec/specs/`, then `/opsx-archive` the change.
