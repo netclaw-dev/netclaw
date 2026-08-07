@@ -1141,6 +1141,52 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidate.Verb == "echo" && candidate.Directory == workingDirectory);
     }
 
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_echo_text_question_mark_is_not_a_glob_scope()
+    {
+        // Regression for #1795: `echo "---try /stats?format=json---"` contains
+        // a `?`, which the parser classifies as a Glob token. The matcher then
+        // derives a covering directory from the static prefix (`---try`) —
+        // but the `?` is URL query syntax inside echo text, not a glob
+        // pattern, and `---try` is not a real directory. echo is a
+        // stdout-only side-effect verb, so the candidate must carry
+        // Directory == null (matching `echo "done"`). The phantom scope is
+        // what inflated the approval header to "Approve in 2 directories?".
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "echo \"---try /stats?format=json---\"",
+                ["WorkingDirectory"] = "/home/user/repos/demo"
+            });
+
+        var echoCandidate = Assert.Single(candidates);
+        Assert.Equal("echo", echoCandidate.Verb);
+        Assert.Null(echoCandidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_bare_numeric_operand_is_not_a_path_scope()
+    {
+        // Regression for #1795: `head -c 2000` treats the bare numeric
+        // operand `2000` as a path arg (slash-free token branch of
+        // IsAuthorizationPathArg) and resolves it relative to cwd, producing
+        // the phantom scope `/cwd/2000`. `head -c 2000` touches no filesystem
+        // path; head is a read-only verb with no path argument, so its
+        // candidate must carry Directory == null (like `git status`).
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "head -c 2000",
+                ["WorkingDirectory"] = "/home/user/repos/demo"
+            });
+
+        var headCandidate = Assert.Single(candidates);
+        Assert.Equal("head", headCandidate.Verb);
+        Assert.Null(headCandidate.Directory);
+    }
+
     [Fact]
     public void IsApproved_treats_side_effect_candidates_as_authorized()
     {
