@@ -20,7 +20,9 @@ namespace Netclaw.Actors.Reminders;
     "Schedule or update a reminder by ID. If a reminder with the given ID already exists it will be updated (upsert). " +
     "Supports relative durations ('30m', '2h'), interval schedules ('every 6h'), and cron ('0 */6 * * *'). " +
     "Cron schedules evaluate in UTC by default; prefix the expression with 'CRON_TZ=<time-zone-id>' " +
-    "(e.g. 'CRON_TZ=Europe/Brussels 0 9 * * *') to evaluate it in a specific time zone.",
+    "(e.g. 'CRON_TZ=Europe/Brussels 0 9 * * *') to evaluate it in a specific time zone. " +
+    "The time zone id must be an IANA identifier without spaces (e.g. 'Europe/Brussels', 'America/New_York'); " +
+    "Windows names like 'Eastern Standard Time' are not supported.",
     Grant = "scheduling")]
 public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params>
 {
@@ -38,7 +40,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string Prompt,
         [property: Description("Schedule type: 'once', 'interval', or 'cron'.")]
         string ScheduleType,
-        [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression (optional 'CRON_TZ=<time-zone-id>' prefix for timezone-aware cron).")]
+        [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression (optional 'CRON_TZ=<IANA-time-zone-id>' prefix for timezone-aware cron, e.g. 'CRON_TZ=Europe/Brussels 0 9 * * *').")]
         string Schedule,
         [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution). Required unless `delivery.kind` is provided.")]
         string? DeliveryKind = null,

@@ -11,7 +11,25 @@ audience sessions cannot use scheduling tools regardless of the config flag.
 |------|---------|
 | `once` | `"30m"`, `"2h"`, `"2026-03-15T14:30:00Z"` |
 | `interval` | `"30m"`, `"6h"`, `"1d"` |
-| `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"` |
+| `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"`, `"CRON_TZ=Europe/Brussels 0 9 * * *"` |
+
+### Cron time zones (`CRON_TZ`)
+
+Cron schedules evaluate in **UTC by default**. To anchor a schedule to a local
+time zone, prefix the expression with `CRON_TZ=<time-zone-id>` (Vixie crontab
+syntax). The prefix is stored with the expression, so it survives reschedules
+and daemon restarts, and it is DST-aware:
+
+- `CRON_TZ=Europe/Brussels 0 9 * * *` — every day at 09:00 Brussels time
+  (08:00 UTC in winter, 07:00 UTC during DST; transitions handled automatically).
+- `CRON_TZ=America/New_York 0 9 * * MON-FRI` — weekdays at 09:00 New York time.
+
+The time zone id must be an **IANA identifier without spaces** (e.g.
+`Europe/Brussels`, `America/New_York`, `Asia/Tokyo`). Windows display names
+such as `Eastern Standard Time` are not supported — the id ends at the first
+space, so multi-word names resolve to a truncated, unknown identifier and the
+reminder fails to schedule. When a user names a zone loosely ("Eastern time"),
+translate it to the IANA id (`America/New_York`) before scheduling.
 
 Delivery contract parameters:
 

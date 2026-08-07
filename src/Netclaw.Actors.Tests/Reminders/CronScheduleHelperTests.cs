@@ -106,6 +106,7 @@ public class CronScheduleHelperTests
     [InlineData("CRON_TZ=Europe/Brussels", false)] // no expression after prefix
     [InlineData("CRON_TZ= 0 9 * * *", false)] // empty zone id
     [InlineData("CRON_TZ=Not/AZone 0 9 * * *", false)] // unknown zone
+    [InlineData("CRON_TZ=Eastern Standard Time 0 9 * * *", false)] // Windows names contain spaces; IANA only
     [InlineData("CRON_TZ=Europe/Brussels not a cron", false)]
     public void TryParse_validates_cron_tz_prefix(string expr, bool expected)
     {
@@ -168,6 +169,19 @@ public class CronScheduleHelperTests
         var ex = Assert.Throws<Cronos.CronFormatException>(
             () => CronScheduleHelper.GetNextOccurrence("CRON_TZ=Not/AZone 0 9 * * *", from));
         Assert.Contains("Not/AZone", ex.Message);
+        Assert.Contains("IANA", ex.Message);
+    }
+
+    [Fact]
+    public void GetNextOccurrence_windows_style_cron_tz_zone_throws_with_iana_guidance()
+    {
+        // Windows display names contain spaces; the zone id ends at the first space,
+        // so 'Eastern Standard Time' truncates to unknown zone 'Eastern'.
+        var from = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var ex = Assert.Throws<Cronos.CronFormatException>(
+            () => CronScheduleHelper.GetNextOccurrence("CRON_TZ=Eastern Standard Time 0 9 * * *", from));
+        Assert.Contains("Eastern", ex.Message);
+        Assert.Contains("IANA", ex.Message);
     }
 
     [Fact]

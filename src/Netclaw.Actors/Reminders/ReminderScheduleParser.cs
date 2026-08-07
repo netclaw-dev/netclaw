@@ -79,7 +79,8 @@ public static partial class ReminderScheduleParser
                 {
                     return (null,
                         $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday), " +
-                        "optionally preceded by 'CRON_TZ=<time-zone-id>' to evaluate the schedule in a specific time zone.");
+                        "optionally preceded by 'CRON_TZ=<IANA-time-zone-id>' (no spaces in the zone id, e.g. 'Europe/Brussels') " +
+                        "to evaluate the schedule in a specific time zone.");
                 }
 
                 return (new ReminderSchedule

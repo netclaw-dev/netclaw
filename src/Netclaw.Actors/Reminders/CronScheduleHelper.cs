@@ -13,6 +13,12 @@ namespace Netclaw.Actors.Reminders;
 /// Supports an optional leading <c>CRON_TZ=&lt;time-zone-id&gt;</c> prefix (Vixie crontab syntax)
 /// to evaluate the schedule in a specific time zone; without it, schedules are evaluated in UTC.
 /// </summary>
+/// <remarks>
+/// Time zone identifiers in the <c>CRON_TZ</c> prefix must be IANA identifiers without spaces
+/// (e.g. <c>Europe/Brussels</c>, <c>America/New_York</c>). Windows display names such as
+/// <c>Eastern Standard Time</c> are not supported: the zone id ends at the first space, so
+/// multi-word names would resolve to a truncated, unknown identifier. Use IANA names instead.
+/// </remarks>
 public static class CronScheduleHelper
 {
     private const string CronTzPrefix = "CRON_TZ=";
@@ -85,6 +91,9 @@ public static class CronScheduleHelper
     /// Splits an optional <c>CRON_TZ=&lt;time-zone-id&gt;</c> prefix from the expression and
     /// resolves the zone. Returns <see cref="TimeZoneInfo.Utc"/> when no prefix is present.
     /// Throws <see cref="CronFormatException"/> when the prefix references an unknown time zone.
+    /// The zone id must be an IANA identifier without spaces (e.g. <c>Europe/Brussels</c>);
+    /// it ends at the first space, so multi-word Windows names like <c>Eastern Standard Time</c>
+    /// are not supported.
     /// </summary>
     internal static (string Fields, TimeZoneInfo TimeZone) SplitTimeZone(string cronExpression)
     {
@@ -100,7 +109,8 @@ public static class CronScheduleHelper
 
         var zoneId = rest[..spaceIndex].Trim();
         if (zoneId.Length == 0)
-            throw new CronFormatException("CRON_TZ prefix requires a time zone identifier.");
+            throw new CronFormatException(
+                "CRON_TZ prefix requires a time zone identifier. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
 
         try
         {
@@ -109,11 +119,13 @@ public static class CronScheduleHelper
         }
         catch (TimeZoneNotFoundException)
         {
-            throw new CronFormatException($"Unknown time zone '{zoneId}' in CRON_TZ prefix.");
+            throw new CronFormatException(
+                $"Unknown time zone '{zoneId}' in CRON_TZ prefix. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
         }
         catch (InvalidTimeZoneException)
         {
-            throw new CronFormatException($"Invalid time zone '{zoneId}' in CRON_TZ prefix.");
+            throw new CronFormatException(
+                $"Invalid time zone '{zoneId}' in CRON_TZ prefix. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
         }
     }
 
