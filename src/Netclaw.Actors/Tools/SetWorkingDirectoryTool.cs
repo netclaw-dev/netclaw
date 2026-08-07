@@ -47,7 +47,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
         if (string.IsNullOrEmpty(raw))
             return Task.FromResult("Error: path is required.");
 
-        if (!_fileAccessPolicy.TryResolveReadPath(raw, context, out var fullPath, out var accessError))
+        if (!_fileAccessPolicy.TryResolveWorkingDirectory(raw, context, out var fullPath, out var accessError))
             return Task.FromResult(accessError);
 
         if (!Directory.Exists(fullPath))

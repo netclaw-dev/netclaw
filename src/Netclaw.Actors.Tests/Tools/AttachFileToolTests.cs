@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -14,7 +15,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class AttachFileToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly AttachFileTool _tool = new(new ToolConfig(), new NetclawPaths());
+    private readonly AttachFileTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
     public void Dispose()
     {
@@ -40,13 +41,21 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Path_traversal_attempt_is_rejected()
     {
-        // Create a file outside the session directory
+        // Autonomous Personal: the out-of-session boundary holds for
+        // non-interactive sessions (#1724). Interactive Personal gets
+        // shell-equivalent reach instead.
         var outsidePath = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(outsidePath, "sensitive data", TestContext.Current.CancellationToken);
 
         try
         {
-            var context = TestToolExecutionContext.CreateBound("test-session", _dir.Path, TrustAudience.Personal);
+            var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+                ChannelType = "reminder"
+            });
             var args = ToolInput.Create("Path", outsidePath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -63,7 +72,14 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Dotdot_traversal_is_rejected()
     {
-        var context = TestToolExecutionContext.CreateBound("test-session", _dir.Path, TrustAudience.Personal);
+        // Autonomous Personal: dotdot escape is denied outside the zone (#1724).
+        var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+            ChannelType = "reminder"
+        });
         var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "..", "..", "etc", "passwd"));
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -156,12 +172,20 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Prefix_collision_path_is_rejected()
     {
+        // Autonomous Personal: a sibling directory sharing the session dir's
+        // name prefix is outside the zone and denied (#1724).
         var outsideDir = _dir.Path + "-outside";
         Directory.CreateDirectory(outsideDir);
         var outsideFile = Path.Combine(outsideDir, "secret.txt");
         await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
-        var context = TestToolExecutionContext.CreateBound("test-session", _dir.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+            ChannelType = "reminder"
+        });
         var args = ToolInput.Create("Path", outsideFile);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -174,6 +198,9 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Symlink_to_outside_file_is_rejected()
     {
+        // Autonomous Personal: a symlink in the session dir that resolves
+        // outside is denied by the proximity gate (#1724). Interactive Personal
+        // gets shell-equivalent reach instead.
         var outsideFile = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         var symlinkPath = Path.Combine(_dir.Path, "linked.txt");
 
@@ -183,13 +210,21 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsideFile);
 
-            var context = TestToolExecutionContext.CreateBound("test-session", _dir.Path, TrustAudience.Personal);
+            var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+                ChannelType = "reminder"
+            });
             var args = ToolInput.Create("Path", symlinkPath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
+            // The autonomous zone rejects symlinked paths outright — stricter
+            // than the proximity gate, and the intended behavior (#1724).
             Assert.Contains("Error", result);
-            Assert.Contains("session directory", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("symlink", result, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(context.FileAttachments);
         }
         catch (UnauthorizedAccessException)
@@ -278,11 +313,12 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsidePath);
 
-            var context = TestToolExecutionContext.CreateBound("signalr/thread-1", currentSessionDir, new TestToolExecutionContextOptions
-        {
+            var context = TestToolExecutionContext.CreateBound("reminder/thread-1", currentSessionDir, new TestToolExecutionContextOptions
+            {
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.TrustedInstance,
-                ChannelType = "signalr"
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+                ChannelType = "reminder"
             });
             var args = ToolInput.Create("Path", symlinkPath);
 

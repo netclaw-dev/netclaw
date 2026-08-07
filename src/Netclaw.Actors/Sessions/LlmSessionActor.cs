@@ -570,6 +570,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ToolFailure;
+
+            // A partial parallel-batch failure leaves the tail assistant tool_calls
+            // message with unanswered call(s) — the sibling(s) that faulted. Close
+            // those out with synthetic tool-results BEFORE FailCurrentTurn appends the
+            // "I encountered an error" assistant reply. Otherwise that reply wedges
+            // between the tool_calls message and the rest of its results, which strict
+            // OpenAI-compatible providers (DeepSeek/Qwen/vLLM) reject on every later
+            // turn with 400 "insufficient tool messages following tool_calls".
+            if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null)
+            {
+                var abandoned = BuildToolBatchAbandonedEvent(
+                    "Tool call was not completed — the tool run failed.");
+                Persist(abandoned, evt =>
+                {
+                    ApplyToolBatchAbandoned(evt);
+                    FailCurrentTurn(errorMessage, msg.Cause, category);
+                });
+                return;
+            }
+
             FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 

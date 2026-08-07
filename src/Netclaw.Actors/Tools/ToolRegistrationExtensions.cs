@@ -40,7 +40,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new FileListTool(config, paths, pathPolicy));
         registry.Register(new FileWriteTool(config, paths, pathPolicy));
         registry.Register(new FileEditTool(config, paths, pathPolicy));
-        registry.Register(new AttachFileTool(config, paths));
+        registry.Register(new AttachFileTool(config, paths, pathPolicy));
         if (webhookRouteStore is not null)
         {
             registry.Register(new SetWebhookTool(webhookRouteStore));

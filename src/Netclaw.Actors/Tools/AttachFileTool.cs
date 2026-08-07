@@ -23,14 +23,16 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 {
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
         [property: Description("Absolute path to the file to attach")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
-    public AttachFileTool(ToolConfig config, NetclawPaths paths)
+    public AttachFileTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+        _pathPolicy = pathPolicy;
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -44,13 +46,27 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         if (!_fileAccessPolicy.TryResolveAttachPath(args.Path, context, out var requestedPath, out var accessError))
             return Task.FromResult(accessError);
 
+        // Same hard-deny surface as file_read/file_list: attach must never ship
+        // control-plane files (secrets, keys, webhooks, config, sqlite, pid,
+        // lock, restart manifest) that shell cannot even reference (#1724).
+        if (_pathPolicy.IsReadDenied(requestedPath))
+            return Task.FromResult(FileToolErrors.CredentialReadDenied(requestedPath));
+
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
+
+        // Interactive Personal-audience sessions get shell-equivalent reach:
+        // shell can attach anything it can read, so the session-proximity
+        // restriction is lifted for them. The out-of-session file is still
+        // copied into this session's attachments directory below, preserving
+        // delivery semantics. Non-interactive, Team, and Public sessions keep
+        // the proximity gate.
+        var interactivePersonalReach = ScopedFileAccessPolicy.HasInteractivePersonalReach(context);
 
         var requestedInCurrentSession = PathUtility.IsWithinRoot(requestedPath, sessionDir);
         var requestedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(requestedPath, sessionRoot);
 
-        if (!requestedInCurrentSession && !requestedInSessionRoot)
+        if (!interactivePersonalReach && !requestedInCurrentSession && !requestedInSessionRoot)
         {
             return Task.FromResult(
                 $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
@@ -60,10 +76,17 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult($"Error: File not found: {requestedPath}");
 
         var resolvedPath = ResolveFinalPath(requestedPath);
+
+        // Defense-in-depth: re-check the deny against the symlink-resolved
+        // target so any future divergence between requestedPath and resolvedPath
+        // cannot widen attach's surface.
+        if (_pathPolicy.IsReadDenied(resolvedPath))
+            return Task.FromResult(FileToolErrors.CredentialReadDenied(resolvedPath));
+
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
         var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
 
-        if (!resolvedInCurrentSession && !resolvedInSessionRoot)
+        if (!interactivePersonalReach && !resolvedInCurrentSession && !resolvedInSessionRoot)
         {
             return Task.FromResult(
                 $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
