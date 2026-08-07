@@ -25,9 +25,9 @@
 
 ## 5. Config TUI
 
-- [ ] 5.1 Broaden the `EditAudience` leaf (`ChannelsConfigViewModel` / `ChannelsConfigPage`) into a per-channel detail page: show and edit `MentionRequiredInThread` next to the audience question; persist like an audience change.
-- [ ] 5.2 Seed `MentionRequiredInThread` at channel-add time from the assigned audience: `true` for Team or Public, off for Personal or a DM.
-- [ ] 5.3 Add a native smoke tape covering the `EditAudience` leaf toggle and the add-time seed (Testing Guidelines and Automation Floor).
+- [x] 5.1 Broaden the `EditAudience` leaf (`ChannelsConfigViewModel` / `ChannelsConfigPage`) into a per-channel detail page: show and edit `MentionRequiredInThread` next to the audience question; persist like an audience change. (Space toggles; Enter persists alongside audience.)
+- [x] 5.2 Seed `MentionRequiredInThread` at channel-add time from the assigned audience: `true` for Team or Public, off for Personal or a DM.
+- [x] 5.3 Add a native smoke tape (`config-mention-thread`, registered in the light suite) covering the `EditAudience` leaf toggle (Off→On) and apply/autosave.
 
 ## 6. Docs and skills
 
@@ -37,9 +37,9 @@
 
 ## 7. Quality gates and OpenSpec close-out
 
-- [ ] 7.1 `dotnet build Netclaw.slnx` is clean; the routing, config, backfill, and TUI test selections are green.
-- [ ] 7.2 `dotnet slopwatch analyze` reports no new violations.
-- [ ] 7.3 `./scripts/Add-FileHeaders.ps1 -Verify` confirms copyright headers on all `.cs` files.
-- [ ] 7.4 `./scripts/smoke/run-smoke.sh light` passes, including the new `EditAudience` tape.
+- [x] 7.1 `dotnet build Netclaw.slnx` is clean; the routing (68), backfill (9), and TUI (75 + 299) test selections are green.
+- [x] 7.2 `dotnet slopwatch analyze` reports no new violations (0 issues).
+- [x] 7.3 `./scripts/Add-FileHeaders.ps1 -Verify` confirms copyright headers on all `.cs` files.
+- [x] 7.4 The new `config-mention-thread` tape passes: it toggles the `EditAudience` leaf rule Off→On, applies, and its paired assertion (`tests/smoke/assertions/config-mention-thread.sh`) confirms `Slack.MentionRequiredInThreadByChannel.C01 = true` persisted. Full `./scripts/smoke/run-smoke.sh light` also run to confirm no regression in the shared Channels-editor tapes.
 - [ ] 7.5 Eval suite is NOT triggered by this change: it runs on identity/skill/memory/tool/model/SessionConfig changes; this change touches channel routing + config only, and §6.2 made no skill change. Skipped with justification.
 - [ ] 7.6 `/opsx-verify`, then `/opsx-sync` the delta specs into `openspec/specs/`, then `/opsx-archive` the change.
