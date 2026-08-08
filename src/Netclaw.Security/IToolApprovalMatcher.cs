@@ -511,12 +511,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// Rebuilds one clause's user-facing text from its parsed parts: verb
     /// chain, positional/flag args, and redirects. Synthetic cd-attribution
     /// args are dropped — they carry an inherited cwd, not a token the user
-    /// typed. Call-specific value arguments (issue #1331, generalized to
-    /// digit-bearing tokens — see <see cref="IsCallSpecificValueToken"/>)
-    /// are also excluded since they vary between invocations of the same
-    /// verb chain. Once a value token is encountered, the greedy walk
-    /// terminates — subsequent args (wrapped subcommands like <c>curl</c>
-    /// after <c>timeout 30</c>) are outside the approval intent.
+    /// typed. Call-specific value arguments are also excluded since they vary
+    /// between invocations of the same verb chain: digit-bearing tokens
+    /// (issue #1331, see <see cref="IsCallSpecificValueToken"/>), multi-line
+    /// quoted strings (issue #1402, see <see cref="ContainsLineBreak"/>), and
+    /// single-line quoted free text (issue #1406, see
+    /// <see cref="IsQuotedFreeTextArg"/>). Once such a token is encountered,
+    /// the greedy walk terminates — subsequent args (wrapped subcommands like
+    /// <c>curl</c> after <c>timeout 30</c>) are outside the approval intent.
     /// The result is fed back through
     /// <see cref="ShellTokenizer.NormalizeApprovalUnit"/> for path
     /// normalization, so this only needs to emit a clean token sequence.
@@ -547,6 +549,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             // pattern's display. Like the digit rule above, hitting one
             // terminates the walk.
             if (ContainsLineBreak(arg.Raw))
+                break;
+
+            // Issue #1406: a single-line quoted operand whose text holds
+            // internal whitespace (a commit message, a ticket body, an inline
+            // note) is call-specific free text. Every unique value would
+            // otherwise become a new stored pattern that re-prompts. Same
+            // termination mechanism as the digit (#1331) and multi-line
+            // (#1402) rules. A path arg is exempt so a quoted path with a
+            // space keeps its directory scope (see IsQuotedFreeTextArg).
+            if (IsQuotedFreeTextArg(arg))
                 break;
 
             if (sb.Length > 0)
@@ -616,6 +628,58 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         foreach (var c in token)
         {
             if (char.IsAsciiDigit(c))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="arg"/> is a quote-wrapped operand whose text
+    /// holds internal whitespace and is not a path (issue #1406). Such an
+    /// operand is call-specific free text — a commit message, a ticket body,
+    /// an inline note — that varies between invocations of the same verb
+    /// chain, so it must not enter the stored approval pattern. Like the
+    /// digit-bearing (#1331) and multi-line (#1402) rules, hitting one
+    /// terminates the reconstruction walk.
+    /// <para>
+    /// The rule is deliberately narrow so it never widens a grant:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>Only a single matching quote pair qualifies. An unquoted token
+    /// cannot hold internal whitespace — the shell splits it into separate
+    /// args — so a single-word quoted arg (<c>git commit -m "fix"</c>) has no
+    /// internal whitespace, stays in the pattern, and normalizes the same as
+    /// its unquoted form.</item>
+    /// <item>A path arg is exempt. Its directory is authorization state that
+    /// <see cref="ExtractCandidatesViaBashAnalysis"/> resolves separately from
+    /// the same parsed <c>Arg</c>, so a quoted path with a space
+    /// (<c>cat "my file.txt"</c>) keeps its scope. Only a value operand, never
+    /// a path, drops here.</item>
+    /// </list>
+    /// This rule only shapes the stored/display pattern. It does not touch the
+    /// gate candidate or the live authorization decision, which re-parse each
+    /// command and scope every path arg through the zone gate.
+    /// </summary>
+    private static bool IsQuotedFreeTextArg(ShellSyntaxTree.Arg arg)
+    {
+        if (arg.IsPath)
+            return false;
+
+        var raw = arg.Raw;
+
+        // A single matching quote pair around at least one inner character.
+        // The shortest droppable form is quote + whitespace + quote (length 3).
+        if (raw.Length < 3)
+            return false;
+
+        var quote = raw[0];
+        if (quote is not ('"' or '\'') || raw[^1] != quote)
+            return false;
+
+        for (var i = 1; i < raw.Length - 1; i++)
+        {
+            if (char.IsWhiteSpace(raw[i]))
                 return true;
         }
 

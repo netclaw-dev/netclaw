@@ -364,6 +364,93 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_line_quoted_free_text_terminates_pattern_at_flag()
+    {
+        // Issue #1406: a single-line quoted commit message is call-specific
+        // free text, not approvable intent. The stored pattern stops at the
+        // flag so a later commit with a different message still matches.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("git commit -m \"fix the bug\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("git commit -m", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_line_quoted_body_drops_from_pattern()
+    {
+        // Issue #1406: the ticket body is a single-line quoted operand with
+        // internal whitespace, so it drops before it inflates the pattern.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply --message \"Single line body\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("freshdesk ticket reply --message", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_word_quoted_arg_is_kept()
+    {
+        // A single-word quoted arg has no internal whitespace, so it stays in
+        // the pattern and normalizes the same as its unquoted form — the drop
+        // rule targets only multi-word quoted free text.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("git commit -m \"fix\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("git commit -m fix", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_quoted_glob_without_internal_whitespace_is_kept()
+    {
+        // `"*.cs"` is quoted but has no internal whitespace, so the drop rule
+        // leaves it in the pattern — only whitespace-bearing free text drops.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("find . -name \"*.cs\"", "/srv/project"));
+
+        Assert.Single(patterns);
+        Assert.Contains("-name", patterns[0]);
+        Assert.Contains("*.cs", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractCandidates_quoted_path_with_space_keeps_directory_scope()
+    {
+        // Security: the drop rule shapes only the stored pattern. A quoted
+        // path with a space is authorization state — ExtractCandidates still
+        // scopes the candidate to the file's parent directory.
+        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+            Args("cat \"my file.txt\"", "/srv/project"));
+
+        Assert.Contains(candidates, c => c.Verb == "cat" && c.Directory == "/srv/project");
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractCandidates_quoted_free_text_before_path_keeps_path_scope()
+    {
+        // The quoted search pattern `"foo bar"` is free text and never becomes
+        // a scope, while the trailing path operand still scopes the candidate.
+        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+            Args("grep \"foo bar\" ./notes.txt", "/srv/project"));
+
+        Assert.Contains(candidates, c => c.Verb == "grep" && c.Directory == "/srv/project");
+        Assert.DoesNotContain(candidates, c => c.Directory is not null && c.Directory.Contains("foo"));
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_single_line_quoted_free_text_shows_full_command()
+    {
+        // The drop rule is pattern-only: a single-line command has no line
+        // break, so the operator still sees the full message verbatim in the
+        // approval prompt. Only the stored pattern omits the body.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("git commit -m \"fix the bug\""));
+
+        Assert.Equal("git commit -m \"fix the bug\"", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
     public void FormatForDisplay_carriage_return_arg_is_summarized()
     {
         var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
