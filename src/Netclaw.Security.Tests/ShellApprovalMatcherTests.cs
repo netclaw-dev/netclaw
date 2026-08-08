@@ -1244,6 +1244,72 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Null(headCandidate.Directory);
     }
 
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void IsApproved_numeric_token_that_names_an_escaping_symlink_still_prompts()
+    {
+        // Security regression for the #1795 numeric guard. `cat 2000` where
+        // `2000` is a symlink out of the granted tree must NOT auto-approve.
+        // The guard drops a numeric operand only when no filesystem entry
+        // exists at its path. A real symlink named `2000` stays a path arg, so
+        // its scope survives and the symlink-segment check in
+        // MatchesShellApproval refuses the folder grant. A purely syntactic
+        // guard would drop `2000`, collapse the scope to the cwd, skip the
+        // symlink check, and auto-approve a read outside the tree.
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-numeric-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var externalSecret = Path.Combine(externalDirectory, "secret.txt");
+        var link = Path.Combine(projectDirectory, "2000");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(externalSecret, "secret");
+        File.CreateSymbolicLink(link, externalSecret);
+
+        try
+        {
+            var approved = new[] { new ApprovalEntry("cat") { Directory = projectDirectory } };
+            Assert.False(_matcher.IsApproved(
+                new ToolName("shell_execute"),
+                Args("cat 2000", projectDirectory),
+                approved,
+                cwd: projectDirectory));
+        }
+        finally
+        {
+            File.Delete(link);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void IsApproved_numeric_token_that_names_a_real_in_tree_directory_is_covered_by_grant()
+    {
+        // Complement to the symlink case. `cat 2000` where `2000` is a real
+        // directory inside the granted tree keeps its scope and is covered by
+        // the folder grant. This proves the existence gate does not over-block
+        // a legitimate in-tree entry, and that the numeric token stays a path
+        // when a real object exists.
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-numeric-dir-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var numericDirectory = Path.Combine(projectDirectory, "2000");
+        Directory.CreateDirectory(numericDirectory);
+
+        try
+        {
+            var approved = new[] { new ApprovalEntry("cat") { Directory = projectDirectory } };
+            Assert.True(_matcher.IsApproved(
+                new ToolName("shell_execute"),
+                Args("cat 2000", projectDirectory),
+                approved,
+                cwd: projectDirectory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void IsApproved_treats_side_effect_candidates_as_authorized()
     {

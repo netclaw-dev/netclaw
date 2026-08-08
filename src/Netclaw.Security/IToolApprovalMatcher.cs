@@ -410,12 +410,24 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // Temporary containment for #1795. ShellSyntaxTree 0.2 tags a bare
         // numeric operand such as `head -c 2000` as a path arg. The matcher
         // then makes a phantom scope `/cwd/2000`. A token of only ASCII digits
-        // with no `/` is a numeric value, not a path. Reject it. This guard is
-        // narrow: `2000.txt`, `file1234`, and `1234/x` still pass. This code
-        // only removes a false scope. It never grants a new one. ShellSyntaxTree
+        // is normally a numeric value, not a path.
+        //
+        // Drop the token ONLY when no filesystem entry exists at its resolved
+        // path. A real file, directory, or symlink named `2000` stays a path
+        // arg, so its directory scope and the later symlink-segment check
+        // survive. Without this existence gate, `cat 2000` where `2000` is a
+        // symlink out of the granted tree would collapse to the cwd and skip
+        // the symlink check — a prompt-to-auto-approve escalation on the ACL
+        // perimeter. ShouldDropNumericToken safe-fails: it keeps the arg as a
+        // path on any doubt, so the gate prompts. This guard stays narrow:
+        // `2000.txt`, `file1234`, and `1234/x` still pass. This code only
+        // removes a false scope. It never grants a new one. ShellSyntaxTree
         // v0.3.0 classifies the operand in the parser. Remove this guard then.
-        if (arg.Raw.Length > 0 && arg.Raw.All(char.IsAsciiDigit))
+        if (arg.Raw.Length > 0 && arg.Raw.All(char.IsAsciiDigit)
+            && ShouldDropNumericToken(arg, workingDirectory))
+        {
             return false;
+        }
 
         if (ShellTokenizer.IsPathToken(arg.Raw) || !arg.Raw.Contains('/', StringComparison.Ordinal))
             return true;
@@ -447,6 +459,51 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                                       or System.Security.SecurityException)
         {
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Decides if an all-digit operand is a plain numeric value and not a real
+    /// filesystem object. This is temporary containment for #1795. It returns
+    /// <c>true</c> only when the matcher can prove no entry exists at the
+    /// resolved path. On any doubt it returns <c>false</c>, so the caller keeps
+    /// the token as a path and the gate prompts. It never fails toward an
+    /// automatic grant.
+    /// </summary>
+    private static bool ShouldDropNumericToken(ShellSyntaxTree.Arg arg, string? workingDirectory)
+    {
+        try
+        {
+            var token = string.IsNullOrWhiteSpace(arg.Resolved) ? arg.Raw : arg.Resolved;
+
+            string path;
+            if (Path.IsPathRooted(token))
+            {
+                path = token;
+            }
+            else if (!string.IsNullOrWhiteSpace(workingDirectory))
+            {
+                path = Path.Combine(workingDirectory, token);
+            }
+            else
+            {
+                // No absolute path to probe. Keep the token as a path.
+                return false;
+            }
+
+            // File.Exists and Directory.Exists follow a symlink to its target.
+            // A real symlink to an outside path returns true here, so the token
+            // stays a path and keeps its symlink-segment check downstream.
+            return !File.Exists(path) && !Directory.Exists(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or UnauthorizedAccessException
+                                      or System.Security.SecurityException)
+        {
+            // The probe failed. Keep the token as a path so the gate prompts.
+            return false;
         }
     }
 
