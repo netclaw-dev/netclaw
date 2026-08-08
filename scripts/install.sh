@@ -19,6 +19,7 @@
 # Environment variables:
 #   INSTALL_DIR     — Install directory (default: ~/.netclaw/bin)
 #   NETCLAW_VERSION — Specific version to install (overrides --channel; e.g. 0.19.0-beta.1)
+#   FEED_BASE_URL   — Release feed URL (default: https://releases.netclaw.dev)
 
 set -euo pipefail
 
@@ -29,9 +30,8 @@ else
     CURL_PROGRESS=(-s)
 fi
 
-# MANIFEST_URL is overridable so the script can be pointed at a local manifest
-# (smoke tests) or a private mirror.
-MANIFEST_URL="${MANIFEST_URL:-https://releases.netclaw.dev/manifest.json}"
+# Feed base URL can point at a private mirror or a local smoke-test server.
+FEED_BASE_URL="${FEED_BASE_URL:-https://releases.netclaw.dev}"
 
 # ── Argument parsing ──
 COMPONENT="all"        # "all", "cli", or "daemon"
@@ -125,56 +125,6 @@ sha256_file() {
     fi
 }
 
-# ── JSON field extraction (no jq dependency) ──
-# Uses jq if available, falls back to grep/sed
-json_field() {
-    local json="$1" field="$2"
-    if command -v jq >/dev/null 2>&1; then
-        echo "$json" | jq -r "$field"
-    else
-        # Simple grep/sed fallback for flat JSON fields
-        echo "$json" | grep -o "\"${field#.}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed 's/.*: *"\(.*\)"/\1/'
-    fi
-}
-
-json_asset_field() {
-    local json="$1" version="$2" component="$3" rid="$4" field="$5"
-
-    # Release manifests contain flat release and asset objects. Splitting object
-    # boundaries lets POSIX awk select an asset without depending on property order
-    # or GNU-only regular-expression extensions.
-    printf '%s\n' "$json" | tr '{' '\n' | tr '}' '\n' | awk \
-        -v wanted_version="$version" \
-        -v wanted_component="$component" \
-        -v wanted_rid="$rid" \
-        -v wanted_field="$field" '
-        function string_field(record, name, value) {
-            if (index(record, "\"" name "\"") == 0) {
-                return ""
-            }
-
-            value = record
-            sub(".*\"" name "\"[[:space:]]*:[[:space:]]*\"", "", value)
-            sub("\".*", "", value)
-            return value
-        }
-
-        {
-            release_version = string_field($0, "version")
-            if (release_version != "") {
-                current_version = release_version
-            }
-
-            if (current_version == wanted_version &&
-                string_field($0, "component") == wanted_component &&
-                string_field($0, "rid") == wanted_rid) {
-                print string_field($0, wanted_field)
-                exit
-            }
-        }
-    '
-}
-
 validate_install_dir_for_path() {
     local install_dir="$1"
 
@@ -202,38 +152,62 @@ if [ "$DRY_RUN" = true ]; then
 fi
 echo ""
 
-# Fetch manifest
-echo "Fetching release manifest..."
-MANIFEST=$(curl -sSL --fail "$MANIFEST_URL") || {
-    echo "Error: Failed to fetch manifest from $MANIFEST_URL" >&2
-    exit 1
+# ── Version + asset resolution ──
+# The release feed has plain-text channel pointers. The shell installer does
+# not parse manifest.json.
+resolve_version() {
+    if [ -n "${NETCLAW_VERSION:-}" ]; then
+        VERSION="$NETCLAW_VERSION"
+        return 0
+    fi
+
+    local pointer="latest"
+    [ "$CHANNEL" = "beta" ] && pointer="latest-prerelease"
+    local pointer_url="$FEED_BASE_URL/$pointer"
+    local fetched
+    if ! fetched=$(curl -fsSL --max-time 10 "$pointer_url"); then
+        echo "Error: Failed to fetch release channel from $pointer_url" >&2
+        exit 1
+    fi
+    fetched="${fetched%$'\r'}"
+    if [ -z "$fetched" ] || [[ "$fetched" == *$'\n'* || "$fetched" == *$'\r'* || "$fetched" == *[[:space:]]* ]]; then
+        echo "Error: Release channel endpoint returned an invalid version: $pointer_url" >&2
+        exit 1
+    fi
+    VERSION="$fetched"
+    echo "  Resolved $CHANNEL channel from $pointer_url"
 }
 
-# Determine version. Precedence: explicit pin > channel selection > stable latest.
-if [ -n "${NETCLAW_VERSION:-}" ]; then
-    VERSION="$NETCLAW_VERSION"
-elif [ "$CHANNEL" = "beta" ]; then
-    # Beta channel resolves to latestPrerelease (the newest of {stable, prerelease}).
-    VERSION=$(json_field "$MANIFEST" ".latestPrerelease")
-    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-        # Manifest predates the prerelease channel — use latest stable and say so
-        # loudly. This is the newest known version, not a silent default.
-        echo "  Note: manifest has no prerelease channel; using latest stable." >&2
-        VERSION=$(json_field "$MANIFEST" ".latest")
+# ── Asset resolution ──
+# URL layout is deterministic: $FEED_BASE_URL/$VERSION/$component-$VERSION-$RID.{tar.gz|zip}.
+# Every archive requires a checksum from checksums-$RID.txt.
+resolve_asset() {
+    local component="$1"
+    local ext="tar.gz"
+    [ "$RID" = "win-x64" ] && ext="zip"
+    url="$FEED_BASE_URL/$VERSION/$component-$VERSION-$RID.$ext"
+
+    local checksum_url="$FEED_BASE_URL/$VERSION/checksums-$RID.txt"
+    local checksums
+    if ! checksums=$(curl -fsSL --max-time 10 "$checksum_url"); then
+        echo "  Error: Failed to fetch checksum file from $checksum_url" >&2
+        return 1
     fi
-else
-    VERSION=$(json_field "$MANIFEST" ".latest")
-fi
 
-if [ -z "$VERSION" ]; then
-    echo "Error: Could not determine latest version from manifest" >&2
-    exit 1
-fi
+    sha256=$(printf '%s\n' "$checksums" | awk -v f="$component-$VERSION-$RID.$ext" '$2 == f { print $1; exit }')
+    if [ -z "$sha256" ]; then
+        echo "  Error: No checksum found for $component-$VERSION-$RID.$ext" >&2
+        return 1
+    fi
 
+    return 0
+}
+
+resolve_version
 echo "  Version: $VERSION"
 echo ""
 
-# Parse assets using jq if available, otherwise use a simpler approach
+# Create a private download directory.
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -241,15 +215,11 @@ download_component() {
     local component="$1"
     local url sha256
 
-    if command -v jq >/dev/null 2>&1; then
-        url=$(echo "$MANIFEST" | jq -r ".releases[] | select(.version==\"$VERSION\") | .assets[] | select(.component==\"$component\" and .rid==\"$RID\") | .url")
-        sha256=$(echo "$MANIFEST" | jq -r ".releases[] | select(.version==\"$VERSION\") | .assets[] | select(.component==\"$component\" and .rid==\"$RID\") | .sha256")
-    else
-        url=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "url")
-        sha256=$(json_asset_field "$MANIFEST" "$VERSION" "$component" "$RID" "sha256")
+    if ! resolve_asset "$component"; then
+        return 1
     fi
 
-    if [ -z "$url" ] || [ "$url" = "null" ]; then
+    if [ -z "$url" ]; then
         echo "  Warning: No $component binary found for $RID in version $VERSION" >&2
         return 1
     fi
@@ -268,7 +238,7 @@ download_component() {
         return 1
     }
 
-    # Verify checksum
+    # Verify every archive before extraction.
     echo "  Verifying checksum..."
     local actual_sha
     actual_sha=$(sha256_file "$TMPDIR/$filename")

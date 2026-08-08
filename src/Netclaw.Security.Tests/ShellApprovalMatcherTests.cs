@@ -364,6 +364,93 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_line_quoted_free_text_terminates_pattern_at_flag()
+    {
+        // Issue #1406: a single-line quoted commit message is call-specific
+        // free text, not approvable intent. The stored pattern stops at the
+        // flag so a later commit with a different message still matches.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("git commit -m \"fix the bug\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("git commit -m", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_line_quoted_body_drops_from_pattern()
+    {
+        // Issue #1406: the ticket body is a single-line quoted operand with
+        // internal whitespace, so it drops before it inflates the pattern.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("freshdesk ticket reply --message \"Single line body\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("freshdesk ticket reply --message", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_single_word_quoted_arg_is_kept()
+    {
+        // A single-word quoted arg has no internal whitespace, so it stays in
+        // the pattern and normalizes the same as its unquoted form — the drop
+        // rule targets only multi-word quoted free text.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("git commit -m \"fix\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("git commit -m fix", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_quoted_glob_without_internal_whitespace_is_kept()
+    {
+        // `"*.cs"` is quoted but has no internal whitespace, so the drop rule
+        // leaves it in the pattern — only whitespace-bearing free text drops.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("find . -name \"*.cs\"", "/srv/project"));
+
+        Assert.Single(patterns);
+        Assert.Contains("-name", patterns[0]);
+        Assert.Contains("*.cs", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractCandidates_quoted_path_with_space_keeps_directory_scope()
+    {
+        // Security: the drop rule shapes only the stored pattern. A quoted
+        // path with a space is authorization state — ExtractCandidates still
+        // scopes the candidate to the file's parent directory.
+        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+            Args("cat \"my file.txt\"", "/srv/project"));
+
+        Assert.Contains(candidates, c => c.Verb == "cat" && c.Directory == "/srv/project");
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractCandidates_quoted_free_text_before_path_keeps_path_scope()
+    {
+        // The quoted search pattern `"foo bar"` is free text and never becomes
+        // a scope, while the trailing path operand still scopes the candidate.
+        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+            Args("grep \"foo bar\" ./notes.txt", "/srv/project"));
+
+        Assert.Contains(candidates, c => c.Verb == "grep" && c.Directory == "/srv/project");
+        Assert.DoesNotContain(candidates, c => c.Directory is not null && c.Directory.Contains("foo"));
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_single_line_quoted_free_text_shows_full_command()
+    {
+        // The drop rule is pattern-only: a single-line command has no line
+        // break, so the operator still sees the full message verbatim in the
+        // approval prompt. Only the stored pattern omits the body.
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("git commit -m \"fix the bug\""));
+
+        Assert.Equal("git commit -m \"fix the bug\"", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
     public void FormatForDisplay_carriage_return_arg_is_summarized()
     {
         var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
@@ -607,6 +694,35 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     };
 
     /// <summary>
+    /// Directory-listing globs: a trailing slash restricts the wildcard to
+    /// directories (<c>foo/*/</c>) but adds no descendant path segment — every
+    /// match is still a direct child of the covering directory <c>foo</c>. These
+    /// MUST resolve to that covering directory and stay persistable, exactly like
+    /// the leaf glob <c>foo/*</c>. Regression for the 0.25.3 change that swept the
+    /// directory-listing idiom into the one-shot-only "complex command" bucket
+    /// (the <c>ls -d .../immovlan/*/ | xargs -n1 basename</c> report).
+    /// </summary>
+    public static TheoryData<string, string> DirectoryOnlyTrailingSlashGlobCases => new()
+    {
+        { "ls -d artifacts/*/", "artifacts" },
+        { "ls artifacts/*/", "artifacts" },
+        { "ls -d workspaces/immovlan/*/", "workspaces/immovlan" }
+    };
+
+    /// <summary>
+    /// A trailing slash relaxes ONLY the directory-listing case (<c>foo/*/</c>).
+    /// A glob with a real path segment after the wildcard still hides the matched
+    /// segment's identity — a symlink or traversal the covering directory cannot
+    /// bound — so it MUST stay one-shot even when it also ends in a slash. Guards
+    /// the fix against over-reaching past a single trailing slash.
+    /// </summary>
+    public static TheoryData<string> TrailingSlashWithRealSegmentStaysMessyCases => new()
+    {
+        { "cat artifacts/*/deeper/" },
+        { "ls artifacts/*/*/" }
+    };
+
+    /// <summary>
     /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
     /// matcher falls through to the legacy <c>ShellTokenizer</c> path
     /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
@@ -713,6 +829,82 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         try
         {
             var arguments = Args(command, projectDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+            Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash directory-glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(DirectoryOnlyTrailingSlashGlobCases))]
+    public void ExtractCandidates_trailing_slash_directory_glob_resolves_covering_directory(
+        string command,
+        string expectedRelativeScope)
+    {
+        // The directory-listing idiom `foo/*/` must scope to the covering
+        // directory `foo` and stay persistable — not degrade to a one-shot
+        // "complex command". Currently fails (the trailing slash trips the
+        // descendant-scope guard); passes once `foo/*/` normalizes to `foo/*`.
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-trailing-slash-glob-{Guid.NewGuid():N}");
+        var expectedDirectory = expectedRelativeScope
+            .Split('/')
+            .Aggregate(projectDirectory, Path.Combine);
+        var arguments = Args(command, projectDirectory);
+
+        var candidate = Assert.Single(
+            _matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+
+        Assert.Equal("ls", candidate.Verb);
+        Assert.Equal(expectedDirectory, candidate.Directory);
+        Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [MemberData(nameof(TrailingSlashWithRealSegmentStaysMessyCases))]
+    public void Trailing_slash_does_not_rescue_real_descendant_segment(string command)
+    {
+        // A trailing slash after a real intermediate segment (`foo/*/deeper/`)
+        // or a second wildcard (`foo/*/*/`) must NOT be mistaken for the benign
+        // directory-listing case — the matched segment is still unbounded, so
+        // these stay one-shot both before and after the fix.
+        var projectDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-trailing-descendant-{Guid.NewGuid():N}");
+        var arguments = Args(command, projectDirectory);
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash symlink glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Trailing_slash_directory_glob_with_symlink_child_fails_closed()
+    {
+        // `foo/*/` reduces to the covering directory `foo`. The symlink scan of
+        // `foo` must still fail the command closed — the trailing-slash
+        // relaxation must not remove the symlink protection a leaf glob already
+        // enforces. A fix that skips the covering-directory scan for `foo/*/`
+        // would surface a candidate here and flip IsMessy to false.
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-trailing-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var artifactsDirectory = Path.Combine(projectDirectory, "artifacts");
+        var externalDirectory = Path.Combine(root, "external");
+        var link = Path.Combine(artifactsDirectory, "escape");
+        Directory.CreateDirectory(artifactsDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(link, externalDirectory);
+
+        try
+        {
+            var arguments = Args("ls -d artifacts/*/", projectDirectory);
 
             Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
             Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));

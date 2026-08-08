@@ -44,6 +44,26 @@ public enum ApprovalDecision
 }
 
 /// <summary>
+/// Extensions over <see cref="ApprovalDecision"/>.
+/// </summary>
+public static class ApprovalDecisionExtensions
+{
+    /// <summary>
+    /// True when the decision grants execution (any approve scope) rather than
+    /// Denied or TimedOut. Every "the user approved" branch — the live pipeline
+    /// retry, the cold re-drive plan, and the sub-agent loop — must classify the
+    /// approve scopes identically, so route them through this one predicate
+    /// instead of duplicating the scope list (a missed site reintroduces the
+    /// "approved command still fails" bug for the new scope).
+    /// </summary>
+    public static bool IsApprovalGrant(this ApprovalDecision decision)
+        => decision is ApprovalDecision.ApprovedOnce
+            or ApprovalDecision.ApprovedSession
+            or ApprovalDecision.ApprovedAlways
+            or ApprovalDecision.ApprovedEverywhere;
+}
+
+/// <summary>
 /// Bridge between the tool execution pipeline (thread pool) and the session actor
 /// (mailbox). Allows tool tasks to block awaiting user approval while the actor
 /// remains responsive to incoming messages.

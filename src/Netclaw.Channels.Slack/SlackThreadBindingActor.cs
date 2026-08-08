@@ -61,6 +61,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private readonly SessionPipelineHandle _handle;
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
+
+    // Reliable in-flight-turn signal for the mention re-arm guard: set when ANY
+    // inbound is enqueued (unlike _pendingCursorTs, which is only set for inbounds
+    // with a parseable ts), cleared when the turn ends. Without it, a null-ts
+    // in-flight turn would leave _pendingCursorTs unset and let a following mention
+    // re-arm mid-turn — the PR #733 no-duplicate hazard.
+    private bool _turnInFlight;
     private volatile bool _processingIndicatorActive;
     private readonly object _processingIndicatorRenderLock = new();
     private Task _processingIndicatorRenderTail = Task.CompletedTask;
@@ -402,6 +409,29 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return;
             }
 
+            // Re-arm thread-history hydration on a tap-gated mention so the gap the
+            // tap held since the last completed turn is backfilled. Under
+            // MentionRequiredInThread the conversation actor forwards only mentions here,
+            // so every inbound is a deliberate re-entry. _turnInFlight guards against a
+            // re-arm while a prior turn is still processing, preserving the PR #733
+            // no-duplicate invariant; BuildInputWithDeferredHydrationAsync no-ops on an
+            // empty gap.
+            //
+            // Two accepted trade-offs of reusing the existing backfill (vs. a new
+            // drop-tracking side channel): (1) one thread-history fetch per mention on an
+            // active thread even when nothing accumulated — the actor cannot know the gap
+            // is empty without fetching, and mention-gating makes mentions deliberate so
+            // the cost is bounded; (2) a mention arriving while a turn is in flight takes
+            // the fetch-free path, so chatter in that window is adopted on the next idle
+            // mention, not this one (and can be skipped if the cursor later advances past
+            // it under rapid concurrent mentions).
+            if (!_hydrationPending
+                && !_turnInFlight
+                && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
+            {
+                _hydrationPending = true;
+            }
+
             var buildResult = _hydrationPending
                 && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options)
                 ? await BuildInputWithDeferredHydrationAsync(message, contents, currentTs, inboundCts.Token)
@@ -417,6 +447,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 queueWriteCts.CancelAfter(OperationTimeout);
 
                 await writer.WriteAsync(input, queueWriteCts.Token);
+                _turnInFlight = true;
 
                 // Defer cursor persistence until TurnCompleted confirms durable turn recording,
                 // otherwise a crash between cursor and turn persist loses messages.
@@ -773,6 +804,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             writeCts.CancelAfter(OperationTimeout);
             await writer.WriteAsync(backfillInput, writeCts.Token);
+            // A hydration backfill is an in-flight turn too; mirror the live-inbound
+            // enqueue so a mention arriving before this turn completes does not re-arm.
+            _turnInFlight = true;
 
             if (triggerTs is { } ts)
             {
@@ -1025,6 +1059,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     {
         QueueProcessingIndicatorClearIfActive();
         _pendingCursorTs = null;
+        _turnInFlight = false;
         // Reset per-turn delivery flags: a reinit aborts the in-flight turn,
         // and a stale _postedThisTurn=true would otherwise leak into the next
         // turn and falsely report a later reminder as delivered.
@@ -1124,6 +1159,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 if (completed.Outcome == TurnOutcome.Completed && _pendingCursorTs is { } pendingTs)
                     AdvanceCursor(pendingTs);
                 _pendingCursorTs = null;
+                _turnInFlight = false;
 
                 if (completed.SourceReminderId is { } sourceReminderKey
                     && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)

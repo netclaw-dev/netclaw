@@ -163,9 +163,17 @@ internal static class ShellGlobPath
         if (!arg.IsPath || arg.Kind != ArgKind.Glob)
             return false;
 
-        var firstGlob = arg.Raw.IndexOfAny(['*', '?', '[']);
+        // A trailing slash is a directory-only type filter (foo/*/), not a
+        // descendant path segment: every match is still a direct child of the
+        // covering directory, exactly like the leaf glob foo/*. Strip it before
+        // the scan so the directory-listing idiom keeps a fixed, persistable
+        // scope instead of degrading to a one-shot "complex command". A real
+        // segment after the wildcard (foo/*/x, foo/*/*) keeps its separator and
+        // stays unresolved.
+        var scope = arg.Raw.TrimEnd('/');
+        var firstGlob = scope.IndexOfAny(['*', '?', '[']);
         return firstGlob >= 0
-            && arg.Raw.IndexOf('/', firstGlob + 1) >= 0;
+            && scope.IndexOf('/', firstGlob + 1) >= 0;
     }
 }
 

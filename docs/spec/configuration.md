@@ -307,7 +307,7 @@ Slack Socket Mode channel configuration.
 | `MentionOnly` | bool | `true` | If true, plain `message` events are ignored unless the bot is mentioned. |
 | `AllowDirectMessages` | bool | `false` | If true, DM messages do not require mention. |
 | `MentionRequiredInDm` | bool | `false` | If true, DM messages also require a bot mention. Only applies when `AllowDirectMessages` is true. |
-| `MentionRequiredInThread` | bool | `false` | If true, thread replies require a bot mention even when the thread already has an active session. Default behavior routes every reply in an active thread without a mention. |
+| `MentionRequiredInThreadByChannel` | object | `{}` | Per-channel map (channel ID → bool). When `true` for a channel, thread replies in that channel require a bot mention even when the thread already has an active session; a later mention re-reads the messages held since the last reply. A channel with no entry defaults to `false` (every reply in an active thread is routed without a mention). |
 | `AllowedChannelIds` | string[] | `[]` | Allow-list of Slack channel IDs. Empty means no channels are allowed. |
 | `AllowedUserIds` | string[] | `[]` | Optional allow-list of Slack user IDs. Empty means all users in allowed channels/DM policy are accepted. |
 

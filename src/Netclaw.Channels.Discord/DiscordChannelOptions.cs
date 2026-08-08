@@ -22,11 +22,20 @@ public sealed class DiscordChannelOptions : IRemoteChatChannelOptions
     public bool MentionRequiredInDm { get; init; }
 
     /// <summary>
-    /// If true, thread replies require a bot mention even when the thread
-    /// already has an active session. Default is false — once a thread has
-    /// an active session, follow-up replies are processed without a mention.
+    /// Per-channel opt-in for the thread mention rule. Keys are channel IDs.
+    /// When a channel's value is <c>true</c>, a thread reply requires a bot
+    /// mention even when the thread already has an active session. A channel
+    /// with no entry defaults to <c>false</c> — follow-up replies in an active
+    /// thread are processed without a mention.
     /// </summary>
-    public bool MentionRequiredInThread { get; init; } = false;
+    public Dictionary<string, bool> MentionRequiredInThreadByChannel { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Resolves the effective thread mention rule for a channel: the per-channel
+    /// value, or <c>false</c> when the channel has no entry.
+    /// </summary>
+    public bool MentionRequiredInThreadFor(string channelId)
+        => MentionRequiredInThreadByChannel.TryGetValue(channelId, out var required) && required;
 
     public string[] AllowedChannelIds { get; init; } = [];
 

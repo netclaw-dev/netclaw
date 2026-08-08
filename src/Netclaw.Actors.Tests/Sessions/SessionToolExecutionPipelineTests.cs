@@ -137,6 +137,51 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Approved_always_seeds_the_immediate_retry_bypass_so_a_partially_covered_command_still_runs()
+    {
+        // Regression for the "approved command still throws" trigger
+        // (https://github.com/netclaw-dev/netclaw/issues/1802): the pipeline seeded
+        // the one-time retry bypass only for ApprovedOnce, so a command approved
+        // with ApprovedSession/ApprovedAlways whose durable grant does not cover
+        // every verb re-hit the gate on retry and failed the turn. This fake
+        // re-requires approval until the immediate retry carries the bypass.
+        var executor = new BypassRequiredOnRetryExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("approved-always-bypass-probe");
+        var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/approved-always-bypass");
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-1", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "gh api foo/bar 2>/dev/null | base64 -d | head"
+            })
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequestTcs.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedAlways);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal("ran-with-bypass", result.Content);
+    }
+
+    [Fact]
     public async Task Source_less_approval_required_turn_fails_closed_without_prompt()
     {
         var executor = new ApprovalThenSuccessExecutor();
@@ -795,6 +840,43 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
+        }
+    }
+
+    private sealed class BypassRequiredOnRetryExecutor : IToolExecutor
+    {
+        private static readonly string[] Patterns = ["gh api", "base64", "head"];
+
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+        {
+            // Stand in for the real gate on a command whose persisted grant does not
+            // cover every candidate verb: authorization keeps requiring approval
+            // until the immediate retry carries the one-time bypass for these
+            // patterns. That bypass is what the pipeline must seed for every
+            // approved scope, not just ApprovedOnce.
+            var approval = context?.Approval;
+            if (approval is not null
+                && string.Equals(approval.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal)
+                && Patterns.All(approval.OneTimeApprovedPatterns.Contains))
+            {
+                return Task.FromResult("ran-with-bypass");
+            }
+
+            throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                ToolName: toolCall.Name,
+                DisplayText: "gh api foo/bar | base64 -d | head",
+                Patterns: Patterns,
+                CandidateVerbs: Patterns,
+                Options:
+                [
+                    new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolApprovalOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolApprovalOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]));
         }
     }
 

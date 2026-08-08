@@ -54,7 +54,7 @@ SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-${ROOT_DIR}/smoke-logs}"
 
 # Cheapest harness checks first so a harness-level break fails fast
 # before paying for the wizard + probe tapes.
-LIGHT_TAPES=(help init-wizard init-existing init-redo-identity provider-add provider-rename config-search config-exposure config-posture config-features config-audience config-channels config-surfaces config-ops-surfaces config-workspaces-picker config-skill-picker config-back-nav tui-cleanup mcp-permissions approvals model-manager sessions-tui)
+LIGHT_TAPES=(help init-wizard init-existing init-redo-identity provider-add provider-rename config-search config-exposure config-posture config-features config-audience config-channels config-mention-thread config-surfaces config-ops-surfaces config-workspaces-picker config-skill-picker config-back-nav tui-cleanup mcp-permissions approvals model-manager sessions-tui)
 FULL_TAPES=("${LIGHT_TAPES[@]}")
 
 LIGHT_SCENARIOS=(

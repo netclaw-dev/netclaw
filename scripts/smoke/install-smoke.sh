@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # install-smoke.sh — hermetic smoke test for scripts/install.sh
 #
-# Verifies the installer's platform detection, manifest parsing, and the
+# Verifies the installer's platform detection and the
 # download/checksum/extract/install path WITHOUT building or downloading the
-# real product binary. Stand-in binaries (tiny shell scripts) and a manifest
-# served from localhost keep the test fast, offline, and free of any
+# real product binary. Stand-in binaries (tiny shell scripts) and a plain-text
+# feed served from localhost keep the test fast, offline, and free of any
 # dependency on releases.netclaw.dev.
 #
 # Two layers of coverage:
@@ -23,8 +23,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_SH="$ROOT_DIR/scripts/install.sh"
 MANIFEST_GEN="$ROOT_DIR/feeds/scripts/generate-release-manifest.sh"
-VERSION="0.0.0"          # stable → manifest.latest
-BETA_VERSION="0.0.1-beta1"  # prerelease → manifest.latestPrerelease
+VERSION="0.0.0"          # stable → latest
+BETA_VERSION="0.0.1-beta1"  # prerelease → latest-prerelease
 RIDS="linux-x64 linux-arm64 osx-arm64"
 
 PASS=0
@@ -43,12 +43,9 @@ SERVER_PID=""
 # pre-existing file and restore it on exit so the working tree is left clean.
 # It also writes the plain-text channel pointers (latest, latest-prerelease).
 MANIFEST_DEST="$ROOT_DIR/feeds/releases/manifest.json"
-MANIFEST_BACKUP="$WORK/manifest.json.backup"
-MANIFEST_PREEXISTING=false
 for feed_file in manifest.json latest latest-prerelease; do
   if [ -f "$ROOT_DIR/feeds/releases/$feed_file" ]; then
     cp "$ROOT_DIR/feeds/releases/$feed_file" "$WORK/$feed_file.backup"
-    MANIFEST_PREEXISTING=true
   else
     touch "$WORK/$feed_file.absent"
   fi
@@ -92,7 +89,7 @@ done
 
 # ── 2. Package archives + checksums for every RID, for a stable AND a prerelease ─
 # Two versions let us prove channel selection: the default install must resolve to
-# the stable (manifest.latest), --channel beta to the prerelease (latestPrerelease).
+# the stable pointer, and --channel beta to the prerelease pointer.
 for ver in "$VERSION" "$BETA_VERSION"; do
   mkdir -p "$SERVE/$ver" "$WORK/checksums-$ver"
   for rid in $RIDS; do
@@ -107,11 +104,11 @@ for ver in "$VERSION" "$BETA_VERSION"; do
   done
 done
 
-# ── 3. Pick a free port and generate the manifest ────────────────────────────
+# ── 3. Pick a free port and generate the release feed ────────────────────────
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p=s.getsockname()[1]; s.close(); print(p)')"
 BASE_URL="http://127.0.0.1:$PORT"
 # Start from a clean slate so the generator's latest/latestPrerelease are computed
-# from only our two test versions (cleanup restores any pre-existing manifest).
+# from only our two test versions (cleanup restores prior feed files).
 rm -f "$MANIFEST_DEST"
 # Run the REAL generator once per version; it accumulates releases[] and recomputes
 # latest (newest stable) + latestPrerelease (newest of all) across both.
@@ -129,34 +126,18 @@ else
   fail "feed: latest-prerelease pointer has an unexpected value"
 fi
 
-cp "$MANIFEST_DEST" "$SERVE/manifest.json"
-python3 - "$SERVE/manifest.json" "$SERVE/manifest-rid-first.json" <<'PY'
-import json
-import sys
+cp "$ROOT_DIR/feeds/releases/latest" "$SERVE/latest"
+cp "$ROOT_DIR/feeds/releases/latest-prerelease" "$SERVE/latest-prerelease"
+for ver in "$VERSION" "$BETA_VERSION"; do
+  cp "$WORK/checksums-$ver"/checksums-*.txt "$SERVE/$ver/"
+done
 
-with open(sys.argv[1], encoding="utf-8") as source:
-    manifest = json.load(source)
-for release in manifest["releases"]:
-    release["assets"] = [
-        {
-            "rid": asset["rid"],
-            "component": asset["component"],
-            "url": asset["url"],
-            "sha256": asset["sha256"],
-            "sizeBytes": asset["sizeBytes"],
-        }
-        for asset in release["assets"]
-    ]
-with open(sys.argv[2], "w", encoding="utf-8") as destination:
-    json.dump(manifest, destination)
-PY
-
-# ── 4. Serve the manifest + archives from localhost ──────────────────────────
+# ── 4. Serve the plain-text feed + archives from localhost ───────────────────
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$SERVE" >/dev/null 2>&1 &
 SERVER_PID=$!
 if ! curl -sf --retry 30 --retry-delay 1 --retry-connrefused \
-     "$BASE_URL/manifest.json" >/dev/null 2>&1; then
-  echo "FATAL: local manifest server did not come up on $BASE_URL"
+     "$BASE_URL/latest" >/dev/null 2>&1; then
+  echo "FATAL: local feed server did not come up on $BASE_URL"
   exit 1
 fi
 
@@ -187,7 +168,7 @@ check_detect() {
   set +e
   out=$(FAKE_OS="$fos" FAKE_ARCH="$farch" FAKE_TRANSLATED="$ftrans" \
         PATH="$SHIM:$PATH" \
-        MANIFEST_URL="$BASE_URL/manifest.json" \
+        FEED_BASE_URL="$BASE_URL" \
         INSTALL_DIR="$WORK/should-not-exist" \
         bash "$INSTALL_SH" --dry-run 2>&1)
   rc=$?
@@ -210,7 +191,7 @@ check_detect "unsupported OS rejected"          freebsd x86_64 0 'Unsupported OS
 
 set +e
 invalid_path_out=$(INSTALL_DIR="$WORK/invalid:path" \
-  MANIFEST_URL="$BASE_URL/manifest.json" \
+  FEED_BASE_URL="$BASE_URL" \
   bash "$INSTALL_SH" --dry-run 2>&1)
 invalid_path_rc=$?
 set -e
@@ -227,7 +208,7 @@ mkdir -p "$PHYSICAL_INSTALL" "$SYMLINK_HOME"
 ln -s "$PHYSICAL_INSTALL" "$SYMLINK_INSTALL"
 set +e
 symlink_path_out=$(HOME="$SYMLINK_HOME" SHELL="$(command -v bash)" \
-  INSTALL_DIR="$SYMLINK_INSTALL" MANIFEST_URL="$BASE_URL/manifest.json" \
+  INSTALL_DIR="$SYMLINK_INSTALL" FEED_BASE_URL="$BASE_URL" \
   bash "$INSTALL_SH" cli 2>&1)
 symlink_path_rc=$?
 set -e
@@ -242,30 +223,31 @@ else
   echo "$symlink_path_out" | indent
 fi
 
-# Exercise the dependency-free parser with a valid manifest whose asset fields
-# are in reverse order. A private mirror need not preserve JSON property order.
-NO_JQ_BIN="$WORK/no-jq-bin"
-mkdir -p "$NO_JQ_BIN"
-for cmd in awk bash curl cut grep head mktemp rm sed sha256sum shasum tar tr uname; do
+# The shell installer does not need a JSON parser. Run it from a PATH that has
+# no JSON tools and serve no manifest file.
+NO_JSON_BIN="$WORK/no-json-bin"
+mkdir -p "$NO_JSON_BIN"
+for cmd in awk bash curl cut dirname grep head mktemp rm sed sha256sum shasum tar tr uname; do
   command_path=$(command -v "$cmd" 2>/dev/null || true)
   if [ -n "$command_path" ]; then
-    ln -s "$command_path" "$NO_JQ_BIN/$cmd"
+    ln -s "$command_path" "$NO_JSON_BIN/$cmd"
   fi
 done
 set +e
-no_jq_out=$(PATH="$NO_JQ_BIN" \
-  MANIFEST_URL="$BASE_URL/manifest-rid-first.json" \
-  INSTALL_DIR="$WORK/no-jq-install" \
+no_json_out=$(PATH="$NO_JSON_BIN" \
+  FEED_BASE_URL="$BASE_URL" \
+  INSTALL_DIR="$WORK/no-json-install" \
   /bin/bash "$INSTALL_SH" --dry-run 2>&1)
-no_jq_rc=$?
+no_json_rc=$?
 set -e
-if [ "$no_jq_rc" -eq 0 ] \
-    && echo "$no_jq_out" | grep -q "DRY RUN: would install netclaw .*/$VERSION/" \
-    && echo "$no_jq_out" | grep -q "DRY RUN: would install netclawd .*/$VERSION/"; then
-  pass "manifest: jq-less parser selects stable assets with reordered fields"
+if [ "$no_json_rc" -eq 0 ] \
+    && echo "$no_json_out" | grep -q "Resolved stable channel from $BASE_URL/latest" \
+    && echo "$no_json_out" | grep -q "DRY RUN: would install netclaw .*/$VERSION/" \
+    && echo "$no_json_out" | grep -q "DRY RUN: would install netclawd .*/$VERSION/"; then
+  pass "feed: shell installer works without JSON tools or a manifest"
 else
-  fail "manifest: jq-less reordered-field parse failed (exit=$no_jq_rc)"
-  echo "$no_jq_out" | indent
+  fail "feed: shell installer requires a JSON tool or manifest (exit=$no_json_rc)"
+  echo "$no_json_out" | indent
 fi
 
 # Dry run must not create the install directory.
@@ -285,7 +267,7 @@ INSTALL_DIR="$INSTALL_HOME/.netclaw/bin"
 mkdir -p "$INSTALL_HOME"
 set +e
 install_out=$(HOME="$INSTALL_HOME" \
-              MANIFEST_URL="$BASE_URL/manifest.json" INSTALL_DIR="$INSTALL_DIR" \
+              FEED_BASE_URL="$BASE_URL" INSTALL_DIR="$INSTALL_DIR" \
               bash "$INSTALL_SH" 2>&1)
 install_rc=$?
 set -e
@@ -336,7 +318,7 @@ assert_resolves() {
   local desc="$1" want="$2"; shift 2
   local out rc
   set +e
-  out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+  out=$(FEED_BASE_URL="$BASE_URL" \
         INSTALL_DIR="$WORK/should-not-exist" \
         NETCLAW_VERSION="${NETCLAW_PIN:-}" \
         bash "$INSTALL_SH" --dry-run "$@" 2>&1)
@@ -358,7 +340,7 @@ NETCLAW_PIN="$BETA_VERSION" \
 
 # An unknown channel must fail loudly, not silently fall back to stable.
 set +e
-bad_out=$(MANIFEST_URL="$BASE_URL/manifest.json" INSTALL_DIR="$WORK/should-not-exist" \
+bad_out=$(FEED_BASE_URL="$BASE_URL" INSTALL_DIR="$WORK/should-not-exist" \
           bash "$INSTALL_SH" --dry-run --channel bogus 2>&1)
 bad_rc=$?
 set -e
@@ -377,7 +359,7 @@ echo "=== config channel persistence ==="
 FRESH_DIR="$WORK/fresh-beta"
 FRESH_CONFIG_DIR="$WORK/fresh-beta-config/config"
 set +e
-fresh_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+fresh_out=$(FEED_BASE_URL="$BASE_URL" \
             INSTALL_DIR="$FRESH_DIR" \
             CONFIG_DIR="$FRESH_CONFIG_DIR" \
             bash "$INSTALL_SH" --channel beta --skip-shell 2>&1)
@@ -405,7 +387,7 @@ EXIST_CONFIG_DIR="$WORK/existing-beta-config/config"
 mkdir -p "$EXIST_CONFIG_DIR"
 printf '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}\n' > "$EXIST_CONFIG_DIR/netclaw.json"
 set +e
-exist_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+exist_out=$(FEED_BASE_URL="$BASE_URL" \
             INSTALL_DIR="$EXIST_DIR" \
             CONFIG_DIR="$EXIST_CONFIG_DIR" \
             bash "$INSTALL_SH" --channel beta --skip-shell 2>&1)
@@ -430,7 +412,7 @@ NOFLAG_CONFIG_DIR="$WORK/noflag-config/config"
 mkdir -p "$NOFLAG_CONFIG_DIR"
 printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$NOFLAG_CONFIG_DIR/netclaw.json"
 set +e
-noflag_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+noflag_out=$(FEED_BASE_URL="$BASE_URL" \
              INSTALL_DIR="$NOFLAG_DIR" \
              CONFIG_DIR="$NOFLAG_CONFIG_DIR" \
              bash "$INSTALL_SH" --skip-shell 2>&1)
@@ -454,7 +436,7 @@ DOWNGRADE_CONFIG_DIR="$WORK/downgrade-config/config"
 mkdir -p "$DOWNGRADE_CONFIG_DIR"
 printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$DOWNGRADE_CONFIG_DIR/netclaw.json"
 set +e
-down_out=$(MANIFEST_URL="$BASE_URL/manifest.json" \
+down_out=$(FEED_BASE_URL="$BASE_URL" \
            INSTALL_DIR="$DOWNGRADE_DIR" \
            CONFIG_DIR="$DOWNGRADE_CONFIG_DIR" \
            bash "$INSTALL_SH" --channel stable --skip-shell 2>&1)
@@ -491,7 +473,7 @@ run_unix_installer() {
   local shell_path="$1" home="$2" install_dir="$3"
   shift 3
   SHELL="$shell_path" HOME="$home" \
-    MANIFEST_URL="$BASE_URL/manifest.json" INSTALL_DIR="$install_dir" \
+    FEED_BASE_URL="$BASE_URL" INSTALL_DIR="$install_dir" \
     CONFIG_DIR="$home/.netclaw/config" \
     bash "$INSTALL_SH" "$@"
 }

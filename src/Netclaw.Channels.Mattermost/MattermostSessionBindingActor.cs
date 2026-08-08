@@ -79,6 +79,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private string? _cursorPostId;
     private string? _pendingCursorPostId;
 
+    // Reliable in-flight-turn signal for the mention re-arm guard: set when the
+    // main inbound is enqueued (unlike _pendingCursorPostId, which is only set for
+    // inbounds with a non-empty post id), cleared when the turn ends or the
+    // pipeline reinitializes. Without it, a null-id in-flight turn would leave
+    // _pendingCursorPostId unset and let a following mention re-arm mid-turn —
+    // the PR #733 no-duplicate hazard.
+    private bool _turnInFlight;
+
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
     // case: the binding actor's lifetime began when the agent posted the thread
@@ -233,6 +241,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         {
             _deliveredThisTurn = false;
             _postFailedThisTurn = false;
+            // A reinit abandons any in-flight turn before its TurnCompleted; clear
+            // the mention re-arm guard so the next mention can re-hydrate instead of
+            // being blocked by a stuck flag.
+            _turnInFlight = false;
             // A reinit aborts any in-flight reminder turn before its
             // TurnCompleted. Report those as not-delivered now so the
             // execution actor redelivers immediately instead of stalling
@@ -361,6 +373,28 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
+        // Re-arm thread-history hydration on a tap-gated mention so the gap the
+        // tap held since the last completed turn is backfilled. Under
+        // MentionRequiredInThread the conversation actor forwards only mentions here,
+        // so every inbound is a deliberate re-entry. _turnInFlight guards against a
+        // re-arm while a prior turn is still processing, preserving the PR #733
+        // no-duplicate invariant; ApplyDeferredHydrationAsync no-ops on an empty gap.
+        //
+        // Two accepted trade-offs of reusing the existing backfill (vs. a new
+        // drop-tracking side channel): (1) one thread-history fetch per mention on an
+        // active thread even when nothing accumulated — the actor cannot know the gap
+        // is empty without fetching, and mention-gating makes mentions deliberate so
+        // the cost is bounded; (2) a mention arriving while a turn is in flight takes
+        // the fetch-free path, so chatter in that window is adopted on the next idle
+        // mention, not this one (and can be skipped if the cursor later advances past
+        // it under rapid concurrent mentions).
+        if (!_hydrationPending
+            && !_turnInFlight
+            && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
+        {
+            _hydrationPending = true;
+        }
+
         if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
             input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
 
@@ -368,6 +402,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
+            _turnInFlight = true;
             ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
 
             var eventId = message.EventId.Value;
@@ -526,6 +561,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             writeCts.CancelAfter(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(backfillInput, writeCts.Token);
+            // A hydration backfill is an in-flight turn too; mirror the live-inbound
+            // enqueue so a mention arriving before this turn completes does not re-arm.
+            _turnInFlight = true;
 
             if (!string.IsNullOrEmpty(triggerPostId))
             {
@@ -1165,6 +1203,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 if (completed.Outcome == TurnOutcome.Completed && _pendingCursorPostId is { } pendingCursor)
                     AdvanceCursor(pendingCursor);
                 _pendingCursorPostId = null;
+                _turnInFlight = false;
 
                 if (completed.SourceReminderId is { } sourceReminderKey
                     && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
