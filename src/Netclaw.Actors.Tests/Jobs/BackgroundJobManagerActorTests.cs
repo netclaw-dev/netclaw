@@ -243,7 +243,7 @@ public class BackgroundJobManagerActorTests : TestKit
             Boundary = TrustBoundary.Personal,
             OriginChannelType = ChannelType.Tui
         });
-        var logPath = _store.GetOutputLogPath(orphanId);
+        var logPath = _store.GetOutputLogPath(orphanId, sessionId);
         await File.WriteAllTextAsync(
             logPath, "Server running on http://127.0.0.1:4000/\n",
             TestContext.Current.CancellationToken);

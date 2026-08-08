@@ -13,6 +13,7 @@ namespace Netclaw.Actors.Tests.Reminders;
 public class GetReminderHistoryToolTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
+    private readonly ReminderDefinitionStore _definitionStore;
     private readonly ReminderHistoryStore _store;
     private readonly GetReminderHistoryTool _tool;
 
@@ -20,7 +21,8 @@ public class GetReminderHistoryToolTests : IDisposable
     {
         var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        _store = new ReminderHistoryStore(paths);
+        _definitionStore = new ReminderDefinitionStore(paths);
+        _store = new ReminderHistoryStore(_definitionStore);
         _tool = new GetReminderHistoryTool(_store, new SchedulingConfig());
     }
 
@@ -43,6 +45,7 @@ public class GetReminderHistoryToolTests : IDisposable
     public async Task Returns_formatted_history_for_existing_reminder()
     {
         var id = new ReminderId("daily-summary");
+        SaveDefinition(id);
         await _store.AppendAsync(id, new HistoryRecord(
             FiredAt: DateTimeOffset.UtcNow,
             Success: true,
@@ -63,6 +66,7 @@ public class GetReminderHistoryToolTests : IDisposable
     public async Task Last_param_is_capped_at_100()
     {
         var id = new ReminderId("busy-job");
+        SaveDefinition(id);
         // Store uses max 500, so add 150 records normally
         for (var i = 0; i < 150; i++)
             await _store.AppendAsync(id, new HistoryRecord(
@@ -85,6 +89,7 @@ public class GetReminderHistoryToolTests : IDisposable
     public async Task Error_message_included_for_failed_run()
     {
         var id = new ReminderId("failing-job");
+        SaveDefinition(id);
         await _store.AppendAsync(id, new HistoryRecord(
             FiredAt: DateTimeOffset.UtcNow,
             Success: false,
@@ -97,5 +102,22 @@ public class GetReminderHistoryToolTests : IDisposable
 
         Assert.Contains("False", result);
         Assert.Contains("Notification tool returned an unspecified error.", result);
+    }
+
+    private void SaveDefinition(ReminderId id)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        _definitionStore.Save(new ReminderDefinition
+        {
+            Id = id,
+            Title = id.Value,
+            Instructions = "Run the test reminder.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule { Type = ReminderScheduleType.OneShot, FireAt = now.AddHours(1) },
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
     }
 }

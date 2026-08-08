@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.42.0"
+  version: "2.43.0"
 ---
 
 # Netclaw Operations
@@ -102,7 +102,7 @@ view inline plus a pointer to the full output — not the whole thing:
   specific range with `StartLine`/`Limit` or `grep` (`StartLine` is a 1-based line
   number — line 1 is the first line). Don't `cat` a huge file through
   `shell_execute` to get around it — that just spills again.
-- **`background_job`** output goes to `~/.netclaw/jobs/{id}/output.log` (bounded);
+- **`background_job`** output goes to `{session}/jobs/{id}/output.log` (bounded);
   `check_background_job` returns a tail, and you can `file_read`/`grep` the log for the rest.
 
 Reading a targeted range or grepping is always cheaper than re-running a command or

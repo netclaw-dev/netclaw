@@ -10,23 +10,23 @@ The boundary SHALL NOT include `Channel` or `None` reminder files. Those reminde
 
 The system SHALL derive each artifact path from the typed `SessionId`. It SHALL NOT accept an arbitrary file path as ownership authority.
 
-#### Scenario: Current-session reminder uses the session boundary
+#### Scenario: New current-session reminder uses the session boundary
 
-- **GIVEN** a reminder has `Delivery.Kind = CurrentSession`
+- **GIVEN** a new reminder has `Delivery.Kind = CurrentSession`
 - **AND** its delivery contains a valid `SessionId`
 - **WHEN** the reminder store saves the definition
 - **THEN** the definition is stored under that session directory
 - **AND** its history uses the same reminder subdirectory
 
-#### Scenario: Background job uses the session boundary
+#### Scenario: New background job uses the session boundary
 
-- **GIVEN** a session starts a background job
+- **GIVEN** a session starts a new background job
 - **WHEN** the job store saves its definition and output
 - **THEN** both artifacts are stored under that session directory
 
-#### Scenario: Daemon-scoped reminder stays outside the session boundary
+#### Scenario: New daemon-scoped reminder stays outside the session boundary
 
-- **GIVEN** a reminder has `Delivery.Kind = Channel` or `Delivery.Kind = None`
+- **GIVEN** a new reminder has `Delivery.Kind = Channel` or `Delivery.Kind = None`
 - **WHEN** the reminder store saves the definition
 - **THEN** the definition and history remain in the daemon reminder directory
 
@@ -36,10 +36,3 @@ The system SHALL derive each artifact path from the typed `SessionId`. It SHALL 
 - **AND** the path is outside the exact source session directory
 - **WHEN** the store validates a session-owned artifact path
 - **THEN** the store rejects the path
-
-#### Scenario: Session artifact path contains a symbolic-link escape
-
-- **GIVEN** a candidate artifact path contains a symbolic-link segment
-- **AND** that segment resolves outside the source session directory
-- **WHEN** the store validates the path
-- **THEN** the store rejects the path and logs the reason

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -139,6 +140,113 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal(new BackgroundJobId("job-byte-eq"), loaded!.Id);
         Assert.Equal(new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"), loaded.SessionId);
+    }
+
+    [Fact]
+    public void New_job_definition_and_output_use_source_session_directory()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var definition = CreateDefinition("session-job", "C0ABC/1712000000.000001");
+
+        store.Save(definition);
+        var outputPath = store.GetOutputLogPath(definition.Id, definition.SessionId);
+
+        var sessionDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            definition.SessionId,
+            _paths.SessionsDirectory);
+        Assert.True(File.Exists(Path.Combine(sessionDirectory, "session-job.json")));
+        Assert.Equal(Path.Combine(sessionDirectory, "session-job", "output.log"), outputPath);
+        Assert.True(Directory.Exists(Path.GetDirectoryName(outputPath)));
+        Assert.False(File.Exists(Path.Combine(_paths.JobsDirectory, "session-job.json")));
+    }
+
+    [Fact]
+    public void Existing_job_definition_and_output_stay_in_daemon_directory_after_update()
+    {
+        var definition = CreateDefinition("existing-job", "C0ABC/1712000000.000001");
+        var daemonPath = Path.Combine(_paths.JobsDirectory, "existing-job.json");
+        WriteDefinition(daemonPath, definition);
+        var daemonOutputPath = Path.Combine(_paths.JobsDirectory, "existing-job", "output.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(daemonOutputPath)!);
+        File.WriteAllText(daemonOutputPath, "existing output");
+
+        var store = new BackgroundJobDefinitionStore(_paths);
+        store.Save(definition with { Status = BackgroundJobStatus.Completed, ExitCode = 0 });
+
+        var sessionDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            definition.SessionId,
+            _paths.SessionsDirectory);
+        Assert.True(File.Exists(daemonPath));
+        Assert.Equal(daemonOutputPath, store.GetOutputLogPathOnly(definition.Id, definition.SessionId));
+        Assert.Equal("existing output", File.ReadAllText(daemonOutputPath));
+        Assert.False(File.Exists(Path.Combine(sessionDirectory, "existing-job.json")));
+        Assert.Equal(BackgroundJobStatus.Completed, new BackgroundJobDefinitionStore(_paths).Get(definition.Id)!.Status);
+    }
+
+    [Fact]
+    public void Duplicate_id_across_daemon_and_session_directories_is_rejected()
+    {
+        var definition = CreateDefinition("duplicate-job", "C0ABC/1712000000.000001");
+        var daemonPath = Path.Combine(_paths.JobsDirectory, "duplicate-job.json");
+        WriteDefinition(daemonPath, definition);
+        var sessionDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            definition.SessionId,
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(sessionDirectory);
+        WriteDefinition(Path.Combine(sessionDirectory, "duplicate-job.json"), definition);
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+
+        Assert.Null(store.Get(definition.Id));
+        Assert.Empty(store.List());
+        Assert.Contains(logger.Errors, message =>
+            message.Contains(daemonPath, StringComparison.Ordinal)
+            && message.Contains(sessionDirectory, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Session_directory_owner_mismatch_is_rejected()
+    {
+        var definition = CreateDefinition("owner-mismatch", "C0ABC/1712000000.000001");
+        var wrongDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            new SessionId("C0OTHER/1712000000.000002"),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(wrongDirectory);
+        var wrongPath = Path.Combine(wrongDirectory, "owner-mismatch.json");
+        WriteDefinition(wrongPath, definition);
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+
+        Assert.Null(store.Get(definition.Id));
+        Assert.Empty(store.List());
+        Assert.Contains(logger.Errors, message =>
+            message.Contains(wrongPath, StringComparison.Ordinal)
+            && message.Contains("owner", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static BackgroundJobDefinition CreateDefinition(string id, string sessionId) => new()
+    {
+        Id = new BackgroundJobId(id),
+        Command = "dotnet test",
+        SessionId = new SessionId(sessionId),
+        Rationale = "Run the test suite.",
+        Status = BackgroundJobStatus.Pending,
+        TimeoutSeconds = 300,
+        StartedAtMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+        Audience = TrustAudience.Personal,
+        Boundary = TrustBoundary.Personal
+    };
+
+    private static void WriteDefinition(string path, BackgroundJobDefinition definition)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        };
+        File.WriteAllText(path, JsonSerializer.Serialize(definition, options));
     }
 
     public void Dispose()

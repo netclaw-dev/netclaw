@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Xunit;
@@ -291,6 +292,153 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         // explicit containment check in GetPath would throw if that invariant
         // ever regressed.
         Assert.False(store.Exists(new ReminderId(maliciousId)));
+    }
+
+    [Fact]
+    public void New_current_session_reminder_uses_session_directory()
+    {
+        var store = new ReminderDefinitionStore(_paths);
+        var definition = CreateDefinition(
+            "session-owned",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+
+        store.Save(definition);
+
+        var sessionDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId(definition.Delivery.SessionId!),
+            _paths.SessionsDirectory);
+        var sessionPath = Path.Combine(sessionDirectory, "session-owned.json");
+        var daemonPath = Path.Combine(_paths.RemindersDirectory, "session-owned.json");
+        Assert.True(File.Exists(sessionPath));
+        Assert.False(File.Exists(daemonPath));
+        Assert.Equal(definition, new ReminderDefinitionStore(_paths).Get(definition.Id));
+    }
+
+    [Fact]
+    public void Existing_current_session_reminder_stays_in_daemon_directory_after_update()
+    {
+        var definition = CreateDefinition(
+            "existing-current-session",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+        var daemonPath = Path.Combine(_paths.RemindersDirectory, "existing-current-session.json");
+        WriteDefinition(daemonPath, definition);
+
+        var store = new ReminderDefinitionStore(_paths);
+        var updated = definition with { Title = "Updated title" };
+        store.Save(updated);
+
+        var sessionPath = Path.Combine(
+            SessionDirectoryHelper.GetSessionRemindersDirectory(
+                new SessionId(definition.Delivery.SessionId!),
+                _paths.SessionsDirectory),
+            "existing-current-session.json");
+        Assert.True(File.Exists(daemonPath));
+        Assert.False(File.Exists(sessionPath));
+        Assert.Equal("Updated title", new ReminderDefinitionStore(_paths).Get(definition.Id)!.Title);
+    }
+
+    [Theory]
+    [InlineData(DeliveryKind.Channel)]
+    [InlineData(DeliveryKind.None)]
+    public void New_daemon_scoped_reminder_uses_daemon_directory(DeliveryKind deliveryKind)
+    {
+        var store = new ReminderDefinitionStore(_paths);
+        var definition = CreateDefinition($"daemon-{deliveryKind}", deliveryKind);
+
+        store.Save(definition);
+
+        var daemonPath = Path.Combine(
+            _paths.RemindersDirectory,
+            $"{Uri.EscapeDataString(definition.Id.Value)}.json");
+        Assert.True(File.Exists(daemonPath));
+        Assert.Equal(definition, new ReminderDefinitionStore(_paths).Get(definition.Id));
+    }
+
+    [Fact]
+    public void Duplicate_id_across_daemon_and_session_directories_is_rejected()
+    {
+        var definition = CreateDefinition(
+            "duplicate-reminder",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+        var daemonPath = Path.Combine(_paths.RemindersDirectory, "duplicate-reminder.json");
+        WriteDefinition(daemonPath, definition);
+        var sessionDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId(definition.Delivery.SessionId!),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(sessionDirectory);
+        WriteDefinition(Path.Combine(sessionDirectory, "duplicate-reminder.json"), definition);
+        var logger = new CapturingLogger<ReminderDefinitionStore>();
+
+        var store = new ReminderDefinitionStore(_paths, logger);
+
+        Assert.Null(store.Get(definition.Id));
+        Assert.Empty(store.List());
+        Assert.Contains(logger.Errors, message =>
+            message.Contains(daemonPath, StringComparison.Ordinal)
+            && message.Contains(sessionDirectory, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Session_directory_owner_mismatch_is_rejected()
+    {
+        var definition = CreateDefinition(
+            "owner-mismatch",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+        var wrongDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId("C0OTHER/1712000000.000002"),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(wrongDirectory);
+        var wrongPath = Path.Combine(wrongDirectory, "owner-mismatch.json");
+        WriteDefinition(wrongPath, definition);
+        var logger = new CapturingLogger<ReminderDefinitionStore>();
+
+        var store = new ReminderDefinitionStore(_paths, logger);
+
+        Assert.Null(store.Get(definition.Id));
+        Assert.Empty(store.List());
+        Assert.Contains(logger.Errors, message =>
+            message.Contains(wrongPath, StringComparison.Ordinal)
+            && message.Contains("owner", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static ReminderDefinition CreateDefinition(
+        string id,
+        DeliveryKind deliveryKind,
+        string? sessionId = null)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        return new ReminderDefinition
+        {
+            Id = new ReminderId(id),
+            Title = id,
+            Instructions = "Check status.",
+            Delivery = new ReminderDelivery { Kind = deliveryKind, SessionId = sessionId },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddHours(1)
+            },
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+    }
+
+    private static void WriteDefinition(string path, ReminderDefinition definition)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        };
+        File.WriteAllText(path, JsonSerializer.Serialize(definition, options));
     }
 
     public void Dispose()

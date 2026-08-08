@@ -443,10 +443,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// </summary>
     private async Task DeleteReminderInternalAsync(ReminderId id)
     {
-        _definitionStore.Delete(id);
-        await CancelScheduleOnlyAsync(id);
-        _skipCounts.Remove(id);
-
         try
         {
             _historyStore.DeleteHistory(id);
@@ -455,6 +451,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         {
             _log.Warning(ex, "Failed to delete history for reminder '{0}'", id.Value);
         }
+
+        _definitionStore.Delete(id);
+        await CancelScheduleOnlyAsync(id);
+        _skipCounts.Remove(id);
     }
 
     private async Task<ReminderStateResponse> EnableReminderInternalAsync(ReminderId id)

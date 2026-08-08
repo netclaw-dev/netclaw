@@ -30,7 +30,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        _historyStore = new ReminderHistoryStore(paths);
+        _historyStore = new ReminderHistoryStore(new ReminderDefinitionStore(paths));
     }
 
     void IDisposable.Dispose()
@@ -411,6 +411,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             bool acceptCompletion = true,
             bool reportChild = false)
         {
+            historyStore.DefinitionStore.Save(definition);
             var executionId = Guid.NewGuid();
             var envelope = new Akka.Reminders.ReminderEnvelope<ReminderPayload>(
                 new Akka.Reminders.ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),

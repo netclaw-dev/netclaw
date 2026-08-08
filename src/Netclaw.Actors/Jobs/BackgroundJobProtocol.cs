@@ -185,7 +185,7 @@ internal sealed record BackgroundJobCompleted
 // ── Persistence ──
 
 /// <summary>
-/// Job definition persisted to <c>~/.netclaw/jobs/{id}.json</c>.
+/// Job definition persisted in its source session job directory.
 /// </summary>
 public sealed record BackgroundJobDefinition
 {

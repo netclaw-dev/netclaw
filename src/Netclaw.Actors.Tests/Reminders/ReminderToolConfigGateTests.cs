@@ -75,7 +75,7 @@ public class ReminderToolConfigGateTests : IDisposable
     {
         var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        var store = new ReminderHistoryStore(paths);
+        var store = new ReminderHistoryStore(new ReminderDefinitionStore(paths));
         var tool = new GetReminderHistoryTool(store, _disabledConfig);
 
         var result = await tool.ExecuteAsync(

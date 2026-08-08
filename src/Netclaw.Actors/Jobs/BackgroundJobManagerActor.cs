@@ -18,8 +18,8 @@ using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 namespace Netclaw.Actors.Jobs;
 
 /// <summary>
-/// Infrastructure singleton that manages background job lifecycle independently
-/// of any session. Follows the same pattern as <c>ReminderManagerActor</c>.
+/// Infrastructure singleton that coordinates background jobs across sessions.
+/// Each source session owns its job files.
 /// </summary>
 public sealed class BackgroundJobManagerActor : ReceiveActor
 {
@@ -98,7 +98,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         _store.Save(definition);
         _definitions[jobId.Value] = definition;
 
-        var outputLogPath = _store.GetOutputLogPathOnly(jobId);
+        var outputLogPath = _store.GetOutputLogPathOnly(jobId, cmd.SessionId);
 
         if (_activeJobIds.Count >= MaxConcurrentJobs)
         {
@@ -182,7 +182,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private void HandleCancel(CancelBackgroundJob cmd)
     {
         if (!_definitions.TryGetValue(cmd.JobId.Value, out var def))
-            def = _store.Get(cmd.JobId);
+            def = _store.Get(cmd.JobId, cmd.SessionId);
 
         if (def is null
             || def.SessionId != cmd.SessionId
@@ -221,7 +221,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     {
         if (!_definitions.TryGetValue(query.JobId.Value, out var def))
         {
-            var diskDef = _store.Get(query.JobId);
+            var diskDef = _store.Get(query.JobId, query.SessionId);
             if (diskDef is not null)
                 def = diskDef;
         }
@@ -240,7 +240,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             return;
         }
 
-        var outputFilePath = _store.GetOutputLogPathOnly(query.JobId);
+        var outputFilePath = _store.GetOutputLogPathOnly(query.JobId, query.SessionId);
         string? outputTail = null;
         var outputFileExists = false;
         try
@@ -326,7 +326,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private void NotifyLostJob(BackgroundJobDefinition lost, long nowMs)
     {
-        var outputFilePath = _store.GetOutputLogPathOnly(lost.Id);
+        var outputFilePath = _store.GetOutputLogPathOnly(lost.Id, lost.SessionId);
         string? outputTail = null;
         try
         {
@@ -386,7 +386,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         _store.Save(running);
         _activeJobIds.Add(running.Id.Value);
 
-        var outputLogPath = _store.GetOutputLogPath(running.Id);
+        var outputLogPath = _store.GetOutputLogPath(running.Id, running.SessionId);
         var props = DependencyResolver.For(Context.System)
             .Props<BackgroundJobExecutionActor>(running, outputLogPath, _timeProvider);
         Context.ActorOf(props, $"job-{running.Id}");

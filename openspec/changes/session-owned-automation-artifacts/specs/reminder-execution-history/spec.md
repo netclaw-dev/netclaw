@@ -4,13 +4,15 @@
 
 On completion of each reminder execution, the system SHALL append one structured record to the history path for that reminder owner.
 
-A `CurrentSession` reminder SHALL use this path:
+A new `CurrentSession` reminder SHALL use this path:
 
 `~/.netclaw/sessions/{session-key}/reminders/{reminderId}.history.jsonl`
 
-A `Channel` or `None` reminder SHALL use this path:
+A new `Channel` or `None` reminder SHALL use this path:
 
 `~/.netclaw/schedules/reminders/{reminderId}.history.jsonl`
+
+The history file SHALL stay beside its definition. An existing daemon-owned history file SHALL remain at its current path.
 
 The record SHALL contain `firedAt`, `success`, `durationMs`, `sessionId`, and `errorMessage`. A write failure SHALL not change the execution result.
 
@@ -25,11 +27,18 @@ The record SHALL contain `firedAt`, `success`, `durationMs`, `sessionId`, and `e
 - **WHEN** a reminder execution fails or reaches its timeout
 - **THEN** the store appends a record with `success: false` and a non-null `errorMessage`
 
-#### Scenario: History follows current-session ownership
+#### Scenario: New history follows current-session ownership
 
 - **GIVEN** a reminder has `Delivery.Kind = CurrentSession`
 - **WHEN** the store appends its execution record
 - **THEN** the history file is beside the definition in the source session reminder directory
+
+#### Scenario: Existing current-session history stays at its current path
+
+- **GIVEN** a `CurrentSession` reminder definition exists in the daemon reminder directory
+- **WHEN** the store appends or reads its execution history
+- **THEN** the history file stays beside that daemon-owned definition
+- **AND** the store does not create a session-owned copy
 
 #### Scenario: History follows daemon ownership
 

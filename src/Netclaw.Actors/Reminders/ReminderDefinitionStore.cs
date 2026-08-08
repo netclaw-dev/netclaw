@@ -8,7 +8,9 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Persistence;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Reminders;
 
@@ -27,7 +29,8 @@ public sealed class ReminderDefinitionStore
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private readonly string _directory;
+    private readonly string _daemonDirectory;
+    private readonly string _sessionsDirectory;
     private readonly object _sync = new();
     private readonly List<DroppedInvalidReminderDefinition> _droppedInvalidDefinitions = [];
     private readonly Dictionary<string, RejectedLegacyReminderDefinition> _rejectedLegacyDefinitions =
@@ -36,9 +39,11 @@ public sealed class ReminderDefinitionStore
 
     public ReminderDefinitionStore(NetclawPaths paths, ILogger<ReminderDefinitionStore>? logger = null)
     {
-        _directory = paths.RemindersDirectory;
+        _daemonDirectory = paths.RemindersDirectory;
+        _sessionsDirectory = paths.SessionsDirectory;
         _logger = logger ?? NullLogger<ReminderDefinitionStore>.Instance;
-        Directory.CreateDirectory(_directory);
+        Directory.CreateDirectory(_daemonDirectory);
+        Directory.CreateDirectory(_sessionsDirectory);
         PruneInvalidDefinitions();
     }
 
@@ -78,47 +83,57 @@ public sealed class ReminderDefinitionStore
     public bool Exists(ReminderId id)
     {
         lock (_sync)
-            return File.Exists(GetPath(id));
+            return TryResolveDefinition(id, out _, out _);
     }
 
     public ReminderDefinition? Get(ReminderId id)
     {
         lock (_sync)
-        {
-            var path = GetPath(id);
-            if (!File.Exists(path))
-                return null;
-
-            var result = TryReadDefinition(path);
-            if (result.Definition is not null)
-                return result.Definition;
-
-            if (result.ShouldDelete)
-                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
-
-            return null;
-        }
+            return TryResolveDefinition(id, out var definition, out _) ? definition : null;
     }
 
     public IReadOnlyList<ReminderDefinition> List()
     {
         lock (_sync)
         {
-            var list = new List<ReminderDefinition>();
-            foreach (var file in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
+            var definitions = new Dictionary<string, ReminderDefinition>(StringComparer.Ordinal);
+            var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var path in EnumerateDefinitionFiles())
             {
-                var result = TryReadDefinition(file);
-                if (result.Definition is not null)
+                var result = TryReadDefinition(path);
+                if (result.Definition is null)
                 {
-                    list.Add(result.Definition);
+                    if (result.ShouldDelete)
+                        DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
                     continue;
                 }
 
-                if (result.ShouldDelete)
-                    DeleteInvalidDefinition(file, result.ErrorMessage ?? "invalid reminder definition");
+                var definition = result.Definition;
+                if (!IsValidStoragePath(definition, path, out var reason))
+                {
+                    _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
+                    continue;
+                }
+
+                if (duplicates.Contains(definition.Id.Value))
+                    continue;
+
+                if (paths.TryGetValue(definition.Id.Value, out var priorPath))
+                {
+                    paths.Remove(definition.Id.Value);
+                    definitions.Remove(definition.Id.Value);
+                    duplicates.Add(definition.Id.Value);
+                    LogDuplicate(definition.Id, priorPath, path);
+                    continue;
+                }
+
+                paths.Add(definition.Id.Value, path);
+                definitions.Add(definition.Id.Value, definition);
             }
 
-            return list;
+            return definitions.Values.ToArray();
         }
     }
 
@@ -126,9 +141,23 @@ public sealed class ReminderDefinitionStore
     {
         lock (_sync)
         {
-            Directory.CreateDirectory(_directory);
+            var existingPaths = FindDefinitionPaths(definition.Id);
+            if (existingPaths.Count > 1)
+            {
+                LogDuplicate(definition.Id, existingPaths[0], existingPaths[1]);
+                throw new InvalidOperationException(
+                    $"Reminder '{definition.Id.Value}' has definitions in more than one storage directory.");
+            }
 
-            var path = GetPath(definition.Id);
+            var path = existingPaths.Count == 1
+                ? existingPaths[0]
+                : GetDefinitionPath(GetDirectoryForNewDefinition(definition), definition.Id);
+
+            if (!IsDaemonPath(path) && !IsValidSessionStoragePath(definition, path, out var reason))
+                throw new InvalidOperationException(
+                    $"Reminder '{definition.Id.Value}' cannot use its existing storage directory: {reason}");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var tempPath = $"{path}.tmp";
             File.WriteAllText(tempPath, JsonSerializer.Serialize(definition, JsonOptions));
             File.Move(tempPath, path, overwrite: true);
@@ -139,32 +168,197 @@ public sealed class ReminderDefinitionStore
     {
         lock (_sync)
         {
-            var path = GetPath(id);
-            if (!File.Exists(path))
+            var paths = FindDefinitionPaths(id);
+            if (paths.Count == 0)
                 return false;
+            if (paths.Count > 1)
+            {
+                LogDuplicate(id, paths[0], paths[1]);
+                return false;
+            }
 
-            File.Delete(path);
+            File.Delete(paths[0]);
             return true;
         }
     }
 
-    private string GetPath(ReminderId id)
+    internal bool TryGetStorageDirectory(ReminderId id, out string directory)
     {
-        // Uri.EscapeDataString escapes path separators and absolute-path
-        // markers (/, \, :, control chars), so the encoded value cannot encode a
-        // traversal. The post-canonicalization containment check below is the
-        // belt-and-suspenders that CodeQL also recognizes as a path sanitizer.
-        // (cs/path-injection)
-        var encoded = Uri.EscapeDataString(id.Value);
-        var baseDir = Path.GetFullPath(_directory);
-        var candidate = Path.GetFullPath(Path.Combine(baseDir, $"{encoded}.json"));
-        var baseWithSep = baseDir.EndsWith(Path.DirectorySeparatorChar)
-            ? baseDir
-            : baseDir + Path.DirectorySeparatorChar;
-        if (!candidate.StartsWith(baseWithSep, StringComparison.Ordinal))
+        lock (_sync)
+        {
+            if (!TryResolveDefinition(id, out _, out var path))
+            {
+                directory = string.Empty;
+                return false;
+            }
+
+            directory = Path.GetDirectoryName(path)!;
+            return true;
+        }
+    }
+
+    private bool TryResolveDefinition(
+        ReminderId id,
+        out ReminderDefinition definition,
+        out string path)
+    {
+        var paths = FindDefinitionPaths(id);
+        if (paths.Count == 0)
+        {
+            definition = null!;
+            path = string.Empty;
+            return false;
+        }
+
+        if (paths.Count > 1)
+        {
+            LogDuplicate(id, paths[0], paths[1]);
+            definition = null!;
+            path = string.Empty;
+            return false;
+        }
+
+        path = paths[0];
+        var result = TryReadDefinition(path);
+        if (result.Definition is null)
+        {
+            if (result.ShouldDelete)
+                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
+            definition = null!;
+            path = string.Empty;
+            return false;
+        }
+
+        if (result.Definition.Id != id)
+        {
+            _logger.LogError(
+                "Reminder document {Path} contains id {StoredId}, but its file name identifies {RequestedId}",
+                path, result.Definition.Id.Value, id.Value);
+            definition = null!;
+            path = string.Empty;
+            return false;
+        }
+
+        if (!IsValidStoragePath(result.Definition, path, out var reason))
+        {
+            _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
+            definition = null!;
+            path = string.Empty;
+            return false;
+        }
+
+        definition = result.Definition;
+        return true;
+    }
+
+    private List<string> FindDefinitionPaths(ReminderId id)
+    {
+        var paths = new List<string>();
+        var fileName = $"{Uri.EscapeDataString(id.Value)}.json";
+        AddIfPresent(paths, GetContainedPath(_daemonDirectory, fileName, id));
+
+        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        {
+            var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
+            if (Directory.Exists(reminderDirectory))
+                AddIfPresent(paths, GetContainedPath(reminderDirectory, fileName, id));
+        }
+
+        return paths;
+    }
+
+    private IEnumerable<string> EnumerateDefinitionFiles()
+    {
+        foreach (var path in Directory.EnumerateFiles(_daemonDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            yield return path;
+
+        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        {
+            var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
+            if (!Directory.Exists(reminderDirectory))
+                continue;
+
+            foreach (var path in Directory.EnumerateFiles(reminderDirectory, "*.json", SearchOption.TopDirectoryOnly))
+                yield return path;
+        }
+    }
+
+    private static void AddIfPresent(List<string> paths, string path)
+    {
+        if (File.Exists(path))
+            paths.Add(path);
+    }
+
+    private bool IsValidStoragePath(ReminderDefinition definition, string path, out string reason)
+    {
+        var expectedPath = GetDefinitionPath(Path.GetDirectoryName(path)!, definition.Id);
+        if (!PathUtility.AreEquivalentPaths(path, expectedPath))
+        {
+            reason = "the file name does not match the stored reminder id";
+            return false;
+        }
+
+        if (IsDaemonPath(path))
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        return IsValidSessionStoragePath(definition, path, out reason);
+    }
+
+    private bool IsValidSessionStoragePath(ReminderDefinition definition, string path, out string reason)
+    {
+        if (definition.Delivery.Kind != DeliveryKind.CurrentSession)
+        {
+            reason = $"delivery kind {definition.Delivery.Kind} requires the daemon reminder directory";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(definition.Delivery.SessionId))
+        {
+            reason = "a CurrentSession reminder requires a session id";
+            return false;
+        }
+
+        var expectedDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId(definition.Delivery.SessionId), _sessionsDirectory);
+        if (!PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, expectedDirectory))
+        {
+            reason = $"the stored session owner resolves to '{expectedDirectory}'";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool IsDaemonPath(string path) =>
+        PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, _daemonDirectory);
+
+    private string GetDirectoryForNewDefinition(ReminderDefinition definition) =>
+        definition.Delivery.Kind switch
+        {
+            DeliveryKind.CurrentSession when !string.IsNullOrWhiteSpace(definition.Delivery.SessionId) =>
+                SessionDirectoryHelper.GetSessionRemindersDirectory(
+                    new SessionId(definition.Delivery.SessionId), _sessionsDirectory),
+            DeliveryKind.CurrentSession => throw new InvalidDataException(
+                $"CurrentSession reminder '{definition.Id.Value}' does not have a session id."),
+            DeliveryKind.Channel or DeliveryKind.None => _daemonDirectory,
+            _ => throw new InvalidDataException(
+                $"Reminder '{definition.Id.Value}' has unsupported delivery kind '{definition.Delivery.Kind}'.")
+        };
+
+    private static string GetDefinitionPath(string directory, ReminderId id) =>
+        GetContainedPath(directory, $"{Uri.EscapeDataString(id.Value)}.json", id);
+
+    private static string GetContainedPath(string directory, string fileName, ReminderId id)
+    {
+        var root = Path.GetFullPath(directory);
+        var candidate = Path.GetFullPath(Path.Combine(root, fileName));
+        if (!PathUtility.IsWithinRoot(candidate, root))
             throw new ArgumentException(
-                $"Reminder id '{id.Value}' resolves outside the reminders directory.",
-                nameof(id));
+                $"Reminder id '{id.Value}' resolves outside the reminder directory.", nameof(id));
         return candidate;
     }
 
@@ -172,16 +366,21 @@ public sealed class ReminderDefinitionStore
     {
         lock (_sync)
         {
-            foreach (var file in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
+            foreach (var path in EnumerateDefinitionFiles().ToArray())
             {
-                var result = TryReadDefinition(file);
+                var result = TryReadDefinition(path);
                 if (result.Definition is not null || !result.ShouldDelete)
                     continue;
 
-                DeleteInvalidDefinition(file, result.ErrorMessage ?? "invalid reminder definition");
+                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
             }
         }
     }
+
+    private void LogDuplicate(ReminderId id, string firstPath, string secondPath) =>
+        _logger.LogError(
+            "Reminder id {ReminderId} has duplicate definitions at {FirstPath} and {SecondPath}. Neither definition will run.",
+            id.Value, firstPath, secondPath);
 
     private void DeleteInvalidDefinition(string path, string reason)
     {
@@ -226,10 +425,8 @@ public sealed class ReminderDefinitionStore
         try
         {
             var text = File.ReadAllText(path);
-            // A pre-#994 reminder document with no persisted trust context cannot
-            // be run safely. Reject it loudly without coercing a substitute
-            // audience, and keep the file — it is operator-authored data, not
-            // corrupt JSON, so the operator can repair or remove it.
+            // A document without trust fields cannot execute safely. Keep it so
+            // the operator can repair or remove the file.
             var missingTrustFields = LegacyTrustFieldGuard.MissingTrustFields(text);
             if (missingTrustFields.Count > 0)
             {
@@ -237,8 +434,7 @@ public sealed class ReminderDefinitionStore
                 _logger.LogError(
                     "Reminder document {Path} predates issue #994 and is missing required "
                     + "trust field(s): {MissingFields}. The reminder will not be loaded or "
-                    + "scheduled — a reminder with no persisted audience cannot be run safely. "
-                    + "Recreate the reminder or remove the file.",
+                    + "scheduled. Recreate the reminder or remove the file.",
                     path, fields);
                 RecordRejectedLegacyDefinition(path, $"missing trust field(s): {fields}");
                 return new ReadResult(null, $"missing trust field(s): {fields}", ShouldDelete: false);

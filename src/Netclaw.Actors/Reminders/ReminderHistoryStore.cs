@@ -5,8 +5,6 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Netclaw.Configuration;
-
 namespace Netclaw.Actors.Reminders;
 
 /// <summary>
@@ -33,13 +31,14 @@ public sealed class ReminderHistoryStore
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private readonly string _directory;
+    private readonly ReminderDefinitionStore _definitionStore;
 
-    public ReminderHistoryStore(NetclawPaths paths)
+    public ReminderHistoryStore(ReminderDefinitionStore definitionStore)
     {
-        _directory = paths.RemindersDirectory;
-        Directory.CreateDirectory(_directory);
+        _definitionStore = definitionStore;
     }
+
+    internal ReminderDefinitionStore DefinitionStore => _definitionStore;
 
     /// <summary>
     /// Appends <paramref name="record"/> to <c>{id}.history.jsonl</c>.
@@ -49,6 +48,7 @@ public sealed class ReminderHistoryStore
     public async Task AppendAsync(ReminderId id, HistoryRecord record)
     {
         var path = GetHistoryPath(id);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var line = JsonSerializer.Serialize(record, JsonOptions);
 
         if (!File.Exists(path))
@@ -88,7 +88,8 @@ public sealed class ReminderHistoryStore
     /// </summary>
     public async Task<IReadOnlyList<HistoryRecord>> ReadAsync(ReminderId id, int maxRecords)
     {
-        var path = GetHistoryPath(id);
+        if (!TryGetHistoryPath(id, out var path))
+            return [];
         if (!File.Exists(path))
             return [];
 
@@ -122,14 +123,29 @@ public sealed class ReminderHistoryStore
     /// </summary>
     public void DeleteHistory(ReminderId id)
     {
-        var path = GetHistoryPath(id);
+        if (!TryGetHistoryPath(id, out var path))
+            return;
         if (File.Exists(path))
             File.Delete(path);
     }
 
     private string GetHistoryPath(ReminderId id)
     {
+        if (!TryGetHistoryPath(id, out var path))
+            throw new InvalidOperationException($"Reminder '{id.Value}' does not have a valid definition.");
+        return path;
+    }
+
+    private bool TryGetHistoryPath(ReminderId id, out string path)
+    {
+        if (!_definitionStore.TryGetStorageDirectory(id, out var directory))
+        {
+            path = string.Empty;
+            return false;
+        }
+
         var encoded = Uri.EscapeDataString(id.Value);
-        return Path.Combine(_directory, $"{encoded}.history.jsonl");
+        path = Path.Combine(directory, $"{encoded}.history.jsonl");
+        return true;
     }
 }

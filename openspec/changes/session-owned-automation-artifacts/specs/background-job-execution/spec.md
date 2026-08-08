@@ -4,11 +4,13 @@
 
 The system SHALL provide one `BackgroundJobManagerActor` as a daemon infrastructure actor. The manager SHALL coordinate jobs across all sessions.
 
-The source session SHALL own each job definition and output directory. The manager SHALL persist them under:
+The source session SHALL own each new job definition and output directory. The manager SHALL persist them under:
 
 `~/.netclaw/sessions/{session-key}/jobs/`
 
-The manager SHALL enforce the current global concurrency limit and FIFO queue. File ownership SHALL NOT create one manager or one capacity limit per session.
+The store SHALL also read existing jobs under `~/.netclaw/jobs/`. It SHALL preserve their definition and output paths during reads and updates.
+
+The manager SHALL enforce the current global concurrency limit and FIFO queue. File ownership SHALL NOT create one manager or capacity limit per session.
 
 Job persistence SHALL NOT guarantee process continuity across a daemon restart. Startup reconciliation SHALL mark an orphaned job as lost.
 
@@ -19,6 +21,7 @@ The manager SHALL deliver the lost result and output path to the source session 
 - **WHEN** the Netclaw daemon starts
 - **THEN** one `BackgroundJobManagerActor` is registered
 - **AND** it scans each fixed session job directory
+- **AND** it scans the existing daemon job directory
 - **AND** it runs the current best-effort reconciliation
 
 #### Scenario: Concurrency limit remains global
@@ -44,12 +47,26 @@ The manager SHALL deliver the lost result and output path to the source session 
 - **AND** it does not guarantee that the prior process resumes
 - **AND** it notifies the source session when the agent must start a new job
 
-#### Scenario: Manager lookup uses session ownership
+#### Scenario: New manager lookup uses session ownership
 
 - **GIVEN** a job command contains the job ID and source `SessionId`
 - **WHEN** the manager reads or updates the job
 - **THEN** the store resolves the canonical path under that exact session directory
 - **AND** another trusted root does not satisfy the owner check
+
+#### Scenario: Existing job stays at its current path
+
+- **GIVEN** a valid job definition and output exist under `~/.netclaw/jobs/`
+- **WHEN** the store starts, reads, or updates that job
+- **THEN** both artifacts remain under `~/.netclaw/jobs/`
+- **AND** the manager resolves the job with its stored ID and `SessionId`
+
+#### Scenario: Duplicate job ID fails loud
+
+- **GIVEN** the same job ID exists in the daemon and a session job directory
+- **WHEN** the store resolves that ID
+- **THEN** the store rejects the ambiguous duplicate
+- **AND** it logs both paths
 
 ### Requirement: Background job execution
 
@@ -131,47 +148,3 @@ An explicit timeout SHALL kill the full process tree. The completion result SHAL
 - **THEN** the completion uses a trusted turn
 - **AND** that trust equals the approved synchronous shell result trust
 - **AND** the stored audience and boundary do not become broader
-
-## ADDED Requirements
-
-### Requirement: Legacy background job artifact migration
-
-On startup, the job store SHALL inspect legacy definitions under `~/.netclaw/jobs/`. It SHALL derive each destination from the stored `SessionId`.
-
-The store SHALL move the job output directory before it moves the definition file. The definition move SHALL act as the migration commit point.
-
-The store SHALL NOT overwrite a destination artifact. A conflict or invalid owner SHALL produce an error and preserve the source data.
-
-The store SHALL continue to resolve a valid legacy job after a migration error. This compatibility path SHALL produce an operator-visible log entry.
-
-#### Scenario: Legacy job moves to its source session
-
-- **GIVEN** a valid legacy job definition contains a valid `SessionId`
-- **AND** no destination artifact exists
-- **WHEN** startup migration runs
-- **THEN** the output directory moves to the canonical session job directory when present
-- **AND** the definition moves to the same session job directory
-- **AND** the job keeps its current ID and status
-
-#### Scenario: Migration conflict preserves legacy job
-
-- **GIVEN** a legacy job and its destination path both exist
-- **WHEN** startup migration runs
-- **THEN** the migration does not overwrite either artifact
-- **AND** the store logs the conflict
-- **AND** the manager can still inspect the source job through the explicit compatibility path
-
-#### Scenario: Restart resumes an interrupted job migration
-
-- **GIVEN** a prior migration moved the output directory but did not move the definition
-- **WHEN** the daemon restarts
-- **THEN** the migration accepts the matching destination output directory
-- **AND** it completes the definition move without output loss
-
-#### Scenario: Invalid session owner fails loud
-
-- **GIVEN** a legacy job definition has an invalid or absent `SessionId`
-- **WHEN** startup migration runs
-- **THEN** the store does not move the job
-- **AND** it logs the path and validation error
-- **AND** the manager does not execute the job under a substituted session

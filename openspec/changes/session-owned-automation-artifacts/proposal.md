@@ -9,8 +9,8 @@ PRD-008 requires durable scheduled work, but Netclaw stores session-owned automa
 - Keep `Channel` and `None` reminder definitions and history in the daemon-wide reminder directory.
 - Keep the current reminder manager, background job manager, execution actors, delivery routes, and trust derivation.
 - Persist logical session ownership and derive a validated absolute artifact path before file access.
-- Restrict each session-owned path to the exact source session directory and reject path or symbolic-link escapes.
-- Move compatible legacy session-owned artifacts from the daemon-wide directories during startup reconciliation.
+- Restrict each session-owned path to the exact source session directory and reject path traversal.
+- Read current session-owned artifacts from their present daemon-wide locations without an automatic move.
 - Use the future session-retention process instead of a background-job-specific artifact timer.
 - Leave the planned session-retention process outside this change.
 
@@ -29,8 +29,8 @@ None.
 
 ## Impact
 
-- **In scope:** PRD-008 storage, reminder lookup, reminder reconciliation, background job lookup, startup migration, and path-containment tests.
+- **In scope:** PRD-008 storage, reminder lookup, reminder reconciliation, background job lookup, dual-location reads, and path tests.
 - **Out of scope:** The planned 30-day session-retention process, a job-specific retention timer, actor ownership changes, scheduler replacement, and delivery-route changes.
 - **Security:** The daemon derives paths from typed session identity. It does not accept an arbitrary path as reminder or job authority.
 - **Operations:** Session removal can later remove these artifacts with the other session files. Daemon-scoped reminders remain independent of session retention.
-- **Compatibility:** Startup reconciliation moves compatible legacy artifacts. Existing reminder schedules remain valid across the storage migration.
+- **Compatibility:** Current files remain in place. ID-only scheduler payloads and current reminder schedules remain valid.

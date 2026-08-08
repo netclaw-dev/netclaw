@@ -257,8 +257,8 @@ Lifecycle:
 
 Monitoring a running job (e.g. waiting for a dev server to come up):
 
-- `file_read`/`grep` the output log — it streams live (secret-redacted,
-  rotation-bounded) at `~/.netclaw/jobs/{id}/output.log`.
+- `file_read`/`grep` the output log. It streams live at
+  `{session}/jobs/{id}/output.log` with secret redaction and bounded rotation.
 - `check_background_job(JobId: "id")` — status, elapsed time, live output tail
 - Probe the service directly (e.g. curl the port) once the log shows it started.
 - `check_background_job(JobId: "id", Cancel: true)` — cancel a running job.
@@ -282,7 +282,8 @@ Rules:
   model server that takes minutes to respond) should run as background jobs.
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
-- Job definitions persist to `~/.netclaw/jobs/{id}.json`.
+- New job definitions persist to `{session}/jobs/{id}.json`.
+- Existing definitions under `~/.netclaw/jobs/` stay there. Netclaw reads and updates them in place.
 
 `check_background_job` is only available when shell execution is granted (same
 `shell` grant category). It validates that the requesting session matches the

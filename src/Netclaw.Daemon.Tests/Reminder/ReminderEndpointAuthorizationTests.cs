@@ -47,7 +47,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _definitionStore = new ReminderDefinitionStore(paths);
-        _historyStore = new ReminderHistoryStore(paths);
+        _historyStore = new ReminderHistoryStore(_definitionStore);
 
         _actorSystem = ActorSystem.Create($"reminder-endpoint-tests-{Guid.NewGuid():N}");
         _testActor = new TestReminderActor();

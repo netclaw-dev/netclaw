@@ -31,6 +31,16 @@ public static class SessionDirectoryHelper
     public const string MediaSubdirectory = "media";
 
     /// <summary>
+    /// Name of the subdirectory that owns current-session reminder files.
+    /// </summary>
+    public const string RemindersSubdirectory = "reminders";
+
+    /// <summary>
+    /// Name of the subdirectory that owns background job files.
+    /// </summary>
+    public const string JobsSubdirectory = "jobs";
+
+    /// <summary>
     /// Computes the session directory path under the given base directory
     /// (e.g. <c>~/.netclaw/sessions/</c>).
     /// </summary>
@@ -39,6 +49,18 @@ public static class SessionDirectoryHelper
         var sanitized = SanitizeSessionId(sessionId);
         return Path.Combine(basePath, sanitized);
     }
+
+    /// <summary>
+    /// Gets the canonical directory for reminders that re-enter one session.
+    /// </summary>
+    public static string GetSessionRemindersDirectory(SessionId sessionId, string basePath) =>
+        GetSessionArtifactDirectory(sessionId, basePath, RemindersSubdirectory);
+
+    /// <summary>
+    /// Gets the canonical directory for background jobs that belong to one session.
+    /// </summary>
+    public static string GetSessionJobsDirectory(SessionId sessionId, string basePath) =>
+        GetSessionArtifactDirectory(sessionId, basePath, JobsSubdirectory);
 
     /// <summary>
     /// Computes and creates the <c>inbox/</c> subdirectory under the
@@ -105,5 +127,16 @@ public static class SessionDirectoryHelper
         for (var i = 0; i < value.Length; i++)
             buf[i] = char.IsLetterOrDigit(value[i]) || value[i] == '-' ? value[i] : '_';
         return new string(buf);
+    }
+
+    private static string GetSessionArtifactDirectory(
+        SessionId sessionId,
+        string basePath,
+        string artifactSubdirectory)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId.Value))
+            throw new ArgumentException("Session id cannot be empty.", nameof(sessionId));
+
+        return Path.Combine(GetSessionDirectory(sessionId, basePath), artifactSubdirectory);
     }
 }

@@ -35,7 +35,7 @@ The `BackgroundJobManagerActor` manages job lifecycle:
 - **Process isolation**: each job runs as a child `BackgroundJobExecutionActor`
   that spawns the shell process with stdin closed.
 - **Streaming output capture**: stdout/stderr stream line-by-line to
-  `~/.netclaw/jobs/{id}/output.log` *while the process runs* (stderr lines
+  `~/.netclaw/sessions/{session-key}/jobs/{id}/output.log` *while the process runs* (stderr lines
   prefixed `[stderr]`). Each line is secret-redacted at write time. The log is
   bounded by single-slot rotation: when `output.log` crosses ~5 MB it moves to
   `output.1.log` (replacing any earlier rotation), so a job holds at most
@@ -43,7 +43,7 @@ The `BackgroundJobManagerActor` manages job lifecycle:
 - **Timeout**: a kill timer is armed **only** when the agent passes a positive
   `_timeout_seconds`. Omitted means no timer — the job runs until it exits or
   is reaped.
-- **Definitions**: persisted to `~/.netclaw/jobs/{id}.json` for crash recovery.
+- **Definitions**: persisted to `~/.netclaw/sessions/{session-key}/jobs/{id}.json` for crash recovery.
 
 ### Termination
 
@@ -75,9 +75,10 @@ job process outlives the daemon.
 
 ### Startup reconciliation
 
-On daemon restart, the manager scans `~/.netclaw/jobs/` for definitions with
-status `Running` or `Pending`. These are orphaned processes lost during the
-restart — marked `Lost` with a completion timestamp, **and the owning session
+On daemon restart, the manager scans each session job directory. It also scans
+`~/.netclaw/jobs/` for existing definitions. Running or pending definitions are
+orphaned processes. The manager marks them `Lost` with a completion timestamp.
+The owning session
 is notified** with the log path so the agent can relaunch. Notification volume
 is bounded by design: passivated sessions have no live jobs, so only sessions
 that were warm at crash time appear here.
@@ -117,12 +118,15 @@ category as `shell_execute`).
 ## Filesystem layout
 
 ```
-~/.netclaw/jobs/
+~/.netclaw/sessions/{session-key}/jobs/
 ├── abc123.json           # job definition (status, command, session, timing)
 └── abc123/
     ├── output.log        # live streamed stdout + stderr (most recent)
     └── output.1.log      # rotated predecessor (present only after rotation)
 ```
+
+Existing jobs can remain under `~/.netclaw/jobs/`. Netclaw reads and updates
+these jobs at their current paths. Netclaw does not move them automatically.
 
 ## Configuration
 
@@ -140,7 +144,7 @@ approval policy and audience ACL as regular shell execution.
 
 | Symptom | Check |
 |---------|-------|
-| Job stuck as "running" | Check `~/.netclaw/jobs/{id}.json` status; daemon may have restarted (jobs become Lost) |
+| Job stuck as "running" | Check the session `jobs/{id}.json` status. Existing jobs can remain under `~/.netclaw/jobs/`. |
 | No result delivered | Check daemon logs for gateway resolution failure; verify channel type matches a registered gateway |
 | Job definition shows Lost | Normal after daemon restart — the owning session was notified; the pre-crash log remains readable |
 | Job definition shows Reaped | Normal after the owning session went idle — the agent resubmits if still needed |

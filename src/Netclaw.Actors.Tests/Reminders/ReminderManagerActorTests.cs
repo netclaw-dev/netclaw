@@ -49,7 +49,7 @@ public class ReminderManagerActorTests : TestKit
         _definitionStore = new ReminderDefinitionStore(paths);
         _notificationSink = new TestNotificationSink();
         var definitionStore = _definitionStore;
-        var historyStore = new ReminderHistoryStore(paths);
+        var historyStore = new ReminderHistoryStore(definitionStore);
 
         // Wire local reminders with in-memory storage
         builder.WithLocalReminders(reminders =>
@@ -301,10 +301,11 @@ public class ReminderManagerActorTests : TestKit
             cancellationToken: TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_basePath);
+        var restartedDefinitionStore = new ReminderDefinitionStore(paths);
         var restarted = Sys.ActorOf(
             CreateManagerProps(
-                new ReminderDefinitionStore(paths),
-                new ReminderHistoryStore(paths)),
+                restartedDefinitionStore,
+                new ReminderHistoryStore(restartedDefinitionStore)),
             "reminder-manager-restarted");
         ActorRegistry.For(Sys).Register<ReminderManagerActorKey>(restarted, overwrite: true);
         _sharedResolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, restarted);
@@ -357,7 +358,7 @@ public class ReminderManagerActorTests : TestKit
             UpdatedAt = now.AddHours(-2)
         };
         _definitionStore.Save(zombie);
-        var historyStore = new ReminderHistoryStore(new NetclawPaths(_basePath));
+        var historyStore = new ReminderHistoryStore(_definitionStore);
         await historyStore.AppendAsync(
             zombie.Id,
             new HistoryRecord(now.AddMinutes(-30), false, 100, "session-1", "recovery failed"));
@@ -564,7 +565,7 @@ public class ReminderManagerActorTests : TestKit
                 new SchedulingConfig(),
                 TimeProvider.System,
                 store,
-                new ReminderHistoryStore(paths),
+                new ReminderHistoryStore(store),
                 sink,
                 NullReminderChannelNotifier.Instance)),
             "legacy-reminder-alert-manager");

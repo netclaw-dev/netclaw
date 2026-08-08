@@ -55,7 +55,7 @@ public class BackgroundJobExecutionActorTests : TestKit
 
     private IActorRef SpawnExecution(BackgroundJobDefinition definition, IActorRef probe)
     {
-        var outputPath = _store.GetOutputLogPath(definition.Id);
+        var outputPath = _store.GetOutputLogPath(definition.Id, definition.SessionId);
         var props = Props.Create(() => new BackgroundJobExecutionActor(definition, outputPath, TimeProvider.System));
         return Sys.ActorOf(ForwardingParent.Props(props, probe), $"exec-{definition.Id}");
     }
@@ -124,7 +124,7 @@ public class BackgroundJobExecutionActorTests : TestKit
         var definition = MakeDefinition(command);
         var probe = CreateTestProbe("parent");
         var actor = SpawnExecution(definition, probe);
-        var outputPath = _store.GetOutputLogPath(definition.Id);
+        var outputPath = _store.GetOutputLogPath(definition.Id, definition.SessionId);
 
         await AwaitAssertAsync(() =>
             {
