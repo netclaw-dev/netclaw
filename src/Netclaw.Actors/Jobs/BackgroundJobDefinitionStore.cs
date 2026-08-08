@@ -163,8 +163,12 @@ public sealed class BackgroundJobDefinitionStore
                 removed = true;
             }
 
-            var outputDir = Path.Combine(_directory, Uri.EscapeDataString(id.Value));
-            if (Directory.Exists(outputDir))
+            // Reuse the canonical output-log path (same encoding as
+            // GetOutputLogPathOnly) so the artifact directory matches exactly
+            // what the execution actor wrote.
+            var outputLogPath = GetOutputLogPathOnly(id);
+            var outputDir = Path.GetDirectoryName(outputLogPath);
+            if (outputDir is not null && Directory.Exists(outputDir))
             {
                 Directory.Delete(outputDir, recursive: true);
                 removed = true;

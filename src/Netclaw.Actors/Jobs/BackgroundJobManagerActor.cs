@@ -33,14 +33,14 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
     /// long enough for the owning session to poll <c>check_background_job</c> or
     /// read the log after delivery. See <see cref="SweepTerminalJobs"/>.
     /// </summary>
-    internal static TimeSpan TerminalJobRetentionWindow = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan TerminalJobRetentionWindow = TimeSpan.FromHours(24);
 
     /// <summary>
     /// Cadence of the periodic terminal-job cleanup sweep. The sweep also runs
     /// once during startup reconciliation, so a daemon restart immediately
     /// purges anything past the retention window.
     /// </summary>
-    internal static TimeSpan TerminalSweepInterval = TimeSpan.FromHours(1);
+    internal static readonly TimeSpan TerminalSweepInterval = TimeSpan.FromHours(1);
 
     // Capture ceiling for a job's output log: the execution actor drains each
     // stream to this bound (head+tail) so a chatty long-running job can't buffer
