@@ -1187,6 +1187,63 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Null(headCandidate.Directory);
     }
 
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_printf_format_operand_is_not_a_path_scope()
+    {
+        // Regression for #1795: printf is a stdout-only side-effect verb. Its
+        // format string and value operands are literal text, not paths. The
+        // candidate must carry Directory == null.
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "printf \"%d\" 5",
+                ["WorkingDirectory"] = "/home/user/repos/demo"
+            });
+
+        var printfCandidate = Assert.Single(candidates);
+        Assert.Equal("printf", printfCandidate.Verb);
+        Assert.Null(printfCandidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_echo_glob_char_text_is_not_a_scope()
+    {
+        // Regression for #1795: `echo "a?b"` contains a `?`, which the parser
+        // classifies as a Glob token. echo is a side-effect verb, so no
+        // arg-derived scope forms. The candidate must carry Directory == null.
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "echo \"a?b\"",
+                ["WorkingDirectory"] = "/home/user/repos/demo"
+            });
+
+        var echoCandidate = Assert.Single(candidates);
+        Assert.Equal("echo", echoCandidate.Verb);
+        Assert.Null(echoCandidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_bare_numeric_flag_value_is_not_a_path_scope()
+    {
+        // Regression for #1795: `head -n 20` has a bare numeric operand `20`.
+        // A number is not a path, so no scope forms. The candidate must carry
+        // Directory == null.
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "head -n 20",
+                ["WorkingDirectory"] = "/home/user/repos/demo"
+            });
+
+        var headCandidate = Assert.Single(candidates);
+        Assert.Equal("head", headCandidate.Verb);
+        Assert.Null(headCandidate.Directory);
+    }
+
     [Fact]
     public void IsApproved_treats_side_effect_candidates_as_authorized()
     {

@@ -269,27 +269,39 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // Each parser path is an authorization scope. A grant must cover all
         // scopes, or a later external path could hide behind an earlier local
         // path. The resolved value also handles native forms such as @file.
-        foreach (var arg in clause.Args)
+        //
+        // Temporary containment for #1795. ShellSyntaxTree 0.2 tags an echo or
+        // printf text operand as a path arg or a glob arg. The matcher then
+        // makes a phantom directory scope from literal text. A pure side-effect
+        // verb writes only to stdout. Its operands are never filesystem paths.
+        // So this verb derives no arg-based scope. A redirect still gives a real
+        // scope below. This code only removes a false scope. It never grants a
+        // new one. ShellSyntaxTree v0.3.0 fixes the misclassification in the
+        // parser. Remove this guard then.
+        if (!isSideEffectVerb)
         {
-            if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
-                continue;
-
-            if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+            foreach (var arg in clause.Args)
             {
-                var coveringDirectory = ResolveGlobCoveringDirectory(arg, clauseWorkingDirectory);
-                if (coveringDirectory is null)
+                if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
+                    continue;
+
+                if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+                {
+                    var coveringDirectory = ResolveGlobCoveringDirectory(arg, clauseWorkingDirectory);
+                    if (coveringDirectory is null)
+                        return null;
+
+                    directories.Add(coveringDirectory);
+                    continue;
+                }
+
+                // A parser path without a canonical value cannot use the broader
+                // cwd grant. Return no candidates so the command fails closed.
+                if (string.IsNullOrWhiteSpace(arg.Resolved))
                     return null;
 
-                directories.Add(coveringDirectory);
-                continue;
+                directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved));
             }
-
-            // A parser path without a canonical value cannot use the broader
-            // cwd grant. Return no candidates so the command fails closed.
-            if (string.IsNullOrWhiteSpace(arg.Resolved))
-                return null;
-
-            directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved));
         }
 
         foreach (var redirect in clause.Redirects)
@@ -393,6 +405,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         string? workingDirectory)
     {
         if (!arg.IsPath)
+            return false;
+
+        // Temporary containment for #1795. ShellSyntaxTree 0.2 tags a bare
+        // numeric operand such as `head -c 2000` as a path arg. The matcher
+        // then makes a phantom scope `/cwd/2000`. A token of only ASCII digits
+        // with no `/` is a numeric value, not a path. Reject it. This guard is
+        // narrow: `2000.txt`, `file1234`, and `1234/x` still pass. This code
+        // only removes a false scope. It never grants a new one. ShellSyntaxTree
+        // v0.3.0 classifies the operand in the parser. Remove this guard then.
+        if (arg.Raw.Length > 0 && arg.Raw.All(char.IsAsciiDigit))
             return false;
 
         if (ShellTokenizer.IsPathToken(arg.Raw) || !arg.Raw.Contains('/', StringComparison.Ordinal))
