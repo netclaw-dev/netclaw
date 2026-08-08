@@ -174,8 +174,22 @@ public sealed class ToolAccessPolicy
             }
         }
 
-        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(toolName, context, arguments, SelectShellApprovalMatcher(toolName));
     }
+
+    /// <summary>
+    /// Selects the approval matcher for shell-coupled tools. Real shell
+    /// commands use <see cref="ShellApprovalMatcher"/> (verb-chain extraction,
+    /// unconditional fail-closed on Personal). <c>check_background_job</c> uses
+    /// <see cref="BackgroundJobApprovalMatcher"/> because its status query is
+    /// read-only and job-scoped (the job manager enforces an exact
+    /// SessionId+Audience+Boundary match), so only its Cancel=true mutation
+    /// must fail closed on Personal.
+    /// </summary>
+    private static IToolApprovalMatcher SelectShellApprovalMatcher(ToolName toolName)
+        => string.Equals(toolName.Value, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
+            ? BackgroundJobApprovalMatcher.Instance
+            : ShellApprovalMatcher.Instance;
 
     /// <summary>
     /// For non-interactive channels, validates that the working directory and all
