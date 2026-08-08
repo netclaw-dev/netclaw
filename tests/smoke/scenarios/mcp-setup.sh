@@ -87,12 +87,12 @@ else
   die "daemon log: no 'MCP server ${MCP_SERVER_NAME} connected' line — stdio handshake failed"
 fi
 
-# The test server exposes exactly four tools (add, echo, record-tasks, process-info) —
-# confirm the daemon registered all of them.
-if [[ "$connect_line" == *"(4 tools)"* ]]; then
-  pass "daemon log: MCP server registered 4 tools (add, echo, record-tasks, process-info)"
+# The test server exposes four tools and one prompt. Confirm the daemon
+# registered the complete catalog from the same connection generation.
+if [[ "$connect_line" == *"(4 tools, 1 prompts)"* ]]; then
+  pass "daemon log: MCP server registered 4 tools and 1 prompt"
 else
-  die "daemon log: expected '(4 tools)' in the connection line, got: $connect_line"
+  die "daemon log: expected '(4 tools, 1 prompts)' in the connection line, got: $connect_line"
 fi
 
 summarize
