@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ChannelPipeline.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -103,9 +103,9 @@ public sealed class MaterializedSession : IAsyncDisposable
     /// <summary>
     /// Input sink. Encapsulates <see cref="ChannelInput"/> →
     /// <see cref="SendUserMessage"/> transformation and delivery to the
-    /// session manager. Channel connects its own Source:
+    /// session manager. A caller connects its own source:
     /// <code>
-    /// Source.Queue&lt;ChannelInput&gt;(16, Backpressure)
+    /// Source.Channel&lt;ChannelInput&gt;(512, true)
     ///     .ToMat(session.Input, Keep.Left)
     ///     .Run(system);
     /// </code>

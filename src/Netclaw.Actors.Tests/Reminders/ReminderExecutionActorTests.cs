@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderExecutionActorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -20,6 +20,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
+[Collection(ReminderActorTestCollection.Name)]
 public class ReminderExecutionActorTests : TestKit, IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -61,6 +62,39 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Assert.Equal("fail-test", completed.Id.Value);
         // Error message is the outer exception message
         Assert.Equal("outer failure", completed.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Execution_waits_for_manager_acceptance_before_stop()
+    {
+        var pipeline = new FailingSessionPipeline(new InvalidOperationException("failed"));
+        var definition = CreateDefinition("settlement-handshake");
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(
+                probe.Ref,
+                definition,
+                pipeline,
+                _historyStore,
+                acceptCompletion: false,
+                reportChild: true)),
+            "exec-handshake-parent");
+
+        var child = (await probe.ExpectMsgAsync<ChildCreated>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken)).Child;
+        Watch(child);
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+
+        child.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
+        await ExpectTerminatedAsync(
+            child,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -254,10 +288,12 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         {
             // Emits one non-terminal output, then goes silent forever — no
             // TurnCompleted/Error ever arrives.
-            var pipeline = new ScriptedSessionPipeline(sessionId =>
-            [
-                new TextOutput("Working on it...") { SessionId = sessionId }
-            ]);
+            var pipeline = new ScriptedSessionPipeline(
+                sessionId =>
+                [
+                    new TextOutput("Working on it...") { SessionId = sessionId }
+                ],
+                keepOutputOpen: true);
 
             var definition = CreateDefinition("mode-a-stall");
             var probe = CreateTestProbe();
@@ -275,6 +311,65 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         finally
         {
             ReminderExecutionActor.ExecutionStallTimeout = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task Execution_fails_when_output_stream_ends_without_terminal_output()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TextOutput("Partial output") { SessionId = sessionId }
+        ]);
+        var definition = CreateDefinition("stream-ended");
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-stream-ended");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipeline.InputCompleted.WaitAsync(
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(completed.Success);
+        Assert.Contains("ended", completed.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Execution_fails_at_absolute_attempt_limit_despite_output_activity()
+    {
+        var originalAttemptTimeout = ReminderExecutionActor.ExecutionAttemptTimeout;
+        var originalStallTimeout = ReminderExecutionActor.ExecutionStallTimeout;
+        ReminderExecutionActor.ExecutionAttemptTimeout = TimeSpan.FromMilliseconds(250);
+        ReminderExecutionActor.ExecutionStallTimeout = TimeSpan.FromSeconds(5);
+        try
+        {
+            var pipeline = new ScriptedSessionPipeline(
+                sessionId =>
+                [
+                    new TextOutput("Still active") { SessionId = sessionId }
+                ],
+                keepOutputOpen: true);
+            var definition = CreateDefinition("absolute-limit");
+            var probe = CreateTestProbe();
+            Sys.ActorOf(
+                Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+                "exec-absolute-limit");
+
+            var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.False(completed.Success);
+            Assert.Contains("exceeded", completed.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            ReminderExecutionActor.ExecutionAttemptTimeout = originalAttemptTimeout;
+            ReminderExecutionActor.ExecutionStallTimeout = originalStallTimeout;
         }
     }
 
@@ -312,21 +407,40 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             IActorRef probe,
             ReminderDefinition definition,
             ISessionPipeline pipeline,
-            ReminderHistoryStore historyStore)
+            ReminderHistoryStore historyStore,
+            bool acceptCompletion = true,
+            bool reportChild = false)
         {
             var executionId = Guid.NewGuid();
-            Context.ActorOf(
+            var envelope = new Akka.Reminders.ReminderEnvelope<ReminderPayload>(
+                new Akka.Reminders.ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+                new Akka.Reminders.ReminderKey(definition.Id.Value),
+                definition.Schedule.FireAt ?? TimeProvider.System.GetUtcNow(),
+                Akka.Reminders.ReminderDeadline.Infinite,
+                new ReminderPayload { Id = definition.Id });
+            var child = Context.ActorOf(
                 ReminderExecutionActor.CreateProps(
                     executionId,
                     definition,
                     pipeline,
                     TimeProvider.System,
-                    historyStore),
+                    envelope),
                 "exec");
+            if (reportChild)
+                probe.Tell(new ChildCreated(child));
 
+            ReceiveAsync<ReminderExecutionCompleted>(async completed =>
+            {
+                await historyStore.AppendAsync(completed.Id, completed.History);
+                probe.Tell(completed);
+                if (acceptCompletion)
+                    Sender.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
+            });
             ReceiveAny(msg => probe.Tell(msg));
         }
     }
+
+    private sealed record ChildCreated(IActorRef Child);
 
     /// <summary>Fake pipeline that throws a pre-configured exception on CreateAsync.</summary>
     private sealed class FailingSessionPipeline(Exception exception) : ISessionPipeline
@@ -346,13 +460,17 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     }
 
     private sealed class ScriptedSessionPipeline(
-        Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
+        Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory,
+        bool keepOutputOpen = false) : ISessionPipeline
     {
         private readonly TaskCompletionSource<ChannelInput> _inputCaptured =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _inputCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public SessionPipelineOptions? CapturedOptions { get; private set; }
         public Task<ChannelInput> InputCaptured => _inputCaptured.Task;
+        public Task InputCompleted => _inputCompleted.Task;
 
         public Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
@@ -368,10 +486,14 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 {
                     _inputCaptured.TrySetResult(ci);
                 })
-                .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
+                .MapMaterializedValue<NotUsed>(completion =>
+                {
+                    _ = ObserveInputCompletionAsync(completion);
+                    return NotUsed.Instance;
+                });
 
             var outputs = outputFactory(sessionId).ToList();
-            var output = Source.UnfoldAsync<int, SessionOutput>(0, async state =>
+            Source<SessionOutput, NotUsed> output = Source.UnfoldAsync<int, SessionOutput>(0, async state =>
                 {
                     if (state == 0)
                         await _inputCaptured.Task.ConfigureAwait(false);
@@ -383,7 +505,27 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 })
                 .Via(killSwitch.Flow<SessionOutput>());
 
+            if (keepOutputOpen)
+            {
+                output = output.Concat(
+                    Source.Maybe<SessionOutput>()
+                        .MapMaterializedValue(_ => NotUsed.Instance));
+            }
+
             return Task.FromResult(new MaterializedSession(captureInputSink, output, killSwitch));
+
+            async Task ObserveInputCompletionAsync(Task<Done> completion)
+            {
+                try
+                {
+                    await completion.ConfigureAwait(false);
+                    _inputCompleted.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    _inputCompleted.TrySetException(ex);
+                }
+            }
         }
 
         public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
@@ -572,4 +714,10 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Assert.False(records[0].Success);
         Assert.Equal("pipeline blew up", records[0].ErrorMessage);
     }
+}
+
+[CollectionDefinition(Name)]
+public sealed class ReminderActorTestCollection
+{
+    public const string Name = "Reminder actor tests";
 }

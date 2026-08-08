@@ -610,6 +610,232 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
 
+        // These synthetic cases represent the dominant search, pipeline, and
+        // file-change shapes in the sanitized local approval-prompt sample.
+        // No command text, path, identifier, or free text came from the sample.
+        Case(
+            "workload-search-rg-in-project-allows",
+            Bash("rg -n \"TODO\" src"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-grep-in-project-allows",
+            Bash("grep -R \"error\" src"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-find-in-project-allows",
+            Bash("find src -name \"*.cs\" -print"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-cat-in-project-allows",
+            Bash("cat src/file.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-head-in-project-allows",
+            Bash("head -40 src/file.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-tail-in-project-allows",
+            Bash("tail -100 logs/app.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-sed-print-in-project-currently-prompts",
+            Bash("sed -n '20,80p' src/file.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["sed"])),
+        Case(
+            "workload-search-rg-external-prompts",
+            Bash("rg -n \"TODO\" .", ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["rg"])),
+        Case(
+            "workload-search-rg-external-grant-allows",
+            Bash("rg -n \"TODO\" .", ApprovalDirectoryShape.External),
+            Approvals.PersistentHere(ApprovalDirectoryShape.External, "rg"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:rg")),
+        Case(
+            "workload-search-rg-head-pipeline-allows",
+            Bash("rg -n \"TODO\" src | head -40"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-grep-tail-pipeline-allows",
+            Bash("grep -R \"error\" logs | tail -20"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-find-head-pipeline-allows",
+            Bash("find src -name \"*.cs\" -print | head -20"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-search-cat-jq-pipeline-currently-prompts",
+            Bash("cat config.json | jq '.items[]'"),
+            Approvals.None,
+            ExpectedApproval.Require(["cat", "jq"])),
+        Case(
+            "workload-search-jq-direct-prompts",
+            Bash("jq '.items[]' config.json"),
+            Approvals.None,
+            ExpectedApproval.Require(["jq"])),
+        Case(
+            "workload-search-jq-direct-grant-allows",
+            Bash("jq '.items[]' config.json"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "jq"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:jq")),
+        Case(
+            "workload-search-cat-jq-stored-tail-currently-prompts",
+            Bash("cat config.json | jq '.items[]'"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "jq"),
+            ExpectedApproval.Require(
+                ["cat", "jq"],
+                approvalMatches: ["persistent:jq"])),
+        Case(
+            "workload-edit-grep-tee-pipeline-prompts",
+            Bash("grep \"error\" logs/app.log | tee reports/errors.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["grep", "tee"])),
+        Case(
+            "workload-edit-tee-direct-prompts",
+            Bash("tee reports/output.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["tee"])),
+        Case(
+            "workload-edit-tee-direct-grant-allows",
+            Bash("tee reports/output.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "tee"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:tee")),
+        Case(
+            "workload-edit-grep-tee-stored-tail-currently-prompts",
+            Bash("grep \"error\" logs/app.log | tee reports/errors.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "tee"),
+            ExpectedApproval.Require(
+                ["grep", "tee"],
+                approvalMatches: ["persistent:tee"])),
+        Case(
+            "workload-edit-sed-in-place-prompts",
+            Bash("sed -i 's/old/new/' src/file.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["sed"])),
+        Case(
+            "workload-edit-sed-in-place-grant-allows",
+            Bash("sed -i 's/old/new/' src/file.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "sed"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:sed")),
+        Case(
+            "workload-edit-copy-prompts",
+            Bash("cp src/input.txt src/output.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["cp"])),
+        Case(
+            "workload-edit-copy-grant-allows",
+            Bash("cp src/input.txt src/output.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "cp"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:cp")),
+        Case(
+            "workload-edit-move-prompts",
+            Bash("mv src/old.txt src/new.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["mv"])),
+        Case(
+            "workload-edit-move-grant-allows",
+            Bash("mv src/old.txt src/new.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "mv"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:mv")),
+        Case(
+            "workload-edit-touch-prompts",
+            Bash("touch src/new.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["touch"])),
+        Case(
+            "workload-edit-touch-grant-allows",
+            Bash("touch src/new.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "touch"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:touch")),
+        Case(
+            "workload-edit-mkdir-prompts",
+            Bash("mkdir -p reports/output"),
+            Approvals.None,
+            ExpectedApproval.Require(["mkdir"])),
+        Case(
+            "workload-edit-mkdir-grant-allows",
+            Bash("mkdir -p reports/output"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "mkdir"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:mkdir")),
+        Case(
+            "workload-edit-remove-prompts",
+            Bash("rm -- src/obsolete.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["rm"])),
+        Case(
+            "workload-edit-remove-grant-allows",
+            Bash("rm -- src/obsolete.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:rm")),
+        Case(
+            "workload-edit-printf-redirect-prompts",
+            Bash("printf '%s\\n' \"text\" > reports/output.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["printf"])),
+        Case(
+            "workload-edit-printf-redirect-grant-allows",
+            Bash("printf '%s\\n' \"text\" > reports/output.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "printf"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:printf")),
+        Case(
+            "workload-edit-search-pipeline-redirect-in-project-allows",
+            Bash("grep -R \"error\" logs | head -20 > reports/errors.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "workload-edit-search-pipeline-redirect-external-prompts",
+            Bash(
+                "grep -R \"error\" logs | head -20 > reports/errors.txt",
+                ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["grep", "head"])),
+        Case(
+            "workload-edit-search-pipeline-redirect-external-grant-allows",
+            Bash(
+                "grep -R \"error\" logs | head -20 > reports/errors.txt",
+                ApprovalDirectoryShape.External),
+            Approvals.PersistentHere(ApprovalDirectoryShape.External, "grep", "head"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:grep",
+                "persistent:head")),
+        Case(
+            "workload-search-loop-currently-complex",
+            Bash("for f in src/*.cs; do grep -n \"TODO\" \"$f\"; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-edit-loop-currently-complex",
+            Bash("for f in src/a.txt src/b.txt; do sed -i 's/old/new/' \"$f\"; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "sed"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-search-dynamic-root-remains-complex",
+            Bash("grep -R \"error\" \"$SEARCH_ROOT\""),
+            Approvals.PersistentAnywhere("grep"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-search-substitution-pipeline-redirect-remains-complex",
+            Bash("pattern=$(printf '%s' error); grep -R \"$pattern\" src | head -20 > reports/errors.txt"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep", "head", "printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-search-loop-substitution-pipeline-redirect-remains-complex",
+            Bash("for f in logs/*.log; do grep -n \"$(printf '%s' error)\" \"$f\" | head -20 > \"reports/$f.txt\"; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep", "head", "printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+
         Case(
             "echo-allows-without-grant",
             Bash("echo hello"),

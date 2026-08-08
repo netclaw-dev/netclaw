@@ -56,6 +56,11 @@ internal enum ToolAllowReason
     PolicyAuto,
 
     /// <summary>
+    /// The initial shell approval covers control of the session-owned job.
+    /// </summary>
+    BackgroundJobLifecycle,
+
+    /// <summary>
     /// The shell safe-verb policy allows every command candidate.
     /// </summary>
     /// <remarks>
@@ -115,6 +120,8 @@ internal static class ToolAllowReasonExtensions
         {
             ToolAllowReason.PolicyAuto =>
                 "The resolved approval policy allowed the tool automatically.",
+            ToolAllowReason.BackgroundJobLifecycle =>
+                "The initial shell approval covered control of the session-owned background job.",
             ToolAllowReason.SafeVerbInTrustedScope =>
                 "The shell safe-verb policy allowed every candidate inside a trusted scope.",
             ToolAllowReason.ApprovalExemptShellCandidates =>

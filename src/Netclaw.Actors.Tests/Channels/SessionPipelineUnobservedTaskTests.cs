@@ -16,10 +16,8 @@ namespace Netclaw.Actors.Tests.Channels;
 /// unobserved-task crashes (daemon-unobserved logs with
 /// <c>AbruptTerminationException</c> / <c>StreamDetachedException</c>).
 /// Akka.Streams stages create internal <see cref="Task{Done}"/> instances
-/// (e.g. via <c>Sink.ForEach</c>'s <c>IgnoreSink</c> and
-/// <c>Source.Queue</c>'s <c>_completion</c>) that fault on teardown.
-/// Production code in <c>SessionPipelineHandle</c> and
-/// <c>ChannelPipeline</c> uses two complementary patterns to observe these:
+/// that can fault on teardown. Production code observes these tasks before it
+/// discards their materialized values. These tests cover two valid patterns:
 /// <list type="bullet">
 ///   <item><c>Keep.Both</c> + await both materialized tasks.</item>
 ///   <item><c>MapMaterializedValue</c> with a <c>ContinueWith</c> that
@@ -36,8 +34,7 @@ public sealed class SessionPipelineUnobservedTaskTests : TestKit
     /// Verifies that wrapping <c>Sink.ForEach</c> with <c>MapMaterializedValue</c>
     /// + <c>ContinueWith(OnlyOnFaulted)</c> reliably runs the observation
     /// callback when the upstream is aborted. This is the pattern used in
-    /// <c>ChannelPipeline.CreateAsync</c> and
-    /// <c>SessionPipelineHandle.InitializeWithQueueAsync</c>.
+    /// <c>ChannelPipeline.CreateAsync</c> and <c>SessionPipelineHandle</c>.
     /// </summary>
     [Fact]
     public async Task MapMaterializedValue_continuation_observes_sink_task_on_fault()
@@ -74,8 +71,7 @@ public sealed class SessionPipelineUnobservedTaskTests : TestKit
 
     /// <summary>
     /// Verifies that <c>Keep.Both</c> + await-both observes the Sink.ForEach
-    /// task after a stream fault. This is the pattern used in
-    /// <c>SessionPipelineHandle.InitializeWithChannelAsync</c>.
+    /// task after a stream fault when a caller retains both materialized tasks.
     /// </summary>
     [Fact]
     public async Task KeepBoth_awaits_observe_both_watch_and_sink_tasks_on_fault()

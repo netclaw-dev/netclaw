@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderManagerActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -9,6 +9,7 @@ using Akka.Event;
 using Akka.Reminders;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using AkkaReminderProtocol = Akka.Reminders.ReminderProtocol;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Reminders;
@@ -40,6 +41,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// <summary>Recent run records returned by the per-reminder status query.</summary>
     internal const int RecentHistoryCount = 5;
 
+    internal static readonly TimeSpan SettlementMargin = TimeSpan.FromMinutes(1);
+
     private readonly ISessionPipeline _pipeline;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly SchedulingConfig _schedulingConfig;
@@ -53,8 +56,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private IReminderClient? _client;
 
     private readonly ActiveExecutionTracker _activeExecutions = new();
-    private readonly Queue<ReminderId> _deferredQueue = new();
-    private readonly Dictionary<ReminderId, int> _failureCounts = [];
     private readonly Dictionary<ReminderId, int> _skipCounts = [];
 
     public ReminderManagerActor(
@@ -86,7 +87,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<GetReminderCommand>(HandleGetAsync);
 
         ReceiveAsync<ReminderEnvelope<ReminderPayload>>(HandleReminderFiredAsync);
-        ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionCompletedAsync);
+        ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionOutcomeAsync);
+        ReceiveAsync<ReminderExecutionTerminated>(HandleExecutionTerminatedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
         Receive<GetReminderHealthQuery>(_ => HandleGetHealth());
@@ -114,6 +116,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         Self.Tell(ReconcileReminders.Instance);
     }
+
+    protected override SupervisorStrategy SupervisorStrategy() =>
+        new OneForOneStrategy(_ => Directive.Stop);
 
     private void EmitDroppedInvalidDefinitionAlerts()
     {
@@ -283,7 +288,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (exists)
         {
             await CancelScheduleOnlyAsync(id);
-            RemoveFromDeferredQueue(id);
         }
 
         DateTimeOffset? nextFire = null;
@@ -320,7 +324,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         else
         {
             await CancelScheduleOnlyAsync(id);
-            RemoveFromDeferredQueue(id);
         }
 
         _definitionStore.Save(normalized);
@@ -428,26 +431,21 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _definitionStore.Save(definition);
         await CancelScheduleOnlyAsync(id);
 
-        _failureCounts.Remove(id);
         _skipCounts.Remove(id);
-        RemoveFromDeferredQueue(id);
 
         _log.Info("Disabled reminder '{0}'", id.Value);
         return new ReminderStateResponse(id, Found: true, Enabled: false);
     }
 
     /// <summary>
-    /// Permanently removes a reminder definition, its schedule, history, and any
-    /// in-memory tracking state. Used during startup reconciliation to clean up
-    /// stale one-shot reminders whose fire time has passed.
+    /// Permanently removes a reminder definition, its schedule, history, and process state.
+    /// Only an explicit delete command uses this path.
     /// </summary>
     private async Task DeleteReminderInternalAsync(ReminderId id)
     {
         _definitionStore.Delete(id);
         await CancelScheduleOnlyAsync(id);
-        _failureCounts.Remove(id);
         _skipCounts.Remove(id);
-        RemoveFromDeferredQueue(id);
 
         try
         {
@@ -465,30 +463,25 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (definition is null)
             return new ReminderStateResponse(id, Found: false, Enabled: false, ErrorMessage: "Reminder not found.");
 
-        definition = definition with
+        var candidate = definition with
         {
             Enabled = true,
+            ConsecutiveFailures = 0,
+            TerminalOutcome = null,
             UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
         };
 
-        var scheduleResult = await ScheduleDefinitionAsync(definition, rescheduleFromNow: true);
+        var scheduleResult = await ScheduleDefinitionAsync(candidate, rescheduleFromNow: true);
         if (!scheduleResult.IsSuccess)
         {
-            definition = definition with
-            {
-                Enabled = false,
-                UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
-            };
-            _definitionStore.Save(definition);
-
             return new ReminderStateResponse(
                 id,
                 Found: true,
-                Enabled: false,
+                Enabled: definition.Enabled,
                 ErrorMessage: scheduleResult.ErrorMessage);
         }
 
-        _definitionStore.Save(definition);
+        _definitionStore.Save(candidate);
         _log.Info("Enabled reminder '{0}'", id.Value);
 
         return new ReminderStateResponse(
@@ -570,7 +563,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         {
             _log.Warning("Reminder '{0}' fired while disabled. Cancelling any lingering schedule.", reminderId.Value);
             await CancelScheduleOnlyAsync(reminderId);
-            RemoveFromDeferredQueue(reminderId);
             await _client!.AckAsync(envelope);
             return;
         }
@@ -588,13 +580,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _log.Info("Reminder fired: id='{0}', title='{1}', schedule_type={2}",
             reminderId.Value, definition.Title, definition.Schedule.Type);
 
-        if (_activeExecutions.IsExecuting(reminderId))
-        {
-            RecordSkippedDuplicate(reminderId, definition.Title, "scheduled");
-            await _client!.AckAsync(envelope);
-            return;
-        }
-
         // Cron reminders are implemented as recurring single-shot schedules.
         if (definition.Schedule.Type == ReminderScheduleType.Cron)
         {
@@ -605,40 +590,117 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
-        var isCurrentSessionDelivery = definition.Delivery.Kind == DeliveryKind.CurrentSession;
-
-        if (_activeExecutions.Count >= MaxConcurrentExecutions)
+        if (_activeExecutions.TryGet(reminderId, out var activeExecution))
         {
-            _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
-                MaxConcurrentExecutions, reminderId.Value);
-            _deferredQueue.Enqueue(reminderId);
-            // Ack even Mode B envelopes on the deferred path — the
-            // concurrency gate fires before we can dispatch to the
-            // gateway, so holding the envelope open would starve
-            // Akka.Reminders' retry budget on nothing.
-            await _client!.AckAsync(envelope);
+            RecordSkippedDuplicate(reminderId, definition.Title, "active");
+            if (IsSameDeliveryAttempt(activeExecution.Envelope, envelope))
+                return;
+
+            var sameOccurrence = activeExecution.Envelope.Key == envelope.Key
+                                 && activeExecution.Envelope.DueTimeUtc == envelope.DueTimeUtc;
+            await SettleBlockedOccurrenceAsync(
+                definition,
+                envelope,
+                nack: definition.Schedule.Type == ReminderScheduleType.OneShot || sameOccurrence,
+                "Another execution for this reminder is active.");
             return;
         }
 
-        if (isCurrentSessionDelivery)
+        if (_activeExecutions.Count >= MaxConcurrentExecutions)
         {
-            // CurrentSession: execution actor holds the envelope open and acks
-            // itself once the target session has confirmed receipt.
-            StartExecution(definition, envelope);
+            _log.Info("Concurrency limit reached ({0}), settling blocked reminder '{1}'",
+                MaxConcurrentExecutions, reminderId.Value);
+            if (definition.Schedule.Type != ReminderScheduleType.OneShot)
+                RecordSkippedDuplicate(reminderId, definition.Title, "capacity");
+            await SettleBlockedOccurrenceAsync(
+                definition,
+                envelope,
+                nack: definition.Schedule.Type == ReminderScheduleType.OneShot,
+                "Reminder execution capacity is unavailable.");
+            return;
         }
-        else
+
+        if (!HasSafeExecutionLease(envelope, _timeProvider.GetUtcNow()))
         {
-            // Channel/None: ack envelope eagerly, execution tracks its own success
-            StartExecution(definition);
-            await _client!.AckAsync(envelope);
+            var isOneShot = definition.Schedule.Type == ReminderScheduleType.OneShot;
+            if (isOneShot)
+            {
+                _log.Warning(
+                    "Reminder '{0}' arrived too late to finish before its delivery deadline. Returning it to the scheduler for retry.",
+                    reminderId.Value);
+            }
+            else
+            {
+                _log.Warning(
+                    "Recurring reminder '{0}' arrived too late to finish before its delivery deadline. Skipping this occurrence.",
+                    reminderId.Value);
+                RecordSkippedDuplicate(reminderId, definition.Title, "lease");
+            }
+
+            await SettleBlockedOccurrenceAsync(
+                definition,
+                envelope,
+                nack: isOneShot,
+                "The reminder arrived too late to finish before its delivery deadline.");
+            return;
+        }
+
+        // Issue #1803: every delivery mode retains its envelope until the
+        // execution actor confirms success or reports a known failure.
+        StartExecution(definition, envelope);
+    }
+
+    private static bool IsSameDeliveryAttempt(
+        ReminderEnvelope<ReminderPayload> active,
+        ReminderEnvelope<ReminderPayload> candidate) =>
+        active.Key == candidate.Key
+        && active.DueTimeUtc == candidate.DueTimeUtc
+        && active.Deadline == candidate.Deadline;
+
+    private static bool HasSafeExecutionLease(
+        ReminderEnvelope<ReminderPayload> envelope,
+        DateTimeOffset now) =>
+        envelope.Deadline.IsInfinite
+        || envelope.Deadline.UtcDateTime - now >= ReminderExecutionActor.ExecutionAttemptTimeout + SettlementMargin;
+
+    private async Task SettleBlockedOccurrenceAsync(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload> envelope,
+        bool nack,
+        string reason)
+    {
+        try
+        {
+            if (nack)
+            {
+                var response = await _client!.NackAsync(envelope, reason);
+                if (response.ResponseCode is ReminderNackResponseCode.Error or ReminderNackResponseCode.NotFound)
+                {
+                    EmitSettlementFailure(
+                        definition,
+                        $"Negative acknowledgement returned {response.ResponseCode}: {response.Message}");
+                }
+
+                return;
+            }
+
+            var ack = await _client!.AckAsync(envelope);
+            if (ack.ResponseCode != ReminderAckResponseCode.Success)
+            {
+                EmitSettlementFailure(
+                    definition,
+                    $"Acknowledgement returned {ack.ResponseCode}: {ack.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitSettlementFailure(definition, ex.Message, ex);
         }
     }
 
     /// <summary>
-    /// Records a skipped fire (a fire that arrived while a prior execution of the
-    /// same reminder was still running). Counted in-memory since daemon start and
-    /// surfaced by <c>netclaw reminder status</c> so the silent-skip pattern from
-    /// #1492/#1494 (49 skips in a day, unnoticed) is now visible to operators.
+    /// Records an occurrence that Netclaw skips or returns to Akka.Reminders.
+    /// The status command exposes this process-local skip count.
     /// </summary>
     private void RecordSkippedDuplicate(ReminderId reminderId, string title, string source)
     {
@@ -672,97 +734,319 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _channelNotifier.NotifyFailure(target, text);
     }
 
-    private async Task HandleExecutionCompletedAsync(ReminderExecutionCompleted completed)
+    private async Task HandleExecutionOutcomeAsync(ReminderExecutionCompleted outcome)
     {
-        if (!_activeExecutions.Remove(completed.Id))
+        var replyTo = Sender;
+        if (!_activeExecutions.TryGet(outcome.Id, out var execution)
+            || execution.ExecutionId != outcome.ExecutionId)
+        {
+            replyTo.Tell(new ReminderExecutionAccepted(outcome.ExecutionId));
+            return;
+        }
+
+        try
+        {
+            await SettleExecutionOutcomeAsync(outcome, execution);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Unexpected reminder settlement failure for '{0}'", outcome.Id.Value);
+            var definition = _definitionStore.Get(outcome.Id);
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+        }
+        finally
+        {
+            _activeExecutions.TryRemove(outcome.Id, outcome.ExecutionId, out _);
+            replyTo.Tell(new ReminderExecutionAccepted(outcome.ExecutionId));
+        }
+    }
+
+    private async Task HandleExecutionTerminatedAsync(ReminderExecutionTerminated terminated)
+    {
+        if (!_activeExecutions.TryRemove(terminated.Id, terminated.ExecutionId, out var execution))
             return;
 
-        var definition = _definitionStore.Get(completed.Id);
-        var title = definition?.Title ?? completed.Id.Value;
+        const string reason = "Reminder execution actor terminated unexpectedly.";
+        var now = _timeProvider.GetUtcNow();
+        var definition = _definitionStore.Get(terminated.Id);
+        var sessionId = definition?.Delivery.Kind == DeliveryKind.CurrentSession
+            ? definition.Delivery.SessionId ?? $"reminder/{terminated.Id}/unknown"
+            : $"reminder/{terminated.Id}/{execution.Envelope.DueTimeUtc.ToUnixTimeMilliseconds()}";
+        var history = new HistoryRecord(
+            execution.StartedAt,
+            Success: false,
+            DurationMs: (long)(now - execution.StartedAt).TotalMilliseconds,
+            sessionId,
+            reason);
 
-        if (completed.Success)
+        try
         {
-            _failureCounts.Remove(completed.Id);
-            _log.Info("Reminder '{0}' execution completed successfully", completed.Id.Value);
+            await SettleExecutionOutcomeAsync(new ReminderExecutionCompleted(
+                terminated.ExecutionId,
+                terminated.Id,
+                Success: false,
+                history,
+                reason), execution);
         }
-        else
+        catch (Exception ex)
         {
-            var count = _failureCounts.GetValueOrDefault(completed.Id) + 1;
-            _failureCounts[completed.Id] = count;
+            _log.Error(ex, "Unexpected termination settlement failed for reminder '{0}'", terminated.Id.Value);
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+        }
+    }
 
-            _log.Warning("Reminder '{0}' execution failed ({1}/{2}): {3}",
-                completed.Id.Value,
-                count,
-                FailurePauseThreshold,
-                completed.ErrorMessage);
+    private async Task SettleExecutionOutcomeAsync(
+        ReminderExecutionCompleted outcome,
+        ActiveReminderExecution execution)
+    {
+        await AppendHistorySafelyAsync(outcome.Id, outcome.History);
 
-            _notificationSink.Emit(OperationalAlert.Create(
-                _timeProvider,
-                "reminder.execution.failed",
-                AlertType.ReminderExecutionFailed,
-                $"Reminder '{title}' execution failed: {completed.ErrorMessage}",
-                AlertSeverity.Warning,
-                source: completed.Id.Value,
-                context: new Dictionary<string, string>
+        var definition = _definitionStore.Get(outcome.Id);
+        if (outcome.Success)
+        {
+            await SettleSuccessfulExecutionAsync(outcome, execution, definition);
+            return;
+        }
+
+        await SettleFailedExecutionAsync(outcome, execution, definition);
+    }
+
+    private async Task AppendHistorySafelyAsync(ReminderId id, HistoryRecord history)
+    {
+        try
+        {
+            await _historyStore.AppendAsync(id, history);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to write execution history for reminder '{0}'", id.Value);
+        }
+    }
+
+    private async Task SettleSuccessfulExecutionAsync(
+        ReminderExecutionCompleted outcome,
+        ActiveReminderExecution execution,
+        ReminderDefinition? definition)
+    {
+        if (definition is not null)
+        {
+            try
+            {
+                _definitionStore.Save(definition with
                 {
-                    ["reminderId"] = completed.Id.Value,
-                    ["title"] = title,
-                    ["error"] = completed.ErrorMessage ?? "unknown",
-                }));
-
-            // Surface the failure where the operator expects this reminder's
-            // output: its destination channel. Only below the threshold — on the
-            // threshold-hitting failure the disabled notice below already carries
-            // the last error, so posting both would double the noise on the most
-            // important event. Bounded overall by the threshold, never the
-            // unbounded skip stream that #1494 makes visible via status instead.
-            if (count < FailurePauseThreshold)
-            {
-                PostFailureNoticeToChannel(
-                    definition,
-                    $"Reminder \"{title}\" failed: {completed.ErrorMessage ?? "unknown error"}");
+                    ConsecutiveFailures = 0,
+                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                });
             }
-
-            if (count >= FailurePauseThreshold)
+            catch (Exception ex)
             {
-                _log.Warning("Reminder '{0}' hit failure threshold ({1}), disabling",
-                    completed.Id.Value,
-                    FailurePauseThreshold);
-
-                _notificationSink.Emit(OperationalAlert.Create(
-                    _timeProvider,
-                    "reminder.auto_disabled",
-                    AlertType.ReminderAutoDisabled,
-                    $"Reminder '{title}' disabled after {count} consecutive failures",
-                    AlertSeverity.Critical,
-                    source: completed.Id.Value,
-                    context: new Dictionary<string, string>
-                    {
-                        ["reminderId"] = completed.Id.Value,
-                        ["title"] = title,
-                        ["failureCount"] = count.ToString(),
-                    }));
-
-                PostFailureNoticeToChannel(
-                    definition,
-                    $"Reminder \"{title}\" was automatically disabled after {count} consecutive failures. " +
-                    $"Last error: {completed.ErrorMessage ?? "unknown error"}");
-
-                await DisableReminderInternalAsync(completed.Id);
-                _failureCounts.Remove(completed.Id);
+                EmitSettlementFailure(definition, ex.Message, ex);
+                return;
             }
         }
 
-        // One-shot reminders cannot fire again — soft-delete by disabling.
-        // The definition stays on disk so history remains queryable.
-        // Startup reconciliation will hard-delete stale disabled one-shots.
+        AkkaReminderProtocol.ReminderAckResponse ack;
+        try
+        {
+            ack = await _client!.AckAsync(execution.Envelope);
+        }
+        catch (Exception ex)
+        {
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+            return;
+        }
+
+        if (ack.ResponseCode != ReminderAckResponseCode.Success)
+        {
+            if (definition is not null)
+            {
+                EmitSettlementFailure(
+                    definition,
+                    ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
+            }
+
+            return;
+        }
+
         if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
         {
-            _log.Info("One-shot reminder '{0}' completed, disabling (soft-delete)", completed.Id.Value);
-            await DisableReminderInternalAsync(completed.Id);
+            try
+            {
+                _definitionStore.Save(definition with
+                {
+                    Enabled = false,
+                    ConsecutiveFailures = 0,
+                    TerminalOutcome = ReminderTerminalOutcome.Completed,
+                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                });
+            }
+            catch (Exception ex)
+            {
+                _log.Error(ex, "Failed to save completed state for one-shot reminder '{0}'", outcome.Id.Value);
+            }
         }
 
-        await ProcessDeferredQueueAsync();
+        _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
+    }
+
+    private async Task SettleFailedExecutionAsync(
+        ReminderExecutionCompleted outcome,
+        ActiveReminderExecution execution,
+        ReminderDefinition? definition)
+    {
+        var reason = string.IsNullOrWhiteSpace(outcome.ErrorMessage)
+            ? "Reminder execution failed."
+            : outcome.ErrorMessage;
+        var count = (definition?.ConsecutiveFailures ?? 0) + 1;
+        var thresholdReached = count >= FailurePauseThreshold;
+
+        if (definition is not null)
+        {
+            try
+            {
+                definition = definition with
+                {
+                    ConsecutiveFailures = count,
+                    Enabled = thresholdReached ? false : definition.Enabled,
+                    TerminalOutcome = thresholdReached ? ReminderTerminalOutcome.Failed : definition.TerminalOutcome,
+                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                };
+                _definitionStore.Save(definition);
+            }
+            catch (Exception ex)
+            {
+                EmitSettlementFailure(definition, ex.Message, ex);
+                return;
+            }
+        }
+
+        AkkaReminderProtocol.ReminderNackResponse? nack = null;
+        try
+        {
+            nack = await _client!.NackAsync(execution.Envelope, reason);
+        }
+        catch (Exception ex)
+        {
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+        }
+
+        var occurrenceTerminal = nack?.ResponseCode is ReminderNackResponseCode.Failed
+            or ReminderNackResponseCode.Expired;
+        if (nack?.ResponseCode is ReminderNackResponseCode.Error or ReminderNackResponseCode.NotFound)
+        {
+            if (definition is not null)
+            {
+                EmitSettlementFailure(
+                    definition,
+                    nack.Message ?? $"Negative acknowledgement returned {nack.ResponseCode}.");
+            }
+        }
+
+        ReportExecutionFailure(
+            outcome.Id,
+            definition,
+            count,
+            reason,
+            willDisable: thresholdReached || occurrenceTerminal);
+
+        if (thresholdReached || occurrenceTerminal)
+        {
+            if (!thresholdReached && definition is not null)
+            {
+                try
+                {
+                    definition = definition with
+                    {
+                        Enabled = false,
+                        TerminalOutcome = ReminderTerminalOutcome.Failed,
+                        UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                    };
+                    _definitionStore.Save(definition);
+                }
+                catch (Exception ex)
+                {
+                    EmitSettlementFailure(definition, ex.Message, ex);
+                }
+            }
+
+            await CancelScheduleOnlyAsync(outcome.Id);
+        }
+    }
+
+    private void ReportExecutionFailure(
+        ReminderId id,
+        ReminderDefinition? definition,
+        int count,
+        string reason,
+        bool willDisable)
+    {
+        var title = definition?.Title ?? id.Value;
+        _log.Warning("Reminder '{0}' execution failed ({1}/{2}): {3}",
+            id.Value, count, FailurePauseThreshold, reason);
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.execution.failed",
+            AlertType.ReminderExecutionFailed,
+            $"Reminder '{title}' execution failed: {reason}",
+            AlertSeverity.Warning,
+            source: id.Value,
+            context: new Dictionary<string, string>
+            {
+                ["reminderId"] = id.Value,
+                ["title"] = title,
+                ["error"] = reason
+            }));
+
+        if (!willDisable)
+        {
+            PostFailureNoticeToChannel(definition, $"Reminder \"{title}\" failed: {reason}");
+            return;
+        }
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.auto_disabled",
+            AlertType.ReminderAutoDisabled,
+            $"Reminder '{title}' disabled after {count} consecutive failures or a terminal occurrence",
+            AlertSeverity.Critical,
+            source: id.Value,
+            context: new Dictionary<string, string>
+            {
+                ["reminderId"] = id.Value,
+                ["title"] = title,
+                ["failureCount"] = count.ToString()
+            }));
+
+        PostFailureNoticeToChannel(
+            definition,
+            $"Reminder \"{title}\" was automatically disabled after {count} consecutive failures or a terminal occurrence. Last error: {reason}");
+    }
+
+    private void EmitSettlementFailure(ReminderDefinition definition, string reason, Exception? exception = null)
+    {
+        if (exception is null)
+            _log.Warning("Reminder settlement failed for '{0}': {1}", definition.Id.Value, reason);
+        else
+            _log.Error(exception, "Reminder settlement failed for '{0}': {1}", definition.Id.Value, reason);
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.settlement.failed",
+            AlertType.ReminderExecutionFailed,
+            $"Reminder '{definition.Title}' settlement failed: {reason}",
+            AlertSeverity.Warning,
+            source: definition.Id.Value,
+            context: new Dictionary<string, string>
+            {
+                ["reminderId"] = definition.Id.Value,
+                ["title"] = definition.Title,
+                ["error"] = reason
+            }));
     }
 
     private async Task HandleReconcileAsync()
@@ -790,23 +1074,54 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 if (scheduled.ContainsKey(definition.Id.Value))
                     continue;
 
+                if (definition.Schedule.Type == ReminderScheduleType.OneShot
+                    && definition.Schedule.FireAt <= _timeProvider.GetUtcNow())
+                {
+                    continue;
+                }
+
                 var result = await ScheduleDefinitionAsync(definition, rescheduleFromNow: true);
                 if (result.IsSuccess)
                     restoredSchedules++;
             }
 
-            // Delete stale one-shots: definitions with fire time in the past
-            // and no active Akka.Reminders schedule (already fired, never cleaned up).
-            // Includes both enabled zombies and already-disabled leftovers.
+            // Issue #1803: a past due time and the absence of a schedule do not prove success.
             var now = _timeProvider.GetUtcNow();
-            var deletedOneShots = 0;
+            var softDeletedOneShots = 0;
             foreach (var definition in definitions.Where(d =>
+                         d.Enabled &&
                          d.Schedule.Type == ReminderScheduleType.OneShot &&
-                         d.Schedule.FireAt <= now &&
-                         !scheduled.ContainsKey(d.Id.Value)))
+                         d.Schedule.FireAt <= now))
             {
-                await DeleteReminderInternalAsync(definition.Id);
-                deletedOneShots++;
+                var occurrence = await GetOccurrenceStatusAsync(definition);
+                if (occurrence is null)
+                {
+                    _log.Warning(
+                        "Past one-shot reminder '{0}' has no durable occurrence status. The definition remains enabled for operator review.",
+                        definition.Id.Value);
+                    continue;
+                }
+
+                var outcome = occurrence.CompletionStatus switch
+                {
+                    Akka.Reminders.Storage.ReminderCompletionStatus.Delivered => ReminderTerminalOutcome.Completed,
+                    Akka.Reminders.Storage.ReminderCompletionStatus.Failed => ReminderTerminalOutcome.Failed,
+                    Akka.Reminders.Storage.ReminderCompletionStatus.Expired => ReminderTerminalOutcome.Failed,
+                    Akka.Reminders.Storage.ReminderCompletionStatus.Cancelled => ReminderTerminalOutcome.Failed,
+                    _ => (ReminderTerminalOutcome?)null
+                };
+
+                if (outcome is null)
+                    continue;
+
+                var terminalDefinition = definition with
+                {
+                    Enabled = false,
+                    TerminalOutcome = outcome,
+                    UpdatedAtMs = now.ToUnixTimeMilliseconds()
+                };
+                _definitionStore.Save(terminalDefinition);
+                softDeletedOneShots++;
             }
 
             // Disable expired recurring reminders that haven't fired since expiration.
@@ -820,94 +1135,52 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 disabledExpired++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0 || deletedOneShots > 0 || disabledExpired > 0)
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || softDeletedOneShots > 0 || disabledExpired > 0)
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, deleted_oneshots={2}, disabled_expired={3}",
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, soft_deleted_oneshots={2}, disabled_expired={3}",
                     cancelledOrphans,
                     restoredSchedules,
-                    deletedOneShots,
+                    softDeletedOneShots,
                     disabledExpired);
             }
 
             // Only ack external callers — skip Self.Tell from PreStart
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, deletedOneShots, disabledExpired));
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, softDeletedOneShots, disabledExpired));
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Reminder reconcile failed");
 
-            // Reply with a zero-result ack so external Ask callers don't hang until timeout
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(0, 0, 0));
+                sender.Tell(new Status.Failure(ex));
         }
     }
 
-    private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
+    private void StartExecution(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload> envelope)
     {
         var executionId = Guid.NewGuid();
-        _activeExecutions.Add(definition.Id);
+        var startedAt = _timeProvider.GetUtcNow();
+        _activeExecutions.Add(definition.Id, executionId, envelope, startedAt);
 
-        var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
+        var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{startedAt.ToUnixTimeMilliseconds()}";
         var executionActor = Context.ActorOf(
             ReminderExecutionActor.CreateProps(
                 executionId,
                 definition,
                 _pipeline,
                 _timeProvider,
-                _historyStore,
                 envelope),
             actorName);
+        Context.WatchWith(
+            executionActor,
+            new ReminderExecutionTerminated(executionId, definition.Id));
 
         _log.Info(
-            "Started execution actor for reminder '{0}' mode={1}: {2}",
-            definition.Id, envelope is null ? "A" : "B", executionActor.Path);
-    }
-
-    private async Task ProcessDeferredQueueAsync()
-    {
-        while (_deferredQueue.Count > 0 && _activeExecutions.Count < MaxConcurrentExecutions)
-        {
-            var nextId = _deferredQueue.Dequeue();
-            var definition = _definitionStore.Get(nextId);
-            if (definition is null || !definition.Enabled)
-                continue;
-
-            if (_activeExecutions.IsExecuting(nextId))
-            {
-                RecordSkippedDuplicate(nextId, definition.Title, "deferred_queue");
-                continue;
-            }
-
-            var now = _timeProvider.GetUtcNow();
-            if (definition.Schedule.Type is not ReminderScheduleType.OneShot
-                && definition.ExpiresAt is { } expiresAt
-                && expiresAt <= now)
-            {
-                _log.Info("Deferred reminder '{0}' expired while queued (expiresAt={1}), disabling", nextId.Value, expiresAt);
-                await DisableReminderInternalAsync(nextId);
-                continue;
-            }
-
-            StartExecution(definition);
-        }
-    }
-
-    private void RemoveFromDeferredQueue(ReminderId id)
-    {
-        if (_deferredQueue.Count == 0)
-            return;
-
-        var keep = new Queue<ReminderId>();
-        while (_deferredQueue.Count > 0)
-        {
-            var item = _deferredQueue.Dequeue();
-            if (item != id)
-                keep.Enqueue(item);
-        }
-
-        while (keep.Count > 0)
-            _deferredQueue.Enqueue(keep.Dequeue());
+            "Started execution actor for reminder '{0}' occurrence={1}: {2}",
+            definition.Id, envelope.DueTimeUtc, executionActor.Path);
     }
 
     private async Task<ScheduleAttempt> ScheduleDefinitionAsync(ReminderDefinition definition, bool rescheduleFromNow)
@@ -925,52 +1198,52 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             switch (definition.Schedule.Type)
             {
                 case ReminderScheduleType.OneShot:
-                {
-                    if (definition.Schedule.FireAt is null)
-                        return ScheduleAttempt.Fail("One-shot reminders require an absolute fire time.");
+                    {
+                        if (definition.Schedule.FireAt is null)
+                            return ScheduleAttempt.Fail("One-shot reminders require an absolute fire time.");
 
-                    var fireAt = definition.Schedule.FireAt.Value;
-                    if (fireAt <= now)
-                        return ScheduleAttempt.Fail("One-shot fire time is in the past.");
+                        var fireAt = definition.Schedule.FireAt.Value;
+                        if (fireAt <= now)
+                            return ScheduleAttempt.Fail("One-shot fire time is in the past.");
 
-                    var result = await _client.ScheduleSingleReminderAsync(key, fireAt, payload);
-                    return result.ResponseCode == ReminderScheduleResponseCode.Success
-                        ? ScheduleAttempt.Ok(fireAt)
-                        : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule one-shot reminder.");
-                }
+                        var result = await _client.ScheduleSingleReminderAsync(key, fireAt, payload);
+                        return result.ResponseCode == ReminderScheduleResponseCode.Success
+                            ? ScheduleAttempt.Ok(fireAt)
+                            : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule one-shot reminder.");
+                    }
 
                 case ReminderScheduleType.Interval:
-                {
-                    if (definition.Schedule.Interval is null)
-                        return ScheduleAttempt.Fail("Interval reminders require an interval duration.");
+                    {
+                        if (definition.Schedule.Interval is null)
+                            return ScheduleAttempt.Fail("Interval reminders require an interval duration.");
 
-                    var interval = definition.Schedule.Interval.Value;
-                    var first = rescheduleFromNow
-                        ? now.Add(interval)
-                        : definition.Schedule.FireAt is { } explicitFirst && explicitFirst > now
-                            ? explicitFirst
-                            : now.Add(interval);
+                        var interval = definition.Schedule.Interval.Value;
+                        var first = rescheduleFromNow
+                            ? now.Add(interval)
+                            : definition.Schedule.FireAt is { } explicitFirst && explicitFirst > now
+                                ? explicitFirst
+                                : now.Add(interval);
 
-                    var result = await _client.ScheduleRecurringReminderAsync(key, first, interval, payload);
-                    return result.ResponseCode == ReminderScheduleResponseCode.Success
-                        ? ScheduleAttempt.Ok(first)
-                        : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule interval reminder.");
-                }
+                        var result = await _client.ScheduleRecurringReminderAsync(key, first, interval, payload);
+                        return result.ResponseCode == ReminderScheduleResponseCode.Success
+                            ? ScheduleAttempt.Ok(first)
+                            : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule interval reminder.");
+                    }
 
                 case ReminderScheduleType.Cron:
-                {
-                    if (string.IsNullOrWhiteSpace(definition.Schedule.CronExpression))
-                        return ScheduleAttempt.Fail("Cron reminders require a cron expression.");
+                    {
+                        if (string.IsNullOrWhiteSpace(definition.Schedule.CronExpression))
+                            return ScheduleAttempt.Fail("Cron reminders require a cron expression.");
 
-                    var nextFire = CronScheduleHelper.GetNextOccurrence(definition.Schedule.CronExpression, _timeProvider);
-                    if (nextFire is null)
-                        return ScheduleAttempt.Fail("Cron schedule has no future occurrence.");
+                        var nextFire = CronScheduleHelper.GetNextOccurrence(definition.Schedule.CronExpression, _timeProvider);
+                        if (nextFire is null)
+                            return ScheduleAttempt.Fail("Cron schedule has no future occurrence.");
 
-                    var result = await _client.ScheduleSingleReminderAsync(key, nextFire.Value, payload);
-                    return result.ResponseCode == ReminderScheduleResponseCode.Success
-                        ? ScheduleAttempt.Ok(nextFire)
-                        : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule cron reminder.");
-                }
+                        var result = await _client.ScheduleSingleReminderAsync(key, nextFire.Value, payload);
+                        return result.ResponseCode == ReminderScheduleResponseCode.Success
+                            ? ScheduleAttempt.Ok(nextFire)
+                            : ScheduleAttempt.Fail(result.Message ?? "Failed to schedule cron reminder.");
+                    }
 
                 default:
                     return ScheduleAttempt.Fail("Unknown schedule type.");
@@ -1036,7 +1309,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         Enabled: d.Enabled,
         AgentDefinitionId: d.AgentDefinitionId,
         Audience: d.Audience,
-        ExpiresAt: d.ExpiresAt);
+        ExpiresAt: d.ExpiresAt,
+        ConsecutiveFailures: d.ConsecutiveFailures,
+        TerminalOutcome: d.TerminalOutcome);
 
     private static string SanitizeActorName(string raw)
     {
@@ -1054,7 +1329,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         Sender.Tell(new ReminderHealthResponse(
             scheduledCount,
             _activeExecutions.Count,
-            _failureCounts.Count));
+            _definitionStore.List().Count(d => d.ConsecutiveFailures > 0)));
     }
 
     private async Task HandleGetStatusAsync(GetReminderStatusQuery query)
@@ -1068,6 +1343,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 replyTo.Tell(new ReminderStatusResponse(
                     query.Id, Found: false, Enabled: false, Executing: false,
                     NextFire: null, ConsecutiveFailures: 0, SkippedDuplicates: 0,
+                    TerminalOutcome: null, Occurrence: null,
                     RecentHistory: []));
                 return;
             }
@@ -1077,7 +1353,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             // Neither touches actor state until both complete.
             var schedulesTask = ListScheduledRemindersAsync();
             var historyTask = _historyStore.ReadAsync(query.Id, RecentHistoryCount);
-            await Task.WhenAll(schedulesTask, historyTask);
+            var occurrenceTask = GetOccurrenceStatusAsync(definition);
+            await Task.WhenAll(schedulesTask, historyTask, occurrenceTask);
+
+            var occurrence = occurrenceTask.Result is { } status
+                ? new ReminderOccurrenceInfo(
+                    status.DueTimeUtc,
+                    status.NextAttemptAtUtc,
+                    status.AttemptCount,
+                    status.LastFailureReason,
+                    status.CompletionStatus.ToString(),
+                    status.DeliveryDeadlineUtc,
+                    status.AckDeadlineUtc,
+                    status.CompletedAtUtc)
+                : null;
 
             replyTo.Tell(new ReminderStatusResponse(
                 query.Id,
@@ -1085,8 +1374,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 Enabled: definition.Enabled,
                 Executing: _activeExecutions.IsExecuting(query.Id),
                 NextFire: schedulesTask.Result.GetValueOrDefault(query.Id.Value),
-                ConsecutiveFailures: _failureCounts.GetValueOrDefault(query.Id),
+                ConsecutiveFailures: definition.ConsecutiveFailures,
                 SkippedDuplicates: _skipCounts.GetValueOrDefault(query.Id),
+                TerminalOutcome: definition.TerminalOutcome,
+                Occurrence: occurrence,
                 RecentHistory: historyTask.Result));
         }
         catch (Exception ex)
@@ -1099,6 +1390,30 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Error(ex, "Error getting status for reminder '{0}'", query.Id.Value);
             replyTo.Tell(new Status.Failure(ex));
         }
+    }
+
+    private async Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderDefinition definition)
+    {
+        if (_client is null
+            || definition.Schedule.Type is not ReminderScheduleType.OneShot
+            || definition.Schedule.FireAt is not { } dueTimeUtc)
+        {
+            return null;
+        }
+
+        var response = await _client.GetOccurrenceStatusAsync(
+            new ReminderKey(definition.Id.Value),
+            dueTimeUtc);
+
+        return response.ResponseCode switch
+        {
+            ReminderOccurrenceStatusResponseCode.Success => response.Status,
+            ReminderOccurrenceStatusResponseCode.NotFound => null,
+            ReminderOccurrenceStatusResponseCode.Error => throw new InvalidOperationException(
+                response.Message ?? "The reminder occurrence status query failed."),
+            _ => throw new InvalidOperationException(
+                $"Unexpected occurrence status response: {response.ResponseCode}.")
+        };
     }
 
     private sealed record ScheduleAttempt(bool IsSuccess, DateTimeOffset? NextFire, string? ErrorMessage) : INoSerializationVerificationNeeded
@@ -1134,5 +1449,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
     /// synchronize on reconcile completion instead of polling.
     /// </summary>
-    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots, int DisabledExpired = 0) : INoSerializationVerificationNeeded;
+    internal sealed record ReconcileCompleted(
+        int CancelledOrphans,
+        int RestoredSchedules,
+        int SoftDeletedOneShots,
+        int DisabledExpired = 0) : INoSerializationVerificationNeeded;
 }

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderCommand.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -592,7 +592,18 @@ internal static class ReminderCommand
             Console.WriteLine($"Executing now:       {status.Executing}");
             Console.WriteLine($"Next fire:           {status.NextFire ?? "not scheduled"}");
             Console.WriteLine($"Consecutive fails:   {status.ConsecutiveFailures}");
-            Console.WriteLine($"Skipped (duplicate): {status.SkippedDuplicates}");
+            Console.WriteLine($"Skipped occurrences: {status.SkippedDuplicates}");
+            Console.WriteLine($"Terminal outcome:    {status.TerminalOutcome ?? "none"}");
+
+            if (status.Occurrence is { } occurrence)
+            {
+                Console.WriteLine($"Occurrence status:   {occurrence.CompletionStatus}");
+                Console.WriteLine($"Occurrence attempts: {occurrence.AttemptCount}");
+                if (occurrence.NextAttemptAtUtc is { } nextAttemptAtUtc)
+                    Console.WriteLine($"Next retry:          {nextAttemptAtUtc:u}");
+                if (!string.IsNullOrWhiteSpace(occurrence.LastFailureReason))
+                    Console.WriteLine($"Last failure:        {occurrence.LastFailureReason}");
+            }
 
             var history = status.RecentHistory ?? [];
             if (history.Length == 0)
@@ -630,7 +641,16 @@ internal static class ReminderCommand
         string? NextFire,
         int ConsecutiveFailures,
         int SkippedDuplicates,
+        string? TerminalOutcome,
+        ReminderOccurrenceView? Occurrence,
         HistoryRecord[]? RecentHistory);
+
+    private sealed record ReminderOccurrenceView(
+        DateTimeOffset DueTimeUtc,
+        DateTimeOffset? NextAttemptAtUtc,
+        int AttemptCount,
+        string? LastFailureReason,
+        string CompletionStatus);
 
     private static int WriteHelp()
     {
@@ -647,7 +667,7 @@ internal static class ReminderCommand
         Console.WriteLine("  validate <file>                               Validate reminder file");
         Console.WriteLine("  show <id>                                     Show reminder details");
         Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
-        Console.WriteLine("  status <id>                                   Show operational status: failures, skipped fires, in-flight");
+        Console.WriteLine("  status <id>                                   Show execution, retry, terminal, and history status");
         Console.WriteLine();
         Console.WriteLine("Create options:");
         Console.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");

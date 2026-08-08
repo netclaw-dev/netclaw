@@ -83,6 +83,48 @@
 | multiple-cd-then-safe-prompts | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | side-effect-before-mutation-prompts | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | echo, git push | No |
 | heredoc-prompts | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | RequiresApproval | approval required | none | Yes |
+| workload-search-rg-in-project-allows | Personal | Project | Interactive | rg -n "TODO" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-grep-in-project-allows | Personal | Project | Interactive | grep -R "error" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-find-in-project-allows | Personal | Project | Interactive | find src -name "*.cs" -print | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-cat-in-project-allows | Personal | Project | Interactive | cat src/file.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-head-in-project-allows | Personal | Project | Interactive | head -40 src/file.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-tail-in-project-allows | Personal | Project | Interactive | tail -100 logs/app.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-sed-print-in-project-currently-prompts | Personal | Project | Interactive | sed -n '20,80p' src/file.txt | none | RequiresApproval | approval required | sed | No |
+| workload-search-rg-external-prompts | Personal | External | Interactive | rg -n "TODO" . | none | RequiresApproval | approval required | rg | No |
+| workload-search-rg-external-grant-allows | Personal | External | Interactive | rg -n "TODO" . | persistent[external]:rg | Allowed | StoredApproval | none | Not applicable |
+| workload-search-rg-head-pipeline-allows | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-grep-tail-pipeline-allows | Personal | Project | Interactive | grep -R "error" logs \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-find-head-pipeline-allows | Personal | Project | Interactive | find src -name "*.cs" -print \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-cat-jq-pipeline-currently-prompts | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | RequiresApproval | approval required | cat, jq | No |
+| workload-search-jq-direct-prompts | Personal | Project | Interactive | jq '.items[]' config.json | none | RequiresApproval | approval required | jq | No |
+| workload-search-jq-direct-grant-allows | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
+| workload-search-cat-jq-stored-tail-currently-prompts | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | RequiresApproval | approval required | cat, jq | No |
+| workload-edit-grep-tee-pipeline-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | none | RequiresApproval | approval required | grep, tee | No |
+| workload-edit-tee-direct-prompts | Personal | Project | Interactive | tee reports/output.txt | none | RequiresApproval | approval required | tee | No |
+| workload-edit-tee-direct-grant-allows | Personal | Project | Interactive | tee reports/output.txt | persistent[project]:tee | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-grep-tee-stored-tail-currently-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | persistent[project]:tee | RequiresApproval | approval required | grep, tee | No |
+| workload-edit-sed-in-place-prompts | Personal | Project | Interactive | sed -i 's/old/new/' src/file.txt | none | RequiresApproval | approval required | sed | No |
+| workload-edit-sed-in-place-grant-allows | Personal | Project | Interactive | sed -i 's/old/new/' src/file.txt | persistent[project]:sed | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-copy-prompts | Personal | Project | Interactive | cp src/input.txt src/output.txt | none | RequiresApproval | approval required | cp | No |
+| workload-edit-copy-grant-allows | Personal | Project | Interactive | cp src/input.txt src/output.txt | persistent[project]:cp | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-move-prompts | Personal | Project | Interactive | mv src/old.txt src/new.txt | none | RequiresApproval | approval required | mv | No |
+| workload-edit-move-grant-allows | Personal | Project | Interactive | mv src/old.txt src/new.txt | persistent[project]:mv | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-touch-prompts | Personal | Project | Interactive | touch src/new.txt | none | RequiresApproval | approval required | touch | No |
+| workload-edit-touch-grant-allows | Personal | Project | Interactive | touch src/new.txt | persistent[project]:touch | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-mkdir-prompts | Personal | Project | Interactive | mkdir -p reports/output | none | RequiresApproval | approval required | mkdir | No |
+| workload-edit-mkdir-grant-allows | Personal | Project | Interactive | mkdir -p reports/output | persistent[project]:mkdir | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-remove-prompts | Personal | Project | Interactive | rm -- src/obsolete.txt | none | RequiresApproval | approval required | rm | No |
+| workload-edit-remove-grant-allows | Personal | Project | Interactive | rm -- src/obsolete.txt | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-printf-redirect-prompts | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | none | RequiresApproval | approval required | printf | No |
+| workload-edit-printf-redirect-grant-allows | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | persistent[project]:printf | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-search-pipeline-redirect-in-project-allows | Personal | Project | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-edit-search-pipeline-redirect-external-prompts | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | grep, head | No |
+| workload-edit-search-pipeline-redirect-external-grant-allows | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | persistent[external]:grep, persistent[external]:head | Allowed | StoredApproval | none | Not applicable |
+| workload-search-loop-currently-complex | Personal | Project | Interactive | for f in src/*.cs; do grep -n "TODO" "$f"; done | persistent[project]:grep | RequiresApproval | approval required | none | Yes |
+| workload-edit-loop-currently-complex | Personal | Project | Interactive | for f in src/a.txt src/b.txt; do sed -i 's/old/new/' "$f"; done | persistent[project]:sed | RequiresApproval | approval required | none | Yes |
+| workload-search-dynamic-root-remains-complex | Personal | Project | Interactive | grep -R "error" "$SEARCH_ROOT" | persistent[anywhere]:grep | RequiresApproval | approval required | none | Yes |
+| workload-search-substitution-pipeline-redirect-remains-complex | Personal | Project | Interactive | pattern=$(printf '%s' error); grep -R "$pattern" src \| head -20 > reports/errors.txt | persistent[project]:grep, persistent[project]:head, persistent[project]:printf | RequiresApproval | approval required | none | Yes |
+| workload-search-loop-substitution-pipeline-redirect-remains-complex | Personal | Project | Interactive | for f in logs/*.log; do grep -n "$(printf '%s' error)" "$f" \| head -20 > "reports/$f.txt"; done | persistent[project]:grep, persistent[project]:head, persistent[project]:printf | RequiresApproval | approval required | none | Yes |
 | echo-allows-without-grant | Personal | Project | Interactive | echo hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | printf-allows-without-grant | Personal | Project | Interactive | printf hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | echo-redirect-prompts | Personal | Project | Interactive | echo hello > result.txt | none | RequiresApproval | approval required | echo | No |

@@ -22,6 +22,8 @@ namespace Netclaw.Actors.Hosting;
 
 public static class NetclawAkkaHostingExtensions
 {
+    internal static readonly TimeSpan ReminderAckTimeout = TimeSpan.FromMinutes(70);
+
     public sealed record ReminderStorageOptions
     {
         public string? SqliteConnectionString { get; init; }
@@ -68,11 +70,8 @@ public static class NetclawAkkaHostingExtensions
     /// <summary>
     /// Registers the reminder manager as a singleton actor and wires
     /// the local Akka.Reminders scheduler to deliver payloads to it.
-    /// Uses Akka.Reminders' built-in default settings throughout — no
-    /// configuration surface exposed. If operators ever need to tune
-    /// <c>AckTimeout</c>, <c>MaxRetryBackoff</c>, or
-    /// <c>MaxDeliveryAttempts</c>, a configuration knob can be added at
-    /// that point. Right now: YAGNI.
+    /// Uses a 70-minute acknowledgement lease for one-hour LLM attempts.
+    /// Other Akka.Reminders settings use their library defaults.
     /// </summary>
     public static AkkaConfigurationBuilder WithReminderManager(
         this AkkaConfigurationBuilder builder,
@@ -86,6 +85,11 @@ public static class NetclawAkkaHostingExtensions
         return builder
             .WithLocalReminders(reminders =>
             {
+                reminders.WithSettings(new ReminderSettings
+                {
+                    AckTimeout = ReminderAckTimeout
+                });
+
                 if (!string.IsNullOrWhiteSpace(storageOptions?.SqliteConnectionString))
                 {
                     reminders.WithStorage(system =>

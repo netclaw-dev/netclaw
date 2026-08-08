@@ -170,6 +170,73 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         Assert.Equal(TrustBoundary.Personal, loaded.Boundary);
         Assert.Equal(id, loaded.Id.Value);
         Assert.Equal("Round-trip check", loaded.Title);
+        Assert.Equal(0, loaded.ConsecutiveFailures);
+        Assert.Null(loaded.TerminalOutcome);
+    }
+
+    [Fact]
+    public void Reminder_failure_state_roundtrips()
+    {
+        var store = new ReminderDefinitionStore(_paths);
+        var now = TimeProvider.System.GetUtcNow();
+        var definition = new ReminderDefinition
+        {
+            Id = new ReminderId("roundtrip-failure-state"),
+            Title = "Failure state check",
+            Instructions = "Do the thing.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddHours(1)
+            },
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Enabled = false,
+            ConsecutiveFailures = 5,
+            TerminalOutcome = ReminderTerminalOutcome.Failed,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        store.Save(definition);
+
+        var loaded = new ReminderDefinitionStore(_paths).Get(definition.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(5, loaded.ConsecutiveFailures);
+        Assert.Equal(ReminderTerminalOutcome.Failed, loaded.TerminalOutcome);
+    }
+
+    [Fact]
+    public void Definition_without_failure_fields_loads_with_active_defaults()
+    {
+        var reminderId = "old-failure-shape";
+        var filePath = Path.Combine(
+            _paths.RemindersDirectory,
+            $"{Uri.EscapeDataString(reminderId)}.json");
+        const string json = """
+            {
+              "id": "old-failure-shape",
+              "title": "Old shape",
+              "schedule": { "type": "OneShot", "fireAtMs": 1800000000000 },
+              "instructions": "Check status.",
+              "delivery": { "kind": "None" },
+              "enabled": true,
+              "audience": "Personal",
+              "boundary": "personal",
+              "createdAtMs": 1700000000000,
+              "updatedAtMs": 1700000000000
+            }
+            """;
+        File.WriteAllText(filePath, json);
+
+        var loaded = new ReminderDefinitionStore(_paths).Get(new ReminderId(reminderId));
+
+        Assert.NotNull(loaded);
+        Assert.Equal(0, loaded!.ConsecutiveFailures);
+        Assert.Null(loaded.TerminalOutcome);
+        Assert.True(loaded.Enabled);
     }
 
     /// <summary>

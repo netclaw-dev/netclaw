@@ -540,10 +540,8 @@ static void ConfigureDaemonServices(
     services.AddSingleton(effectivePolicyDefaults);
     services.AddSingleton<TrustContextDeriver>();
 
-    // Reminders — no config surface exposed. Settings live as private
-    // consts on ReminderManagerActor / ReminderExecutionActor /
-    // ReminderScheduleParser / ReminderHistoryStore. Library defaults
-    // cover AckTimeout, MaxRetryBackoff, and MaxDeliveryAttempts.
+    // Reminder limits stay private. Netclaw sets the library acknowledgement
+    // lease in WithReminderManager because an LLM attempt can take one hour.
     services.AddSingleton<ReminderDefinitionStore>();
     services.AddSingleton<ReminderHistoryStore>();
 

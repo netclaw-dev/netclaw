@@ -43,7 +43,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 ExpiresAt: r.ExpiresAt is null
                     ? null
                     : SetReminderTool.FormatTimestamp(r.ExpiresAt),
-                Audience: r.Audience?.ToWireValue()));
+                Audience: r.Audience?.ToWireValue(),
+                ConsecutiveFailures: r.ConsecutiveFailures,
+                TerminalOutcome: r.TerminalOutcome?.ToString()));
             return TypedResults.Ok(projected);
         })
         .WithName("ListReminders")
@@ -287,7 +289,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 DeliveryAddress: r.Delivery.Address,
                 DeliveryRequired: r.DeliveryRequired,
                 DeliveryInstructions: r.DeliveryInstructions,
-                Audience: r.Audience?.ToWireValue()));
+                Audience: r.Audience?.ToWireValue(),
+                ConsecutiveFailures: r.ConsecutiveFailures,
+                TerminalOutcome: r.TerminalOutcome?.ToString()));
         })
         .WithName("GetReminder")
         .WithSummary("Get a single reminder's full definition.");
@@ -331,10 +335,12 @@ public static class ReminderEndpointRouteBuilderExtensions
                 NextFire: status.NextFire is null ? null : SetReminderTool.FormatTimestamp(status.NextFire),
                 ConsecutiveFailures: status.ConsecutiveFailures,
                 SkippedDuplicates: status.SkippedDuplicates,
+                TerminalOutcome: status.TerminalOutcome?.ToString(),
+                Occurrence: status.Occurrence,
                 RecentHistory: status.RecentHistory));
         })
         .WithName("GetReminderStatus")
-        .WithSummary("Get per-reminder operational status: in-flight, consecutive failures, skipped fires, recent history.");
+        .WithSummary("Get reminder execution, retry, failure, terminal, and history status.");
 
         return app;
     }
@@ -392,7 +398,9 @@ internal sealed record ReminderSummaryDto(
     string Schedule,
     string NextFire,
     string? ExpiresAt,
-    string? Audience);
+    string? Audience,
+    int ConsecutiveFailures,
+    string? TerminalOutcome);
 
 /// <summary>Full reminder projection returned by <c>GET /api/reminders/{id}</c>.</summary>
 internal sealed record ReminderDetailDto(
@@ -408,7 +416,9 @@ internal sealed record ReminderDetailDto(
     string? DeliveryAddress,
     bool DeliveryRequired,
     string? DeliveryInstructions,
-    string? Audience);
+    string? Audience,
+    int ConsecutiveFailures,
+    string? TerminalOutcome);
 
 /// <summary>Per-reminder operational status projection (see <c>GET /{id}/status</c>).</summary>
 internal sealed record ReminderStatusDto(
@@ -418,6 +428,8 @@ internal sealed record ReminderStatusDto(
     string? NextFire,
     int ConsecutiveFailures,
     int SkippedDuplicates,
+    string? TerminalOutcome,
+    ReminderOccurrenceInfo? Occurrence,
     IReadOnlyList<HistoryRecord> RecentHistory);
 
 /// <summary>Acknowledgement carrying a human-readable message.</summary>

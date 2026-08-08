@@ -62,6 +62,19 @@ Reminders that hit 5 consecutive execution failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
 operator can diagnose and re-enable after fixing the root cause.
 
+A known execution or delivery failure starts the Akka.Reminders retry policy.
+The retry uses bounded backoff and the same durable occurrence identity. A
+successful attempt resets the consecutive failure count.
+
+A one-shot reminder stays enabled while an occurrence can retry. A successful
+one-shot becomes disabled with a `Completed` outcome. A poison one-shot becomes
+disabled with a `Failed` outcome. Both definitions and their history remain
+available until an operator uses the permanent delete command.
+
+Each attempt has a 20-minute inactivity limit and a one-hour absolute limit.
+The durable acknowledgement lease is 70 minutes. A daemon crash therefore lets
+Akka.Reminders retry the occurrence after the lease expires.
+
 **Failure visibility.** When a reminder execution fails for any reason — including
 the 20-minute stall backstop that recovers a wedged run — the failure is posted
 as a plain-language notice to the reminder's **destination channel** (for
@@ -69,20 +82,22 @@ as a plain-language notice to the reminder's **destination channel** (for
 reminder's output. This is bounded by the auto-disable threshold (at most a few
 notices plus the disabled notice), not the unbounded skip stream.
 
-A *skipped* fire (one that arrives while the prior execution is still running) is
-**not** posted to the channel — it would be too noisy — but it is counted and
-surfaced by the status command:
+A one-shot that cannot start receives a negative acknowledgement. Akka.Reminders
+then controls its retry delay. Netclaw acknowledges and skips a blocked recurring
+occurrence. It does not keep a stale catch-up queue. The status command shows the
+skip count:
 
 ```
 netclaw reminder status <id>
 ```
 
-`status` shows, per reminder: whether it's enabled, whether an execution is in
-flight right now, when it next fires, the consecutive-failure count, the
-skipped-fire count (since daemon start), and recent run history. Reach for it
-when a reminder seems to have silently stopped doing its job — a high skip count
-means a prior run is wedged (it should self-recover within ~20 minutes), and a
-rising failure count points at a misconfigured or broken reminder.
+`status` shows the enabled state, the terminal outcome, and current execution
+state. It also shows the next fire, consecutive failures, skipped occurrence count,
+and recent history. For one-shots, it shows the durable occurrence state, attempt
+count, next retry time, and last failure reason.
+
+Use this command when a reminder stops its expected work. A failure count that
+increases usually means that the reminder or its delivery target is not healthy.
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
