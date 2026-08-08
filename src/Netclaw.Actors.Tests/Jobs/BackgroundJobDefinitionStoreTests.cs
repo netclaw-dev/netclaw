@@ -151,6 +151,69 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
     }
 
     /// <summary>
+    /// Traversal guard (adversarial review, HIGH): Uri.EscapeDataString does not
+    /// escape dots, so a dot-only id must NOT resolve to the jobs directory's
+    /// parent and delete it recursively. The store rejects such ids at
+    /// deserialization, and DeleteJobArtifacts contains the delete to the jobs
+    /// directory as belt-and-braces.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_dot_only_id_cannot_escape_jobs_directory()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var jobsDir = _paths.JobsDirectory;
+        var parentDir = Path.GetDirectoryName(jobsDir.TrimEnd(Path.DirectorySeparatorChar))!;
+        var sentinel = Path.Combine(parentDir, "sentinel-file.txt");
+        File.WriteAllText(sentinel, "do not delete");
+
+        // ".." would resolve to the parent of the jobs directory.
+        var removed = store.DeleteJobArtifacts(new BackgroundJobId(".."));
+
+        // The delete must be refused (nothing removed) — the parent survives.
+        Assert.False(removed);
+        Assert.True(File.Exists(sentinel));
+        Assert.True(Directory.Exists(jobsDir));
+
+        File.Delete(sentinel);
+    }
+
+    /// <summary>
+    /// Traversal guard (adversarial review, HIGH): a persisted definition whose
+    /// id is "." or ".." must be rejected at load — it never appears in
+    /// List(), so the sweep can never act on it.
+    /// </summary>
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void Definition_with_dot_only_id_is_rejected_at_load(string unsafeId)
+    {
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+
+        // File name mirrors what GetPath would produce for this id:
+        // Uri.EscapeDataString leaves dots unescaped, so the file is "..json".
+        var filePath = Path.Combine(_paths.JobsDirectory, $"{Uri.EscapeDataString(unsafeId)}.json");
+        File.WriteAllText(filePath, $$"""
+            {
+              "id": "{{unsafeId}}",
+              "command": "echo pwn",
+              "sessionId": "C0TEST/1712000000.000001",
+              "rationale": "test",
+              "status": "Completed",
+              "timeoutSeconds": 600,
+              "startedAtMs": 0,
+              "completedAtMs": 0,
+              "audience": "Personal",
+              "boundary": "Personal"
+            }
+            """);
+
+        Assert.Empty(store.List());
+        Assert.Null(store.Get(new BackgroundJobId(unsafeId)));
+        Assert.Contains(logger.Errors, e => e.Contains("unsafe id"));
+    }
+
+    /// <summary>
     /// Byte-equality gate for issue #994 Pass 7b. Wrapping <c>BackgroundJobDefinition.Id</c>
     /// in <see cref="BackgroundJobId"/> and <c>SessionId</c> in
     /// <see cref="Netclaw.Actors.Protocol.SessionId"/> MUST NOT change the on-disk JSON:

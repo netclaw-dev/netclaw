@@ -54,7 +54,44 @@ public sealed class BackgroundJobDefinitionStore
             return null;
         }
 
-        return JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+        var definition = JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+        if (definition is null)
+            return null;
+
+        // Reject ids that resolve to special directory entries ("." / "..") —
+        // Uri.EscapeDataString does NOT escape dots, so such an id would make
+        // DeleteJobArtifacts target the jobs directory itself or its parent
+        // (see DeleteJobArtifacts containment check). The manager only ever
+        // generates 12-hex ids; anything else on disk is corrupt or hostile.
+        if (!IsSafeJobId(definition.Id.Value))
+        {
+            _logger.LogError(
+                "Background job document {Path} has an unsafe id '{JobId}'. The job will not be loaded.",
+                path, definition.Id.Value);
+            return null;
+        }
+
+        return definition;
+    }
+
+    /// <summary>
+    /// True when the id is a plain file-name token that cannot traverse out of
+    /// the jobs directory. Dots pass through <c>Uri.EscapeDataString</c>
+    /// unescaped, so "." / ".." (and any id containing a path separator) are
+    /// rejected outright.
+    /// </summary>
+    private static bool IsSafeJobId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return false;
+
+        if (id is "." or "..")
+            return false;
+
+        if (id.IndexOfAny(['/', '\\']) >= 0)
+            return false;
+
+        return true;
     }
 
     /// <summary>
@@ -168,10 +205,22 @@ public sealed class BackgroundJobDefinitionStore
             // what the execution actor wrote.
             var outputLogPath = GetOutputLogPathOnly(id);
             var outputDir = Path.GetDirectoryName(outputLogPath);
-            if (outputDir is not null && Directory.Exists(outputDir))
+            if (outputDir is not null)
             {
-                Directory.Delete(outputDir, recursive: true);
-                removed = true;
+                // Containment guard: Uri.EscapeDataString does not escape dots,
+                // so an id like ".." would otherwise resolve to the jobs
+                // directory's parent and Directory.Delete(recursive) would wipe
+                // it. Never touch anything outside the jobs directory.
+                var root = Path.GetFullPath(_directory);
+                var fullDir = Path.GetFullPath(outputDir);
+                var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+                    ? root
+                    : root + Path.DirectorySeparatorChar;
+                if (fullDir.StartsWith(prefix, StringComparison.Ordinal) && Directory.Exists(fullDir))
+                {
+                    Directory.Delete(fullDir, recursive: true);
+                    removed = true;
+                }
             }
 
             return removed;

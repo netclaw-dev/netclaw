@@ -464,4 +464,48 @@ public class BackgroundJobManagerActorTests : TestKit
         Assert.False(File.Exists(outputLogPath));
         Assert.False(Directory.Exists(Path.GetDirectoryName(outputLogPath)));
     }
+
+    [Fact]
+    public async Task TerminalSweep_SweepsTerminalJobWithNullCompletedAtMs_UsingStartedAtFallback()
+    {
+        // Adversarial review, MED: a terminal-status definition with null
+        // CompletedAtMs must still be swept once its StartedAtMs is past the
+        // window — otherwise it leaks forever (the exact bug this PR fixes).
+        var manager = GetManager();
+        var pastWindowMs = TimeProvider.System.GetUtcNow()
+            .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
+            .Subtract(TimeSpan.FromMinutes(1))
+            .ToUnixTimeMilliseconds();
+
+        var def = MakeTerminalDefinition("sweep-null-completed", BackgroundJobStatus.Failed, pastWindowMs);
+        def = def with { CompletedAtMs = null };
+        _store.Save(def);
+
+        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Null(_store.Get(new BackgroundJobId("sweep-null-completed")));
+    }
+
+    [Fact]
+    public async Task TerminalSweep_KeepsTerminalJobWithNullCompletedAtMs_WhenStartedAtRecent()
+    {
+        // A terminal job with null CompletedAtMs but a RECENT StartedAtMs must
+        // survive the sweep — the StartedAt fallback must not over-delete.
+        var manager = GetManager();
+        var recentMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var def = MakeTerminalDefinition("sweep-null-recent", BackgroundJobStatus.Failed, recentMs);
+        def = def with { CompletedAtMs = null };
+        _store.Save(def);
+
+        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(_store.Get(new BackgroundJobId("sweep-null-recent")));
+    }
 }

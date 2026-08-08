@@ -387,7 +387,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
             if (_activeJobIds.Contains(def.Id.Value))
                 continue;
 
-            if (def.CompletedAtMs is null || def.CompletedAtMs.Value > cutoffMs)
+            // Terminal jobs always carry CompletedAtMs from the manager's own
+            // transitions, but a corrupt/legacy file can have terminal status
+            // with a null completion time — fall back to StartedAtMs so that
+            // class still gets swept instead of leaking forever. StartedAtMs is
+            // always present (set at submission), so the fallback is total.
+            var completedAtMs = def.CompletedAtMs ?? def.StartedAtMs;
+            if (completedAtMs > cutoffMs)
                 continue;
 
             if (_store.DeleteJobArtifacts(def.Id))
