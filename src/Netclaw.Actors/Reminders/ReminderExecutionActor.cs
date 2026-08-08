@@ -23,8 +23,14 @@ namespace Netclaw.Actors.Reminders;
 /// Creates a session pipeline, sends reminder instructions, collects output,
 /// and reports success/failure to <see cref="ReminderManagerActor"/>.
 /// </summary>
-internal sealed class ReminderExecutionActor : ReceiveActor
+internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
 {
+    /// <summary>
+    /// Timer keys for the two IWithTimers backstops. Distinct keys so arming
+    /// one never cancels the other.
+    /// </summary>
+    private static readonly object ExecutionAttemptTimerKey = new();
+    private static readonly object DeliveryBackstopTimerKey = new();
     /// <summary>
     /// Backstop timeout for CurrentSession reminders with
     /// <c>DeliveryRequired=true</c> waiting for a
@@ -69,8 +75,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private string? _sessionIdValue;
     private bool _awaitingDeliveryResult;
     private ReminderId? _expectedReminderDeliveryKey;
-    private ICancelable? _deliveryTimeoutCancelable;
-    private ICancelable? _executionTimeoutCancelable;
+
+    /// <summary>
+    /// Timer scheduler injected by Akka for <see cref="IWithTimers"/>. Timers
+    /// are canceled automatically when the actor stops, so the one-shot
+    /// backstops can never fire after settlement stops the actor.
+    /// </summary>
+    public ITimerScheduler Timers { get; set; } = null!;
     private bool _settlementStarted;
 
     private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
@@ -126,11 +137,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _log.Info(
             $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt} delivery_kind={_definition.Delivery.Kind}");
 
-        _executionTimeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(
-            ExecutionAttemptTimeout,
-            Self,
+        Timers.StartSingleTimer(
+            ExecutionAttemptTimerKey,
             ExecutionAttemptTimeoutReached.Instance,
-            Self);
+            ExecutionAttemptTimeout);
 
         Self.Tell(new ExecutionStarted());
         RunTask(RoutesBackToOriginSession ? InitializeCurrentSessionAsync : InitializeAsync);
@@ -334,11 +344,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     {
         _awaitingDeliveryResult = true;
         _expectedReminderDeliveryKey = reminderDeliveryKey;
-        _deliveryTimeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(
-            DeliveryObservedTimeout,
-            Self,
+        Timers.StartSingleTimer(
+            DeliveryBackstopTimerKey,
             new DeliveryBackstopTimeout(reminderDeliveryKey),
-            Self);
+            DeliveryObservedTimeout);
     }
 
     private void HandleDeliveryResult(ReminderDeliveryResult result)
@@ -356,8 +365,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             return;
 
         _awaitingDeliveryResult = false;
-        _deliveryTimeoutCancelable?.Cancel();
-        _deliveryTimeoutCancelable = null;
+        Timers.Cancel(DeliveryBackstopTimerKey);
 
         if (result.Delivered)
         {
@@ -384,7 +392,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             return;
 
         _awaitingDeliveryResult = false;
-        _deliveryTimeoutCancelable = null;
         _log.Warning(
             "reminder_delivery_observation_timeout execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} timeout={Timeout}",
             _executionId, _definition.Id, msg.ReminderDeliveryKey, DeliveryObservedTimeout);
@@ -569,8 +576,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _settlementStarted = true;
 
         Context.SetReceiveTimeout(null);
-        _executionTimeoutCancelable?.Cancel();
-        _executionTimeoutCancelable = null;
+        Timers.Cancel(ExecutionAttemptTimerKey);
 
         _completed = true;
 
@@ -610,11 +616,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     protected override void PostStop()
     {
-        _deliveryTimeoutCancelable?.Cancel();
-        _deliveryTimeoutCancelable = null;
-        _executionTimeoutCancelable?.Cancel();
-        _executionTimeoutCancelable = null;
-
         try
         {
             _handle.Dispose();
