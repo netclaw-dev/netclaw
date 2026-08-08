@@ -21,7 +21,7 @@ namespace Netclaw.Actors.Jobs;
 /// Infrastructure singleton that manages background job lifecycle independently
 /// of any session. Follows the same pattern as <c>ReminderManagerActor</c>.
 /// </summary>
-public sealed class BackgroundJobManagerActor : ReceiveActor
+public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
 {
     internal const int MaxConcurrentJobs = 5;
     internal const int MaxOutputTailChars = 2000;
@@ -61,7 +61,17 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
     private readonly Dictionary<string, BackgroundJobDefinition> _definitions = [];
-    private ICancelable? _sweepCancelable;
+
+    /// <summary>
+    /// Timer identity for the periodic terminal-job sweep.
+    /// </summary>
+    private static readonly object TerminalSweepTimerKey = new();
+
+    /// <summary>
+    /// Timer scheduler injected by Akka for <see cref="IWithTimers"/>. Timers
+    /// are canceled automatically when the actor stops.
+    /// </summary>
+    public ITimerScheduler Timers { get; set; } = null!;
 
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,
@@ -94,18 +104,8 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         // Periodic cleanup for terminal jobs past their retention window. The
         // startup reconcile also sweeps, so a restart purges immediately; this
         // timer keeps the store from growing during a long-lived daemon run.
-        _sweepCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(
-            TerminalSweepInterval,
-            TerminalSweepInterval,
-            Self,
-            SweepTerminalJobs.Instance,
-            Self);
-    }
-
-    protected override void PostStop()
-    {
-        _sweepCancelable?.Cancel();
-        _sweepCancelable = null;
+        // IWithTimers cancels the timer automatically when the actor stops.
+        Timers.StartPeriodicTimer(TerminalSweepTimerKey, SweepTerminalJobs.Instance, TerminalSweepInterval);
     }
 
     private async Task HandleStartAsync(StartBackgroundJob cmd)
