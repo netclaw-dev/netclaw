@@ -68,6 +68,13 @@ It SHALL NOT add a prompt-specific grant category.
 - **THEN** no `gigatron` prompt descriptor appears
 - **AND** the load follows the generic denied result
 
+#### Scenario: Unknown skill fallback does not reveal remote prompts
+
+- **GIVEN** the registry contains MCP prompt skills from one or more servers
+- **WHEN** a session requests an unknown skill name
+- **THEN** the fallback list contains no MCP server or prompt names
+- **AND** the audience-filtered skill index remains the discovery source for remote prompts
+
 ### Requirement: MCP prompt load generation and failure behavior
 
 The system SHALL resolve an MCP prompt through the client generation that supplied its skill descriptor.

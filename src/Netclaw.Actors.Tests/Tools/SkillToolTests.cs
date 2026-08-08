@@ -278,6 +278,41 @@ public class SkillToolTests : IDisposable
         Assert.Contains("not found", result);
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public async Task SkillLoad_UnknownSkillDoesNotListMcpPromptSkills(TrustAudience audience)
+    {
+        WriteSkill("file-skill", """
+            ---
+            name: file-skill
+            description: A file skill.
+            ---
+            # File Skill
+            """);
+        ScanSkills();
+        _registry.PublishMcpPromptSkills("private-server",
+        [
+            new SkillEntry(
+                "mcp__private-server__secret-workflow",
+                "Secret workflow",
+                "Private server guidance.",
+                new McpPromptSkillSource("private-server", "secret-workflow", 1, []),
+                "mcp"),
+        ]);
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Name", "missing-skill"),
+            TestToolExecutionContext.CreateUnbound(
+                new TestToolExecutionContextOptions { Audience = audience }).Invocation,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("file-skill", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-server", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-workflow", result, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task SkillLoad_BlocksSkillWithRejectedContent()
     {

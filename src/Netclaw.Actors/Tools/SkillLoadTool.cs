@@ -79,7 +79,13 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
         if (skill is null)
         {
-            var available = _skillRegistry.GetAll().Select(s => s.Name).ToList();
+            // Remote prompt visibility depends on the session audience. The model
+            // already receives the filtered prompt index, so this fallback lists
+            // only file skills and cannot reveal a denied MCP server or prompt.
+            var available = _skillRegistry.GetAll()
+                .Where(static candidate => candidate.Source is FileSkillSource)
+                .Select(static candidate => candidate.Name)
+                .ToList();
             return available.Count > 0
                 ? $"Skill '{name}' not found. Available skills: {string.Join(", ", available)}"
                 : $"Skill '{name}' not found. No skills are currently registered.";
