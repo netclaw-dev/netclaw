@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobManagerActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -26,6 +26,22 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     internal const int MaxConcurrentJobs = 5;
     internal const int MaxOutputTailChars = 2000;
 
+    /// <summary>
+    /// How long a terminal job's definition and output log are retained after
+    /// completion before the cleanup sweep deletes them. The delivered result
+    /// message references the full output-log path, so the grace period must be
+    /// long enough for the owning session to poll <c>check_background_job</c> or
+    /// read the log after delivery. See <see cref="SweepTerminalJobs"/>.
+    /// </summary>
+    internal static TimeSpan TerminalJobRetentionWindow = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Cadence of the periodic terminal-job cleanup sweep. The sweep also runs
+    /// once during startup reconciliation, so a daemon restart immediately
+    /// purges anything past the retention window.
+    /// </summary>
+    internal static TimeSpan TerminalSweepInterval = TimeSpan.FromHours(1);
+
     // Capture ceiling for a job's output log: the execution actor drains each
     // stream to this bound (head+tail) so a chatty long-running job can't buffer
     // its full output in memory and OOM the daemon. The log holds a head+tail view
@@ -45,6 +61,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
     private readonly Dictionary<string, BackgroundJobDefinition> _definitions = [];
+    private ICancelable? _sweepCancelable;
 
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,
@@ -62,6 +79,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         Receive<QueryBackgroundJob>(HandleQuery);
         Receive<KillJobsForSession>(HandleKillJobsForSession);
         Receive<GetBackgroundJobManagerHealth>(_ => HandleGetHealth());
+        Receive<SweepTerminalJobs>(_ => HandleSweepTerminalJobs());
     }
 
     protected override void PreStart()
@@ -72,6 +90,22 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         // (macOS CI): ActorOf returns before PreStart executes, allowing external
         // messages to queue ahead of the Reconcile message.
         HandleReconcile();
+
+        // Periodic cleanup for terminal jobs past their retention window. The
+        // startup reconcile also sweeps, so a restart purges immediately; this
+        // timer keeps the store from growing during a long-lived daemon run.
+        _sweepCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(
+            TerminalSweepInterval,
+            TerminalSweepInterval,
+            Self,
+            SweepTerminalJobs.Instance,
+            Self);
+    }
+
+    protected override void PostStop()
+    {
+        _sweepCancelable?.Cancel();
+        _sweepCancelable = null;
     }
 
     private async Task HandleStartAsync(StartBackgroundJob cmd)
@@ -322,7 +356,64 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         if (reconciled > 0)
             _log.Info("Background job startup reconciliation: marked {0} orphaned job(s) as lost", reconciled);
+
+        // Startup sweep: purge terminal jobs whose retention window has elapsed,
+        // in the same pass as the orphan reconciliation.
+        HandleSweepTerminalJobs();
     }
+
+    /// <summary>
+    /// Deletes definitions (and output logs) for terminal jobs whose
+    /// <c>CompletedAtMs</c> is older than <see cref="TerminalJobRetentionWindow"/>.
+    /// Active jobs are never touched. Terminal jobs stay queryable via
+    /// <c>check_background_job</c> during the window — the delivered result
+    /// message references the output-log path, and a slow polling session may
+    /// still read it — then get swept so the store cannot grow without bound.
+    /// </summary>
+    private void HandleSweepTerminalJobs()
+    {
+        var swept = 0;
+        var cutoffMs = _timeProvider.GetUtcNow()
+            .Subtract(TerminalJobRetentionWindow)
+            .ToUnixTimeMilliseconds();
+
+        foreach (var def in _store.List())
+        {
+            if (!IsTerminalStatus(def.Status))
+                continue;
+
+            // Belt-and-braces: never sweep a job this actor still considers
+            // active, even if the on-disk snapshot is stale.
+            if (_activeJobIds.Contains(def.Id.Value))
+                continue;
+
+            if (def.CompletedAtMs is null || def.CompletedAtMs.Value > cutoffMs)
+                continue;
+
+            if (_store.DeleteJobArtifacts(def.Id))
+            {
+                _definitions.Remove(def.Id.Value);
+                swept++;
+                _log.Info(
+                    "Swept terminal background job {JobId} (status={Status}, completed_at={CompletedAtMs}) past retention window",
+                    def.Id, def.Status, def.CompletedAtMs);
+            }
+        }
+
+        if (swept > 0)
+            _log.Info("Background job terminal sweep: deleted {0} job(s) past the retention window", swept);
+    }
+
+    private static bool IsTerminalStatus(BackgroundJobStatus status) => status switch
+    {
+        BackgroundJobStatus.Completed or
+        BackgroundJobStatus.Failed or
+        BackgroundJobStatus.Cancelled or
+        BackgroundJobStatus.TimedOut or
+        BackgroundJobStatus.Lost or
+        BackgroundJobStatus.Reaped => true,
+        _ => false
+    };
 
     private void NotifyLostJob(BackgroundJobDefinition lost, long nowMs)
     {
@@ -497,4 +588,11 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                output + filePath;
     }
 
+    /// <summary>
+    /// Internal self-message: periodic terminal-job cleanup sweep.
+    /// </summary>
+    internal sealed record SweepTerminalJobs : INoSerializationVerificationNeeded
+    {
+        public static readonly SweepTerminalJobs Instance = new();
+    }
 }

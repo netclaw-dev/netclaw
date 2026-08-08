@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobDefinitionStore.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -142,6 +142,35 @@ public sealed class BackgroundJobDefinitionStore
 
             File.Delete(path);
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the job definition file AND its output-log directory. Used by
+    /// terminal-job cleanup once a job's retention window has elapsed. Returns
+    /// true when anything was removed.
+    /// </summary>
+    public bool DeleteJobArtifacts(BackgroundJobId id)
+    {
+        lock (_sync)
+        {
+            var removed = false;
+
+            var path = GetPath(id);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                removed = true;
+            }
+
+            var outputDir = Path.Combine(_directory, Uri.EscapeDataString(id.Value));
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, recursive: true);
+                removed = true;
+            }
+
+            return removed;
         }
     }
 

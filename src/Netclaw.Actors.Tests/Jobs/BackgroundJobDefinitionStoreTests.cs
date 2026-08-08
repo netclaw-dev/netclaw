@@ -98,6 +98,59 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
     }
 
     /// <summary>
+    /// Terminal-job cleanup: <see cref="BackgroundJobDefinitionStore.DeleteJobArtifacts"/>
+    /// removes BOTH the definition file and the job's output-log directory, so the
+    /// store cannot grow without bound after a job's retention window elapses.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_removes_definition_and_output_directory()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var jobId = new BackgroundJobId("cleanup-job-001");
+
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = jobId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            TimeoutSeconds = 300,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        // Simulate a real job's output log on disk.
+        var outputLogPath = store.GetOutputLogPath(jobId);
+        File.WriteAllText(outputLogPath, "build output");
+
+        Assert.NotNull(store.Get(jobId));
+        Assert.True(File.Exists(outputLogPath));
+
+        var removed = store.DeleteJobArtifacts(jobId);
+
+        Assert.True(removed);
+        Assert.Null(store.Get(jobId));
+        Assert.False(File.Exists(outputLogPath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(outputLogPath)));
+    }
+
+    /// <summary>
+    /// Idempotent cleanup: deleting artifacts for an already-removed job reports
+    /// false and does not throw.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_missing_job_returns_false_without_throwing()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+
+        var removed = store.DeleteJobArtifacts(new BackgroundJobId("never-existed"));
+
+        Assert.False(removed);
+    }
+
+    /// <summary>
     /// Byte-equality gate for issue #994 Pass 7b. Wrapping <c>BackgroundJobDefinition.Id</c>
     /// in <see cref="BackgroundJobId"/> and <c>SessionId</c> in
     /// <see cref="Netclaw.Actors.Protocol.SessionId"/> MUST NOT change the on-disk JSON:
