@@ -179,16 +179,13 @@ public sealed class ToolAccessPolicy
 
     /// <summary>
     /// Selects the approval matcher for shell-coupled tools. Real shell
-    /// commands use <see cref="ShellApprovalMatcher"/> (verb-chain extraction,
-    /// unconditional fail-closed on Personal). <c>check_background_job</c> uses
-    /// <see cref="BackgroundJobApprovalMatcher"/> because its status query is
-    /// read-only and job-scoped (the job manager enforces an exact
-    /// SessionId+Audience+Boundary match), so only its Cancel=true mutation
-    /// must fail closed on Personal.
+    /// commands use <see cref="ShellApprovalMatcher"/>. The background-job
+    /// follow-up tool uses <see cref="DefaultApprovalMatcher"/> because it can
+    /// only inspect or stop a job that this session already started.
     /// </summary>
     private static IToolApprovalMatcher SelectShellApprovalMatcher(ToolName toolName)
         => string.Equals(toolName.Value, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
-            ? BackgroundJobApprovalMatcher.Instance
+            ? DefaultApprovalMatcher.Instance
             : ShellApprovalMatcher.Instance;
 
     /// <summary>

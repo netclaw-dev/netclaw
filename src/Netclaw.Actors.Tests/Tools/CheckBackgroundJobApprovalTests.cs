@@ -20,7 +20,7 @@ using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// Pipeline-level approval behavior for <see cref="CheckBackgroundJobTool"/>,
+/// Executor-level approval behavior for <see cref="CheckBackgroundJobTool"/>,
 /// driven through <see cref="DispatchingToolExecutor"/> with a real
 /// <see cref="ToolApprovalActor"/>.
 /// </summary>
@@ -42,11 +42,10 @@ public sealed class CheckBackgroundJobApprovalTests(ITestOutputHelper output) : 
     }
 
     [Fact]
-    public async Task Status_query_from_non_interactive_turn_does_not_require_approval()
+    public async Task Status_and_cancel_from_non_interactive_turn_do_not_require_approval()
     {
-        // Regression: a status query (Cancel=false) is read-only and job-scoped,
-        // so a non-interactive turn (reminder/webhook) must NOT hit the approval
-        // gate — nothing can answer the prompt there, so the session wedges.
+        // The launch approval authorizes the job lifecycle. A non-interactive
+        // follow-up must not request another approval that no user can answer.
         var config = CreateConfig();
         var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobStatusManager()), "fake-job-manager");
 
@@ -84,13 +83,12 @@ public sealed class CheckBackgroundJobApprovalTests(ITestOutputHelper output) : 
             ToolInput.Create("JobId", "abc123"));
         _ = await executor.ExecuteAsync(statusCall, nonInteractiveContext, TestContext.Current.CancellationToken);
 
-        // Cancel: a mutation, must still throw ToolApprovalRequiredException.
+        // Cancellation only stops the session-owned process. It must not prompt.
         var cancelCall = new FunctionCallContent(
             "call-cancel",
             "check_background_job",
             ToolInput.Create("JobId", "abc123", "Cancel", true));
-        await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-            executor.ExecuteAsync(cancelCall, nonInteractiveContext, TestContext.Current.CancellationToken));
+        _ = await executor.ExecuteAsync(cancelCall, nonInteractiveContext, TestContext.Current.CancellationToken);
     }
 
     private sealed class FakeJobStatusManager : ReceiveActor
@@ -103,6 +101,8 @@ public sealed class CheckBackgroundJobApprovalTests(ITestOutputHelper output) : 
                 Status = BackgroundJobStatus.Running,
                 Found = false
             }));
+            Receive<CancelBackgroundJob>(command =>
+                Sender.Tell(new BackgroundJobCancelResponse(command.JobId, Found: true)));
         }
     }
 

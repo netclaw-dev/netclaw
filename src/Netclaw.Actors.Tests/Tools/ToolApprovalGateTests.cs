@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Jobs;
@@ -53,14 +52,9 @@ public sealed class ToolApprovalGateTests
         return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
     }
 
-    // check_background_job is a shell-coupled tool (ToolAccessPolicy.IsShellCoupledTool)
-    // that routes through ShellApprovalMatcher, whose IsFailClosedOnPersonal returns
-    // true unconditionally. That forces ToolApprovalMode.Approval for every Personal
-    // invocation with no explicit override — including pure read-only status queries
-    // (Cancel=false) scoped to the caller's own jobs. On a non-interactive turn
-    // (reminder/webhook) nothing can answer the prompt, so the session wedges waiting
-    // on an approval that never arrives. Status queries are read-only and job-scoped;
-    // only Cancel=true is a mutation and should stay approval-gated.
+    // shell_execute authorizes the host process before the background job starts.
+    // This follow-up tool can only inspect or stop a job that the same session,
+    // audience, and boundary already own. It must not request a second approval.
     [Fact]
     public void check_background_job_status_query_does_not_require_approval()
     {
@@ -96,7 +90,7 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void check_background_job_cancel_requires_approval()
+    public void check_background_job_cancel_does_not_require_approval()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
@@ -104,77 +98,18 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
-    }
-
-    // Cancel-bypass matrix: the matcher must agree with the tool binding's
-    // accepted argument shapes BY CONSTRUCTION (both go through
-    // ToolArgumentHelper.GetBoolStrict). Any shape that parses as a real
-    // cancel must fail closed — otherwise a cancel fires with no approval
-    // prompt (adversarial review finding, HIGH). The second element is the
-    // expected binding result: true → NeedsApproval, false → allowed.
-    public static TheoryData<object?, bool> CancelValueShapes => new()
-    {
-        { true, true },
-        { false, false },
-        { JsonSerializer.SerializeToElement(true), true },
-        { JsonSerializer.SerializeToElement(false), false },
-        { JsonSerializer.SerializeToElement("true"), true },
-        { JsonSerializer.SerializeToElement("false"), false },
-        { "true", true },
-        { "TRUE", true },
-        { "false", false },
-        { (object?)null, false },
-        { "garbage", false },
-        { JsonSerializer.SerializeToElement(42), false },
-        { 42, false }
-    };
-
-    [Theory]
-    [MemberData(nameof(CancelValueShapes))]
-    public void check_background_job_cancel_argument_shapes_match_binding(object? cancelValue, bool bindsAsCancel)
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = cancelValue };
-
-        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
-
-        if (bindsAsCancel)
-        {
-            Assert.True(decision.NeedsApproval);
-        }
-        else
-        {
-            Assert.True(decision.Allowed);
-            Assert.False(decision.NeedsApproval);
-        }
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
     }
 
     [Theory]
-    [InlineData("cancel")]
-    [InlineData("CANCEL")]
-    [InlineData("Cancel ")]
-    [InlineData("c-a-n-c-e-l")]
-    public void check_background_job_cancel_key_variants_fail_closed(string cancelKey)
-    {
-        // Case-insensitive/normalized key variants the binding accepts must
-        // also be detected by the matcher — otherwise a cancel fires ungated.
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", [cancelKey] = true };
-
-        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
-    }
-
-    [Fact]
-    public void check_background_job_status_query_honors_explicit_tool_override()
+    [InlineData(false)]
+    [InlineData(true)]
+    public void check_background_job_honors_explicit_tool_override(bool cancel)
     {
         // An operator who explicitly forces Approval for check_background_job
-        // must still get a prompt even for a status query — ToolOverrides wins
-        // over the matcher's fail-open default.
+        // must still get a prompt for each action. ToolOverrides wins over the
+        // matcher's automatic default.
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -194,7 +129,7 @@ public sealed class ToolApprovalGateTests
             new ToolPathPolicy([]));
 
         var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = false };
+        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = cancel };
 
         var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
 
