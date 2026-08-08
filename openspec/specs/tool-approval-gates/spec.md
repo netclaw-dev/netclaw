@@ -163,6 +163,25 @@ redirect targets: a quoted redirect target carrying an embedded line
 break (e.g. `>> "$LOGDIR⏎file"`) terminates the redirect walk so the
 break never reaches the stored pattern.
 
+A single-line quoted argument whose decoded text holds internal
+whitespace SHALL also terminate pattern extraction, excluding the
+argument and everything after it (issue #1406). A multi-word quoted
+operand — a commit message, a ticket body, a search string — is
+call-specific content that varies between invocations of the same verb
+chain, so it produces overly-specific approval entries that do not
+generalize: every `git commit -m "new message"` would mint a new
+pattern and re-prompt. A single-word quoted argument holds no internal
+whitespace and SHALL NOT terminate extraction, so a quoted and an
+unquoted single token (`git commit -m "fix"` and `git commit -m fix`)
+normalize to the same pattern. A path-shaped argument (`IsPath = true`)
+SHALL be exempt, so a quoted path that holds whitespace still reaches
+directory scoping. A preceding flag (e.g. `--message`) SHALL be retained
+because it carries invocation intent. This rule normalizes the stored
+and display pattern only; it SHALL NOT change the live authorization
+decision, the persisted `(verb, directory)` grant, or the verbatim
+command shown at the prompt. The rule SHALL apply identically on the
+gate (candidate) path and the persisted/display pattern path.
+
 For shell approval units, `&&`, `||`, and `;` SHALL split into separate
 units, while `|` SHALL remain inside the current unit. For `bash -c` or
 `sh -c` wrappers, the inner command SHALL be extracted and scanned
@@ -242,6 +261,40 @@ chain. Compound commands SHALL produce N entries from one user click on
   because multi-line arguments are call-specific content
 - **AND** the flag `--message` is retained because flags carry
   invocation intent
+
+#### Scenario: Single-line quoted free-text argument terminates the pattern
+
+- **GIVEN** the command `git commit -m "fix the bug"`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `git commit -m`
+- **AND** the multi-word quoted body and everything after it are excluded
+  because a quoted argument with internal whitespace is call-specific
+  content (issue #1406)
+- **AND** the flag `-m` is retained because flags carry invocation intent
+
+#### Scenario: Multi-word quoted operands generalize across values
+
+- **GIVEN** commands `git commit -m "first message"` and
+  `git commit -m "second message"`
+- **WHEN** patterns are extracted for both
+- **THEN** both produce the same pattern `git commit -m`
+- **AND** one `git commit -m` grant covers every commit message
+
+#### Scenario: Single-word quoted argument is not dropped
+
+- **GIVEN** the commands `git commit -m fix` and `git commit -m "fix"`
+- **WHEN** patterns are extracted for both
+- **THEN** both produce the same pattern `git commit -m fix`
+- **AND** the single-word quoted token is retained because it holds no
+  internal whitespace
+
+#### Scenario: Quoted path with whitespace keeps directory scoping
+
+- **GIVEN** the command `cat "my file.txt"`
+- **WHEN** the candidate is extracted
+- **THEN** the quoted path is exempt from the free-text rule because it
+  is path-shaped (`IsPath = true`)
+- **AND** the directory of `my file.txt` still reaches directory scoping
 
 #### Scenario: Digit-bearing ref folded into the chain is trimmed
 
@@ -1288,3 +1341,4 @@ Tool approval evaluation SHALL receive the same required admitted `TurnContext` 
 - **WHEN** a child tool requires approval
 - **THEN** approval evaluation uses the explicitly inherited turn authority
 - **AND** no audience or source fallback is inferred
+
