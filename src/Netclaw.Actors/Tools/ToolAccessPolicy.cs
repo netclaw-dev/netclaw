@@ -138,6 +138,12 @@ public sealed class ToolAccessPolicy
         if (shellAudience != TrustAudience.Personal)
             return ToolAccessDecision.Deny("shell_requires_personal_context");
 
+        // shell_execute authorizes the process before the job starts. This tool
+        // can only control a job with the same session, audience, and boundary.
+        // It does not create a new shell invocation or require another approval.
+        if (string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal))
+            return ToolAccessDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
+
         var shellCommand = ExtractShellCommand(arguments);
         if (shellCommand is not null)
         {
@@ -174,19 +180,8 @@ public sealed class ToolAccessPolicy
             }
         }
 
-        return CheckApprovalGate(toolName, context, arguments, SelectShellApprovalMatcher(toolName));
+        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
     }
-
-    /// <summary>
-    /// Selects the approval matcher for shell-coupled tools. Real shell
-    /// commands use <see cref="ShellApprovalMatcher"/>. The background-job
-    /// follow-up tool uses <see cref="DefaultApprovalMatcher"/> because it can
-    /// only inspect or stop a job that this session already started.
-    /// </summary>
-    private static IToolApprovalMatcher SelectShellApprovalMatcher(ToolName toolName)
-        => string.Equals(toolName.Value, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
-            ? DefaultApprovalMatcher.Instance
-            : ShellApprovalMatcher.Instance;
 
     /// <summary>
     /// For non-interactive channels, validates that the working directory and all

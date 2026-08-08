@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -1381,6 +1382,45 @@ public class DispatchingToolExecutorTests
         {
             await system.Terminate();
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Background_job_control_does_not_contact_approval_service(bool cancel)
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["check_background_job"] = ToolApprovalMode.Approval
+            }
+        };
+        var registry = new ToolRegistry();
+        registry.WithBackgroundJobTools(ActorRefs.Nobody);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])),
+            new UnexpectedApprovalService());
+        var context = TestToolExecutionContext.CreateBound(
+            "slack/thread-1",
+            null,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
+        var toolCall = new FunctionCallContent(
+            $"call-job-{cancel}",
+            CheckBackgroundJobTool.ToolName,
+            ToolInput.Create("JobId", "abc123", "Cancel", cancel));
+
+        await executor.AuthorizeAsync(toolCall, context, TestContext.Current.CancellationToken);
     }
 
     private static DispatchingToolExecutor CreateApprovalGatedShellExecutor()

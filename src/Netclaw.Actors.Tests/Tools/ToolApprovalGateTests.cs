@@ -1,11 +1,9 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ToolApprovalGateTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Akka.Actor;
 using Microsoft.Extensions.AI;
-using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -50,90 +48,6 @@ public sealed class ToolApprovalGateTests
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
-    }
-
-    // shell_execute authorizes the host process before the background job starts.
-    // This follow-up tool can only inspect or stop a job that the same session,
-    // audience, and boundary already own. It must not request a second approval.
-    [Fact]
-    public void check_background_job_status_query_does_not_require_approval()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = false };
-
-        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
-
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
-    }
-
-    [Fact]
-    public void check_background_job_status_query_from_non_interactive_automation_does_not_require_approval()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = false };
-        var context = TestToolExecutionContext.CreateBound(
-            "reminder/exec-1",
-            null,
-            new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Personal,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
-            });
-
-        var decision = policy.AuthorizeInvocation(tool, context, args);
-
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
-    }
-
-    [Fact]
-    public void check_background_job_cancel_does_not_require_approval()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = true };
-
-        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
-
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void check_background_job_honors_explicit_tool_override(bool cancel)
-    {
-        // An operator who explicitly forces Approval for check_background_job
-        // must still get a prompt for each action. ToolOverrides wins over the
-        // matcher's automatic default.
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["check_background_job"] = ToolApprovalMode.Approval
-            }
-        };
-        var policy = new ToolAccessPolicy(
-            config,
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy(),
-            new ToolPathPolicy([]));
-
-        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
-        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = cancel };
-
-        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
     }
 
     [Fact]
