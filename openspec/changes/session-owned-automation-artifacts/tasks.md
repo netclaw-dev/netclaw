@@ -30,6 +30,5 @@
 
 - [ ] 5.1 Run the focused reminder, background job, path-policy, serialization, and daemon endpoint tests.
 - [ ] 5.2 Run the affected project test suites and record all environment-dependent skips.
-- [ ] 5.3 Run `./evals/run-evals.sh` because the operational system skill changes.
-- [ ] 5.4 Run `dotnet slopwatch analyze` and `pwsh ./scripts/Add-FileHeaders.ps1 -Verify`.
-- [ ] 5.5 Run strict OpenSpec validation and `git diff --check`.
+- [ ] 5.3 Run `dotnet slopwatch analyze` and `pwsh ./scripts/Add-FileHeaders.ps1 -Verify`.
+- [ ] 5.4 Run strict OpenSpec validation and `git diff --check`.
