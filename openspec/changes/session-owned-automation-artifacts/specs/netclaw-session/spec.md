@@ -1,0 +1,45 @@
+## ADDED Requirements
+
+### Requirement: Session directory owns session automation artifacts
+
+The system SHALL use the canonical session directory as the lifecycle boundary for session-owned automation files.
+
+The boundary SHALL include `CurrentSession` reminder definitions, their history files, background job definitions, and background job output logs.
+
+The boundary SHALL NOT include `Channel` or `None` reminder files. Those reminders have daemon scope because they create new sessions.
+
+The system SHALL derive each artifact path from the typed `SessionId`. It SHALL NOT accept an arbitrary file path as ownership authority.
+
+#### Scenario: Current-session reminder uses the session boundary
+
+- **GIVEN** a reminder has `Delivery.Kind = CurrentSession`
+- **AND** its delivery contains a valid `SessionId`
+- **WHEN** the reminder store saves the definition
+- **THEN** the definition is stored under that session directory
+- **AND** its history uses the same reminder subdirectory
+
+#### Scenario: Background job uses the session boundary
+
+- **GIVEN** a session starts a background job
+- **WHEN** the job store saves its definition and output
+- **THEN** both artifacts are stored under that session directory
+
+#### Scenario: Daemon-scoped reminder stays outside the session boundary
+
+- **GIVEN** a reminder has `Delivery.Kind = Channel` or `Delivery.Kind = None`
+- **WHEN** the reminder store saves the definition
+- **THEN** the definition and history remain in the daemon reminder directory
+
+#### Scenario: Trusted root does not replace exact owner validation
+
+- **GIVEN** a candidate artifact path is under a trusted project or global root
+- **AND** the path is outside the exact source session directory
+- **WHEN** the store validates a session-owned artifact path
+- **THEN** the store rejects the path
+
+#### Scenario: Session artifact path contains a symbolic-link escape
+
+- **GIVEN** a candidate artifact path contains a symbolic-link segment
+- **AND** that segment resolves outside the source session directory
+- **WHEN** the store validates the path
+- **THEN** the store rejects the path and logs the reason
