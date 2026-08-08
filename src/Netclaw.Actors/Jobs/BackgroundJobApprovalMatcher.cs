@@ -3,12 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Security;
-using Netclaw.Tools;
-
-namespace Netclaw.Actors.Jobs;
+using Netclaw.Tools;namespace Netclaw.Actors.Jobs;
 
 /// <summary>
 /// Approval matcher for <see cref="CheckBackgroundJobTool"/>.
@@ -52,10 +49,17 @@ public sealed class BackgroundJobApprovalMatcher : IToolApprovalMatcher
     /// <summary>
     /// Only a cancellation request fails closed. A status query is read-only
     /// and job-scoped, so it must not force interactive approval on Personal.
-    /// A missing or unparsable <c>Cancel</c> value counts as a status query —
-    /// fail toward the read-only path, never toward an approval prompt for a
-    /// query. The tool's own argument binding rejects invalid values before
-    /// execution, so this cannot mask a real cancellation.
+    ///
+    /// Cancellation detection delegates to <see cref="ToolArgumentHelper.GetBoolStrict"/>
+    /// — the same helper the generated tool binding uses to parse the
+    /// <c>Cancel</c> argument. This keeps the approval decision and the
+    /// execution decision aligned by construction: any argument shape the
+    /// binding accepts as a cancellation (case-insensitive/normalized key,
+    /// CLR <c>bool</c>, <c>JsonElement</c>, or string <c>"true"</c>) is
+    /// detected here too, so a real cancel can never slip through as a
+    /// "status query" and auto-allow. A missing/absent value is not a cancel;
+    /// an unparsable value is not a cancel either — the binding rejects those
+    /// before execution, so failing toward the read-only path is safe.
     /// </summary>
     public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
         => IsCancelRequest(arguments);
@@ -87,16 +91,16 @@ public sealed class BackgroundJobApprovalMatcher : IToolApprovalMatcher
         if (arguments is null)
             return false;
 
-        if (!arguments.TryGetValue(CancelArgumentKey, out var value) || value is null)
-            return false;
-
-        return value switch
+        try
         {
-            bool b => b,
-            JsonElement { ValueKind: JsonValueKind.True } => true,
-            JsonElement { ValueKind: JsonValueKind.False } => false,
-            string s => bool.TryParse(s, out var parsed) && parsed,
-            _ => false
-        };
+            // Absent/null → not a cancel. Invalid values throw here; the tool
+            // binding rejects them before execution, so treating them as
+            // non-cancel (read-only path) cannot mask a real cancellation.
+            return ToolArgumentHelper.GetBoolStrict(arguments, CancelArgumentKey) == true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 }

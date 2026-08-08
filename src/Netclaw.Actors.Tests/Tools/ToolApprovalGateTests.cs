@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Jobs;
@@ -100,6 +101,100 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
         var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = true };
+
+        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+    }
+
+    // Cancel-bypass matrix: the matcher must agree with the tool binding's
+    // accepted argument shapes BY CONSTRUCTION (both go through
+    // ToolArgumentHelper.GetBoolStrict). Any shape that parses as a real
+    // cancel must fail closed — otherwise a cancel fires with no approval
+    // prompt (adversarial review finding, HIGH). The second element is the
+    // expected binding result: true → NeedsApproval, false → allowed.
+    public static TheoryData<object?, bool> CancelValueShapes => new()
+    {
+        { true, true },
+        { false, false },
+        { JsonSerializer.SerializeToElement(true), true },
+        { JsonSerializer.SerializeToElement(false), false },
+        { JsonSerializer.SerializeToElement("true"), true },
+        { JsonSerializer.SerializeToElement("false"), false },
+        { "true", true },
+        { "TRUE", true },
+        { "false", false },
+        { (object?)null, false },
+        { "garbage", false },
+        { JsonSerializer.SerializeToElement(42), false },
+        { 42, false }
+    };
+
+    [Theory]
+    [MemberData(nameof(CancelValueShapes))]
+    public void check_background_job_cancel_argument_shapes_match_binding(object? cancelValue, bool bindsAsCancel)
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
+        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = cancelValue };
+
+        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
+
+        if (bindsAsCancel)
+        {
+            Assert.True(decision.NeedsApproval);
+        }
+        else
+        {
+            Assert.True(decision.Allowed);
+            Assert.False(decision.NeedsApproval);
+        }
+    }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("CANCEL")]
+    [InlineData("Cancel ")]
+    [InlineData("c-a-n-c-e-l")]
+    public void check_background_job_cancel_key_variants_fail_closed(string cancelKey)
+    {
+        // Case-insensitive/normalized key variants the binding accepts must
+        // also be detected by the matcher — otherwise a cancel fires ungated.
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
+        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", [cancelKey] = true };
+
+        var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void check_background_job_status_query_honors_explicit_tool_override()
+    {
+        // An operator who explicitly forces Approval for check_background_job
+        // must still get a prompt even for a status query — ToolOverrides wins
+        // over the matcher's fail-open default.
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["check_background_job"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        var tool = new CheckBackgroundJobTool(ActorRefs.Nobody);
+        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = false };
 
         var decision = policy.AuthorizeInvocation(tool, PersonalContext(), args);
 

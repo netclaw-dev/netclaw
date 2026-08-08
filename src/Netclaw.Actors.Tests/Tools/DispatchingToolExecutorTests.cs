@@ -8,14 +8,12 @@ using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
-using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Tests.Tools;
 
@@ -888,87 +886,6 @@ public class DispatchingToolExecutorTests
         finally
         {
             await system.Terminate();
-        }
-    }
-
-    [Fact]
-    public async Task check_background_job_status_query_from_non_interactive_turn_does_not_require_approval()
-    {
-        // Regression: a status query (Cancel=false) is read-only and job-scoped,
-        // so a non-interactive turn (reminder/webhook) must NOT hit the approval
-        // gate — nothing can answer the prompt there, so the session wedges.
-        // Cancel=true stays gated. See BackgroundJobApprovalMatcher.
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-
-        var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
-        try
-        {
-            var fakeJobManager = system.ActorOf(Props.Create(() => new FakeJobStatusManager()), "fake-job-manager");
-            var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
-            registry.WithBackgroundJobTools(fakeJobManager);
-
-            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
-            var executor = new DispatchingToolExecutor(
-                registry,
-                new ToolAccessPolicy(
-                    config,
-                    new EffectivePolicyDefaults(
-                        DeploymentPosture.Personal,
-                        TrustAudience.Personal,
-                        ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false),
-                    new ShellCommandPolicy(),
-                    new ToolPathPolicy([])),
-                approvalService);
-
-            var nonInteractiveContext = TestToolExecutionContext.CreateBound("reminder/exec-1", null, new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Personal,
-                Boundary = TrustBoundary.TrustedInstance,
-                ChannelType = "slack",
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
-            });
-
-            // Status query: must NOT throw ToolApprovalRequiredException.
-            var statusCall = new FunctionCallContent(
-                "call-status",
-                "check_background_job",
-                ToolInput.Create("JobId", "abc123"));
-            _ = await executor.ExecuteAsync(statusCall, nonInteractiveContext, TestContext.Current.CancellationToken);
-
-            // Cancel: a mutation, must still throw ToolApprovalRequiredException.
-            var cancelCall = new FunctionCallContent(
-                "call-cancel",
-                "check_background_job",
-                ToolInput.Create("JobId", "abc123", "Cancel", true));
-            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-                executor.ExecuteAsync(cancelCall, nonInteractiveContext, TestContext.Current.CancellationToken));
-        }
-        finally
-        {
-            await system.Terminate();
-        }
-    }
-
-    private sealed class FakeJobStatusManager : ReceiveActor
-    {
-        public FakeJobStatusManager()
-        {
-            Receive<QueryBackgroundJob>(_ => Sender.Tell(new BackgroundJobStatusResponse
-            {
-                JobId = new BackgroundJobId("abc123"),
-                Status = BackgroundJobStatus.Running,
-                Found = false
-            }));
         }
     }
 
