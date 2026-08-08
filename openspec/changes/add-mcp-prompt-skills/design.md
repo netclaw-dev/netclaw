@@ -158,7 +158,7 @@ The tool executor invokes `skill_load` through the current actor-independent too
 ## Risks / Trade-offs
 
 - [Risk] A session keeps its start-time index after a remote catalog changes. -> A stale load fails visibly, and a new session receives the new index.
-- [Risk] A remote prompt can contain long text. -> The loader will use the existing skill result path and add a bounded result before release.
+- [Risk] A remote prompt can contain long text. -> The shared tool dispatcher will bound and spill the rendered result.
 - [Risk] A prompt can reference tools that the audience cannot use. -> Normal tool discovery and invocation gates remain authoritative.
 - [Risk] A prompt can use non-text content. -> The first slice fails visibly instead of dropping content.
 - [Risk] The prompt and skill registries publish in two lock domains. -> The generation check rejects any short stale window.
