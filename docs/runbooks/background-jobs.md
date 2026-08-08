@@ -82,6 +82,19 @@ is notified** with the log path so the agent can relaunch. Notification volume
 is bounded by design: passivated sessions have no live jobs, so only sessions
 that were warm at crash time appear here.
 
+### Terminal artifact retention
+
+The manager retains each terminal definition and its output directory for 24
+hours after completion. The policy applies to `Completed`, `Failed`,
+`Cancelled`, `TimedOut`, `Lost`, and `Reaped` jobs.
+
+The manager starts an hourly cleanup sweep after startup reconciliation. The
+sweep deletes the output directory before it deletes the definition. A file
+error keeps the definition and lets the next sweep retry the cleanup.
+
+A terminal definition without `CompletedAtMs` is corrupt. The sweep reports
+the problem and retains its artifacts instead of inferring a deletion time.
+
 ## Monitoring
 
 ### Active jobs in context
@@ -110,6 +123,9 @@ check_background_job(JobId: "abc123", Cancel: true)  # cancel
 Returns: status, elapsed time, rationale, exit code (if finished), and the
 live output tail (last 2000 chars, read from the streaming log). Only
 accessible from the same session/audience/boundary that submitted the job.
+
+The tool can query a terminal job during its 24-hour retention window. After
+that window, the tool reports that it cannot find the job.
 
 This tool is only available when shell execution is granted (same `shell` grant
 category as `shell_execute`).

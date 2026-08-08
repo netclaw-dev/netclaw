@@ -71,6 +71,17 @@ public sealed class BackgroundJobDefinitionStore
             return null;
         }
 
+        var expectedFileName = $"{Uri.EscapeDataString(definition.Id.Value)}.json";
+        var actualFileName = Path.GetFileName(path);
+        if (!string.Equals(actualFileName, expectedFileName, StringComparison.Ordinal))
+        {
+            _logger.LogError(
+                "Background job document {Path} has id '{JobId}', which does not match its canonical file name {ExpectedFileName}. "
+                + "The job will not be loaded.",
+                path, definition.Id.Value, expectedFileName);
+            return null;
+        }
+
         return definition;
     }
 
@@ -193,13 +204,6 @@ public sealed class BackgroundJobDefinitionStore
         {
             var removed = false;
 
-            var path = GetPath(id);
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-                removed = true;
-            }
-
             // Reuse the canonical output-log path (same encoding as
             // GetOutputLogPathOnly) so the artifact directory matches exactly
             // what the execution actor wrote.
@@ -216,11 +220,27 @@ public sealed class BackgroundJobDefinitionStore
                 var prefix = root.EndsWith(Path.DirectorySeparatorChar)
                     ? root
                     : root + Path.DirectorySeparatorChar;
-                if (fullDir.StartsWith(prefix, StringComparison.Ordinal) && Directory.Exists(fullDir))
+                if (!fullDir.StartsWith(prefix, StringComparison.Ordinal))
+                    return false;
+
+                if (File.Exists(fullDir))
+                    throw new IOException($"Background job artifact path '{fullDir}' is not a directory.");
+
+                if (Directory.Exists(fullDir))
                 {
                     Directory.Delete(fullDir, recursive: true);
                     removed = true;
                 }
+            }
+
+            // Keep the definition until every output artifact is gone. A later
+            // sweep can retry if the directory delete fails because of a lock,
+            // permissions, or another transient filesystem error.
+            var path = GetPath(id);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                removed = true;
             }
 
             return removed;

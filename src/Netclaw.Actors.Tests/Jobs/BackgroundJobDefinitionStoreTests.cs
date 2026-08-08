@@ -150,6 +150,42 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.False(removed);
     }
 
+    [Fact]
+    public void DeleteJobArtifacts_keeps_definition_when_output_cleanup_fails_then_retries()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var jobId = new BackgroundJobId("cleanup-retry-001");
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = jobId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            TimeoutSeconds = 300,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        var outputLogPath = store.GetOutputLogPathOnly(jobId);
+        var outputDirectory = Path.GetDirectoryName(outputLogPath)!;
+        File.WriteAllText(outputDirectory, "path collision");
+
+        var error = Assert.Throws<IOException>(() => store.DeleteJobArtifacts(jobId));
+
+        Assert.Contains("is not a directory", error.Message);
+        Assert.NotNull(store.Get(jobId));
+        Assert.True(File.Exists(outputDirectory));
+
+        File.Delete(outputDirectory);
+        File.WriteAllText(store.GetOutputLogPath(jobId), "build output");
+
+        Assert.True(store.DeleteJobArtifacts(jobId));
+        Assert.Null(store.Get(jobId));
+        Assert.False(Directory.Exists(outputDirectory));
+    }
+
     /// <summary>
     /// Traversal guard (adversarial review, HIGH): Uri.EscapeDataString does not
     /// escape dots, so a dot-only id must NOT resolve to the jobs directory's
@@ -211,6 +247,39 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.Empty(store.List());
         Assert.Null(store.Get(new BackgroundJobId(unsafeId)));
         Assert.Contains(logger.Errors, e => e.Contains("unsafe id"));
+    }
+
+    [Fact]
+    public void Definition_with_id_that_does_not_match_file_name_is_rejected_at_load()
+    {
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+        var victimId = new BackgroundJobId("victim-job");
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = victimId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            StartedAtMs = 1,
+            CompletedAtMs = 2,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        var victimPath = Path.Combine(_paths.JobsDirectory, $"{Uri.EscapeDataString(victimId.Value)}.json");
+        var aliasPath = Path.Combine(_paths.JobsDirectory, "stale-alias.json");
+        File.Copy(victimPath, aliasPath);
+
+        var loaded = store.List();
+
+        var definition = Assert.Single(loaded);
+        Assert.Equal(victimId, definition.Id);
+        Assert.Null(store.Get(new BackgroundJobId("stale-alias")));
+        Assert.Contains(logger.Errors, error =>
+            error.Contains("does not match its canonical file name", StringComparison.Ordinal));
     }
 
     /// <summary>

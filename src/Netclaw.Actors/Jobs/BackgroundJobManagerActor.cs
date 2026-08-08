@@ -387,22 +387,39 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
             if (_activeJobIds.Contains(def.Id.Value))
                 continue;
 
-            // Terminal jobs always carry CompletedAtMs from the manager's own
-            // transitions, but a corrupt/legacy file can have terminal status
-            // with a null completion time — fall back to StartedAtMs so that
-            // class still gets swept instead of leaking forever. StartedAtMs is
-            // always present (set at submission), so the fallback is total.
-            var completedAtMs = def.CompletedAtMs ?? def.StartedAtMs;
+            // Every manager-owned terminal transition writes CompletedAtMs. A
+            // missing value is corrupt state, so do not infer a completion time
+            // and risk deletion before the full retention window has elapsed.
+            if (def.CompletedAtMs is not { } completedAtMs)
+            {
+                _log.Warning(
+                    "Cannot sweep terminal background job {JobId} with status {Status}: completion timestamp is missing",
+                    def.Id, def.Status);
+                continue;
+            }
+
             if (completedAtMs > cutoffMs)
                 continue;
 
-            if (_store.DeleteJobArtifacts(def.Id))
+            try
             {
-                _definitions.Remove(def.Id.Value);
-                swept++;
-                _log.Info(
-                    "Swept terminal background job {JobId} (status={Status}, completed_at={CompletedAtMs}) past retention window",
-                    def.Id, def.Status, def.CompletedAtMs);
+                if (_store.DeleteJobArtifacts(def.Id))
+                {
+                    _definitions.Remove(def.Id.Value);
+                    swept++;
+                    _log.Info(
+                        "Swept terminal background job {JobId} (status={Status}, completed_at={CompletedAtMs}) past retention window",
+                        def.Id, def.Status, def.CompletedAtMs);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Keep the definition so the next periodic sweep can retry the
+                // cleanup. One filesystem failure must not stop the manager or
+                // prevent cleanup of other terminal jobs.
+                _log.Warning(
+                    "Failed to sweep terminal background job {JobId}; cleanup will retry: {Error}",
+                    def.Id, ex.Message);
             }
         }
 

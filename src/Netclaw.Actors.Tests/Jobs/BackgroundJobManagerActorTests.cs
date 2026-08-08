@@ -49,6 +49,16 @@ public class BackgroundJobManagerActorTests : TestKit
 
     private IActorRef GetManager() => ActorRegistry.For(Sys).Get<BackgroundJobManagerActorKey>();
 
+    private async Task<BackgroundJobManagerHealthResponse> RunTerminalSweepAsync(IActorRef manager)
+    {
+        // Both messages use the same sender, so the health response is a strict
+        // mailbox barrier after the sweep.
+        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance, TestActor);
+        manager.Tell(GetBackgroundJobManagerHealth.Instance, TestActor);
+        return await ExpectMsgAsync<BackgroundJobManagerHealthResponse>(
+            TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     private BackgroundJobDefinition MakeTerminalDefinition(string jobId, BackgroundJobStatus status, long completedAtMs) => new()
     {
         Id = new BackgroundJobId(jobId),
@@ -324,7 +334,8 @@ public class BackgroundJobManagerActorTests : TestKit
 
     [Fact]
     public async Task StartupReconciliation_EmitsAlert_ForLegacyJobMissingTrustFields()
-    {        var paths = new NetclawPaths(_dir.Path);
+    {
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
 
         const string jobId = "legacy-job-alert";
@@ -390,13 +401,7 @@ public class BackgroundJobManagerActorTests : TestKit
 
         _store.Save(MakeTerminalDefinition("sweep-past", BackgroundJobStatus.Completed, pastWindowMs));
 
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await RunTerminalSweepAsync(manager);
 
         Assert.Null(_store.Get(new BackgroundJobId("sweep-past")));
     }
@@ -409,10 +414,7 @@ public class BackgroundJobManagerActorTests : TestKit
 
         _store.Save(MakeTerminalDefinition("sweep-recent", BackgroundJobStatus.Completed, recentMs));
 
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await RunTerminalSweepAsync(manager);
 
         Assert.NotNull(_store.Get(new BackgroundJobId("sweep-recent")));
     }
@@ -431,10 +433,7 @@ public class BackgroundJobManagerActorTests : TestKit
         _store.Save(MakeTerminalDefinition("sweep-running", BackgroundJobStatus.Running, pastWindowMs));
         _store.Save(MakeTerminalDefinition("sweep-pending", BackgroundJobStatus.Pending, pastWindowMs));
 
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await RunTerminalSweepAsync(manager);
 
         Assert.NotNull(_store.Get(new BackgroundJobId("sweep-running")));
         Assert.NotNull(_store.Get(new BackgroundJobId("sweep-pending")));
@@ -455,10 +454,7 @@ public class BackgroundJobManagerActorTests : TestKit
 
         _store.Save(MakeTerminalDefinition("sweep-log", BackgroundJobStatus.Failed, pastWindowMs));
 
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await RunTerminalSweepAsync(manager);
 
         Assert.Null(_store.Get(jobId));
         Assert.False(File.Exists(outputLogPath));
@@ -466,11 +462,60 @@ public class BackgroundJobManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task TerminalSweep_SweepsTerminalJobWithNullCompletedAtMs_UsingStartedAtFallback()
+    public async Task TerminalSweep_CleanupFailureDoesNotRestartManagerAndLaterSweepRetries()
     {
-        // Adversarial review, MED: a terminal-status definition with null
-        // CompletedAtMs must still be swept once its StartedAtMs is past the
-        // window — otherwise it leaks forever (the exact bug this PR fixes).
+        var manager = GetManager();
+        var pastWindowMs = TimeProvider.System.GetUtcNow()
+            .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
+            .Subtract(TimeSpan.FromMinutes(1))
+            .ToUnixTimeMilliseconds();
+        var blocked = MakeTerminalDefinition("sweep-blocked", BackgroundJobStatus.Failed, pastWindowMs);
+        var removable = MakeTerminalDefinition("sweep-removable", BackgroundJobStatus.Completed, pastWindowMs);
+        _store.Save(blocked);
+        _store.Save(removable);
+
+        var blockedOutputPath = _store.GetOutputLogPathOnly(blocked.Id);
+        var blockedOutputDirectory = Path.GetDirectoryName(blockedOutputPath)!;
+        File.WriteAllText(blockedOutputDirectory, "path collision");
+        File.WriteAllText(_store.GetOutputLogPath(removable.Id), "completed output");
+
+        var active = await manager.Ask<BackgroundJobStarted>(
+            MakeStartCommand("sleep 60"),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var health = await RunTerminalSweepAsync(manager);
+
+            Assert.Equal(1, health.ActiveJobCount);
+            Assert.NotNull(_store.Get(blocked.Id));
+            Assert.Null(_store.Get(removable.Id));
+
+            File.Delete(blockedOutputDirectory);
+            await RunTerminalSweepAsync(manager);
+
+            Assert.Null(_store.Get(blocked.Id));
+        }
+        finally
+        {
+            if (File.Exists(blockedOutputDirectory))
+                File.Delete(blockedOutputDirectory);
+
+            await manager.Ask<BackgroundJobCancelResponse>(
+                new CancelBackgroundJob(
+                    active.JobId,
+                    new SessionId("test/thread"),
+                    TrustAudience.Personal,
+                    TrustBoundary.Personal),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task TerminalSweep_KeepsTerminalJobWithMissingCompletionTime()
+    {
         var manager = GetManager();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
@@ -480,32 +525,12 @@ public class BackgroundJobManagerActorTests : TestKit
         var def = MakeTerminalDefinition("sweep-null-completed", BackgroundJobStatus.Failed, pastWindowMs);
         def = def with { CompletedAtMs = null };
         _store.Save(def);
+        var outputLogPath = _store.GetOutputLogPath(def.Id);
+        File.WriteAllText(outputLogPath, "diagnostic output");
 
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await RunTerminalSweepAsync(manager);
 
-        Assert.Null(_store.Get(new BackgroundJobId("sweep-null-completed")));
-    }
-
-    [Fact]
-    public async Task TerminalSweep_KeepsTerminalJobWithNullCompletedAtMs_WhenStartedAtRecent()
-    {
-        // A terminal job with null CompletedAtMs but a RECENT StartedAtMs must
-        // survive the sweep — the StartedAt fallback must not over-delete.
-        var manager = GetManager();
-        var recentMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
-
-        var def = MakeTerminalDefinition("sweep-null-recent", BackgroundJobStatus.Failed, recentMs);
-        def = def with { CompletedAtMs = null };
-        _store.Save(def);
-
-        manager.Tell(BackgroundJobManagerActor.SweepTerminalJobs.Instance);
-        await manager.Ask<BackgroundJobManagerHealthResponse>(
-            GetBackgroundJobManagerHealth.Instance,
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-
-        Assert.NotNull(_store.Get(new BackgroundJobId("sweep-null-recent")));
+        Assert.NotNull(_store.Get(def.Id));
+        Assert.True(File.Exists(outputLogPath));
     }
 }
