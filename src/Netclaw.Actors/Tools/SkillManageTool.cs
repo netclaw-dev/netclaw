@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillManageTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -437,6 +437,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private string? GuardReadOnly(SkillEntry skill, string verb)
     {
+        if (skill.Source is not FileSkillSource)
+            return $"Cannot {verb} remote skills. The source server owns this skill.";
         if (IsSystemCategory(skill))
             return $"Cannot {verb} system skills. System skills are read-only.";
         if (IsServerFeedSkill(skill))

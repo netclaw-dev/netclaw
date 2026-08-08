@@ -19,6 +19,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -26,10 +27,14 @@ using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
 
-internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker, IMcpReconnectable
+internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker, IMcpReconnectable,
+    IMcpPromptSkillLoader
 {
     private readonly Dictionary<string, McpServerEntry> _serverEntries;
     private readonly ToolRegistry _toolRegistry;
+    private readonly SkillRegistry _skillRegistry;
+    private readonly SkillIndexPublisher _skillIndexPublisher;
+    private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly ToolConfig _toolConfig;
     private readonly McpOAuthCredentialStore _credentialStore;
     private readonly McpOAuthClientRegistrar _registrar;
@@ -65,6 +70,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry toolRegistry,
+        SkillRegistry skillRegistry,
+        SkillIndexPublisher skillIndexPublisher,
+        ToolAccessPolicy toolAccessPolicy,
         ToolConfig toolConfig,
         McpOAuthCredentialStore credentialStore,
         McpOAuthClientRegistrar registrar,
@@ -78,6 +86,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         _serverEntries = serverEntries;
         _toolRegistry = toolRegistry;
+        _skillRegistry = skillRegistry;
+        _skillIndexPublisher = skillIndexPublisher;
+        _toolAccessPolicy = toolAccessPolicy;
         _toolConfig = toolConfig;
         _credentialStore = credentialStore;
         _registrar = registrar;
@@ -266,6 +277,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             var tools = await _clientRuntime.ListToolsAsync(current.Client!, ct);
             var functions = CreateFunctionMap(tools);
+            var prompts = await _clientRuntime.ListPromptsAsync(current.Client!, ct);
+            var promptDescriptors = CreatePromptMap(prompts);
 
             // A server that was serving tools now reports none. Publishing an empty
             // catalog would wipe the model-visible index, and the server is still
@@ -283,7 +296,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return false;
             }
 
-            var fingerprint = ComputeCatalogFingerprint(functions.Values);
+            var fingerprint = ComputeCatalogFingerprint(functions.Values, promptDescriptors.Values);
             if (string.Equals(fingerprint, current.CatalogFingerprint, StringComparison.Ordinal))
                 return false;
 
@@ -306,6 +319,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 replacement = current with
                 {
                     ToolFunctions = functions,
+                    PromptDescriptors = promptDescriptors,
                     Generation = checked(current.Generation + 1),
                     Status = new McpServerStatus(
                         current.Name,
@@ -318,13 +332,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 // Connection first, tools second — same ordering as the connect path.
                 lifecycle.Publish(replacement);
                 _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
+                PublishPromptSkills(replacement);
             }
 
             _logger.LogInformation(
-                "MCP server '{Name}' catalog refreshed as generation {Generation} ({ToolCount} tools)",
+                "MCP server '{Name}' catalog refreshed as generation {Generation} ({ToolCount} tools, {PromptCount} prompts)",
                 current.Name.Value,
                 replacement.Generation,
-                functions.Count);
+                functions.Count,
+                promptDescriptors.Count);
             return true;
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
@@ -386,6 +402,101 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var server = new McpServerName(serverName);
         var tool = new ToolName(toolName);
         return await InvokeSharedAsync(server, tool, arguments, ct);
+    }
+
+    public async ValueTask<McpPromptSkillLoadResult> LoadAsync(
+        McpPromptSkillSource source,
+        IReadOnlyDictionary<string, string>? arguments,
+        ToolInvocationContext context,
+        CancellationToken cancellationToken)
+    {
+        var serverName = new McpServerName(source.ServerName);
+        if (!_toolAccessPolicy.IsMcpServerExposed(serverName, context.Audience))
+            return McpPromptSkillLoadResult.Failed("Error: This skill is not available.");
+
+        var snapshot = TryGetConnectedSnapshot(serverName);
+        if (snapshot is null)
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt skill '{source.PromptName}' is unavailable because server '{source.ServerName}' is not connected.");
+        }
+
+        if (snapshot.Generation != source.Generation)
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt skill '{source.PromptName}' references stale generation {source.Generation}. " +
+                $"Server '{source.ServerName}' now uses generation {snapshot.Generation}.");
+        }
+
+        if (!snapshot.PromptDescriptors.TryGetValue(source.PromptName, out var descriptor))
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt '{source.PromptName}' is not present in server generation {source.Generation}.");
+        }
+
+        var suppliedArguments = arguments ?? new Dictionary<string, string>();
+        var knownArguments = new HashSet<string>(
+            descriptor.Arguments.Select(static argument => argument.Name),
+            StringComparer.Ordinal);
+        var unknownArguments = suppliedArguments.Keys
+            .Where(argument => !knownArguments.Contains(argument))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (unknownArguments.Length > 0)
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt '{source.PromptName}' received unknown argument(s): {string.Join(", ", unknownArguments)}.");
+        }
+
+        var missingArguments = descriptor.Arguments
+            .Where(static argument => argument.Required)
+            .Where(argument => !suppliedArguments.ContainsKey(argument.Name))
+            .Select(static argument => argument.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (missingArguments.Length > 0)
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt '{source.PromptName}' requires argument(s): {string.Join(", ", missingArguments)}.");
+        }
+
+        GetPromptResult result;
+        try
+        {
+            result = await _clientRuntime.GetPromptAsync(
+                snapshot.Client!,
+                source.PromptName,
+                suppliedArguments,
+                cancellationToken);
+        }
+        catch (McpException ex) when (!IsTransportOrSessionFailure(ex))
+        {
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt '{source.PromptName}' failed: {ex.Message}");
+        }
+        catch (Exception ex) when (IsTransportOrSessionFailure(ex))
+        {
+            await ReconnectAfterTransportFailureAsync(serverName, snapshot, ex);
+            return McpPromptSkillLoadResult.Failed(
+                $"MCP prompt '{source.PromptName}' failed because the server connection closed. " +
+                "Netclaw reconnected for later calls but did not replay this request.");
+        }
+
+        var messages = new List<McpPromptSkillMessage>(result.Messages.Count);
+        foreach (var message in result.Messages)
+        {
+            if (message.Content is not TextContentBlock text)
+            {
+                return McpPromptSkillLoadResult.Failed(
+                    $"MCP prompt '{source.PromptName}' returned unsupported content type '{message.Content.Type}'.");
+            }
+
+            messages.Add(new McpPromptSkillMessage(
+                message.Role.ToString().ToLowerInvariant(),
+                text.Text));
+        }
+
+        return McpPromptSkillLoadResult.Loaded(result.Description, messages);
     }
 
     private async Task<string> InvokeSharedAsync(
@@ -556,7 +667,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var initialization = await _clientRuntime.InitializeAsync(candidate, ct);
             var tools = initialization.Tools;
             var functions = CreateFunctionMap(tools);
-            var catalogFingerprint = ComputeCatalogFingerprint(functions.Values);
+            var promptDescriptors = CreatePromptMap(initialization.Prompts);
+            var catalogFingerprint = ComputeCatalogFingerprint(functions.Values, promptDescriptors.Values);
             var publishedTools = ToolRegistrationExtensions.PrepareMcpTools(
                 current.Name.Value,
                 tools,
@@ -598,6 +710,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     current.Name,
                     candidate,
                     functions,
+                    promptDescriptors,
                     checked(current.Generation + 1),
                     connectedStatus,
                     catalogFingerprint);
@@ -605,6 +718,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 // dispatchable, because dispatch resolves it from this snapshot.
                 lifecycle.Publish(replacement);
                 _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
+                PublishPromptSkills(replacement);
                 // The connect path just listed the catalog; skip the next poll window.
                 lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
                 candidate = null;
@@ -614,10 +728,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             if (current.Client is not null)
                 await DisposeReplacedAsync(current.Name, current.Client);
             _logger.LogInformation(
-                "MCP server '{Name}' connected as generation {Generation} ({ToolCount} tools)",
+                "MCP server '{Name}' connected as generation {Generation} ({ToolCount} tools, {PromptCount} prompts)",
                 current.Name.Value,
                 replacement.Generation,
-                tools.Count);
+                tools.Count,
+                promptDescriptors.Count);
             if (authorizationFlow is not null)
                 _flowBroker.Complete(authorizationFlow);
             return true;
@@ -784,6 +899,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // Tools first, connection second. The model stops seeing the server's tools
             // before dispatch loses the snapshot that resolves them.
             _toolRegistry.PublishMcpServerTools(serverName.Value, []);
+            _skillRegistry.PublishMcpPromptSkills(serverName.Value, []);
+            _skillIndexPublisher.Publish();
             lifecycle.Publish(null);
 
             if (client is null)
@@ -1374,6 +1491,69 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new ReadOnlyDictionary<string, AIFunction>(map);
     }
 
+    internal static IReadOnlyDictionary<string, McpPromptDescriptor> CreatePromptMap(
+        IReadOnlyList<Prompt> prompts)
+    {
+        var map = new Dictionary<string, McpPromptDescriptor>(StringComparer.OrdinalIgnoreCase);
+        foreach (var prompt in prompts)
+        {
+            var arguments = prompt.Arguments?
+                .Select(static argument => new SkillArgumentDescriptor(
+                    argument.Name,
+                    argument.Description,
+                    argument.Required is true))
+                .ToArray() ?? [];
+            map[prompt.Name] = new McpPromptDescriptor(
+                prompt.Name,
+                prompt.Title,
+                prompt.Description,
+                arguments);
+        }
+
+        return new ReadOnlyDictionary<string, McpPromptDescriptor>(map);
+    }
+
+    private void PublishPromptSkills(McpServerSnapshot snapshot)
+    {
+        var skills = snapshot.PromptDescriptors.Values
+            .OrderBy(static prompt => prompt.Name, StringComparer.Ordinal)
+            .Select(prompt => new SkillEntry(
+                $"mcp__{snapshot.Name.Value}__{prompt.Name}".ToLowerInvariant(),
+                prompt.Title ?? prompt.Name,
+                prompt.Description ?? $"Load the '{prompt.Name}' workflow from MCP server '{snapshot.Name.Value}'.",
+                new McpPromptSkillSource(
+                    snapshot.Name.Value,
+                    prompt.Name,
+                    snapshot.Generation,
+                    prompt.Arguments),
+                "mcp")
+            {
+                UserInvocable = false,
+                ArgumentHint = BuildArgumentHint(prompt.Arguments),
+            })
+            .ToArray();
+
+        var conflicts = _skillRegistry.PublishMcpPromptSkills(snapshot.Name.Value, skills);
+        foreach (var conflict in conflicts)
+        {
+            _logger.LogWarning(
+                "MCP prompt skill '{SkillName}' from server '{ServerName}' conflicts with a file skill; keeping the file skill",
+                conflict,
+                snapshot.Name.Value);
+        }
+
+        _skillIndexPublisher.Publish();
+    }
+
+    private static string? BuildArgumentHint(IReadOnlyList<SkillArgumentDescriptor> arguments)
+    {
+        if (arguments.Count == 0)
+            return null;
+
+        return string.Join(" ", arguments.Select(static argument =>
+            argument.Required ? $"<{argument.Name}>" : $"[{argument.Name}]"));
+    }
+
     /// <summary>
     /// Computes a content checksum over the model-visible surface of a server's tool
     /// catalog: name, description, input schema, and return schema of every tool.
@@ -1383,14 +1563,34 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// rename, or schema edit changes the checksum.
     /// </summary>
     internal static string ComputeCatalogFingerprint(IEnumerable<AIFunction> tools)
+        => ComputeCatalogFingerprint(tools, []);
+
+    internal static string ComputeCatalogFingerprint(
+        IEnumerable<AIFunction> tools,
+        IEnumerable<McpPromptDescriptor> prompts)
     {
         using var stream = new MemoryStream();
         foreach (var tool in tools.OrderBy(t => t.Name, StringComparer.Ordinal))
         {
+            WriteField(stream, "tool");
             WriteField(stream, tool.Name);
             WriteField(stream, tool.Description ?? string.Empty);
             WriteField(stream, CanonicalSchema(tool.JsonSchema));
             WriteField(stream, tool.ReturnJsonSchema is { } returnSchema ? CanonicalSchema(returnSchema) : string.Empty);
+        }
+
+        foreach (var prompt in prompts.OrderBy(static prompt => prompt.Name, StringComparer.Ordinal))
+        {
+            WriteField(stream, "prompt");
+            WriteField(stream, prompt.Name);
+            WriteField(stream, prompt.Title ?? string.Empty);
+            WriteField(stream, prompt.Description ?? string.Empty);
+            foreach (var argument in prompt.Arguments.OrderBy(static argument => argument.Name, StringComparer.Ordinal))
+            {
+                WriteField(stream, argument.Name);
+                WriteField(stream, argument.Description ?? string.Empty);
+                WriteField(stream, argument.Required ? "required" : "optional");
+            }
         }
 
         return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
@@ -1490,6 +1690,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             foreach (var (serverName, lifecycle) in _servers)
             {
                 _toolRegistry.PublishMcpServerTools(serverName.Value, []);
+                _skillRegistry.PublishMcpPromptSkills(serverName.Value, []);
+                _skillIndexPublisher.Publish();
                 lifecycle.Publish(null);
             }
         }
@@ -1520,6 +1722,16 @@ internal interface IMcpClientRuntime
         McpClient client,
         CancellationToken cancellationToken);
 
+    ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+        McpClient client,
+        CancellationToken cancellationToken);
+
+    ValueTask<GetPromptResult> GetPromptAsync(
+        McpClient client,
+        string promptName,
+        IReadOnlyDictionary<string, string> arguments,
+        CancellationToken cancellationToken);
+
     ValueTask<object?> InvokeAsync(
         AIFunction function,
         AIFunctionArguments? arguments,
@@ -1541,15 +1753,43 @@ internal sealed class McpClientRuntime : IMcpClientRuntime
         CancellationToken cancellationToken)
     {
         var tools = await ListToolsAsync(client, cancellationToken);
-        return new McpClientInitialization(tools);
+        var prompts = await ListPromptsAsync(client, cancellationToken);
+        return new McpClientInitialization(tools, prompts);
     }
 
     public async ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
         McpClient client,
         CancellationToken cancellationToken)
     {
+        if (client.ServerCapabilities.Tools is null)
+            return [];
+
         var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
         return tools.Cast<AIFunction>().ToList();
+    }
+
+    public async ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+        McpClient client,
+        CancellationToken cancellationToken)
+    {
+        if (client.ServerCapabilities.Prompts is null)
+            return [];
+
+        var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
+        return prompts.Select(static prompt => prompt.ProtocolPrompt).ToList();
+    }
+
+    public ValueTask<GetPromptResult> GetPromptAsync(
+        McpClient client,
+        string promptName,
+        IReadOnlyDictionary<string, string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var values = arguments.ToDictionary(
+            static pair => pair.Key,
+            static pair => (object?)pair.Value,
+            StringComparer.Ordinal);
+        return client.GetPromptAsync(promptName, values, cancellationToken: cancellationToken);
     }
 
     public ValueTask<object?> InvokeAsync(
@@ -1562,7 +1802,8 @@ internal sealed class McpClientRuntime : IMcpClientRuntime
 }
 
 internal sealed record McpClientInitialization(
-    IReadOnlyList<AIFunction> Tools);
+    IReadOnlyList<AIFunction> Tools,
+    IReadOnlyList<Prompt> Prompts);
 
 internal sealed record McpClientCandidate(
     McpClient Client,
@@ -1606,19 +1847,28 @@ internal sealed record McpServerSnapshot(
     McpServerName Name,
     McpClient? Client,
     IReadOnlyDictionary<string, AIFunction> ToolFunctions,
+    IReadOnlyDictionary<string, McpPromptDescriptor> PromptDescriptors,
     long Generation,
     McpServerStatus Status,
     string CatalogFingerprint = "")
 {
     private static readonly IReadOnlyDictionary<string, AIFunction> EmptyFunctions =
         new ReadOnlyDictionary<string, AIFunction>(new Dictionary<string, AIFunction>());
+    private static readonly IReadOnlyDictionary<string, McpPromptDescriptor> EmptyPrompts =
+        new ReadOnlyDictionary<string, McpPromptDescriptor>(new Dictionary<string, McpPromptDescriptor>());
 
     public bool IsConnected
         => Client is not null && Status.State is McpConnectionState.Connected;
 
     public static McpServerSnapshot WithoutConnection(McpServerStatus status, long generation = 0)
-        => new(status.Name, null, EmptyFunctions, generation, status);
+        => new(status.Name, null, EmptyFunctions, EmptyPrompts, generation, status);
 }
+
+internal sealed record McpPromptDescriptor(
+    string Name,
+    string? Title,
+    string? Description,
+    IReadOnlyList<SkillArgumentDescriptor> Arguments);
 
 internal enum McpConnectionState
 {

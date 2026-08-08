@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillEntry.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -15,10 +15,24 @@ public sealed record SkillEntry(
     string Name,            // skill name, e.g. "git-workflow"
     string DisplayName,     // from first # heading, or titlecased name
     string Description,     // from YAML frontmatter description field
-    string FilePath,        // absolute path to SKILL.md
-    string SkillDirectory,  // absolute path to the skill directory
+    SkillSource Source,     // file or remote prompt content source
     string? Category)       // parent subdirectory name, or null if in root
 {
+    public SkillEntry(
+        string Name,
+        string DisplayName,
+        string Description,
+        string FilePath,
+        string SkillDirectory,
+        string? Category)
+        : this(Name, DisplayName, Description, new FileSkillSource(FilePath, SkillDirectory), Category)
+    {
+    }
+
+    public string FilePath => GetFileSource().FilePath;
+
+    public string SkillDirectory => GetFileSource().SkillDirectory;
+
     /// <summary>
     /// Skill version from YAML frontmatter <c>metadata.version</c>.
     /// </summary>
@@ -92,4 +106,22 @@ public sealed record SkillEntry(
     /// </summary>
     public string? SubagentMetadataError { get; init; }
 
+    private FileSkillSource GetFileSource()
+        => Source as FileSkillSource
+           ?? throw new InvalidOperationException($"Skill '{Name}' is not file-backed.");
 }
+
+public abstract record SkillSource;
+
+public sealed record FileSkillSource(string FilePath, string SkillDirectory) : SkillSource;
+
+public sealed record McpPromptSkillSource(
+    string ServerName,
+    string PromptName,
+    long Generation,
+    IReadOnlyList<SkillArgumentDescriptor> Arguments) : SkillSource;
+
+public sealed record SkillArgumentDescriptor(
+    string Name,
+    string? Description,
+    bool Required);

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolRegistrationExtensions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -68,6 +68,7 @@ public static class ToolRegistrationExtensions
         SkillRegistry skillRegistry,
         NetclawPaths paths,
         ISkillContentScanner scanner,
+        IMcpPromptSkillLoader mcpPromptLoader,
         SkillInventoryRefresher inventoryRefresher,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
@@ -79,6 +80,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new SkillLoadTool(
             skillRegistry,
             scanner,
+            mcpPromptLoader,
             sessionMetrics,
             subAgentRegistry,
             subAgentSpawner,

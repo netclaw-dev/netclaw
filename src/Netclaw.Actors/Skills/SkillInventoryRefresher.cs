@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillInventoryRefresher.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -18,20 +18,20 @@ public sealed class SkillInventoryRefresher
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
     private readonly SkillRegistry _registry;
-    private readonly SkillIndexContextLayer _indexLayer;
+    private readonly SkillIndexPublisher _indexPublisher;
 
     public SkillInventoryRefresher(
         NetclawPaths paths,
         SkillFeedsConfig feedsConfig,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         SkillRegistry registry,
-        SkillIndexContextLayer indexLayer)
+        SkillIndexPublisher indexPublisher)
     {
         _paths = paths;
         _feedsConfig = feedsConfig;
         _externalSources = externalSources;
         _registry = registry;
-        _indexLayer = indexLayer;
+        _indexPublisher = indexPublisher;
     }
 
     public MergedSkillScanResult Refresh()
@@ -44,7 +44,7 @@ public sealed class SkillInventoryRefresher
                 _externalSources);
 
             _registry.ReplaceAll(result.AcceptedSkills, result.Issues);
-            _indexLayer.Update(_registry.GenerateIndex());
+            _indexPublisher.Publish();
             return result;
         }
     }

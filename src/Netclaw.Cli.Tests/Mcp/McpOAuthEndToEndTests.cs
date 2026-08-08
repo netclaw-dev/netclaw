@@ -14,6 +14,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
@@ -21,6 +23,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Security;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -50,10 +53,26 @@ public sealed class McpOAuthEndToEndTests : IDisposable
             new NullSecretsProtector(),
             new RecordingLogger<McpOAuthCredentialStore>());
         using var broker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var toolConfig = new ToolConfig();
+        var skillRegistry = new SkillRegistry();
+        var skillIndex = new SkillIndexContextLayer();
+        var toolAccessPolicy = new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+        var skillIndexPublisher = new SkillIndexPublisher(skillRegistry, skillIndex, toolAccessPolicy);
         var manager = new McpClientManager(
             servers,
             new ToolRegistry(),
-            new ToolConfig(),
+            skillRegistry,
+            skillIndexPublisher,
+            toolAccessPolicy,
+            toolConfig,
             credentials,
             new McpOAuthClientRegistrar(
                 new HttpClient(new BodylessDcrHandler()) { BaseAddress = new Uri("https://oauth.test") },
@@ -132,7 +151,8 @@ public sealed class McpOAuthEndToEndTests : IDisposable
             CancellationToken cancellationToken)
         {
             var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-            return new McpClientInitialization(tools.Cast<AIFunction>().ToList());
+            var prompts = await ListPromptsAsync(client, cancellationToken);
+            return new McpClientInitialization(tools.Cast<AIFunction>().ToList(), prompts);
         }
 
         public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
@@ -146,6 +166,30 @@ public sealed class McpOAuthEndToEndTests : IDisposable
         {
             var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
             return tools.Cast<AIFunction>().ToList();
+        }
+
+        public async ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            if (client.ServerCapabilities.Prompts is null)
+                return [];
+
+            var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
+            return prompts.Select(static prompt => prompt.ProtocolPrompt).ToList();
+        }
+
+        public ValueTask<GetPromptResult> GetPromptAsync(
+            McpClient client,
+            string promptName,
+            IReadOnlyDictionary<string, string> arguments,
+            CancellationToken cancellationToken)
+        {
+            var values = arguments.ToDictionary(
+                static pair => pair.Key,
+                static pair => (object?)pair.Value,
+                StringComparer.Ordinal);
+            return client.GetPromptAsync(promptName, values, cancellationToken: cancellationToken);
         }
 
         public ValueTask<object?> InvokeAsync(

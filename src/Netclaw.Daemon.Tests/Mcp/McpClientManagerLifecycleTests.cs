@@ -12,6 +12,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -514,6 +516,9 @@ public sealed class McpClientManagerLifecycleTests
                 NullLogger<McpOAuthCredentialStore>.Instance);
             _flowBroker = new McpOAuthFlowBroker(timeProvider, CancellationToken.None);
             Registry = new ToolRegistry();
+            var dependencies = McpManagerTestDependencies.Create();
+            SkillRegistry = dependencies.SkillRegistry;
+            SkillIndex = dependencies.SkillIndex;
             Logger = new RecordingLogger<McpClientManager>();
             Manager = new McpClientManager(
                 new Dictionary<string, McpServerEntry>
@@ -526,7 +531,10 @@ public sealed class McpClientManagerLifecycleTests
                     },
                 },
                 Registry,
-                new ToolConfig(),
+                dependencies.SkillRegistry,
+                dependencies.SkillIndexPublisher,
+                dependencies.ToolAccessPolicy,
+                dependencies.ToolConfig,
                 credentials,
                 McpOAuthTestDoubles.UnusedRegistrar(),
                 _flowBroker,
@@ -541,6 +549,10 @@ public sealed class McpClientManagerLifecycleTests
         public McpClientManager Manager { get; }
 
         public ToolRegistry Registry { get; }
+
+        public SkillRegistry SkillRegistry { get; }
+
+        public SkillIndexContextLayer SkillIndex { get; }
 
         public RecordingLogger<McpClientManager> Logger { get; }
 
@@ -606,7 +618,7 @@ public sealed class McpClientManagerLifecycleTests
                 await plan.Initialize(cancellationToken);
 
             var functions = BuildFunctions(plan);
-            return new McpClientInitialization(functions.Values.ToList());
+            return new McpClientInitialization(functions.Values.ToList(), plan.Prompts);
         }
 
         public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
@@ -618,6 +630,32 @@ public sealed class McpClientManagerLifecycleTests
             if (plan.ListFailure is not null)
                 return ValueTask.FromException<IReadOnlyList<AIFunction>>(plan.ListFailure);
             return ValueTask.FromResult<IReadOnlyList<AIFunction>>(BuildFunctions(plan).Values.ToList());
+        }
+
+        public ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.PromptRefreshCountStorage);
+            if (plan.PromptListFailure is not null)
+                return ValueTask.FromException<IReadOnlyList<Prompt>>(plan.PromptListFailure);
+            return ValueTask.FromResult<IReadOnlyList<Prompt>>(plan.Prompts);
+        }
+
+        public ValueTask<GetPromptResult> GetPromptAsync(
+            McpClient client,
+            string promptName,
+            IReadOnlyDictionary<string, string> arguments,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            plan.LastPromptName = promptName;
+            plan.LastPromptArguments = new Dictionary<string, string>(arguments, StringComparer.Ordinal);
+            return plan.GetPromptResult is null
+                ? ValueTask.FromException<GetPromptResult>(
+                    new InvalidOperationException("The controlled prompt result is not configured."))
+                : ValueTask.FromResult(plan.GetPromptResult);
         }
 
         private IReadOnlyDictionary<string, AIFunction> BuildFunctions(ClientPlan plan)
@@ -660,6 +698,10 @@ public sealed class McpClientManagerLifecycleTests
     {
         public string[] ToolNames { get; set; } = toolNames;
 
+        public IReadOnlyList<Prompt> Prompts { get; set; } = [];
+
+        public GetPromptResult? GetPromptResult { get; set; }
+
         public Func<CancellationToken, Task>? Initialize { get; init; }
 
         public Func<int, CancellationToken, Task<object?>>? Invoke { get; init; }
@@ -667,6 +709,12 @@ public sealed class McpClientManagerLifecycleTests
         public Exception? DisposeFailure { get; init; }
 
         public Exception? ListFailure { get; set; }
+
+        public Exception? PromptListFailure { get; set; }
+
+        public string? LastPromptName { get; set; }
+
+        public IReadOnlyDictionary<string, string>? LastPromptArguments { get; set; }
 
         public TaskCompletionSource Created { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -682,11 +730,15 @@ public sealed class McpClientManagerLifecycleTests
 
         public int RefreshCountStorage;
 
+        public int PromptRefreshCountStorage;
+
         public int InvocationCount => Volatile.Read(ref InvocationCountStorage);
 
         public int DisposeCount => Volatile.Read(ref DisposeCountStorage);
 
         public int RefreshCount => Volatile.Read(ref RefreshCountStorage);
+
+        public int PromptRefreshCount => Volatile.Read(ref PromptRefreshCountStorage);
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink

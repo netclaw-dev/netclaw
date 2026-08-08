@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SystemSkillSyncServiceTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -575,7 +575,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         new SkillFeedsConfig(),
         [],
         _skillRegistry,
-        _skillIndexLayer);
+        new SkillIndexPublisher(_skillRegistry, _skillIndexLayer, static (_, _) => true));
 
     private SkillSyncState ReadSyncState()
     {

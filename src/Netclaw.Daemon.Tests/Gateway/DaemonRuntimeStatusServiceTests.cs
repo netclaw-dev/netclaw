@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonRuntimeStatusServiceTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -293,10 +293,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             new NullSecretsProtector(),
             NullLogger<McpOAuthCredentialStore>.Instance);
         using var flowBroker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var dependencies = McpManagerTestDependencies.Create();
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),
-            new ToolConfig(),
+            dependencies.SkillRegistry,
+            dependencies.SkillIndexPublisher,
+            dependencies.ToolAccessPolicy,
+            dependencies.ToolConfig,
             credentials,
             McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,

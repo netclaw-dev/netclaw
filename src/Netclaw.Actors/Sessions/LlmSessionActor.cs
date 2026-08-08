@@ -3084,12 +3084,29 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return true;
     }
 
+    private bool RejectSlashCommand(string message)
+    {
+        EmitOutput(new TextOutput(message) { SessionId = _sessionId }, OutputFilter.Text);
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = new TurnNumber(_state.TurnCount),
+            Outcome = TurnOutcome.Skipped,
+            SourceReminderId = _currentTurnSource?.ReminderId
+        });
+        TryReplyAck();
+        return true;
+    }
+
     private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs)
     {
+        if (skill.Source is not FileSkillSource fileSource)
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based slash dispatch.");
+
         string skillBody;
         try
         {
-            var content = File.ReadAllText(skill.FilePath);
+            var content = File.ReadAllText(fileSource.FilePath);
             skillBody = Skills.SkillScanner.ExtractBody(content);
         }
         catch (IOException ex)
@@ -3131,6 +3148,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, string routedSubagent)
     {
+        if (skill.Source is not FileSkillSource fileSource)
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based routed dispatch.");
+
         if (_subAgentRegistry is null || _subAgentSpawner is null)
         {
             EmitOutput(new TextOutput($"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime.")
@@ -3188,7 +3208,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string skillBody;
         try
         {
-            var content = File.ReadAllText(skill.FilePath);
+            var content = File.ReadAllText(fileSource.FilePath);
             skillBody = Skills.SkillScanner.ExtractBody(content);
         }
         catch (IOException ex)

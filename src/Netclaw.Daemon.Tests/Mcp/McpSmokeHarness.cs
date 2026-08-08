@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -25,10 +26,16 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
 {
     private readonly McpOAuthFlowBroker _flowBroker;
 
-    private McpSmokeHarness(McpClientManager manager, McpOAuthFlowBroker flowBroker)
+    private McpSmokeHarness(
+        McpClientManager manager,
+        McpOAuthFlowBroker flowBroker,
+        SkillRegistry skillRegistry,
+        SkillIndexContextLayer skillIndex)
     {
         Manager = manager;
         _flowBroker = flowBroker;
+        SkillRegistry = skillRegistry;
+        SkillIndex = skillIndex;
     }
 
     public McpClientManager Manager { get; }
@@ -52,6 +59,10 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             $"error={status.ErrorMessage ?? "(none)"}");
     }
 
+    public SkillRegistry SkillRegistry { get; }
+
+    public SkillIndexContextLayer SkillIndex { get; }
+
     public static McpSmokeHarness Create(
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry registry,
@@ -65,10 +76,14 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             new NullSecretsProtector(),
             NullLogger<McpOAuthCredentialStore>.Instance);
         var flowBroker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var dependencies = McpManagerTestDependencies.Create();
         var manager = new McpClientManager(
             serverEntries,
             registry,
-            new ToolConfig(),
+            dependencies.SkillRegistry,
+            dependencies.SkillIndexPublisher,
+            dependencies.ToolAccessPolicy,
+            dependencies.ToolConfig,
             credentials,
             McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,
@@ -83,7 +98,11 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
                 ? NullLogger<McpClientManager>.Instance
                 : new TestOutputLogger<McpClientManager>(output),
             new SessionConfig());
-        return new McpSmokeHarness(manager, flowBroker);
+        return new McpSmokeHarness(
+            manager,
+            flowBroker,
+            dependencies.SkillRegistry,
+            dependencies.SkillIndex);
     }
 
     /// <summary>

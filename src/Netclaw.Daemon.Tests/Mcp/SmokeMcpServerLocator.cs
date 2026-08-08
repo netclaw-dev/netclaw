@@ -20,12 +20,7 @@ internal static class SmokeMcpServerLocator
 {
     public static string LocateDll()
     {
-        var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "Netclaw.slnx")))
-            repo = repo.Parent;
-        Assert.NotNull(repo);
-
-        var projectDir = Path.Combine(repo!.FullName, "tests", "Netclaw.SmokeMcpServer");
+        var projectDir = Path.Combine(LocateRepositoryRoot(), "tests", "Netclaw.SmokeMcpServer");
         var binMarker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}";
         var dll = Directory
             .EnumerateFiles(projectDir, "Netclaw.SmokeMcpServer.dll", SearchOption.AllDirectories)
@@ -36,5 +31,15 @@ internal static class SmokeMcpServerLocator
         Assert.True(dll is not null,
             $"Netclaw.SmokeMcpServer.dll not found under {projectDir}/bin — is the project built?");
         return dll!;
+    }
+
+    public static string LocateRepositoryRoot()
+    {
+        var repo = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "Netclaw.slnx")))
+            repo = repo.Parent;
+
+        Assert.NotNull(repo);
+        return repo!.FullName;
     }
 }

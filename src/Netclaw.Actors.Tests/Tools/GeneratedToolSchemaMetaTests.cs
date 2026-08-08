@@ -1,12 +1,15 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="GeneratedToolSchemaMetaTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Tests.Utilities;
 using System.Text.Json;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security.Skills;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -67,5 +70,31 @@ public class GeneratedToolSchemaMetaTests
         // ParseArguments should succeed and ignore meta fields
         var parsed = tool.ParseArguments(args);
         Assert.NotNull(parsed);
+    }
+
+    [Fact]
+    public void SkillLoadSchemaDescribesPromptArgumentsAsStringMap()
+    {
+        var tool = new SkillLoadTool(
+            new SkillRegistry(),
+            new NoOpSkillContentScanner(),
+            new UnavailablePromptLoader());
+
+        var arguments = tool.ParameterSchema
+            .GetProperty("properties")
+            .GetProperty("Arguments");
+
+        Assert.Equal("object", arguments.GetProperty("type").GetString());
+        Assert.Equal("string", arguments.GetProperty("additionalProperties").GetProperty("type").GetString());
+    }
+
+    private sealed class UnavailablePromptLoader : IMcpPromptSkillLoader
+    {
+        public ValueTask<McpPromptSkillLoadResult> LoadAsync(
+            McpPromptSkillSource source,
+            IReadOnlyDictionary<string, string>? arguments,
+            ToolInvocationContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(McpPromptSkillLoadResult.Failed("Unavailable."));
     }
 }

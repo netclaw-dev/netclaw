@@ -735,6 +735,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         var runtime = new FakeServerMcpRuntime(server, failToolListing);
         var logger = new RecordingLogger<McpClientManager>();
         var serverName = new McpServerName("fake-oauth");
+        var dependencies = McpManagerTestDependencies.Create();
         var manager = new McpClientManager(
             new Dictionary<string, McpServerEntry>
             {
@@ -747,7 +748,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 },
             },
             new ToolRegistry(),
-            new ToolConfig(),
+            dependencies.SkillRegistry,
+            dependencies.SkillIndexPublisher,
+            dependencies.ToolAccessPolicy,
+            dependencies.ToolConfig,
             credentials,
             McpOAuthTestDoubles.RegistrarFor(server.CreateHttpClient()),
             broker,
@@ -834,7 +838,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 barrier.Reached.TrySetResult(true);
                 await barrier.Release.Task.WaitAsync(cancellationToken);
             }
-            return new McpClientInitialization(tools.Cast<AIFunction>().ToList());
+            var prompts = await ListPromptsAsync(client, cancellationToken);
+            return new McpClientInitialization(tools.Cast<AIFunction>().ToList(), prompts);
         }
 
         public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
@@ -848,6 +853,30 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         {
             var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
             return tools.Cast<AIFunction>().ToList();
+        }
+
+        public async ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            if (client.ServerCapabilities.Prompts is null)
+                return [];
+
+            var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
+            return prompts.Select(static prompt => prompt.ProtocolPrompt).ToList();
+        }
+
+        public ValueTask<GetPromptResult> GetPromptAsync(
+            McpClient client,
+            string promptName,
+            IReadOnlyDictionary<string, string> arguments,
+            CancellationToken cancellationToken)
+        {
+            var values = arguments.ToDictionary(
+                static pair => pair.Key,
+                static pair => (object?)pair.Value,
+                StringComparer.Ordinal);
+            return client.GetPromptAsync(promptName, values, cancellationToken: cancellationToken);
         }
 
         public ValueTask<object?> InvokeAsync(

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolArgumentHelper.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -160,6 +160,44 @@ public static class ToolArgumentHelper
             _ => value.ToString()
         };
     }
+
+    public static IReadOnlyDictionary<string, string>? GetStringDictionary(
+        IDictionary<string, object?>? arguments,
+        string key)
+    {
+        if (!TryGetValueFlexible(arguments, key, out var value) || IsAbsent(value))
+            return null;
+
+        if (value is IReadOnlyDictionary<string, string> typed)
+            return new Dictionary<string, string>(typed, StringComparer.Ordinal);
+
+        if (value is IDictionary<string, object?> dictionary)
+        {
+            return dictionary.ToDictionary(
+                static pair => pair.Key,
+                pair => ReadDictionaryString(key, pair.Key, pair.Value),
+                StringComparer.Ordinal);
+        }
+
+        if (value is JsonElement { ValueKind: JsonValueKind.Object } element)
+        {
+            return element.EnumerateObject().ToDictionary(
+                static property => property.Name,
+                property => ReadDictionaryString(key, property.Name, property.Value),
+                StringComparer.Ordinal);
+        }
+
+        throw new ArgumentException($"Parameter '{key}' must be an object with string values.");
+    }
+
+    private static string ReadDictionaryString(string parameter, string property, object? value)
+        => value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString()!,
+            _ => throw new ArgumentException(
+                $"Parameter '{parameter}.{property}' must be a string."),
+        };
 
     // ── Coercion primitives ──
     // Single source of truth for loose-value → typed coercion, shared by the

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillToolRegistration.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,6 +31,7 @@ internal static class SkillToolRegistration
         var toolConfig = services.GetRequiredService<ToolConfig>();
         var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
+        var mcpPromptLoader = services.GetRequiredService<IMcpPromptSkillLoader>();
         var inventoryRefresher = services.GetRequiredService<SkillInventoryRefresher>();
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
@@ -46,6 +47,7 @@ internal static class SkillToolRegistration
             skillRegistry,
             paths,
             scanner,
+            mcpPromptLoader,
             inventoryRefresher,
             metrics,
             subAgentRegistry,

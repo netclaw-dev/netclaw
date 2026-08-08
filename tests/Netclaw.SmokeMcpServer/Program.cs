@@ -96,6 +96,13 @@ internal sealed class Program
             arguments = Environment.GetCommandLineArgs().Skip(1).ToArray(),
         });
 
+    [McpServerPrompt(Name = "verify-sum", Title = "Verify a sum")]
+    [Description("Create a deterministic workflow that verifies a sum with the add tool.")]
+    public static string VerifySum(
+        [Description("The first integer as text.")] string left,
+        [Description("The second integer as text.")] string right)
+        => $"SMOKE-MCP-PROMPT-V1: Call the add tool with a={left} and b={right}. Report the returned sum.";
+
     /// <summary>
     /// HTTP-mode-only tool: returns the Authorization header attached to
     /// the most recent request the server received. Returns the literal
@@ -151,6 +158,10 @@ internal sealed class Program
             McpServerTool.Create(RecordTasks, new McpServerToolCreateOptions { Name = "record-tasks" }),
             McpServerTool.Create(ProcessInfo, new McpServerToolCreateOptions { Name = "process-info" }),
         };
+        var prompts = new McpServerPrimitiveCollection<McpServerPrompt>
+        {
+            McpServerPrompt.Create(VerifySum, new McpServerPromptCreateOptions { Name = "verify-sum" }),
+        };
 
         var options = new McpServerOptions
         {
@@ -164,6 +175,7 @@ internal sealed class Program
                 "Use 'add' to sum two integers, 'echo' to repeat text, and " +
                 "'record-tasks' to record a batch of task objects.",
             ToolCollection = tools,
+            PromptCollection = prompts,
         };
 
         await using var transport = new StdioServerTransport(options);
@@ -198,7 +210,8 @@ internal sealed class Program
                     "from the most recent request.";
             })
             .WithHttpTransport()
-            .WithTools<Program>();
+            .WithTools<Program>()
+            .WithPrompts<Program>();
 
         var app = builder.Build();
 

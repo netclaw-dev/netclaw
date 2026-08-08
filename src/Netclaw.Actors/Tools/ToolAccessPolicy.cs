@@ -77,6 +77,9 @@ public sealed class ToolAccessPolicy
     public bool IsToolExposed(INetclawTool tool, ToolInvocationContext context)
         => IsToolExposed(tool, ResolveAudience(context));
 
+    public bool IsMcpServerExposed(McpServerName serverName, TrustAudience audience)
+        => _profileResolver.IsMcpServerAllowed(serverName, audience);
+
     internal bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
         // Feature-disabled tools are hidden for ALL audiences

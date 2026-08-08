@@ -94,7 +94,11 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             feedsConfig,
             paths,
             new SkillInventoryRefresher(
-                paths, feedsConfig, externalSources, skillRegistry, skillIndexLayer),
+                paths,
+                feedsConfig,
+                externalSources,
+                skillRegistry,
+                new SkillIndexPublisher(skillRegistry, skillIndexLayer, static (_, _) => true)),
             timeProvider,
             scanner,
             logger,

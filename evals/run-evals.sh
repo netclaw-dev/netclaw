@@ -378,6 +378,13 @@ start_eval_daemon() {
         cp -r "$REPO_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
     fi
 
+    if [[ -f "$REPO_ROOT/evals/fixtures/mcp/prompt_server.py" ]]; then
+        mkdir -p "$EVAL_HOME/data/evals"
+        cp "$REPO_ROOT/evals/fixtures/mcp/prompt_server.py" \
+            "$EVAL_HOME/data/evals/prompt_server.py"
+        chmod ugo+x "$EVAL_HOME/data/evals/prompt_server.py"
+    fi
+
     # Install the eval-only approval policy before daemon startup. Headless eval
     # sessions cannot answer approval prompts, so tools must be automatic for the
     # Personal audience. Exposure, filesystem, and command-deny rules remain in force.
@@ -1073,6 +1080,17 @@ assert_skill_server_feed_logical_access() {
         && stdout_no_skill_file_read_called
 }
 
+assert_mcp_prompt_skill_activation() {
+    daemon_log_skill_loaded_via_skill_tool 'mcp__eval_analytics__property-analytics' \
+        && stdout_tool_called 'skill_load' \
+        && stdout_contains 'EVAL-MCP-PROMPT-7421' \
+        && stdout_no_skill_file_read_called
+}
+
+assert_mcp_prompt_skill_unrelated() {
+    ! daemon_log_skill_loaded 'mcp__eval_analytics__property-analytics'
+}
+
 assert_skill_explicit_physical_inspection() {
     stdout_tool_called 'file_read' \
         && daemon_log_skill_loaded_via_file_read 'modern-csharp-coding-standards'
@@ -1726,6 +1744,12 @@ run_all() {
 
     run_case skill_server_feed_logical_access "server-feed skill and resource loaded by logical name" \
         "Use the logical-feed-probe skill and its listed reference resource. What exact verification phrase does the resource contain?"
+
+    run_case mcp_prompt_skill_activation "MCP prompt skill loaded with arguments" \
+        "For property alpha, find the exact complete-month analytics process for the live query endpoint. Load the relevant remote workflow before you answer."
+
+    run_case mcp_prompt_skill_unrelated "unrelated request does not load MCP prompt skill" \
+        "Explain the difference between a stack and a queue."
 
     run_case skill_explicit_physical_inspection "explicit physical inspection may use file_read" \
         "Explicitly inspect the physical file /home/netclaw/.netclaw/skills/modern-csharp-coding-standards/SKILL.md with file_read and tell me its title. This is a filesystem inspection request, not normal skill activation."

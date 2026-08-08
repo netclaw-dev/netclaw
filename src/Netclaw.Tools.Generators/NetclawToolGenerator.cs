@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="NetclawToolGenerator.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -151,10 +151,18 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
                 "UInt16" => "integer",
                 "UInt32" => "integer",
                 "UInt64" => "integer",
+                "IReadOnlyDictionary" when IsStringDictionary(type) => "object",
+                "IDictionary" when IsStringDictionary(type) => "object",
+                "Dictionary" when IsStringDictionary(type) => "object",
                 _ => "string" // fallback
             }
         };
     }
+
+    private static bool IsStringDictionary(ITypeSymbol type)
+        => type is INamedTypeSymbol { TypeArguments.Length: 2 } named
+           && named.TypeArguments[0].SpecialType == SpecialType.System_String
+           && named.TypeArguments[1].SpecialType == SpecialType.System_String;
 
     private static string GetEnumMemberName(TypedConstant value, string defaultName)
     {
@@ -206,6 +214,8 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             var p = model.Parameters[i];
             sb.AppendLine($"                \"{p.Name}\": {{");
             sb.AppendLine($"                    \"type\": \"{p.JsonType}\",");
+            if (p.JsonType == "object")
+                sb.AppendLine("                    \"additionalProperties\": { \"type\": \"string\" },");
             sb.AppendLine($"                    \"description\": \"{EscapeJson(p.Description)}\"");
             sb.AppendLine("                },");
         }
@@ -312,6 +322,10 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
                 }
                 else
                     sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetBoolStrict(arguments, \"{p.Name}\") ?? false;");
+            }
+            else if (p.JsonType == "object")
+            {
+                sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetStringDictionary(arguments, \"{p.Name}\");");
             }
         }
 

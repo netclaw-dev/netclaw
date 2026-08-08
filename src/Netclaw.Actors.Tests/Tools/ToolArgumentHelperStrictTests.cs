@@ -227,4 +227,26 @@ public class ToolArgumentHelperStrictTests
             CultureInfo.CurrentCulture = original;
         }
     }
+
+    [Fact]
+    public void StringDictionary_reads_json_object_with_string_values()
+    {
+        var result = ToolArgumentHelper.GetStringDictionary(
+            Args("Arguments", Json("""{"property":"petabridge-com","monthsBack":"1"}""")),
+            "Arguments");
+
+        Assert.NotNull(result);
+        Assert.Equal("petabridge-com", result["property"]);
+        Assert.Equal("1", result["monthsBack"]);
+    }
+
+    [Fact]
+    public void StringDictionary_rejects_non_string_values()
+    {
+        var error = Assert.Throws<ArgumentException>(() => ToolArgumentHelper.GetStringDictionary(
+            Args("Arguments", Json("""{"monthsBack":1}""")),
+            "Arguments"));
+
+        Assert.Contains("Arguments.monthsBack", error.Message);
+    }
 }
