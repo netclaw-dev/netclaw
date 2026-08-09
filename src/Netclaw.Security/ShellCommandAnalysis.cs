@@ -288,7 +288,7 @@ internal sealed record ShellCommandAnalysis(
         // A glob in a directory segment can hide traversal or a symlink.
         // Only a leaf glob has a fixed directory scope.
         || command.Clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
-        || command.Redirects.Any(HasUnresolvedRedirect));
+        || HasUnresolvedRedirect(command));
 
     private static bool HasUnsupportedWorkingDirectory(ShellValueDomain workingDirectory)
     {
@@ -308,9 +308,16 @@ internal sealed record ShellCommandAnalysis(
         };
     }
 
-    private static bool HasUnresolvedRedirect(RedirectAnalysis redirect)
+    private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)
+        => occurrence.Redirects.Any(redirect => HasUnresolvedRedirect(occurrence, redirect));
+
+    private static bool HasUnresolvedRedirect(
+        CommandOccurrence occurrence,
+        RedirectAnalysis redirect)
     {
-        if (!redirect.IsComplete
+        if (redirect.Source is null
+            || redirect.Target is null
+            || !redirect.IsComplete
             || !Enum.IsDefined(redirect.Source.Kind)
             || redirect.Source.Kind == RedirectSourceKind.Unknown
             || !Enum.IsDefined(redirect.Operation)
@@ -332,9 +339,8 @@ internal sealed record ShellCommandAnalysis(
 
         return redirect.Operation switch
         {
-            // Netclaw keeps shell-fed stdin approval-sensitive. The parser can
-            // prove its syntax without proving executable-specific data use.
-            RedirectOperation.HereDocument or RedirectOperation.HereString => true,
+            RedirectOperation.HereDocument or RedirectOperation.HereString =>
+                !HasBoundedDataOnlyStdin(occurrence, redirect),
             RedirectOperation.DescriptorDuplicate or RedirectOperation.DescriptorMove =>
                 redirect.IsPathRelevant || redirect.TargetDescriptor is < 0 or null,
             RedirectOperation.DescriptorClose =>
@@ -346,6 +352,98 @@ internal sealed record ShellCommandAnalysis(
                 or RedirectOperation.CombinedOutputAppend =>
                 !redirect.IsPathRelevant || !HasBoundedPathTarget(redirect.Target),
             _ => true
+        };
+    }
+
+    private static bool HasBoundedDataOnlyStdin(
+        CommandOccurrence occurrence,
+        RedirectAnalysis redirect)
+    {
+        var clause = occurrence.Clause;
+        if (!IsStandardInputSource(redirect.Source)
+            || redirect.IsPathRelevant
+            || clause.Verb.Tokens.Count != 1
+            || !string.Equals(
+                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                "cat",
+                StringComparison.Ordinal)
+            || clause.Args.Any(static arg => !arg.IsCwdAttribution))
+        {
+            return false;
+        }
+
+        return redirect.Operation switch
+        {
+            RedirectOperation.HereDocument when redirect.HereDocument is not null =>
+                redirect.TargetDescriptor is null
+                && HasCanonicalUnknownData(redirect.Target)
+                && HasLiteralHereDocument(
+                    redirect.HereDocument,
+                    clause.IsCommandStringWrapped),
+            RedirectOperation.HereString when redirect.HereDocument is null =>
+                redirect.TargetDescriptor is null
+                && HasBoundedData(redirect.Target),
+            _ => false
+        };
+    }
+
+    private static bool IsStandardInputSource(RedirectSource source)
+        => source.Kind == RedirectSourceKind.Default
+            || source is { Kind: RedirectSourceKind.Descriptor, Descriptor: 0 };
+
+    private static bool HasLiteralHereDocument(
+        HereDocumentAnalysis hereDocument,
+        bool allowUnavailableSourceSpans)
+        => hereDocument.Delimiter is not null
+            && hereDocument.Body is not null
+            && hereDocument.IsComplete
+            && Enum.IsDefined(hereDocument.ExpansionMode)
+            && hereDocument.ExpansionMode == HereDocumentExpansionMode.Literal
+            && HasValidSourceFragment(
+                hereDocument.Delimiter,
+                allowUnavailableSourceSpans)
+            && HasValidSourceFragment(
+                hereDocument.Body,
+                allowUnavailableSourceSpans);
+
+    private static bool HasValidSourceFragment(
+        ShellSourceFragment fragment,
+        bool allowUnavailableSourceSpan)
+    {
+        if (fragment.Raw is null)
+            return false;
+
+        if (fragment.SourceStart is null && fragment.SourceLength is null)
+            return allowUnavailableSourceSpan;
+
+        return fragment.SourceStart >= 0 && fragment.SourceLength >= 0;
+    }
+
+    private static bool HasCanonicalUnknownData(ShellValueDomain data)
+        => data is not null
+            && data.Kind == ShellValueDomainKind.Unknown
+            && data.Values.Count == 0
+            && data.Pattern is null
+            && data.CoveringDirectory is null;
+
+    private static bool HasBoundedData(ShellValueDomain data)
+    {
+        if (data is null
+            || !Enum.IsDefined(data.Kind)
+            || data.Pattern is not null
+            || data.CoveringDirectory is not null)
+        {
+            return false;
+        }
+
+        return data.Kind switch
+        {
+            ShellValueDomainKind.Exact => data.Values.Count == 1
+                && data.Values[0] is not null,
+            ShellValueDomainKind.FiniteSet => data.Values.Count is >= 2 and <= 32
+                && data.Values.All(static value => value is not null)
+                && data.Values.Distinct(StringComparer.Ordinal).Count() == data.Values.Count,
+            _ => false
         };
     }
 

@@ -168,22 +168,18 @@ public sealed class ShellSyntaxTreeIntegrationTests
     }
 
     [Fact]
-    public void Dynamic_token_marked_for_skip()
+    public void Unknown_variable_state_is_unparseable()
     {
-        // Unresolved env var must be flagged so consumers don't extract
-        // a literal "$UNRESOLVED/foo" as a path candidate.
+        // Netclaw cannot prove the inherited Bash variable attributes.
+        // Alpha.1 rejects the full command before a nameref can hide
+        // execution inside the path expression.
         var parser = new BashParser();
 
         var result = parser.Parse("rm $UNRESOLVED/foo");
 
-        Assert.False(result.IsUnparseable);
-        Assert.Single(result.Clauses);
-
-        var argWithDynamic = result.Clauses[0].Args
-            .FirstOrDefault(a => a.Raw.Contains("$UNRESOLVED"));
-        Assert.NotNull(argWithDynamic);
-        Assert.Equal(ArgKind.DynamicSkip, argWithDynamic.Kind);
-        Assert.Null(argWithDynamic.Resolved);
+        Assert.True(result.IsUnparseable);
+        Assert.Empty(result.Clauses);
+        Assert.Empty(result.Commands);
     }
 
     [Fact]

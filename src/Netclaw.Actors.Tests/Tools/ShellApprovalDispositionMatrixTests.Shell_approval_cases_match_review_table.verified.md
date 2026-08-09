@@ -88,7 +88,13 @@
 | cd-parent-then-safe-prompts | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | multiple-cd-then-safe-prompts | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | side-effect-before-mutation-prompts | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | git push | No |
-| heredoc-prompts | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | RequiresApproval | approval required | none | Yes |
+| literal-heredoc-cat-allows | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| expanding-heredoc-cat-prompts | Personal | Project | Interactive | cat <<EOF\nhello\nEOF | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| dynamic-heredoc-cat-prompts | Personal | Project | Interactive | cat <<EOF\n$value\nEOF | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| literal-here-string-cat-allows | Personal | Project | Interactive | cat <<< "hello" | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| dynamic-here-string-cat-prompts | Personal | Project | Interactive | cat <<< "$value" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| here-string-cat-with-argument-prompts | Personal | Project | Interactive | cat -n <<< "hello" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| here-string-interpreter-grant-prompts | Personal | Project | Interactive | bash <<< "echo ok" | persistent[anywhere]:bash | RequiresApproval | approval required | none | Yes |
 | workload-search-rg-in-project-allows | Personal | Project | Interactive | rg -n "TODO" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-grep-in-project-allows | Personal | Project | Interactive | grep -R "error" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-find-in-project-allows | Personal | Project | Interactive | find src -name "*.cs" -print | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -141,10 +147,19 @@
 | process-substitution-fails-closed | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
 | arithmetic-expansion-fails-closed | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | Yes |
 | function-definition-fails-closed | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| exec-command-resolution-mutation-fails-closed | Personal | Project | Interactive | exec git status | persistent[anywhere]:exec, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| hash-command-resolution-mutation-fails-closed | Personal | Project | Interactive | hash -p /usr/bin/git git && git status | persistent[anywhere]:hash, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| alias-command-resolution-mutation-fails-closed | Personal | Project | Interactive | alias inspect='git status'; inspect | persistent[anywhere]:alias, persistent[anywhere]:inspect, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| shell-option-mutation-fails-closed | Personal | Project | Interactive | shopt -s expand_aliases && git status | persistent[anywhere]:shopt, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| builtin-enable-mutation-fails-closed | Personal | Project | Interactive | enable -n printf && git status | persistent[anywhere]:enable, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| time-reserved-form-fails-closed | Personal | Project | Interactive | time git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| negation-reserved-form-fails-closed | Personal | Project | Interactive | ! git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| coprocess-reserved-form-fails-closed | Personal | Project | Interactive | coproc git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| brace-group-reserved-form-fails-closed | Personal | Project | Interactive | { git status; } | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
 | inline-python-prompts-for-interpreter | Personal | Project | Interactive | python3 -c "print('hello')" | none | RequiresApproval | approval required | python3 | No |
 | inline-python-interpreter-grant-currently-allows | Personal | Project | Interactive | python3 -c "print('hello')" | persistent[anywhere]:python3 | Allowed | StoredApproval | none | Not applicable |
-| eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | eval | No |
-| eval-grant-currently-allows-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | Allowed | StoredApproval | none | Not applicable |
+| eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | none | Yes |
+| eval-grant-does-not-cover-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | RequiresApproval | approval required | none | Yes |
 | inline-python-heredoc-fails-closed | Personal | Project | Interactive | python3 <<'PY'\nprint('hello')\nPY | persistent[anywhere]:python3 | RequiresApproval | approval required | none | Yes |
 | empty-command-fails-closed | Personal | Project | Interactive |  | none | RequiresApproval | approval required | none | No |
 | whitespace-command-fails-closed | Personal | Project | Interactive |     | none | RequiresApproval | approval required | none | No |

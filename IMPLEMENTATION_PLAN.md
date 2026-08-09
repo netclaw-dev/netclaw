@@ -141,8 +141,15 @@ Done when:
   explicit Bash redirect facts for the existing grammar.
 - [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
   Static descriptor redirects no longer appear dynamic.
-- [ ] Netclaw interprets bounded loop arguments and promotes the new mutation
-  cases after the next ShellSyntaxTree prerelease.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
+  command-resolution mutation and reserved execution forms into the strict
+  181-case review matrix.
+- [x] A constrained stdin grammar allows a complete literal heredoc or bounded
+  here string only for argument-free `cat`. Unknown data, expanding heredocs,
+  arguments, wrappers, interpreters, and stored grants stay strict.
+- [ ] Netclaw interprets bounded loop arguments only after the executor can
+  prove the Bash initial variable state. The inherited shell state remains
+  fail closed because an ambient nameref can change assignment semantics.
 
 ### Priority: Simplify Tool Execution Context Architecture
 

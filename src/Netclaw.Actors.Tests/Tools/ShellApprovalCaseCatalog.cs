@@ -635,9 +635,39 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         Case(
-            "heredoc-prompts",
+            "literal-heredoc-cat-allows",
             Bash("cat <<'EOF'\nhello\nEOF"),
             Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "expanding-heredoc-cat-prompts",
+            Bash("cat <<EOF\nhello\nEOF"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "dynamic-heredoc-cat-prompts",
+            Bash("cat <<EOF\n$value\nEOF"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "literal-here-string-cat-allows",
+            Bash("cat <<< \"hello\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "dynamic-here-string-cat-prompts",
+            Bash("cat <<< \"$value\""),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "here-string-cat-with-argument-prompts",
+            Bash("cat -n <<< \"hello\""),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "here-string-interpreter-grant-prompts",
+            Bash("bash <<< \"echo ok\""),
+            Approvals.PersistentAnywhere("bash"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
 
         // These synthetic cases represent the dominant search, pipeline, and
@@ -915,6 +945,51 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "exec-command-resolution-mutation-fails-closed",
+            Bash("exec git status"),
+            Approvals.PersistentAnywhere("exec", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "hash-command-resolution-mutation-fails-closed",
+            Bash("hash -p /usr/bin/git git && git status"),
+            Approvals.PersistentAnywhere("hash", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "alias-command-resolution-mutation-fails-closed",
+            Bash("alias inspect='git status'; inspect"),
+            Approvals.PersistentAnywhere("alias", "inspect", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "shell-option-mutation-fails-closed",
+            Bash("shopt -s expand_aliases && git status"),
+            Approvals.PersistentAnywhere("shopt", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "builtin-enable-mutation-fails-closed",
+            Bash("enable -n printf && git status"),
+            Approvals.PersistentAnywhere("enable", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "time-reserved-form-fails-closed",
+            Bash("time git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "negation-reserved-form-fails-closed",
+            Bash("! git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "coprocess-reserved-form-fails-closed",
+            Bash("coproc git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "brace-group-reserved-form-fails-closed",
+            Bash("{ git status; }"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
             "inline-python-prompts-for-interpreter",
             Bash("python3 -c \"print('hello')\""),
             Approvals.None,
@@ -928,12 +1003,12 @@ public static class ShellApprovalCases
             "eval-prompts-for-interpreter",
             Bash("eval \"$CODE\""),
             Approvals.None,
-            ExpectedApproval.Require(["eval"])),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "eval-grant-currently-allows-dynamic-payload",
+            "eval-grant-does-not-cover-dynamic-payload",
             Bash("eval \"$CODE\""),
             Approvals.PersistentAnywhere("eval"),
-            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:eval")),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "inline-python-heredoc-fails-closed",
             Bash("python3 <<'PY'\nprint('hello')\nPY"),

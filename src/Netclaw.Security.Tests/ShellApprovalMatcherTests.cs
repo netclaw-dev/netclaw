@@ -328,15 +328,33 @@ public sealed class ShellApprovalMatcherTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
     public void FormatForDisplay_heredoc_falls_back_to_flattened_raw_command()
     {
-        // The parser drops heredoc bodies from the tree (only the <<EOF
-        // marker survives as a redirect target), so a tree reconstruction
-        // would hide the executable payload from the approver. Heredoc
-        // commands fall back to the flattened raw command instead.
+        // The compatibility redirect cannot preserve the v0.3 heredoc facts.
+        // The raw fallback keeps the full body visible to the approver.
         var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
             Args("bash <<EOF\nrm -rf /tmp/x\nEOF"));
 
         Assert.DoesNotContain('\n', display);
-        Assert.Equal("bash <<EOF rm -rf /tmp/x EOF", display);
+        Assert.Equal("bash <<EOF ⏎ rm -rf /tmp/x ⏎ EOF", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_here_string_keeps_authored_operator()
+    {
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("cat <<< \"alpha\nbeta\""));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("cat <<< \"alpha ⏎ beta\"", display);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void FormatForDisplay_heredoc_keeps_following_command_boundary()
+    {
+        var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
+            Args("cat <<'EOF'\nbody\nEOF\ngit push"));
+
+        Assert.DoesNotContain('\n', display);
+        Assert.Equal("cat <<'EOF' ⏎ body ⏎ EOF ⏎ git push", display);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
@@ -462,13 +480,13 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
-    public void FormatForDisplay_summarizes_multiline_redirect_target()
+    public void FormatForDisplay_unparseable_multiline_redirect_flattens_raw_command()
     {
         var display = _matcher.FormatForDisplay(new ToolName("shell_execute"),
             Args("echo hi >> \"$LOGDIR\nfile\""));
 
         Assert.DoesNotContain('\n', display);
-        Assert.Equal("echo hi >> (2 lines, 12 chars)", display);
+        Assert.Equal("echo hi >> \"$LOGDIR file\"", display);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]

@@ -144,8 +144,9 @@ public sealed class ShellCommandAnalysisTests
     {
         var analysis = _analyzer.Analyze(command);
 
-        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.True(analysis.HasDynamicSyntax);
+        Assert.True(
+            analysis.Failure == ShellAnalysisFailure.Unresolved
+            || analysis.HasDynamicSyntax);
     }
 
     [Fact]
@@ -171,14 +172,101 @@ public sealed class ShellCommandAnalysisTests
         Assert.True(redirect.IsPathRelevant);
     }
 
-    [Fact]
-    public void Heredoc_stays_approval_sensitive()
+    [Theory]
+    [InlineData("cat <<'EOF'\nbody\nEOF", RedirectOperation.HereDocument)]
+    [InlineData("cat <<< \"body\"", RedirectOperation.HereString)]
+    [InlineData("cat 0<<< \"body\"", RedirectOperation.HereString)]
+    public void Bounded_data_only_stdin_is_not_dynamic(
+        string command,
+        RedirectOperation expectedOperation)
     {
-        var analysis = _analyzer.Analyze("cat <<EOF\nbody\nEOF");
+        var analysis = _analyzer.Analyze(command);
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        var redirect = Assert.Single(Assert.Single(analysis.Commands).Redirects);
+        Assert.Equal(expectedOperation, redirect.Operation);
+        Assert.False(redirect.IsPathRelevant);
+        Assert.True(redirect.IsComplete);
+    }
+
+    [Fact]
+    public void Finite_here_string_data_for_argument_free_cat_is_not_dynamic()
+    {
+        var occurrence = new CommandOccurrence
+        {
+            Clause = new Clause
+            {
+                Verb = new VerbChain { Tokens = ["cat"] }
+            },
+            ImmediateRole = CommandOccurrenceRole.Ordinary,
+            Redirects =
+            [
+                new RedirectAnalysis
+                {
+                    Source = new RedirectSource { Kind = RedirectSourceKind.Default },
+                    Operation = RedirectOperation.HereString,
+                    Target = new ShellValueDomain
+                    {
+                        Kind = ShellValueDomainKind.FiniteSet,
+                        Values = ["alpha\n", "beta\n"]
+                    },
+                    IsComplete = true
+                }
+            ],
+            IsComplete = true
+        };
+        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+
+        Assert.False(analysis.HasDynamicSyntax);
+    }
+
+    [Fact]
+    public void Transparent_shell_dispatch_keeps_bounded_inner_cat()
+    {
+        var analysis = _analyzer.Analyze("bash -c \"cat <<< 'body'\"");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.Equal("cat", occurrence.Clause.Verb.Joined);
+        Assert.True(occurrence.Clause.IsCommandStringWrapped);
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedStdinRedirects))]
+    public void Malformed_stdin_facts_for_cat_fail_closed(RedirectAnalysis redirect)
+    {
+        var occurrence = new CommandOccurrence
+        {
+            Clause = new Clause
+            {
+                Verb = new VerbChain { Tokens = ["cat"] }
+            },
+            ImmediateRole = CommandOccurrenceRole.Ordinary,
+            Redirects = [redirect],
+            IsComplete = true
+        };
+        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+
         Assert.True(analysis.HasDynamicSyntax);
-        Assert.Single(Assert.Single(analysis.Commands).Redirects);
+    }
+
+    [Theory]
+    [InlineData("cat <<< \"$value\"")]
+    [InlineData("cat <<EOF\nbody\nEOF")]
+    [InlineData("cat <<EOF\n$value\nEOF")]
+    [InlineData("cat -n <<< \"body\"")]
+    [InlineData("command cat <<< \"body\"")]
+    [InlineData("bash <<< \"echo ok\"")]
+    [InlineData("cat <<< \"$(printf payload)\"")]
+    public void Unproved_or_unsupported_stdin_receiver_stays_dynamic(string command)
+    {
+        var analysis = _analyzer.Analyze(command);
+
+        Assert.True(
+            analysis.Failure == ShellAnalysisFailure.Unresolved
+            || analysis.HasDynamicSyntax);
     }
 
     [Theory]
@@ -287,4 +375,173 @@ public sealed class ShellCommandAnalysisTests
             IsComplete = true
         }
     };
+
+    public static TheoryData<RedirectAnalysis> MalformedStdinRedirects => new()
+    {
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = new ShellSourceFragment { Raw = "EOF" },
+            Body = new ShellSourceFragment { Raw = "body\n" },
+            ExpansionMode = HereDocumentExpansionMode.Literal,
+            IsComplete = false
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = new ShellSourceFragment { Raw = "EOF" },
+            Body = new ShellSourceFragment { Raw = "$value\n" },
+            ExpansionMode = HereDocumentExpansionMode.Expand,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = new ShellSourceFragment { Raw = "EOF" },
+            Body = new ShellSourceFragment { Raw = "body\n" },
+            ExpansionMode = (HereDocumentExpansionMode)999,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            ExpansionMode = HereDocumentExpansionMode.Literal,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = null!,
+            Body = new ShellSourceFragment { Raw = "body\n" },
+            ExpansionMode = HereDocumentExpansionMode.Literal,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = new ShellSourceFragment { Raw = "EOF" },
+            Body = null!,
+            ExpansionMode = HereDocumentExpansionMode.Literal,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(new HereDocumentAnalysis
+        {
+            Delimiter = new ShellSourceFragment
+            {
+                Raw = "EOF",
+                SourceStart = 1
+            },
+            Body = new ShellSourceFragment { Raw = "body\n" },
+            ExpansionMode = HereDocumentExpansionMode.Literal,
+            IsComplete = true
+        }),
+        HereDocumentRedirect(null),
+        HereDocumentRedirect(
+            new HereDocumentAnalysis
+            {
+                Delimiter = new ShellSourceFragment { Raw = "EOF" },
+                Body = new ShellSourceFragment { Raw = "body\n" },
+                ExpansionMode = HereDocumentExpansionMode.Literal,
+                IsComplete = true
+            },
+            target: new ShellValueDomain
+            {
+                Kind = ShellValueDomainKind.Exact,
+                Values = ["body\n"]
+            }),
+        HereStringRedirect(ShellValueDomain.Unknown),
+        HereStringRedirect(null!),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.Exact,
+            Values = ["one", "two"]
+        }),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.Exact,
+            Values = [null!]
+        }),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.FiniteSet,
+            Values = ["one"]
+        }),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.FiniteSet,
+            Values = ["same", "same"]
+        }),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.FiniteSet,
+            Values = Enumerable.Range(0, 33).Select(static index => index.ToString()).ToArray()
+        }),
+        HereStringRedirect(new ShellValueDomain
+        {
+            Kind = ShellValueDomainKind.Pattern,
+            Pattern = "*",
+            CoveringDirectory = "/work"
+        }),
+        HereStringRedirect(
+            new ShellValueDomain
+            {
+                Kind = ShellValueDomainKind.Exact,
+                Values = ["body\n"]
+            },
+            source: new RedirectSource
+            {
+                Kind = RedirectSourceKind.Descriptor,
+                Descriptor = 2
+            }),
+        HereStringRedirect(
+            new ShellValueDomain
+            {
+                Kind = ShellValueDomainKind.Exact,
+                Values = ["body\n"]
+            },
+            isPathRelevant: true),
+        HereStringRedirect(
+            new ShellValueDomain
+            {
+                Kind = ShellValueDomainKind.Exact,
+                Values = ["body\n"]
+            },
+            targetDescriptor: 0),
+        HereStringRedirect(
+            new ShellValueDomain
+            {
+                Kind = ShellValueDomainKind.Exact,
+                Values = ["body\n"]
+            },
+            hereDocument: new HereDocumentAnalysis
+            {
+                Delimiter = new ShellSourceFragment { Raw = "EOF" },
+                Body = new ShellSourceFragment { Raw = "body\n" },
+                ExpansionMode = HereDocumentExpansionMode.Literal,
+                IsComplete = true
+            })
+    };
+
+    private static RedirectAnalysis HereDocumentRedirect(
+        HereDocumentAnalysis? hereDocument,
+        ShellValueDomain? target = null)
+        => new()
+        {
+            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
+            Operation = RedirectOperation.HereDocument,
+            Target = target ?? ShellValueDomain.Unknown,
+            HereDocument = hereDocument,
+            IsComplete = true
+        };
+
+    private static RedirectAnalysis HereStringRedirect(
+        ShellValueDomain target,
+        RedirectSource? source = null,
+        bool isPathRelevant = false,
+        HereDocumentAnalysis? hereDocument = null,
+        int? targetDescriptor = null)
+        => new()
+        {
+            Source = source ?? new RedirectSource { Kind = RedirectSourceKind.Default },
+            Operation = RedirectOperation.HereString,
+            Target = target,
+            TargetDescriptor = targetDescriptor,
+            HereDocument = hereDocument,
+            IsPathRelevant = isPathRelevant,
+            IsComplete = true
+        };
 }

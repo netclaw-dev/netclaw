@@ -929,8 +929,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // inline script) dumped verbatim corrupts the approval prompt. On
         // POSIX, rebuild a one-line view from the parse tree with multi-line
         // args summarized by size; Windows flattens — ShellSyntaxTree is
-        // bash-only. The trailing ReplaceLineEndings catches line breaks the
-        // reconstruction can leak and collapses CRLF to a single space.
+        // bash-only. Heredoc and here-string fallbacks encode line breaks
+        // before the trailing replacement so command boundaries stay visible.
+        // The trailing replacement catches any other leaked line breaks and
+        // collapses CRLF to a single space.
         var display = OperatingSystem.IsWindows()
             ? command
             : BuildSanitizedDisplayViaParser(command);
@@ -943,15 +945,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// parse tree: statement separators render as explicit operators and any
     /// multi-line argument is replaced with a <c>(N lines, M chars)</c>
     /// summary — the operator approving the command needs its shape, not the
-    /// full content (issue #1402). Returns the raw command (for the caller
-    /// to flatten) when the parser cannot decompose it, when the command
-    /// contains a heredoc — the parser drops heredoc bodies entirely (only
-    /// the <c>&lt;&lt;EOF</c> marker survives as a redirect target), so a
-    /// tree reconstruction would silently omit executable content the
-    /// approver must see — or when it contains a subshell, whose grouping
+    /// full content (issue #1402). Returns the raw command when the parser
+    /// cannot decompose it. A heredoc or here string uses a raw view with
+    /// visible line-break markers because the compatibility redirect cannot
+    /// preserve the v0.3 operation and data facts. A subshell uses the raw
+    /// fallback because its grouping
     /// does not survive the flat clause list, so a reconstruction would
     /// misstate which statements a pipe or <c>&amp;&amp;</c> guard applies
-    /// to. The flattened raw command is ugly but fully disclosed.
+    /// to. The raw fallback is ugly but fully disclosed.
     /// </summary>
     private static string BuildSanitizedDisplayViaParser(string command)
     {
@@ -959,8 +960,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (result is null)
             return command;
 
-        if (result.Commands.Any(c =>
-            c.Clause.IsSubshell || c.Clause.Redirects.Any(IsHeredocRedirect)))
+        if (result.Commands.Any(static occurrence =>
+                occurrence.Redirects.Any(IsRawDisplayRedirect)))
+        {
+            return command.ReplaceLineEndings(" ⏎ ");
+        }
+
+        if (result.Commands.Any(static occurrence => occurrence.Clause.IsSubshell))
             return command;
 
         try
@@ -1014,14 +1020,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// True when a parsed redirect is a heredoc marker (<c>&lt;&lt;EOF</c>,
-    /// <c>&lt;&lt;-EOF</c>). The parser keeps only the marker as the redirect
-    /// target and drops the body from the tree, so heredoc-bearing commands
-    /// must not be display-reconstructed — see
+    /// True when the v0.3 redirect operation carries shell-fed data that the
+    /// compatibility clause cannot reconstruct without changing its meaning.
+    /// See
     /// <see cref="BuildSanitizedDisplayViaParser"/>.
     /// </summary>
-    private static bool IsHeredocRedirect(ShellSyntaxTree.Redirect redirect)
-        => redirect.Target?.StartsWith("<<", StringComparison.Ordinal) == true;
+    private static bool IsRawDisplayRedirect(ShellSyntaxTree.RedirectAnalysis redirect)
+        => redirect.Operation is ShellSyntaxTree.RedirectOperation.HereDocument
+            or ShellSyntaxTree.RedirectOperation.HereString;
 
     /// <summary>
     /// Size summary shown in place of a multi-line argument. Outer quotes
