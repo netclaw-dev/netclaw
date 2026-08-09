@@ -1035,7 +1035,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Recurring_occurrence_at_capacity_is_acked_without_execution()
+    public async Task Recurring_occurrence_starts_even_while_other_reminders_are_running()
     {
         var manager = await GetManagerAsync();
 
@@ -1051,18 +1051,19 @@ public class ReminderManagerActorTests : TestKit
             "auto-ack-capacity");
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
+        // Fill three in-flight executions (the historical capacity limit).
         // Save before dispatch so filesystem latency cannot consume any test
         // timing window while execution slots are being filled.
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
         {
             var id = $"blocking-{i}";
             _definitionStore.Save(CreateCurrentSessionDefinition(id, deliveryRequired: true));
         }
 
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
             manager.Tell(CreateEnvelope($"blocking-{i}"));
 
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
         {
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
@@ -1073,17 +1074,19 @@ public class ReminderManagerActorTests : TestKit
 
         var invocationCount = _sessionPipeline.InvocationCount;
         var now = TimeProvider.System.GetUtcNow();
-        var recurringId = "capacity-recurring";
+        var recurringId = "concurrent-recurring";
         var recurringReminder = new ReminderDefinition
         {
             Id = new ReminderId(recurringId),
-            Title = "Capacity recurring reminder",
-            Instructions = "Do not create a stale catch-up execution",
+            Title = "Concurrent recurring reminder",
+            Instructions = "Must start even while other reminders are executing",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.Interval,
-                Interval = TimeSpan.FromMinutes(30),
+                // Must exceed the 1h execution timeout + settlement margin,
+                // otherwise the safe-execution-lease check skips the occurrence.
+                Interval = TimeSpan.FromHours(2),
                 FireAt = now.AddMilliseconds(100)
             },
             Audience = TrustAudience.Team,
@@ -1107,22 +1110,17 @@ public class ReminderManagerActorTests : TestKit
                 new GetReminderStatusQuery(recurringReminder.Id),
                 TimeSpan.FromSeconds(3),
                 TestContext.Current.CancellationToken);
-            Assert.Equal(1, status.SkippedDuplicates);
-            Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions,
-                (await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken)).ActiveExecutions);
+            // The historical capacity gate would have skipped this occurrence
+            // (SkippedDuplicates == 1) without starting an execution. With the
+            // cap removed the occurrence must be dispatched, not skipped.
+            Assert.Equal(0, status.SkippedDuplicates);
+            Assert.True(_sessionPipeline.InvocationCount > invocationCount,
+                "Expected the recurring reminder to be executed by the pipeline.");
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var stored = _definitionStore.Get(recurringReminder.Id);
         Assert.NotNull(stored);
         Assert.True(stored!.Enabled);
-        Assert.Equal(invocationCount, _sessionPipeline.InvocationCount);
-
-        Assert.DoesNotContain(_notificationSink.Alerts, alert =>
-            alert.Category == AlertType.ReminderExecutionFailed
-            && alert.Source == recurringId);
     }
 
     [Fact]
