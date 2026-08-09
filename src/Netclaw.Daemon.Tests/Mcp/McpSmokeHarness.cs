@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -53,7 +54,8 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
 
     public static McpSmokeHarness Create(
         Dictionary<string, McpServerEntry> serverEntries,
-        ToolRegistry registry)
+        ToolRegistry registry,
+        ITestOutputHelper? output = null)
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
         paths.EnsureDirectoriesExist();
@@ -74,9 +76,45 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             NullNotificationSink.Instance,
             TimeProvider.System,
             new McpClientRuntime(),
-            NullLogger<McpClientManager>.Instance,
+            // Real logger wired to test output: when a connect fails the manager
+            // logs the full exception via ReportConnectionFailure, and NullLogger
+            // was discarding it — leaving only the generic status ErrorMessage.
+            output is null
+                ? NullLogger<McpClientManager>.Instance
+                : new TestOutputLogger<McpClientManager>(output),
             new SessionConfig());
         return new McpSmokeHarness(manager, flowBroker);
+    }
+
+    /// <summary>
+    /// Minimal <see cref="ILogger{T}"/> that forwards to xunit test output so
+    /// the manager's own diagnostics (including the full connect-failure
+    /// exception) show up in the CI log when a smoke test fails.
+    /// </summary>
+    private sealed class TestOutputLogger<T> : ILogger<T>
+    {
+        private readonly ITestOutputHelper _output;
+
+        public TestOutputLogger(ITestOutputHelper output) => _output = output;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+            => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            _output.WriteLine($"[{logLevel}] {message}");
+            if (exception is not null)
+                _output.WriteLine(exception.ToString());
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -31,6 +31,10 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// </summary>
 public sealed class SmokeMcpServerHttpHeaderTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public SmokeMcpServerHttpHeaderTests(ITestOutputHelper output) => _output = output;
+
     [Fact]
     public async Task ConfiguredHeader_IsAttachedToOutboundMcpRequest()
     {
@@ -54,7 +58,8 @@ public sealed class SmokeMcpServerHttpHeaderTests
 
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry,
+            _output);
 
         await harness.Manager.StartAsync(ct);
         // Deterministic completion signal: StartAsync awaits the whole connect
@@ -97,7 +102,8 @@ public sealed class SmokeMcpServerHttpHeaderTests
 
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry,
+            _output);
 
         await harness.Manager.StartAsync(ct);
         // Deterministic completion signal: StartAsync awaits the whole connect
@@ -152,7 +158,8 @@ public sealed class SmokeMcpServerHttpHeaderTests
 
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry,
+            _output);
 
         await harness.Manager.StartAsync(ct);
         // Deterministic completion signal: StartAsync awaits the whole connect
@@ -206,7 +213,8 @@ public sealed class SmokeMcpServerHttpHeaderTests
 
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry,
+            _output);
 
         await harness.Manager.StartAsync(ct);
         // Deterministic completion signal: StartAsync awaits the whole connect
