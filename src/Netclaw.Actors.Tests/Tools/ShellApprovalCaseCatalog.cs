@@ -578,8 +578,8 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("pwsh", "Invoke-CustomAction", "Remove-Item"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "pwsh-data-script-block-stays-strict",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item victim.txt }'"),
+            "pwsh-corpus-418-data-script-block-stays-strict",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item target.txt }'"),
             Approvals.PersistentAnywhere("pwsh", "Write-Output", "Remove-Item"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
@@ -1049,6 +1049,22 @@ public static class ShellApprovalCases
             "function-definition-fails-closed",
             Bash("deploy() { git push; }; deploy"),
             Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "unknown-state-named-parameter-fails-closed",
+            Bash("printf '%s' \"$value\""),
+            Approvals.PersistentAnywhere("printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "nameref-deferred-execution-fails-closed",
+            Bash("declare -a values; declare -n current='values[$(printf marker >&2)0]'; " +
+                "cat <<EOF\n${current}\nEOF"),
+            Approvals.PersistentAnywhere("declare", "printf", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "source-builtin-payload-fails-closed",
+            Bash("source ./bootstrap.sh"),
+            Approvals.PersistentAnywhere("source"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "exec-command-resolution-mutation-fails-closed",
