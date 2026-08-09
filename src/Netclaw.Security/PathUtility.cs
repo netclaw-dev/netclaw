@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 
 using Netclaw.Configuration;
+using System.Text;
 
 namespace Netclaw.Security;
 
@@ -209,5 +210,46 @@ public static class PathUtility
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves each symbolic link in a path and preserves segments that do not exist.
+    /// </summary>
+    /// <remarks>
+    /// This method does not catch exceptions. Each security policy owns its failure behavior.
+    /// </remarks>
+    public static string ResolveSymlinksInPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath) ?? string.Empty;
+        var remainder = fullPath.Length > root.Length ? fullPath[root.Length..] : string.Empty;
+        var segments = remainder.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var pathBuilder = new StringBuilder(root);
+
+        foreach (var segment in segments)
+        {
+            if (pathBuilder.Length > 0 && pathBuilder[^1] != Path.DirectorySeparatorChar)
+                pathBuilder.Append(Path.DirectorySeparatorChar);
+            pathBuilder.Append(segment);
+
+            var partial = pathBuilder.ToString();
+            FileSystemInfo? target = Directory.Exists(partial)
+                ? new DirectoryInfo(partial).ResolveLinkTarget(returnFinalTarget: true)
+                : File.Exists(partial)
+                    ? new FileInfo(partial).ResolveLinkTarget(returnFinalTarget: true)
+                    : null;
+            if (target is not null)
+            {
+                pathBuilder.Clear();
+                pathBuilder.Append(target.FullName);
+            }
+
+            if (File.Exists(partial))
+                break;
+        }
+
+        return Normalize(pathBuilder.ToString());
     }
 }

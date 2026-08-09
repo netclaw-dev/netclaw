@@ -91,11 +91,21 @@ internal sealed class ScopedFileAccessPolicy
             return false;
         }
 
-        if (accessKind == AccessKind.Write
-            && IsSessionAutomationArtifactPath(fullPath, _profileResolver.ResolveSessionsDirectory()))
+        if (accessKind == AccessKind.Write)
         {
-            error = "Error: Session automation artifacts are read-only through generic file and shell tools.";
-            return false;
+            try
+            {
+                if (IsSessionAutomationArtifactPath(fullPath, _profileResolver.ResolveSessionsDirectory()))
+                {
+                    error = "Error: Session automation artifacts are read-only through generic file and shell tools.";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = $"Error: The path could not be checked for session automation artifacts: {ex.Message}";
+                return false;
+            }
         }
 
         var profile = _profileResolver.ResolveProfile(context);
@@ -188,6 +198,16 @@ internal sealed class ScopedFileAccessPolicy
         };
 
     private static bool IsSessionAutomationArtifactPath(string fullPath, string sessionsDirectory)
+    {
+        if (IsSessionAutomationArtifactPathCore(fullPath, sessionsDirectory))
+            return true;
+
+        var canonicalPath = PathUtility.ResolveSymlinksInPath(fullPath);
+        var canonicalSessionsDirectory = PathUtility.ResolveSymlinksInPath(sessionsDirectory);
+        return IsSessionAutomationArtifactPathCore(canonicalPath, canonicalSessionsDirectory);
+    }
+
+    private static bool IsSessionAutomationArtifactPathCore(string fullPath, string sessionsDirectory)
     {
         if (!PathUtility.IsWithinRoot(fullPath, sessionsDirectory))
             return false;

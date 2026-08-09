@@ -154,6 +154,28 @@ public sealed class AutonomousZoneClampTests : IDisposable
     }
 
     [Fact]
+    public void Symlink_alias_cannot_change_a_session_automation_artifact()
+    {
+        // Windows requires Developer Mode or elevation for this test operation.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var artifactDirectory = Path.Combine(
+            _sessionDir,
+            SessionDirectoryHelper.RemindersSubdirectory);
+        Directory.CreateDirectory(artifactDirectory);
+        var alias = Path.Combine(_outsideDir, "artifact-alias");
+        Directory.CreateSymbolicLink(alias, artifactDirectory);
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+
+        Assert.False(policy.TryResolveWritePath(
+            Path.Combine(alias, "daily.json"),
+            Ctx(TrustAudience.Personal, autonomous: false),
+            out _,
+            out _));
+    }
+
+    [Fact]
     public void Interactive_personal_outside_zone_is_unrestricted()
     {
         // Contrast: an interactive Personal session keeps Mode.All blanket access —
