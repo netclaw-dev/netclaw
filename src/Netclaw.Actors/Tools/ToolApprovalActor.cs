@@ -36,10 +36,12 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 : (IReadOnlyList<ApprovalEntry>)[];
 
             var unapproved = new List<string>(msg.Candidates.Count);
+            var candidateChecks = new List<ToolApprovalCandidateCheck>(msg.Candidates.Count);
             var approvedMatches = new List<ToolApprovalMatch>(msg.Candidates.Count);
             foreach (var candidate in msg.Candidates)
             {
                 var match = MatchApproval(msg.SessionId, msg.Audience, msg.ToolName, candidate, msg.Cwd, approved);
+                candidateChecks.Add(new ToolApprovalCandidateCheck(candidate, match));
                 if (match is null)
                 {
                     unapproved.Add(candidate.Verb);
@@ -50,7 +52,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 approvedMatches.Add(match);
             }
 
-            Sender.Tell(new UnapprovedPatternsResponse(new ToolApprovalCheckResult(unapproved, approvedMatches)));
+            Sender.Tell(new UnapprovedPatternsResponse(
+                new ToolApprovalCheckResult(unapproved, approvedMatches)
+                {
+                    CandidateChecks = candidateChecks
+                }));
         });
 
         Receive<RecordToolApproval>(msg =>

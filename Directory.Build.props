@@ -8,10 +8,10 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.25.4</VersionPrefix>
-    <VersionSuffix></VersionSuffix>
+    <VersionPrefix>0.26.0</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
     <PackageReleaseNotes>
-      Bug fixes: MCP tool catalog changes on connected servers are detected and refreshed automatically; MCP permissions tool-grid scroll position preserved when editing rows; static fd-dup redirects (2&amp;>1) no longer treated as dynamic shell syntax. 
+      Features: MCP OAuth surfaced at add time; mention-required thread replies with history backfill; file-read permissions match shell reach; TUI state preserved across navigation; background job and one-shot reminder cleanup. Bug fixes: approval prompts skip already-granted candidates; safe shell stages compose with one-time grants; background job control bypasses approval; failed one-shot reminders retry; phantom directory scopes and quoted free-text operands removed from stored patterns; trailing-slash globs scoped to parent; ToolAccessPolicy fail-closed. Dependency updates: Termina 0.16.1, SkiaSharp 4.151.1, Verify.XunitV3 31.28.0.
     </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>

@@ -36,6 +36,8 @@ public sealed class ShellCommandPolicyTests
     [InlineData("echo hello && sudo kill -9 123")]
     [InlineData("SUDO rm -rf /tmp")]
     [InlineData("bash -c \"sudo kill -9 123\"")]
+    [InlineData("sudo bash -lc \"git status\"")]
+    [InlineData("sudo /bin/bash -lc \"git status\"")]
     public void Denies_privilege_escalation_commands(string command)
     {
         var decision = _policy.Evaluate(command);
@@ -118,9 +120,23 @@ public sealed class ShellCommandPolicyTests
     [InlineData("timeout 5 bash -lc \"netclaw daemon stop\"")]
     [InlineData("nice -n 5 bash -lc \"netclaw daemon stop\"")]
     [InlineData("bash -c \"echo safe\" && bash -lc \"netclaw daemon stop\"")]
-    public void Denies_bash_wrapping_denied_command(string command)
+    [InlineData("dash -c \"netclaw daemon stop\"")]
+    [InlineData("/bin/dash -c \"netclaw daemon stop\"")]
+    [InlineData("/usr/bin/zsh -c \"netclaw daemon stop\"")]
+    [InlineData("ksh -c \"netclaw daemon stop\"")]
+    public void Denies_bourne_shell_wrapping_denied_command(string command)
     {
         var decision = _policy.EvaluateBash(command);
+        Assert.False(decision.Allowed);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
+    }
+
+    [Fact]
+    public void Denies_power_shell_child_hard_deny_command()
+    {
+        var decision = _policy.EvaluateBash(
+            "pwsh -NoProfile -NonInteractive -Command 'netclaw daemon stop'");
+
         Assert.False(decision.Allowed);
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }

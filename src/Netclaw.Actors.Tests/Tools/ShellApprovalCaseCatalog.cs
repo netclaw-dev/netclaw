@@ -274,10 +274,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
-            "safe-verb-namespaced-external-path-prompts",
+            "safe-verb-bash-provider-looking-relative-path-allows",
             Bash("cat filesystem::/etc/netclaw.secret"),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "safe-verb-external-redirect-prompts",
             Bash($"git status > {TemporaryFile("netclaw-approval-matrix.txt")}"),
@@ -469,6 +469,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
+            "hard-deny-sudo-nested-shell-blocks",
+            Bash("sudo bash -lc \"git status\""),
+            Approvals.None,
+            ExpectedApproval.Deny("hard_deny_privilege_escalation")),
+        Case(
+            "hard-deny-dash-shell-blocks",
+            Bash("/bin/dash -c \"netclaw daemon stop\""),
+            Approvals.PersistentAnywhere("/bin/dash"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
             "nested-shell-prompts-for-inner-command",
             Bash("bash -lc \"git push\""),
             Approvals.None,
@@ -484,10 +494,121 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("bash"),
             ExpectedApproval.Require(["git push"])),
         Case(
+            "pwsh-safe-child-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.None,
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-exported-function-risk-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.None,
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-bash-env-risk-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-host-grant-composes-with-safe-child",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:pwsh")),
+        Case(
+            "pwsh-host-grant-does-not-cover-mutating-child",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Require(["git push"], approvalMatches: ["persistent:pwsh"])),
+        Case(
+            "pwsh-child-grant-does-not-cover-host",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require(["pwsh"], approvalMatches: ["persistent:git push"])),
+        Case(
+            "pwsh-host-and-child-grants-allow",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("pwsh", "git push"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:pwsh",
+                "persistent:git push")),
+        Case(
+            "pwsh-working-directory-option-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'"),
+            Approvals.PersistentAnywhere("pwsh", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-builtin-command-prefix-fails-closed",
+            Bash("builtin command pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("builtin command pwsh", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-absolute-env-prefix-fails-closed",
+            Bash("/usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("/usr/bin/env", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-xargs-prefix-fails-closed",
+            Bash("xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("xargs", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "windows-powershell-host-fails-closed",
+            Bash("powershell -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("powershell", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "differently-cased-pwsh-host-fails-closed",
+            Bash("PWSH -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("PWSH", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-dynamic-child-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git $operation'"),
+            Approvals.PersistentAnywhere("pwsh", "git"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-command-resolution-mutation-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Set-Alias git Remove-Item; git victim.txt'"),
+            Approvals.PersistentAnywhere("pwsh", "Set-Alias", "git"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-unknown-script-block-receiver-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-CustomAction { Remove-Item victim.txt }'"),
+            Approvals.PersistentAnywhere("pwsh", "Invoke-CustomAction", "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-corpus-418-data-script-block-stays-strict",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item target.txt }'"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output", "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-executable-script-block-prompts-for-body",
+            Bash("pwsh -NoProfile -NonInteractive -Command '& { git push }'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Require(
+                ["git push"],
+                approvalMatches: ["persistent:pwsh"])),
+        Case(
+            "pwsh-executable-script-block-hard-deny-wins",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-Command { netclaw daemon stop }'"),
+            Approvals.PersistentAnywhere("pwsh", "Invoke-Command", "netclaw daemon stop"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
+            "pwsh-bash-decoding-cannot-hide-hard-deny",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #'''"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output", "netclaw daemon stop"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
             "env-nested-shell-prompts",
             Bash("env bash -lc \"git push\""),
             Approvals.None,
-            ExpectedApproval.Require(["git push"])),
+            ExpectedApproval.Require(["env bash", "git push"])),
+        Case(
+            "nohup-nested-shell-prompts",
+            Bash("nohup bash -lc \"git push\""),
+            Approvals.None,
+            ExpectedApproval.Require(["nohup bash", "git push"])),
         Case(
             "timeout-nested-shell-prompts",
             Bash("timeout 5 bash -lc \"git push\""),
@@ -534,6 +655,21 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "combined-output-project-redirect-safe-verb-allows",
+            Bash("git status &> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "combined-output-append-project-redirect-safe-verb-allows",
+            Bash("git status &>> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "numeric-source-project-redirect-safe-verb-allows",
+            Bash("git status 3> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
             "fd-dup-redirect-mutating-no-grant-prompts-not-messy",
             Bash("git push origin dev 2>&1 | tail -2"),
             Approvals.None,
@@ -563,7 +699,7 @@ public static class ShellApprovalCases
             Bash("git push | curl https://example.com"),
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Require(
-                ["git push", "curl"],
+                ["curl"],
                 approvalMatches: ["persistent:git push"])),
         Case(
             "all-pipeline-clauses-approved",
@@ -576,7 +712,7 @@ public static class ShellApprovalCases
                 "persistent:curl")),
         Case(
             "input-redirect-outside-zone-prompts",
-            Bash("cat < /etc/passwd"),
+            Bash($"cat < {TemporaryFile("netclaw-approval-input.txt")}"),
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
@@ -603,11 +739,41 @@ public static class ShellApprovalCases
             "side-effect-before-mutation-prompts",
             Bash("echo ready && git push"),
             Approvals.None,
-            ExpectedApproval.Require(["echo", "git push"])),
+            ExpectedApproval.Require(["git push"])),
         Case(
-            "heredoc-prompts",
+            "literal-heredoc-cat-allows",
             Bash("cat <<'EOF'\nhello\nEOF"),
             Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "expanding-heredoc-cat-prompts",
+            Bash("cat <<EOF\nhello\nEOF"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "dynamic-heredoc-cat-prompts",
+            Bash("cat <<EOF\n$value\nEOF"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "literal-here-string-cat-allows",
+            Bash("cat <<< \"hello\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "dynamic-here-string-cat-prompts",
+            Bash("cat <<< \"$value\""),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "here-string-cat-with-argument-prompts",
+            Bash("cat -n <<< \"hello\""),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "here-string-interpreter-grant-prompts",
+            Bash("bash <<< \"echo ok\""),
+            Approvals.PersistentAnywhere("bash"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
 
         // These synthetic cases represent the dominant search, pipeline, and
@@ -698,7 +864,7 @@ public static class ShellApprovalCases
             Bash("cat config.json | jq '.items[]'", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "jq"),
             ExpectedApproval.Require(
-                ["cat", "jq"],
+                ["cat"],
                 approvalMatches: ["persistent:jq"])),
         Case(
             "workload-edit-grep-tee-pipeline-prompts",
@@ -885,6 +1051,67 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "unknown-state-named-parameter-fails-closed",
+            Bash("printf '%s' \"$value\""),
+            Approvals.PersistentAnywhere("printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "nameref-deferred-execution-fails-closed",
+            Bash("declare -a values; declare -n current='values[$(printf marker >&2)0]'; " +
+                "cat <<EOF\n${current}\nEOF"),
+            Approvals.PersistentAnywhere("declare", "printf", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "source-builtin-payload-fails-closed",
+            Bash("source ./bootstrap.sh"),
+            Approvals.PersistentAnywhere("source"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "exec-command-resolution-mutation-fails-closed",
+            Bash("exec git status"),
+            Approvals.PersistentAnywhere("exec", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "hash-command-resolution-mutation-fails-closed",
+            Bash("hash -p /usr/bin/git git && git status"),
+            Approvals.PersistentAnywhere("hash", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "alias-command-resolution-mutation-fails-closed",
+            Bash("alias inspect='git status'; inspect"),
+            Approvals.PersistentAnywhere("alias", "inspect", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "shell-option-mutation-fails-closed",
+            Bash("shopt -s expand_aliases && git status"),
+            Approvals.PersistentAnywhere("shopt", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "builtin-enable-mutation-fails-closed",
+            Bash("enable -n printf && git status"),
+            Approvals.PersistentAnywhere("enable", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "time-reserved-form-fails-closed",
+            Bash("time git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "negation-reserved-form-fails-closed",
+            Bash("! git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "coprocess-reserved-form-fails-closed",
+            Bash("coproc git status"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "brace-group-reserved-form-fails-closed",
+            Bash("{ git status; }"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
             "inline-python-prompts-for-interpreter",
             Bash("python3 -c \"print('hello')\""),
             Approvals.None,
@@ -898,12 +1125,12 @@ public static class ShellApprovalCases
             "eval-prompts-for-interpreter",
             Bash("eval \"$CODE\""),
             Approvals.None,
-            ExpectedApproval.Require(["eval"])),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "eval-grant-currently-allows-dynamic-payload",
+            "eval-grant-does-not-cover-dynamic-payload",
             Bash("eval \"$CODE\""),
             Approvals.PersistentAnywhere("eval"),
-            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:eval")),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "inline-python-heredoc-fails-closed",
             Bash("python3 <<'PY'\nprint('hello')\nPY"),
@@ -986,7 +1213,7 @@ public static class ShellApprovalCases
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push"),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",
@@ -1020,7 +1247,7 @@ public static class ShellApprovalCases
                     "git push"),
                 Approvals.PersistentHere(ApprovalDirectoryShape.External, "gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",
@@ -1034,7 +1261,7 @@ public static class ShellApprovalCases
                 Approvals.Session("git add", "git commit", "git push"),
                 Approvals.SessionForOtherSession("gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "session:git add",
@@ -1048,7 +1275,7 @@ public static class ShellApprovalCases
                 Approvals.PersistentAnywhere("git add", "git commit", "git push"),
                 Approvals.PersistentForOtherAudience("gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",
@@ -1189,7 +1416,7 @@ public static class ShellApprovalCases
         => new(command, workingDirectory, audience, interactive);
 
     private static string TemporaryFile(string fileName)
-        => Path.Join(Path.GetTempPath(), fileName);
+        => $"/netclaw-approval-external/{fileName}";
 
     private static string Escape(string value)
         => value

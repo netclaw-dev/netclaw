@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text;
+using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
@@ -181,6 +182,12 @@ public sealed class ToolPathPolicy
                 return true;
         }
 
+        if (!OperatingSystem.IsWindows()
+            && StructuredAnalysisReferencesDeniedPath(command, workingDirectory))
+        {
+            return true;
+        }
+
         foreach (var token in tokens)
         {
             if (!LooksLikePath(token))
@@ -233,6 +240,63 @@ public sealed class ToolPathPolicy
             return true;
 
         return false;
+    }
+
+    private bool StructuredAnalysisReferencesDeniedPath(
+        string command,
+        string? workingDirectory)
+    {
+        var analysis = ShellCommandAnalyzer.Bash.Analyze(command, workingDirectory);
+        if (analysis.Failure != ShellAnalysisFailure.None)
+            return false;
+
+        foreach (var occurrence in analysis.Commands)
+        {
+            foreach (var argument in occurrence.Clause.Args)
+            {
+                if (argument.IsPath
+                    && !string.IsNullOrWhiteSpace(argument.Resolved)
+                    && IsDeniedAgainst(argument.Resolved, _shellDeniedPaths))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var effective in occurrence.EffectiveArguments)
+            {
+                if (effective.ClauseElementIndex < 0
+                    || effective.ClauseElementIndex >= occurrence.Clause.Elements.Count
+                    || !occurrence.Clause.Elements[effective.ClauseElementIndex].IsPath)
+                {
+                    continue;
+                }
+
+                if (DomainReferencesDeniedPath(effective.Value))
+                    return true;
+            }
+
+            foreach (var redirect in occurrence.Redirects)
+            {
+                if (redirect.IsPathRelevant && DomainReferencesDeniedPath(redirect.Target))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool DomainReferencesDeniedPath(ShellValueDomain domain)
+    {
+        if (domain.Kind is ShellValueDomainKind.Exact or ShellValueDomainKind.FiniteSet)
+        {
+            return domain.Values.Any(value =>
+                !string.IsNullOrWhiteSpace(value)
+                && IsDeniedAgainst(value, _shellDeniedPaths));
+        }
+
+        return domain.Kind == ShellValueDomainKind.Pattern
+            && !string.IsNullOrWhiteSpace(domain.CoveringDirectory)
+            && IsDeniedAgainst(domain.CoveringDirectory, _shellDeniedPaths);
     }
 
     private static bool ContainsProtectedPathHint(string slashCommand)

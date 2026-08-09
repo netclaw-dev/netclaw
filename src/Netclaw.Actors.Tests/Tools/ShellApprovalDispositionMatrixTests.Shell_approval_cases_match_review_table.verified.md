@@ -20,8 +20,8 @@
 | safe-verb-external-path-prompts | Personal | Project | Interactive | cat /etc/passwd | none | RequiresApproval | approval required | cat | No |
 | safe-verb-quoted-external-path-prompts | Personal | Project | Interactive | cat "/etc/netclaw.secret" | none | RequiresApproval | approval required | cat | No |
 | safe-verb-traversal-external-path-prompts | Personal | Project | Interactive | cat safe/../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
-| safe-verb-namespaced-external-path-prompts | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
-| safe-verb-external-redirect-prompts | Personal | Project | Interactive | git status > {TempPath}netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
+| safe-verb-bash-provider-looking-relative-path-allows | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-verb-external-redirect-prompts | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
 | mutating-verb-project-prompts | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | four-safe-mixed-operator-clauses-allow | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -43,7 +43,7 @@
 | native-dynamic-file-reference-fails-closed | Personal | Project | Interactive | curl --data=@$REQUEST_FILE https://example.invalid/api | persistent[project]:curl | RequiresApproval | approval required | none | Yes |
 | local-glob-allows-safe-verb | Personal | Project | Interactive | ls *.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | local-glob-reuses-project-grant | Personal | Project | Interactive | rm *.tmp | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
-| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}netclaw-ext-glob/*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
+| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm /netclaw-approval-external/netclaw-ext-glob/*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
 | glob-traversal-fails-closed | Personal | Project | Interactive | cat */../../secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | glob-intermediate-symlink-scope-fails-closed | Personal | Project | Interactive | cat artifacts/*/secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | directory-listing-glob-in-project-auto-allows | Personal | Project | Interactive | ls -d subdirs/*/ | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -56,10 +56,33 @@
 | three-step-release-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push origin dev | none | RequiresApproval | approval required | git add, git commit, git push origin dev | No |
 | hard-deny-pipeline-tail-blocks | Personal | Project | Interactive | echo safe \| netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | hard-deny-nested-shell-blocks | Personal | Project | Interactive | bash -lc "netclaw daemon stop" | none | Denied | hard_deny_self_destructive | none | Not applicable |
+| hard-deny-sudo-nested-shell-blocks | Personal | Project | Interactive | sudo bash -lc "git status" | none | Denied | hard_deny_privilege_escalation | none | Not applicable |
+| hard-deny-dash-shell-blocks | Personal | Project | Interactive | /bin/dash -c "netclaw daemon stop" | persistent[anywhere]:/bin/dash | Denied | hard_deny_self_destructive | none | Not applicable |
 | nested-shell-prompts-for-inner-command | Personal | Project | Interactive | bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
 | nested-shell-inner-grant-allows | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | nested-shell-wrapper-grant-does-not-cover-inner-command | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:bash | RequiresApproval | approval required | git push | No |
-| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
+| pwsh-safe-child-still-requires-host-approval | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git status' | none | RequiresApproval | approval required | pwsh | No |
+| pwsh-exported-function-risk-still-requires-host-approval | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git status' | none | RequiresApproval | approval required | pwsh | No |
+| pwsh-bash-env-risk-still-requires-host-approval | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git status' | persistent[anywhere]:git status | RequiresApproval | approval required | pwsh | No |
+| pwsh-host-grant-composes-with-safe-child | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git status' | persistent[anywhere]:pwsh | Allowed | StoredApproval | none | Not applicable |
+| pwsh-host-grant-does-not-cover-mutating-child | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:pwsh | RequiresApproval | approval required | git push | No |
+| pwsh-child-grant-does-not-cover-host | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:git push | RequiresApproval | approval required | pwsh | No |
+| pwsh-host-and-child-grants-allow | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:pwsh, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
+| pwsh-working-directory-option-fails-closed | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status' | persistent[anywhere]:pwsh, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| pwsh-builtin-command-prefix-fails-closed | Personal | Project | Interactive | builtin command pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:builtin command pwsh, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| pwsh-absolute-env-prefix-fails-closed | Personal | Project | Interactive | /usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:/usr/bin/env, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| pwsh-xargs-prefix-fails-closed | Personal | Project | Interactive | xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git push' | persistent[anywhere]:xargs, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| windows-powershell-host-fails-closed | Personal | Project | Interactive | powershell -NoProfile -NonInteractive -Command 'git status' | persistent[anywhere]:powershell, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| differently-cased-pwsh-host-fails-closed | Personal | Project | Interactive | PWSH -NoProfile -NonInteractive -Command 'git status' | persistent[anywhere]:PWSH, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| pwsh-dynamic-child-fails-closed | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'git $operation' | persistent[anywhere]:pwsh, persistent[anywhere]:git | RequiresApproval | approval required | none | Yes |
+| pwsh-command-resolution-mutation-fails-closed | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'Set-Alias git Remove-Item; git victim.txt' | persistent[anywhere]:pwsh, persistent[anywhere]:Set-Alias, persistent[anywhere]:git | RequiresApproval | approval required | none | Yes |
+| pwsh-unknown-script-block-receiver-fails-closed | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'Invoke-CustomAction { Remove-Item victim.txt }' | persistent[anywhere]:pwsh, persistent[anywhere]:Invoke-CustomAction, persistent[anywhere]:Remove-Item | RequiresApproval | approval required | none | Yes |
+| pwsh-corpus-418-data-script-block-stays-strict | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item target.txt }' | persistent[anywhere]:pwsh, persistent[anywhere]:Write-Output, persistent[anywhere]:Remove-Item | RequiresApproval | approval required | none | Yes |
+| pwsh-executable-script-block-prompts-for-body | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command '& { git push }' | persistent[anywhere]:pwsh | RequiresApproval | approval required | git push | No |
+| pwsh-executable-script-block-hard-deny-wins | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'Invoke-Command { netclaw daemon stop }' | persistent[anywhere]:pwsh, persistent[anywhere]:Invoke-Command, persistent[anywhere]:netclaw daemon stop | Denied | hard_deny_self_destructive | none | Not applicable |
+| pwsh-bash-decoding-cannot-hide-hard-deny | Personal | Project | Interactive | pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #''' | persistent[anywhere]:pwsh, persistent[anywhere]:Write-Output, persistent[anywhere]:netclaw daemon stop | Denied | hard_deny_self_destructive | none | Not applicable |
+| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | env bash, git push | No |
+| nohup-nested-shell-prompts | Personal | Project | Interactive | nohup bash -lc "git push" | none | RequiresApproval | approval required | nohup bash, git push | No |
 | timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
 | subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git push | No |
 | command-substitution-fails-closed | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | none | Yes |
@@ -69,20 +92,29 @@
 | fd-dup-redirect-safe-pipeline-allows | Personal | Project | Interactive | git log --oneline -5 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-close-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-move-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| combined-output-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status &> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| combined-output-append-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status &>> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| numeric-source-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status 3> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-dup-redirect-mutating-no-grant-prompts-not-messy | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev | No |
 | dynamic-fd-redirect-fails-closed | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
 | background-list-prompts-for-mutating-tail | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
 | unbalanced-quote-fails-closed | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
 | multiline-argument-prompts | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
-| approved-pipeline-head-does-not-cover-tail | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | git push, curl | No |
+| approved-pipeline-head-does-not-cover-tail | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | curl | No |
 | all-pipeline-clauses-approved | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push, persistent[anywhere]:curl | Allowed | StoredApproval | none | Not applicable |
-| input-redirect-outside-zone-prompts | Personal | Project | Interactive | cat < /etc/passwd | none | RequiresApproval | approval required | cat | No |
-| error-redirect-outside-zone-prompts | Personal | Project | Interactive | git status 2> {TempPath}netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
+| input-redirect-outside-zone-prompts | Personal | Project | Interactive | cat < /netclaw-approval-external/netclaw-approval-input.txt | none | RequiresApproval | approval required | cat | No |
+| error-redirect-outside-zone-prompts | Personal | Project | Interactive | git status 2> /netclaw-approval-external/netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
 | cd-current-then-safe-allows | Personal | Project | Interactive | cd . && git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | cd-parent-then-safe-prompts | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | multiple-cd-then-safe-prompts | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
-| side-effect-before-mutation-prompts | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | echo, git push | No |
-| heredoc-prompts | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | RequiresApproval | approval required | none | Yes |
+| side-effect-before-mutation-prompts | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | git push | No |
+| literal-heredoc-cat-allows | Personal | Project | Interactive | cat <<'EOF'\nhello\nEOF | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| expanding-heredoc-cat-prompts | Personal | Project | Interactive | cat <<EOF\nhello\nEOF | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| dynamic-heredoc-cat-prompts | Personal | Project | Interactive | cat <<EOF\n$value\nEOF | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| literal-here-string-cat-allows | Personal | Project | Interactive | cat <<< "hello" | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| dynamic-here-string-cat-prompts | Personal | Project | Interactive | cat <<< "$value" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| here-string-cat-with-argument-prompts | Personal | Project | Interactive | cat -n <<< "hello" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| here-string-interpreter-grant-prompts | Personal | Project | Interactive | bash <<< "echo ok" | persistent[anywhere]:bash | RequiresApproval | approval required | none | Yes |
 | workload-search-rg-in-project-allows | Personal | Project | Interactive | rg -n "TODO" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-grep-in-project-allows | Personal | Project | Interactive | grep -R "error" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-find-in-project-allows | Personal | Project | Interactive | find src -name "*.cs" -print | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -99,7 +131,7 @@
 | workload-search-jq-direct-prompts | Personal | Project | Interactive | jq '.items[]' config.json | none | RequiresApproval | approval required | jq | No |
 | workload-search-jq-direct-grant-allows | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
 | workload-search-cat-jq-stored-tail-allows | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
-| workload-search-cat-jq-external-stored-tail-still-prompts | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | RequiresApproval | approval required | cat, jq | No |
+| workload-search-cat-jq-external-stored-tail-still-prompts | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | RequiresApproval | approval required | cat | No |
 | workload-edit-grep-tee-pipeline-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-prompts | Personal | Project | Interactive | tee reports/output.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-grant-allows | Personal | Project | Interactive | tee reports/output.txt | persistent[project]:tee | Allowed | StoredApproval | none | Not applicable |
@@ -135,10 +167,22 @@
 | process-substitution-fails-closed | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
 | arithmetic-expansion-fails-closed | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | Yes |
 | function-definition-fails-closed | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
+| unknown-state-named-parameter-fails-closed | Personal | Project | Interactive | printf '%s' "$value" | persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
+| nameref-deferred-execution-fails-closed | Personal | Project | Interactive | declare -a values; declare -n current='values[$(printf marker >&2)0]'; cat <<EOF\n${current}\nEOF | persistent[anywhere]:declare, persistent[anywhere]:printf, persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
+| source-builtin-payload-fails-closed | Personal | Project | Interactive | source ./bootstrap.sh | persistent[anywhere]:source | RequiresApproval | approval required | none | Yes |
+| exec-command-resolution-mutation-fails-closed | Personal | Project | Interactive | exec git status | persistent[anywhere]:exec, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| hash-command-resolution-mutation-fails-closed | Personal | Project | Interactive | hash -p /usr/bin/git git && git status | persistent[anywhere]:hash, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| alias-command-resolution-mutation-fails-closed | Personal | Project | Interactive | alias inspect='git status'; inspect | persistent[anywhere]:alias, persistent[anywhere]:inspect, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| shell-option-mutation-fails-closed | Personal | Project | Interactive | shopt -s expand_aliases && git status | persistent[anywhere]:shopt, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| builtin-enable-mutation-fails-closed | Personal | Project | Interactive | enable -n printf && git status | persistent[anywhere]:enable, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| time-reserved-form-fails-closed | Personal | Project | Interactive | time git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| negation-reserved-form-fails-closed | Personal | Project | Interactive | ! git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| coprocess-reserved-form-fails-closed | Personal | Project | Interactive | coproc git status | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
+| brace-group-reserved-form-fails-closed | Personal | Project | Interactive | { git status; } | persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
 | inline-python-prompts-for-interpreter | Personal | Project | Interactive | python3 -c "print('hello')" | none | RequiresApproval | approval required | python3 | No |
 | inline-python-interpreter-grant-currently-allows | Personal | Project | Interactive | python3 -c "print('hello')" | persistent[anywhere]:python3 | Allowed | StoredApproval | none | Not applicable |
-| eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | eval | No |
-| eval-grant-currently-allows-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | Allowed | StoredApproval | none | Not applicable |
+| eval-prompts-for-interpreter | Personal | Project | Interactive | eval "$CODE" | none | RequiresApproval | approval required | none | Yes |
+| eval-grant-does-not-cover-dynamic-payload | Personal | Project | Interactive | eval "$CODE" | persistent[anywhere]:eval | RequiresApproval | approval required | none | Yes |
 | inline-python-heredoc-fails-closed | Personal | Project | Interactive | python3 <<'PY'\nprint('hello')\nPY | persistent[anywhere]:python3 | RequiresApproval | approval required | none | Yes |
 | empty-command-fails-closed | Personal | Project | Interactive |  | none | RequiresApproval | approval required | none | No |
 | whitespace-command-fails-closed | Personal | Project | Interactive |     | none | RequiresApproval | approval required | none | No |
@@ -152,11 +196,11 @@
 | partial-compound-grant-prompts | Personal | Project | Interactive | git status && git push | persistent[anywhere]:git status | RequiresApproval | approval required | git push | No |
 | four-unapproved-clauses-prompt | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | none | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
 | four-anywhere-grants-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
-| four-one-missing-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-one-missing-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push | RequiresApproval | approval required | gh pr merge | No |
 | four-here-grants-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[project]:git add, persistent[project]:git commit, persistent[project]:git push, persistent[project]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
-| four-one-wrong-directory-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[project]:git add, persistent[project]:git commit, persistent[project]:git push, persistent[external]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
-| four-one-other-session-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:git commit, session[this-chat]:git push, session[other-chat]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
-| four-one-other-audience-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere,Team]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
+| four-one-wrong-directory-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[project]:git add, persistent[project]:git commit, persistent[project]:git push, persistent[external]:gh pr merge | RequiresApproval | approval required | gh pr merge | No |
+| four-one-other-session-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:git commit, session[this-chat]:git push, session[other-chat]:gh pr merge | RequiresApproval | approval required | gh pr merge | No |
+| four-one-other-audience-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere,Team]:gh pr merge | RequiresApproval | approval required | gh pr merge | No |
 | four-mixed-grant-sources-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:gh pr merge, persistent[project]:git commit, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | safe-and-stored-authority-compose | Personal | Project | Interactive | git status && git push && git log && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-hard-deny-beats-grants | Personal | Project | Interactive | git add . && git commit -m fix && netclaw daemon stop && git push | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:netclaw daemon stop, persistent[anywhere]:git push | Denied | hard_deny_self_destructive | none | Not applicable |

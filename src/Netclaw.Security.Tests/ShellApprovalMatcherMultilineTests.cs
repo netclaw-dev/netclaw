@@ -77,4 +77,15 @@ public sealed class ShellApprovalMatcherMultilineTests
         Assert.Contains(candidates, c => c.Verb == "cd" && c.Directory == "/tmp");
         Assert.Contains(candidates, c => c.Verb == "rm" && c.Directory == "/tmp/foo");
     }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_uncertain_cwd_without_absolute_scope_fails_closed()
+    {
+        // A newline runs git even if cd fails. Its cwd can therefore be the
+        // original directory or /tmp, and no persistent scope is safe.
+        var arguments = Args("cd /tmp\ngit status");
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
 }

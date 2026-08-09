@@ -294,7 +294,7 @@ public sealed class OpenAiCodexTests
         }
 
         [Fact]
-        public async Task ProbeAsync_WithOAuthToken_QueriesCodexModelsEndpoint()
+        public async Task ProbeAsync_WithOAuthToken_QueriesCurrentCodexModelsEndpoint()
         {
             HttpRequestMessage? capturedRequest = null;
             var handler = new FakeHttpMessageHandler(request =>
@@ -306,14 +306,14 @@ public sealed class OpenAiCodexTests
                     {
                         new
                         {
-                            slug = "gpt-live-codex",
+                            slug = "gpt-5.6-sol",
                             visibility = "list",
                             context_window = 272000,
                             input_modalities = new[] { "text", "image" },
                         },
                         new
                         {
-                            slug = "gpt-hidden",
+                            slug = "gpt-5.6-sol-wm",
                             visibility = "hide",
                             context_window = 123,
                         }
@@ -334,7 +334,7 @@ public sealed class OpenAiCodexTests
             Assert.True(result.Success);
             Assert.Null(result.ErrorMessage);
             var model = Assert.Single(result.Models);
-            Assert.Equal("gpt-live-codex", model.ModelId.Value);
+            Assert.Equal("gpt-5.6-sol", model.ModelId.Value);
             Assert.Equal(272000, model.ContextWindowTokens);
             Assert.Equal(ModelModality.Text | ModelModality.Image, model.InputModalities);
             // The catalog row omits output_modalities; discovery reports it as unknown
@@ -344,7 +344,7 @@ public sealed class OpenAiCodexTests
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(
-                $"{OpenAiDescriptor.CodexBackendEndpoint}/models?client_version={OpenAiDescriptor.CodexModelCatalogClientVersion}",
+                $"{OpenAiDescriptor.CodexBackendEndpoint}/models?client_version=0.147.0",
                 capturedRequest!.RequestUri!.ToString());
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization!.Scheme);
             Assert.Equal("oauth-token", capturedRequest.Headers.Authorization.Parameter);

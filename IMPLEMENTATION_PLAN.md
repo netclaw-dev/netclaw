@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-06-01
+Last updated: 2026-08-09
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -128,6 +128,8 @@ Done when:
   still requires approval.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
   can persist.
+- [x] A prompt excludes candidates that existing session or persistent grants
+  already cover, while it preserves exact directory-scoped occurrences.
 - [x] A one-time retry is bound to the exact prompted candidate set, including
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
@@ -135,8 +137,28 @@ Done when:
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
-- [ ] Netclaw consumes the ShellSyntaxTree v0.3 occurrence model for bounded
-  loops, substitutions, and explicit redirects after the composition slice.
+- [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
+  explicit Bash redirect facts for the existing grammar.
+- [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
+  Static descriptor redirects no longer appear dynamic.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
+  command-resolution mutation and reserved execution forms into the strict
+  181-case review matrix.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.2` for one exact POSIX
+  `pwsh -NoProfile -NonInteractive -Command '<static payload>'` wrapper. It
+  keeps the outer host and every complete PowerShell child as independent
+  approval occurrences.
+- [x] The 204-case shell approval review table proves PowerShell host and child
+  grant composition, intrinsic direct-call script blocks, nested hard deny,
+  decoded protected paths, and strict handling for dynamic values, named
+  script-block receivers, command-resolution changes, host-option near misses,
+  Windows wrappers, `BASH_ENV`, and exported-function risk.
+- [x] A constrained stdin grammar allows a complete literal heredoc or bounded
+  here string only for argument-free `cat`. Unknown data, expanding heredocs,
+  arguments, wrappers, interpreters, and stored grants stay strict.
+- [ ] Netclaw interprets bounded loop arguments only after the executor can
+  prove the Bash initial variable state. The inherited shell state remains
+  fail closed because an ambient nameref can change assignment semantics.
 
 ### Priority: Simplify Tool Execution Context Architecture
 

@@ -145,12 +145,12 @@ public sealed class ShellCommandPolicy
     private ShellCommandDecision EvaluateBashAnalysis(string command)
     {
         var analysis = Analyzer.Analyze(command);
-        if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Clauses.Count == 0)
+        if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Commands.Count == 0)
             return EvaluateLegacySegments(command);
 
-        foreach (var clause in analysis.Clauses)
+        foreach (var occurrence in analysis.Commands)
         {
-            var decision = EvaluateClause(clause);
+            var decision = EvaluateClause(occurrence.Clause);
             if (!decision.Allowed)
                 return decision;
         }

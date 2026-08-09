@@ -28,6 +28,8 @@ namespace Netclaw.Actors.Tests.Tools;
 /// </summary>
 public sealed class ToolAccessPolicyRequiredDependenciesTests
 {
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private static ToolConfig ShellConfig()
         => new() { ShellMode = ShellExecutionMode.HostAllowed };
 
@@ -81,5 +83,34 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
             ToolInput.Create("Command", $"cat {Path.Combine(otherRoot, "notes.txt")}"));
 
         Assert.NotEqual("shell_references_protected_path", otherDecision.DenyReason);
+    }
+
+    [SlopwatchSuppress("SW001", "This regression verifies Bash decoding before PowerShell child path policy.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The PowerShell child wrapper requires the POSIX Bash host.")]
+    public void Protected_path_control_checks_decoded_power_shell_child_path()
+    {
+        var deniedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-protected-root",
+            "config");
+        var policy = new ToolAccessPolicy(
+            ShellConfig(),
+            Defaults(),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([deniedRoot]));
+        var decodedPath = Path.Combine(deniedRoot, "secret.txt");
+        var authoredPath = decodedPath.Replace("config", "con\"fig", StringComparison.Ordinal);
+        var command =
+            $"pwsh -NoProfile -NonInteractive -Command 'Get-Content {authoredPath}\"'";
+
+        Assert.DoesNotContain(deniedRoot, command, StringComparison.Ordinal);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", command));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 }

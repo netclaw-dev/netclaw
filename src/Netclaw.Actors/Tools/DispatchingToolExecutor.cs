@@ -352,17 +352,42 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                         context.Approval.Cwd,
                         ct);
                     approvalMatches = approvalCheck.ApprovedMatches;
+                    var hasExactCandidateChecks = TryGetExactUnapprovedCandidates(
+                        approvalCheck,
+                        candidatesForCheck,
+                        out var unapprovedCandidates);
+                    var hasInconsistentCandidateChecks = approvalCheck.CandidateChecks is not null
+                                                         && !hasExactCandidateChecks;
 
-                    if (approvalCheck.UnapprovedPatterns.Count == 0)
+                    if (approvalCheck.UnapprovedPatterns.Count == 0
+                        && !hasInconsistentCandidateChecks)
                     {
                         context.Approval.ApplyDecision(
                             "PreviouslyApproved",
                             FormatApprovalMatches(approvalCheck.ApprovedMatches));
                     }
 
-                    accessDecision = approvalCheck.UnapprovedPatterns.Count == 0
-                        ? ToolAccessDecision.Allow(ToolAllowReason.StoredApproval)
-                        : ToolAccessDecision.RequiresApproval(approvalContext);
+                    if (approvalCheck.UnapprovedPatterns.Count == 0
+                        && !hasInconsistentCandidateChecks)
+                    {
+                        accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
+                    }
+                    else
+                    {
+                        // New approval services return exact candidate occurrences.
+                        // An older implementation can only return verb strings, so
+                        // keep the broader context instead of guessing which scoped
+                        // candidate lacks approval.
+                        var promptContext = hasExactCandidateChecks
+                            && unapprovedCandidates.Count > 0
+                            && string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal)
+                                ? ToolAccessPolicy.NarrowShellApprovalContext(
+                                    approvalContext,
+                                    unapprovedCandidates,
+                                    context.SessionDirectory)
+                                : approvalContext;
+                        accessDecision = ToolAccessDecision.RequiresApproval(promptContext);
+                    }
                 }
             }
         }
@@ -426,6 +451,48 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             accessDecision.AllowReason
             ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
             approvalMatches);
+    }
+
+    private static bool TryGetExactUnapprovedCandidates(
+        ToolApprovalCheckResult result,
+        IReadOnlyList<ApprovalCandidate> checkedCandidates,
+        out IReadOnlyList<ApprovalCandidate> unapprovedCandidates)
+    {
+        unapprovedCandidates = [];
+        if (result.CandidateChecks is not { } candidateChecks
+            || candidateChecks.Count != checkedCandidates.Count)
+        {
+            return false;
+        }
+
+        var exactUnapprovedCandidates = new List<ApprovalCandidate>();
+        var exactUnapprovedPatterns = new List<string>();
+        var exactApprovedMatches = new List<ToolApprovalMatch>();
+        for (var index = 0; index < candidateChecks.Count; index++)
+        {
+            var check = candidateChecks[index];
+            if (check.Candidate != checkedCandidates[index])
+                return false;
+
+            if (check.ApprovedMatch is { } approvedMatch)
+                exactApprovedMatches.Add(approvedMatch);
+            else
+            {
+                exactUnapprovedCandidates.Add(check.Candidate);
+                exactUnapprovedPatterns.Add(check.Candidate.Verb);
+            }
+        }
+
+        if (!exactUnapprovedPatterns.SequenceEqual(
+                result.UnapprovedPatterns,
+                StringComparer.OrdinalIgnoreCase)
+            || !exactApprovedMatches.SequenceEqual(result.ApprovedMatches))
+        {
+            return false;
+        }
+
+        unapprovedCandidates = exactUnapprovedCandidates;
+        return true;
     }
 
     private void LogAuthorizationDecision(string toolName, ToolAuthorizationDecision decision)
