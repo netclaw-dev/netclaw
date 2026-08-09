@@ -27,10 +27,10 @@ public sealed class ModelManagerViewModelTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public void StartsAtRoleOverview()
+    public void StartsInLoadingState()
     {
         using var vm = CreateViewModel();
-        Assert.Equal(ModelManagerState.RoleOverview, vm.CurrentState.Value);
+        Assert.Equal(ModelManagerState.Loading, vm.CurrentState.Value);
     }
 
     [Fact]

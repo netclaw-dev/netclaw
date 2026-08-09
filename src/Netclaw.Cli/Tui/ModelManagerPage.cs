@@ -67,6 +67,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
                 return ViewModel.CurrentState.Value switch
                 {
+                    ModelManagerState.Loading => BuildLoading(),
                     ModelManagerState.RoleOverview => BuildRoleOverview(),
                     ModelManagerState.SelectProvider => BuildProviderSelection(),
                     ModelManagerState.DiscoverModels => BuildDiscoverModels(),
@@ -135,9 +136,14 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     // Content views
     // ═══════════════════════════════════════════════════════════════════
 
+    private static ILayoutNode BuildLoading()
+    {
+        return new TextNode("  Loading model configuration...")
+            .WithForeground(Color.BrightBlack);
+    }
+
     private ILayoutNode BuildRoleOverview()
     {
-        var models = ViewModel.Models;
         var items = new[] { "Main", "Fallback", "Compaction" };
 
         _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, role switch
@@ -430,6 +436,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         RoleOverview = ModelManagerState.RoleOverview,
         SelectProvider = ModelManagerState.SelectProvider,
         ConfirmAssignment = ModelManagerState.ConfirmAssignment,
+        Loading = ModelManagerState.Loading,
         DiscoverProbing,
         DiscoverFailed,
         DiscoverEmpty,

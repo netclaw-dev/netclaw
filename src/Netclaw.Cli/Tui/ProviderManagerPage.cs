@@ -121,6 +121,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var state = ViewModel.CurrentState.Value;
         var revision = state is ProviderManagerState.Loading
             or ProviderManagerState.AddValidating
+            or ProviderManagerState.AddOAuthDeviceFlow
             or ProviderManagerState.Details
             ? ViewModel.StateVersion.Value
             : 0;
