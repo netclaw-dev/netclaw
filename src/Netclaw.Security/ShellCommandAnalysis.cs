@@ -23,23 +23,22 @@ internal sealed class ShellCommandAnalyzer
 
     public ShellCommandAnalysis Analyze(string command, string? workingDirectory = null)
     {
-        var clauses = new List<Clause>();
-        var failure = Analyze(command, workingDirectory, depth: 0, clauses);
-        return new ShellCommandAnalysis(clauses, failure);
+        var commands = new List<CommandOccurrence>();
+        var failure = Analyze(command, workingDirectory, depth: 0, commands);
+        return new ShellCommandAnalysis(commands, failure);
     }
 
     private static ShellAnalysisFailure Analyze(
         string command,
         string? workingDirectory,
         int depth,
-        List<Clause> clauses)
+        List<CommandOccurrence> commands)
     {
         if (depth > MaxWrapperDepth)
             return ShellAnalysisFailure.Unresolved;
 
-        // ShellSyntaxTree 0.2 does not expose a background-list tail.
-        // Treat that parser boundary as unresolved so the tail cannot inherit
-        // the first command's safe-verb or stored-approval result.
+        // Stable v0.3 excludes background lists. Keep this guard until the
+        // parser exposes their concurrency and shell-state boundaries.
         if (ContainsBackgroundListOperator(command))
             return ShellAnalysisFailure.Unresolved;
 
@@ -56,25 +55,45 @@ internal sealed class ShellCommandAnalyzer
             return ShellAnalysisFailure.Unresolved;
         }
 
-        if (parsed.IsUnparseable || parsed.Clauses.Count == 0)
+        if (parsed.IsUnparseable || parsed.Commands.Count == 0)
             return ShellAnalysisFailure.Unresolved;
 
         var innerCommands = PosixShellApprovalSemantics.Instance.ExtractInnerCommands(command);
-        var hasUnexpandedWrapper = parsed.Clauses.Any(IsUnexpandedWrapperClause);
-        if (innerCommands.Count == 0 || !hasUnexpandedWrapper)
+        var unexpandedWrappers = parsed.Commands
+            .Where(static occurrence => IsUnexpandedWrapperClause(occurrence.Clause))
+            .ToList();
+        if (innerCommands.Count == 0 || unexpandedWrappers.Count == 0)
         {
-            clauses.AddRange(parsed.Clauses);
+            commands.AddRange(parsed.Commands);
             return ShellAnalysisFailure.None;
         }
 
-        // A direct shell wrapper adds no independent authority scope.
-        // Prefix wrappers such as env and timeout remain visible.
-        clauses.AddRange(parsed.Clauses.Where(clause =>
-            !IsUnexpandedWrapperClause(clause) || HasShellInvokerInArguments(clause)));
+        // The v0.3 parser owns contracted wrapper forms. This fallback keeps
+        // Netclaw's extra bundled bash -lc form. Remove only a direct shell
+        // dispatch: prefix executables such as sudo, env, and nohup remain
+        // visible to hard-deny and approval policy.
+        commands.AddRange(parsed.Commands.Where(static occurrence =>
+            !IsUnexpandedWrapperClause(occurrence.Clause)
+            || !IsTransparentShellDispatch(occurrence.Clause)));
 
-        foreach (var innerCommand in innerCommands)
+        if (innerCommands.Count != unexpandedWrappers.Count)
+            return ShellAnalysisFailure.Unresolved;
+
+        for (var i = 0; i < innerCommands.Count; i++)
         {
-            var failure = Analyze(innerCommand, workingDirectory, depth + 1, clauses);
+            if (!TryResolveWrapperWorkingDirectory(
+                    unexpandedWrappers[i],
+                    workingDirectory,
+                    out var innerWorkingDirectory))
+            {
+                return ShellAnalysisFailure.Unresolved;
+            }
+
+            var failure = Analyze(
+                innerCommands[i],
+                innerWorkingDirectory,
+                depth + 1,
+                commands);
             if (failure != ShellAnalysisFailure.None)
                 return failure;
         }
@@ -82,13 +101,47 @@ internal sealed class ShellCommandAnalyzer
         return ShellAnalysisFailure.None;
     }
 
+    private static bool TryResolveWrapperWorkingDirectory(
+        CommandOccurrence occurrence,
+        string? inheritedWorkingDirectory,
+        out string? workingDirectory)
+    {
+        var cwdAttribution = occurrence.Clause.Args
+            .FirstOrDefault(static arg => arg.IsCwdAttribution);
+        if (cwdAttribution is null)
+        {
+            workingDirectory = inheritedWorkingDirectory;
+            return true;
+        }
+
+        if (occurrence.WorkingDirectory.Kind == ShellValueDomainKind.Exact
+            && occurrence.WorkingDirectory.Values.Count == 1
+            && !string.IsNullOrWhiteSpace(occurrence.WorkingDirectory.Values[0]))
+        {
+            workingDirectory = occurrence.WorkingDirectory.Values[0];
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(cwdAttribution.Resolved))
+        {
+            workingDirectory = cwdAttribution.Resolved;
+            return true;
+        }
+
+        workingDirectory = null;
+        return false;
+    }
+
     private static bool IsUnexpandedWrapperClause(Clause clause)
     {
         if (clause.Verb.Tokens.Count == 0 || clause.Args.Count == 0)
             return false;
 
-        if (!clause.Verb.Tokens.Any(IsShellInvokerToken) && !HasShellInvokerInArguments(clause))
+        if (!clause.Verb.Tokens.Any(IsShellInvokerToken)
+            && !HasShellInvokerInArguments(clause))
+        {
             return false;
+        }
 
         return clause.Args.Any(static arg =>
             arg.Raw.Length > 1
@@ -100,6 +153,40 @@ internal sealed class ShellCommandAnalyzer
     private static bool HasShellInvokerInArguments(Clause clause)
         => clause.Args.Any(static arg =>
             arg.Kind != ArgKind.DynamicSkip && IsShellInvokerToken(arg.Raw));
+
+    private static bool IsTransparentShellDispatch(Clause clause)
+    {
+        if (clause.Verb.Tokens.Count == 0)
+            return false;
+
+        if (IsShellInvokerToken(clause.Verb.Tokens[0]))
+            return true;
+
+        if (!string.Equals(
+                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                "command",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (clause.Verb.Tokens.Count > 1)
+            return IsShellInvokerToken(clause.Verb.Tokens[1]);
+
+        foreach (var arg in clause.Args.Where(static arg => !arg.IsCwdAttribution))
+        {
+            if (arg.Kind == ArgKind.DynamicSkip)
+                return false;
+
+            var token = ShellTokenizer.TrimShellPunctuation(arg.Raw);
+            if (token is "--" or "-p")
+                continue;
+
+            return IsShellInvokerToken(token);
+        }
+
+        return false;
+    }
 
     private static bool IsShellInvokerToken(string token)
         => PosixShellApprovalSemantics.IsPosixShellInvoker(
@@ -178,49 +265,99 @@ internal static class ShellGlobPath
 }
 
 internal sealed record ShellCommandAnalysis(
-    IReadOnlyList<Clause> Clauses,
+    IReadOnlyList<CommandOccurrence> Commands,
     ShellAnalysisFailure Failure)
 {
-    public bool HasDynamicSyntax => Clauses.Any(static clause =>
-        clause.Verb.IsDynamic
-        || clause.Args.Any(static arg => arg.Kind == ArgKind.DynamicSkip)
-        || clause.Args.Any(static arg =>
+    public bool HasDynamicSyntax => Commands.Any(static command =>
+        !command.IsComplete
+        || !Enum.IsDefined(command.ImmediateRole)
+        || command.ImmediateRole == CommandOccurrenceRole.Unknown
+        || command.Ancestry.Any(static frame =>
+            !Enum.IsDefined(frame.AncestorKind)
+            || frame.AncestorKind == ShellSyntaxKind.Unknown
+            || !Enum.IsDefined(frame.Region)
+            || frame.Region == CommandAncestryRegion.Unknown)
+        || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
+        || command.Clause.Verb.IsDynamic
+        || command.Clause.Args.Any(static arg =>
+            arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
+        || command.Clause.Args.Any(static arg =>
             arg.IsPath
             && arg.Kind != ArgKind.Glob
             && string.IsNullOrWhiteSpace(arg.Resolved))
         // A glob in a directory segment can hide traversal or a symlink.
         // Only a leaf glob has a fixed directory scope.
-        || clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
-        // An fd-dup target (&1, &2, &-) is a static file-descriptor number,
-        // not a dynamic token: ShellSyntaxTree marks it IsDynamicSkip to mean
-        // "do not path-resolve", but it carries no unresolved syntax and no
-        // filesystem scope (ResolveRedirectDirectory skips &-prefixed targets).
-        // Treating it as dynamic fails the whole command closed to an approval
-        // prompt for every `2>&1`-shaped command, even fully safe ones.
-        || clause.Redirects.Any(static redirect =>
-            redirect.IsDynamicSkip
-            && !IsStaticFileDescriptor(redirect.Target)));
+        || command.Clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
+        || command.Redirects.Any(HasUnresolvedRedirect));
 
-    /// <summary>
-    /// Returns true only for the static file-descriptor targets that
-    /// ShellSyntaxTree 0.2 recognizes: &amp;N, &amp;N-, and &amp;-.
-    /// </summary>
-    private static bool IsStaticFileDescriptor(string target)
+    private static bool HasUnsupportedWorkingDirectory(ShellValueDomain workingDirectory)
     {
-        if (target == "&-")
+        if (!Enum.IsDefined(workingDirectory.Kind))
             return true;
 
-        if (target.Length < 2 || target[0] != '&')
-            return false;
-
-        var index = 1;
-        while (index < target.Length && char.IsAsciiDigit(target[index]))
-            index++;
-
-        if (index == 1)
-            return false;
-
-        return index == target.Length
-               || index == target.Length - 1 && target[index] == '-';
+        return workingDirectory.Kind switch
+        {
+            ShellValueDomainKind.Unknown => workingDirectory.Values.Count != 0
+                || workingDirectory.Pattern is not null
+                || workingDirectory.CoveringDirectory is not null,
+            ShellValueDomainKind.Exact => workingDirectory.Values.Count != 1
+                || string.IsNullOrWhiteSpace(workingDirectory.Values[0])
+                || workingDirectory.Pattern is not null
+                || workingDirectory.CoveringDirectory is not null,
+            _ => true
+        };
     }
+
+    private static bool HasUnresolvedRedirect(RedirectAnalysis redirect)
+    {
+        if (!redirect.IsComplete
+            || !Enum.IsDefined(redirect.Source.Kind)
+            || redirect.Source.Kind == RedirectSourceKind.Unknown
+            || !Enum.IsDefined(redirect.Operation)
+            || redirect.Operation == RedirectOperation.Unknown)
+        {
+            return true;
+        }
+
+        var hasValidSource = redirect.Source.Kind switch
+        {
+            RedirectSourceKind.Default => redirect.Source.Descriptor is null,
+            RedirectSourceKind.Descriptor => redirect.Source.Descriptor is >= 0,
+            _ => false
+        };
+        if (!hasValidSource)
+        {
+            return true;
+        }
+
+        return redirect.Operation switch
+        {
+            // Netclaw keeps shell-fed stdin approval-sensitive. The parser can
+            // prove its syntax without proving executable-specific data use.
+            RedirectOperation.HereDocument or RedirectOperation.HereString => true,
+            RedirectOperation.DescriptorDuplicate or RedirectOperation.DescriptorMove =>
+                redirect.IsPathRelevant || redirect.TargetDescriptor is < 0 or null,
+            RedirectOperation.DescriptorClose =>
+                redirect.IsPathRelevant || redirect.TargetDescriptor is not null,
+            RedirectOperation.FileInput
+                or RedirectOperation.FileOutput
+                or RedirectOperation.FileAppend
+                or RedirectOperation.CombinedOutput
+                or RedirectOperation.CombinedOutputAppend =>
+                !redirect.IsPathRelevant || !HasBoundedPathTarget(redirect.Target),
+            _ => true
+        };
+    }
+
+    private static bool HasBoundedPathTarget(ShellValueDomain target)
+        => target.Kind switch
+        {
+            ShellValueDomainKind.Exact => target.Values.Count == 1
+                && !string.IsNullOrWhiteSpace(target.Values[0]),
+            ShellValueDomainKind.FiniteSet => target.Values.Count is >= 2 and <= 32
+                && target.Values.All(static value => !string.IsNullOrWhiteSpace(value)),
+            ShellValueDomainKind.Pattern => !string.IsNullOrWhiteSpace(target.Pattern)
+                && !string.IsNullOrWhiteSpace(target.CoveringDirectory),
+            _ => false
+        };
 }

@@ -20,8 +20,8 @@
 | safe-verb-external-path-prompts | Personal | Project | Interactive | cat /etc/passwd | none | RequiresApproval | approval required | cat | No |
 | safe-verb-quoted-external-path-prompts | Personal | Project | Interactive | cat "/etc/netclaw.secret" | none | RequiresApproval | approval required | cat | No |
 | safe-verb-traversal-external-path-prompts | Personal | Project | Interactive | cat safe/../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
-| safe-verb-namespaced-external-path-prompts | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
-| safe-verb-external-redirect-prompts | Personal | Project | Interactive | git status > {TempPath}netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
+| safe-verb-bash-provider-looking-relative-path-allows | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-verb-external-redirect-prompts | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
 | mutating-verb-project-prompts | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | four-safe-mixed-operator-clauses-allow | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -43,7 +43,7 @@
 | native-dynamic-file-reference-fails-closed | Personal | Project | Interactive | curl --data=@$REQUEST_FILE https://example.invalid/api | persistent[project]:curl | RequiresApproval | approval required | none | Yes |
 | local-glob-allows-safe-verb | Personal | Project | Interactive | ls *.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | local-glob-reuses-project-grant | Personal | Project | Interactive | rm *.tmp | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
-| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm {TempPath}netclaw-ext-glob/*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
+| external-glob-does-not-reuse-project-grant | Personal | Project | Interactive | rm /netclaw-approval-external/netclaw-ext-glob/*.bak | persistent[project]:rm | RequiresApproval | approval required | rm | No |
 | glob-traversal-fails-closed | Personal | Project | Interactive | cat */../../secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | glob-intermediate-symlink-scope-fails-closed | Personal | Project | Interactive | cat artifacts/*/secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | directory-listing-glob-in-project-auto-allows | Personal | Project | Interactive | ls -d subdirs/*/ | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -56,10 +56,13 @@
 | three-step-release-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push origin dev | none | RequiresApproval | approval required | git add, git commit, git push origin dev | No |
 | hard-deny-pipeline-tail-blocks | Personal | Project | Interactive | echo safe \| netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | hard-deny-nested-shell-blocks | Personal | Project | Interactive | bash -lc "netclaw daemon stop" | none | Denied | hard_deny_self_destructive | none | Not applicable |
+| hard-deny-sudo-nested-shell-blocks | Personal | Project | Interactive | sudo bash -lc "git status" | none | Denied | hard_deny_privilege_escalation | none | Not applicable |
+| hard-deny-dash-shell-blocks | Personal | Project | Interactive | /bin/dash -c "netclaw daemon stop" | persistent[anywhere]:/bin/dash | Denied | hard_deny_self_destructive | none | Not applicable |
 | nested-shell-prompts-for-inner-command | Personal | Project | Interactive | bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
 | nested-shell-inner-grant-allows | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | nested-shell-wrapper-grant-does-not-cover-inner-command | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:bash | RequiresApproval | approval required | git push | No |
-| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
+| env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | env bash, git push | No |
+| nohup-nested-shell-prompts | Personal | Project | Interactive | nohup bash -lc "git push" | none | RequiresApproval | approval required | nohup bash, git push | No |
 | timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
 | subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git push | No |
 | command-substitution-fails-closed | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | none | Yes |
@@ -69,6 +72,9 @@
 | fd-dup-redirect-safe-pipeline-allows | Personal | Project | Interactive | git log --oneline -5 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-close-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-move-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| combined-output-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status &> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| combined-output-append-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status &>> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| numeric-source-project-redirect-safe-verb-allows | Personal | Project | Interactive | git status 3> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-dup-redirect-mutating-no-grant-prompts-not-messy | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev | No |
 | dynamic-fd-redirect-fails-closed | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
 | background-list-prompts-for-mutating-tail | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
@@ -76,8 +82,8 @@
 | multiline-argument-prompts | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
 | approved-pipeline-head-does-not-cover-tail | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | curl | No |
 | all-pipeline-clauses-approved | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push, persistent[anywhere]:curl | Allowed | StoredApproval | none | Not applicable |
-| input-redirect-outside-zone-prompts | Personal | Project | Interactive | cat < /etc/passwd | none | RequiresApproval | approval required | cat | No |
-| error-redirect-outside-zone-prompts | Personal | Project | Interactive | git status 2> {TempPath}netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
+| input-redirect-outside-zone-prompts | Personal | Project | Interactive | cat < /netclaw-approval-external/netclaw-approval-input.txt | none | RequiresApproval | approval required | cat | No |
+| error-redirect-outside-zone-prompts | Personal | Project | Interactive | git status 2> /netclaw-approval-external/netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
 | cd-current-then-safe-allows | Personal | Project | Interactive | cd . && git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | cd-parent-then-safe-prompts | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | multiple-cd-then-safe-prompts | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |

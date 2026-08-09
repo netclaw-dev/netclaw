@@ -75,7 +75,7 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.2.0" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0-alpha" />
     <PackageVersion Include="Termina" Version="0.16.1" />
   </ItemGroup>
   <!-- Serialization -->

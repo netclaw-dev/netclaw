@@ -733,6 +733,25 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static string CanonicalTemporaryDirectory()
+    {
+        var fullPath = Path.GetFullPath(Path.GetTempPath());
+        var pathRoot = Path.GetPathRoot(fullPath)
+            ?? throw new InvalidOperationException("The temporary directory has no path root.");
+        var current = pathRoot;
+        var relative = fullPath[pathRoot.Length..];
+        foreach (var segment in relative.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(current, segment);
+            current = new DirectoryInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                ?? candidate;
+        }
+
+        return current;
+    }
+
     [SlopwatchSuppress("SW001", "This theory verifies Bash parser path scopes, which do not apply to the Windows shell parser.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     [MemberData(nameof(ParserPathScopeCases))]
@@ -741,7 +760,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         string expectedVerb,
         string[] expectedScopeNames)
     {
-        var root = Path.Combine(Path.GetTempPath(), $"netclaw-path-scopes-{Guid.NewGuid():N}");
+        var root = Path.Combine(CanonicalTemporaryDirectory(), $"netclaw-path-scopes-{Guid.NewGuid():N}");
         var projectDirectory = Path.Combine(root, "project");
         var externalDirectory = Path.Combine(root, "external");
         var command = commandTemplate.Replace(
@@ -1230,6 +1249,73 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_bundled_wrapper_inherits_outer_proven_cwd()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(
+                "cd /tmp && bash -lc \"cat relative.txt\"",
+                "/work")),
+            candidate => candidate.Verb == "cat");
+
+        Assert.Equal("/tmp", candidate.Directory);
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies Bash wrapper approval scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("sudo bash -lc \"git status\"", "sudo bash", "/work")]
+    [InlineData("sudo /bin/bash -lc \"git status\"", "sudo", "/bin/bash")]
+    [InlineData("env bash -lc \"git status\"", "env bash", "/work")]
+    [InlineData("env /bin/bash -lc \"git status\"", "env", "/bin/bash")]
+    [InlineData("nohup bash -lc \"git status\"", "nohup bash", "/work")]
+    [InlineData("timeout 5 bash -lc \"git status\"", "timeout", "/work")]
+    [InlineData("nice -n 5 bash -lc \"git status\"", "nice", "/work")]
+    public void ExtractCandidates_retains_prefix_executable(
+        string command,
+        string expectedPrefix,
+        string expectedDirectory)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/work"));
+
+        Assert.Contains(candidates, candidate =>
+            candidate.Verb == expectedPrefix && candidate.Directory == expectedDirectory);
+        Assert.Contains(candidates, candidate =>
+            candidate.Verb == "git status" && candidate.Directory == "/work");
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Redirect_to_symlink_target_fails_closed()
+    {
+        var root = Path.Combine(CanonicalTemporaryDirectory(), $"netclaw-redirect-symlink-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var externalFile = Path.Combine(externalDirectory, "result.log");
+        var redirectTarget = Path.Combine(projectDirectory, "result.log");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(externalFile, "external");
+        File.CreateSymbolicLink(redirectTarget, externalFile);
+
+        try
+        {
+            var arguments = Args("git status > result.log", projectDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(
+                new ToolName("shell_execute"),
+                arguments));
+            Assert.True(_matcher.IsMessy(
+                new ToolName("shell_execute"),
+                arguments));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_prefers_explicit_path_arg_over_cd_attribution()
     {
         // When a clause has its own anchored path argument, that wins —
@@ -1320,7 +1406,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_uses_redirect_target_and_invocation_working_directory()
     {
-        var workingDirectory = Path.Combine(Path.GetTempPath(), $"netclaw-redirect-{Guid.NewGuid():N}");
+        var workingDirectory = Path.Combine(CanonicalTemporaryDirectory(), $"netclaw-redirect-{Guid.NewGuid():N}");
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
@@ -1331,6 +1417,38 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         Assert.Contains(candidates, candidate =>
             candidate.Verb == "echo" && candidate.Directory == workingDirectory);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies POSIX symlink redirect behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_rejects_redirect_through_symlink_directory()
+    {
+        var root = Path.Combine(
+            CanonicalTemporaryDirectory(),
+            $"netclaw-redirect-parent-symlink-{Guid.NewGuid():N}");
+        var workingDirectory = Path.Combine(root, "project");
+        var externalDirectory = Path.Combine(root, "external");
+        var redirectDirectory = Path.Combine(workingDirectory, "output");
+        Directory.CreateDirectory(workingDirectory);
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(redirectDirectory, externalDirectory);
+
+        try
+        {
+            var arguments = Args("echo hello > output/result.txt", workingDirectory);
+
+            Assert.Empty(_matcher.ExtractCandidates(
+                new ToolName("shell_execute"),
+                arguments));
+            Assert.True(_matcher.IsMessy(
+                new ToolName("shell_execute"),
+                arguments));
+        }
+        finally
+        {
+            Directory.Delete(redirectDirectory);
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
@@ -1358,14 +1476,10 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void ExtractCandidates_bare_numeric_operand_is_not_a_path_scope()
+    public void ExtractCandidates_bare_numeric_operand_uses_command_cwd()
     {
-        // Regression for #1795: `head -c 2000` treats the bare numeric
-        // operand `2000` as a path arg (slash-free token branch of
-        // IsAuthorizationPathArg) and resolves it relative to cwd, producing
-        // the phantom scope `/cwd/2000`. `head -c 2000` touches no filesystem
-        // path; head is a read-only verb with no path argument, so its
-        // candidate must carry Directory == null (like `git status`).
+        // The #1795 guard removes the false `/cwd/2000` path scope.
+        // The v0.3 occurrence still supplies the command cwd for a scoped grant.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
@@ -1376,7 +1490,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         var headCandidate = Assert.Single(candidates);
         Assert.Equal("head", headCandidate.Verb);
-        Assert.Null(headCandidate.Directory);
+        Assert.Equal("/home/user/repos/demo", headCandidate.Directory);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
@@ -1418,11 +1532,10 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void ExtractCandidates_bare_numeric_flag_value_is_not_a_path_scope()
+    public void ExtractCandidates_bare_numeric_flag_value_uses_command_cwd()
     {
-        // Regression for #1795: `head -n 20` has a bare numeric operand `20`.
-        // A number is not a path, so no scope forms. The candidate must carry
-        // Directory == null.
+        // The #1795 guard removes the false `/cwd/20` path scope.
+        // The v0.3 occurrence still supplies the command cwd for a scoped grant.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
@@ -1433,7 +1546,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         var headCandidate = Assert.Single(candidates);
         Assert.Equal("head", headCandidate.Verb);
-        Assert.Null(headCandidate.Directory);
+        Assert.Equal("/home/user/repos/demo", headCandidate.Directory);
     }
 
     [SlopwatchSuppress("SW001", "This test verifies Bash symlink path behavior, which does not apply to the Windows shell parser.")]

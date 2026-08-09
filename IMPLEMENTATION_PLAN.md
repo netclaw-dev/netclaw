@@ -137,8 +137,12 @@ Done when:
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
-- [ ] Netclaw consumes the ShellSyntaxTree v0.3 occurrence model for bounded
-  loops, substitutions, and explicit redirects after the composition slice.
+- [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
+  explicit Bash redirect facts for the existing grammar.
+- [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
+  Static descriptor redirects no longer appear dynamic.
+- [ ] Netclaw interprets bounded loop arguments and promotes the new mutation
+  cases after the next ShellSyntaxTree prerelease.
 
 ### Priority: Simplify Tool Execution Context Architecture
 

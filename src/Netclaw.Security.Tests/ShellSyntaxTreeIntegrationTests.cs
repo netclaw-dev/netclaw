@@ -50,6 +50,11 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal("ls", clause.Verb.Joined);
         Assert.Contains(clause.Args, a => a.Raw == "-la" && a.IsFlag);
         Assert.Contains(clause.Args, a => a.Raw == "/tmp" && a.IsPath);
+
+        var occurrence = Assert.Single(result.Commands);
+        Assert.Same(clause, occurrence.Clause);
+        Assert.Equal(CommandOccurrenceRole.Ordinary, occurrence.ImmediateRole);
+        Assert.True(occurrence.IsComplete);
     }
 
     [Fact]
@@ -279,6 +284,23 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal(2, result.Clauses.Count);
         Assert.Equal("cat", result.Clauses[0].Verb.Joined);
         Assert.Equal("echo after", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Static_descriptor_redirect_has_explicit_non_path_facts()
+    {
+        var parser = new BashParser();
+
+        var result = parser.Parse("dotnet test 2>&1");
+
+        Assert.False(result.IsUnparseable);
+        var redirect = Assert.Single(Assert.Single(result.Commands).Redirects);
+        Assert.Equal(RedirectSourceKind.Descriptor, redirect.Source.Kind);
+        Assert.Equal(2, redirect.Source.Descriptor);
+        Assert.Equal(RedirectOperation.DescriptorDuplicate, redirect.Operation);
+        Assert.Equal(1, redirect.TargetDescriptor);
+        Assert.False(redirect.IsPathRelevant);
+        Assert.True(redirect.IsComplete);
     }
 
     [Fact]

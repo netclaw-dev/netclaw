@@ -274,10 +274,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
-            "safe-verb-namespaced-external-path-prompts",
+            "safe-verb-bash-provider-looking-relative-path-allows",
             Bash("cat filesystem::/etc/netclaw.secret"),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
             "safe-verb-external-redirect-prompts",
             Bash($"git status > {TemporaryFile("netclaw-approval-matrix.txt")}"),
@@ -469,6 +469,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
+            "hard-deny-sudo-nested-shell-blocks",
+            Bash("sudo bash -lc \"git status\""),
+            Approvals.None,
+            ExpectedApproval.Deny("hard_deny_privilege_escalation")),
+        Case(
+            "hard-deny-dash-shell-blocks",
+            Bash("/bin/dash -c \"netclaw daemon stop\""),
+            Approvals.PersistentAnywhere("/bin/dash"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
             "nested-shell-prompts-for-inner-command",
             Bash("bash -lc \"git push\""),
             Approvals.None,
@@ -487,7 +497,12 @@ public static class ShellApprovalCases
             "env-nested-shell-prompts",
             Bash("env bash -lc \"git push\""),
             Approvals.None,
-            ExpectedApproval.Require(["git push"])),
+            ExpectedApproval.Require(["env bash", "git push"])),
+        Case(
+            "nohup-nested-shell-prompts",
+            Bash("nohup bash -lc \"git push\""),
+            Approvals.None,
+            ExpectedApproval.Require(["nohup bash", "git push"])),
         Case(
             "timeout-nested-shell-prompts",
             Bash("timeout 5 bash -lc \"git push\""),
@@ -534,6 +549,21 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "combined-output-project-redirect-safe-verb-allows",
+            Bash("git status &> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "combined-output-append-project-redirect-safe-verb-allows",
+            Bash("git status &>> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "numeric-source-project-redirect-safe-verb-allows",
+            Bash("git status 3> result.log"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
             "fd-dup-redirect-mutating-no-grant-prompts-not-messy",
             Bash("git push origin dev 2>&1 | tail -2"),
             Approvals.None,
@@ -576,7 +606,7 @@ public static class ShellApprovalCases
                 "persistent:curl")),
         Case(
             "input-redirect-outside-zone-prompts",
-            Bash("cat < /etc/passwd"),
+            Bash($"cat < {TemporaryFile("netclaw-approval-input.txt")}"),
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
@@ -1189,7 +1219,7 @@ public static class ShellApprovalCases
         => new(command, workingDirectory, audience, interactive);
 
     private static string TemporaryFile(string fileName)
-        => Path.Join(Path.GetTempPath(), fileName);
+        => $"/netclaw-approval-external/{fileName}";
 
     private static string Escape(string value)
         => value
