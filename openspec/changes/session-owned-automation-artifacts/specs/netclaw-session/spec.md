@@ -47,6 +47,6 @@ The system SHALL derive each artifact path from the typed `SessionId`. It SHALL 
 #### Scenario: Generic file write targets a definition
 
 - **GIVEN** an agent can write other files in its session directory
-- **WHEN** it uses a generic file or safe shell path to write a direct `reminders/*.json` or `jobs/*.json` definition
+- **WHEN** it uses a generic file or safe shell path to write under the session `reminders/` or `jobs/` directory
 - **THEN** the file access policy rejects the write
-- **AND** reminder history and job output paths remain writable
+- **AND** reminder definitions, history, and job output paths remain readable

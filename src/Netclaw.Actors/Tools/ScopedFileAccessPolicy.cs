@@ -92,9 +92,9 @@ internal sealed class ScopedFileAccessPolicy
         }
 
         if (accessKind == AccessKind.Write
-            && IsSessionAutomationDefinitionPath(fullPath, context.SessionDirectory))
+            && IsSessionAutomationArtifactPath(fullPath, _profileResolver.ResolveSessionsDirectory()))
         {
-            error = "Error: Session automation definition files can only be changed through reminder and background job tools.";
+            error = "Error: Session automation artifacts are read-only through generic file and shell tools.";
             return false;
         }
 
@@ -187,24 +187,19 @@ internal sealed class ScopedFileAccessPolicy
             _ => profile.ReadFiles
         };
 
-    private static bool IsSessionAutomationDefinitionPath(string fullPath, string? sessionDirectory)
+    private static bool IsSessionAutomationArtifactPath(string fullPath, string sessionsDirectory)
     {
-        if (string.IsNullOrWhiteSpace(sessionDirectory)
-            || !string.Equals(Path.GetExtension(fullPath), ".json", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var parent = Path.GetDirectoryName(fullPath);
-        if (parent is null)
+        if (!PathUtility.IsWithinRoot(fullPath, sessionsDirectory))
             return false;
 
-        return PathUtility.AreEquivalentPaths(
-                   parent,
-                   Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory))
-               || PathUtility.AreEquivalentPaths(
-                   parent,
-                   Path.Combine(sessionDirectory, SessionDirectoryHelper.JobsSubdirectory));
+        var segments = Path.GetRelativePath(sessionsDirectory, fullPath).Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2)
+            return false;
+
+        return string.Equals(segments[1], SessionDirectoryHelper.RemindersSubdirectory, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(segments[1], SessionDirectoryHelper.JobsSubdirectory, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

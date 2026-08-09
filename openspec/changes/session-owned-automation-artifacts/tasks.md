@@ -33,7 +33,7 @@
 
 ## 6. Adversarial Review Hardening
 
-- [x] 6.1 Reserve session reminder and job definition JSON files from generic writes.
+- [x] 6.1 Reserve session reminder and job artifacts from generic writes.
 - [x] 6.2 Reject session artifact paths that contain a symbolic link or reparse point.
 - [x] 6.3 Count only valid definitions when duplicate IDs are resolved.
 - [x] 6.4 Validate reminder storage ownership before a scheduler mutation.

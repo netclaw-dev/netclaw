@@ -90,45 +90,67 @@ public sealed class AutonomousZoneClampTests : IDisposable
     }
 
     [Theory]
-    [InlineData(SessionDirectoryHelper.RemindersSubdirectory, "daily.json")]
-    [InlineData(SessionDirectoryHelper.JobsSubdirectory, "job-1.json")]
-    public void Generic_writes_cannot_change_session_automation_definitions(
-        string artifactDirectory,
-        string fileName)
+    [InlineData("reminders/daily.json")]
+    [InlineData("reminders/daily.json.tmp/block")]
+    [InlineData("reminders/daily.history.jsonl")]
+    [InlineData("jobs/job-1.json")]
+    [InlineData("jobs/job-1/output.log")]
+    public void Generic_writes_cannot_change_session_automation_artifacts(string relativePath)
     {
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
-        var definitionPath = Path.Combine(_sessionDir, artifactDirectory, fileName);
+        var artifactPath = Path.Combine(
+            _sessionDir,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         foreach (var autonomous in new[] { true, false })
         {
             var allowed = policy.TryResolveWritePath(
-                definitionPath,
+                artifactPath,
                 Ctx(TrustAudience.Personal, autonomous),
                 out _,
                 out var error);
 
             Assert.False(allowed);
-            Assert.Contains("automation definition", error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("automation artifacts", error, StringComparison.OrdinalIgnoreCase);
         }
     }
 
-    [Fact]
-    public void Generic_writes_keep_session_automation_logs_and_history_writable()
+    [Theory]
+    [InlineData("reminders/daily.json")]
+    [InlineData("reminders/daily.history.jsonl")]
+    [InlineData("jobs/job-1/output.log")]
+    public void Session_automation_artifacts_remain_readable(string relativePath)
     {
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
         var ctx = Ctx(TrustAudience.Personal, autonomous: true);
-        var historyPath = Path.Combine(
+        var artifactPath = Path.Combine(
             _sessionDir,
-            SessionDirectoryHelper.RemindersSubdirectory,
-            "daily.history.jsonl");
-        var outputPath = Path.Combine(
-            _sessionDir,
-            SessionDirectoryHelper.JobsSubdirectory,
-            "job-1",
-            "output.log");
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
 
-        Assert.True(policy.TryResolveWritePath(historyPath, ctx, out _, out var historyError), historyError);
-        Assert.True(policy.TryResolveWritePath(outputPath, ctx, out _, out var outputError), outputError);
+        Assert.True(policy.TryResolveReadPath(artifactPath, ctx, out _, out var error), error);
+    }
+
+    [Fact]
+    public void Custom_write_root_cannot_change_a_sibling_session_automation_artifact()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Team.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_paths.SessionsDirectory]
+        };
+        var policy = new ScopedFileAccessPolicy(config, _paths);
+        var siblingDefinition = Path.Combine(
+            _paths.SessionsDirectory,
+            "sibling",
+            SessionDirectoryHelper.RemindersSubdirectory,
+            "daily.json");
+
+        Assert.False(policy.TryResolveWritePath(
+            siblingDefinition,
+            Ctx(TrustAudience.Team, autonomous: true),
+            out _,
+            out _));
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderHistoryStoreTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -98,10 +98,12 @@ public class ReminderHistoryStoreTests : IDisposable
         Assert.Equal("session-4", records[2].SessionId);
     }
 
-    [Fact]
-    public async Task New_current_session_history_is_beside_its_session_definition()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Current_session_history_stays_beside_its_definition(bool legacyDaemonPath)
     {
-        var id = new ReminderId("session-history");
+        var id = new ReminderId(legacyDaemonPath ? "legacy-session-history" : "session-history");
         var definition = CreateDefinition(id) with
         {
             Delivery = new ReminderDelivery
@@ -110,45 +112,28 @@ public class ReminderHistoryStoreTests : IDisposable
                 SessionId = "C0ABC/1712000000.000001"
             }
         };
-        _definitionStore.Save(definition);
-
-        await _store.AppendAsync(id, MakeRecord(true));
-
-        var directory = SessionDirectoryHelper.GetSessionRemindersDirectory(
-            new SessionId(definition.Delivery.SessionId!),
-            _paths.SessionsDirectory);
-        Assert.True(File.Exists(Path.Combine(directory, "session-history.json")));
-        Assert.True(File.Exists(Path.Combine(directory, "session-history.history.jsonl")));
-        Assert.False(File.Exists(Path.Combine(_paths.RemindersDirectory, "session-history.history.jsonl")));
-    }
-
-    [Fact]
-    public async Task Existing_current_session_history_stays_beside_its_daemon_definition()
-    {
-        var id = new ReminderId("existing-session-history");
-        var definition = CreateDefinition(id) with
+        ReminderHistoryStore store;
+        if (legacyDaemonPath)
         {
-            Delivery = new ReminderDelivery
-            {
-                Kind = DeliveryKind.CurrentSession,
-                SessionId = "C0ABC/1712000000.000001"
-            }
-        };
-        var definitionPath = Path.Combine(_paths.RemindersDirectory, "existing-session-history.json");
-        WriteDefinition(definitionPath, definition);
-        var store = new ReminderHistoryStore(new ReminderDefinitionStore(_paths));
+            WriteDefinition(Path.Combine(_paths.RemindersDirectory, $"{id.Value}.json"), definition);
+            store = new ReminderHistoryStore(new ReminderDefinitionStore(_paths));
+        }
+        else
+        {
+            _definitionStore.Save(definition);
+            store = _store;
+        }
 
         await store.AppendAsync(id, MakeRecord(true));
 
-        var daemonHistoryPath = Path.Combine(
-            _paths.RemindersDirectory,
-            "existing-session-history.history.jsonl");
         var sessionDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
             new SessionId(definition.Delivery.SessionId!),
             _paths.SessionsDirectory);
-        Assert.True(File.Exists(definitionPath));
-        Assert.True(File.Exists(daemonHistoryPath));
-        Assert.False(File.Exists(Path.Combine(sessionDirectory, "existing-session-history.history.jsonl")));
+        var expectedDirectory = legacyDaemonPath ? _paths.RemindersDirectory : sessionDirectory;
+        var otherDirectory = legacyDaemonPath ? sessionDirectory : _paths.RemindersDirectory;
+        Assert.True(File.Exists(Path.Combine(expectedDirectory, $"{id.Value}.json")));
+        Assert.True(File.Exists(Path.Combine(expectedDirectory, $"{id.Value}.history.jsonl")));
+        Assert.False(File.Exists(Path.Combine(otherDirectory, $"{id.Value}.history.jsonl")));
         Assert.Single(await store.ReadAsync(id, 10));
     }
 

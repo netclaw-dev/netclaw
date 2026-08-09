@@ -211,7 +211,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             ? cmd.Definition.Id
             : ReminderIdGenerator.Generate(title);
 
-        var exists = _definitionStore.Exists(id);
+        var existing = _definitionStore.Get(id);
+        var exists = existing is not null;
 
         switch (cmd.WriteMode)
         {
@@ -275,8 +276,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         if (exists)
         {
-            var existing = _definitionStore.Get(id);
-            normalized.CreatedAtMs = existing?.CreatedAtMs ?? (normalized.CreatedAtMs > 0 ? normalized.CreatedAtMs : now.ToUnixTimeMilliseconds());
+            normalized.CreatedAtMs = existing!.CreatedAtMs;
         }
         else
         {

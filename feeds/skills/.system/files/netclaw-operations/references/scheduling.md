@@ -107,10 +107,10 @@ audience is always allowed.
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
 `get_reminder_history`.
 
-Do not edit a session reminder or job definition JSON file with a generic file
-tool. Netclaw reserves those files because they contain the durable trust and
-ownership envelope. Use the reminder and background job tools instead. The
-history and output log files remain available to file tools.
+Do not edit files in a session reminder or job directory with a generic file
+tool. Netclaw reserves those subsystem-owned artifacts. Use the reminder and
+background job tools instead. Definitions, history, and output logs remain
+readable through file tools.
 
 ## Proactive channel messaging
 

@@ -73,6 +73,9 @@ internal sealed class ToolAudienceProfileResolver
     /// </summary>
     public string? ResolveWorkspacesDirectory() => _paths?.WorkspacesDirectory;
 
+    public string ResolveSessionsDirectory() => _paths?.SessionsDirectory
+        ?? throw new InvalidOperationException("Netclaw paths are required to resolve the sessions directory.");
+
     public bool IsToolAllowed(ToolName toolName, ToolInvocationContext context)
         => IsToolAllowed(toolName, context.Audience);
 

@@ -83,7 +83,7 @@ The current audience and boundary checks will remain unchanged. A path under ano
 
 The stores will reject a session path that contains a symbolic link or reparse point. They will reuse `PathUtility.ContainsSymlinkSegment`.
 
-The generic write policy will reserve only the direct reminder and job definition files. The agent can still read the definitions and write logs or history.
+The generic write policy will reserve the reminder and job artifact subtrees. The agent can still read definitions, history, and logs.
 
 This rule protects the stored trust envelope from a generic file edit. The reminder and job tools remain the supported mutation surfaces.
 
@@ -113,7 +113,7 @@ Background jobs do not need a retention pin. The current passivation contract re
 
 - **A lookup can cost more with many sessions.** The stores scan only fixed `reminders/` and `jobs/` subdirectories.
 - **A duplicate ID can make ownership ambiguous.** The stores retain global ID uniqueness and fail on duplicate definitions.
-- **A direct file edit can change a trust field.** The generic write policy reserves definition JSON files while it leaves other session artifacts writable.
+- **A direct file edit can change a subsystem-owned record.** The generic write policy reserves session automation artifacts from generic writes.
 - **A future janitor can delete an active reminder.** The later retention change must define a live-reminder policy before file removal.
 
 ## Migration Plan
