@@ -36,6 +36,38 @@ public sealed class ShellApprovalMatcherTests
     /// runners instead of hiding the gap behind an early-return.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    [Theory]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command git-status")]
+    [InlineData("powershell.exe -NoProfile -NonInteractive -Command git-status")]
+    [InlineData("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command git-status")]
+    [InlineData("cmd.exe /d /s /c \"powershell.exe -Command git-status\"")]
+    [InlineData("cmd.exe /d /s /c \"power^shell.exe -Command git-status\"")]
+    [InlineData("cmd.exe /d /s /c power\"shell\".exe -Command git-status")]
+    [InlineData("cmd.exe /d /s /c pw\"sh\".exe -Command git-status")]
+    public void Unanalyzed_power_shell_host_is_detected(string command)
+    {
+        Assert.True(ShellApprovalMatcher.ContainsUnanalyzedPowerShellHost(command));
+    }
+
+    [SlopwatchSuppress("SW001", "This regression verifies the Windows fail-closed PowerShell matcher path.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "The legacy Windows matcher is active only on Windows.")]
+    public void Windows_power_shell_wrapper_cannot_reuse_host_approval()
+    {
+        const string command =
+            "cmd.exe /d /s /c power\"shell\" -NoProfile -NonInteractive -Command git-status";
+        var arguments = Args(command);
+
+        Assert.Empty(_matcher.ExtractPatterns(new ToolName("shell_execute"), arguments));
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+        Assert.False(_matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            [Verb("cmd.exe")],
+            cwd: null));
+    }
 
     [Fact]
     public void ExtractPatterns_simple_command()

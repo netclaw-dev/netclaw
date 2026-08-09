@@ -65,6 +65,17 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
+    public void CommandReferencesDeniedPath_checks_decoded_power_shell_child_path()
+    {
+        var policy = new ToolPathPolicy(["/protected/config"]);
+        const string command =
+            "pwsh -NoProfile -NonInteractive -Command 'Get-Content /protected/con\"fig/file.txt\"'";
+
+        Assert.DoesNotContain("/protected/config", command, StringComparison.Ordinal);
+        Assert.True(policy.CommandReferencesDeniedPath(command, "/work"));
+    }
+
+    [Fact]
     public void CommandReferencesDeniedPath_returns_false_for_empty()
     {
         var policy = new ToolPathPolicy(["/some/path"]);

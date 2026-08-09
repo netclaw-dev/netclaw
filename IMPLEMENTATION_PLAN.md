@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-06-01
+Last updated: 2026-08-09
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -144,6 +144,15 @@ Done when:
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
   command-resolution mutation and reserved execution forms into the strict
   181-case review matrix.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.2` for one exact POSIX
+  `pwsh -NoProfile -NonInteractive -Command '<static payload>'` wrapper. It
+  keeps the outer host and every complete PowerShell child as independent
+  approval occurrences.
+- [x] The 204-case shell approval review table proves PowerShell host and child
+  grant composition, intrinsic direct-call script blocks, nested hard deny,
+  decoded protected paths, and strict handling for dynamic values, named
+  script-block receivers, command-resolution changes, host-option near misses,
+  Windows wrappers, `BASH_ENV`, and exported-function risk.
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.

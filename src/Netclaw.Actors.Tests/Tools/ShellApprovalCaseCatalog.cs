@@ -494,6 +494,112 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("bash"),
             ExpectedApproval.Require(["git push"])),
         Case(
+            "pwsh-safe-child-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.None,
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-exported-function-risk-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.None,
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-bash-env-risk-still-requires-host-approval",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Require(["pwsh"])),
+        Case(
+            "pwsh-host-grant-composes-with-safe-child",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:pwsh")),
+        Case(
+            "pwsh-host-grant-does-not-cover-mutating-child",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Require(["git push"], approvalMatches: ["persistent:pwsh"])),
+        Case(
+            "pwsh-child-grant-does-not-cover-host",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require(["pwsh"], approvalMatches: ["persistent:git push"])),
+        Case(
+            "pwsh-host-and-child-grants-allow",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("pwsh", "git push"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:pwsh",
+                "persistent:git push")),
+        Case(
+            "pwsh-working-directory-option-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'"),
+            Approvals.PersistentAnywhere("pwsh", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-builtin-command-prefix-fails-closed",
+            Bash("builtin command pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("builtin command pwsh", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-absolute-env-prefix-fails-closed",
+            Bash("/usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("/usr/bin/env", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-xargs-prefix-fails-closed",
+            Bash("xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            Approvals.PersistentAnywhere("xargs", "git push"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "windows-powershell-host-fails-closed",
+            Bash("powershell -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("powershell", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "differently-cased-pwsh-host-fails-closed",
+            Bash("PWSH -NoProfile -NonInteractive -Command 'git status'"),
+            Approvals.PersistentAnywhere("PWSH", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-dynamic-child-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'git $operation'"),
+            Approvals.PersistentAnywhere("pwsh", "git"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-command-resolution-mutation-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Set-Alias git Remove-Item; git victim.txt'"),
+            Approvals.PersistentAnywhere("pwsh", "Set-Alias", "git"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-unknown-script-block-receiver-fails-closed",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-CustomAction { Remove-Item victim.txt }'"),
+            Approvals.PersistentAnywhere("pwsh", "Invoke-CustomAction", "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-data-script-block-stays-strict",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item victim.txt }'"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output", "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pwsh-executable-script-block-prompts-for-body",
+            Bash("pwsh -NoProfile -NonInteractive -Command '& { git push }'"),
+            Approvals.PersistentAnywhere("pwsh"),
+            ExpectedApproval.Require(
+                ["git push"],
+                approvalMatches: ["persistent:pwsh"])),
+        Case(
+            "pwsh-executable-script-block-hard-deny-wins",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-Command { netclaw daemon stop }'"),
+            Approvals.PersistentAnywhere("pwsh", "Invoke-Command", "netclaw daemon stop"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
+            "pwsh-bash-decoding-cannot-hide-hard-deny",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #'''"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output", "netclaw daemon stop"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
             "env-nested-shell-prompts",
             Bash("env bash -lc \"git push\""),
             Approvals.None,

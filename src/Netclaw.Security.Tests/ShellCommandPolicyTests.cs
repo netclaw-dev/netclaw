@@ -132,6 +132,16 @@ public sealed class ShellCommandPolicyTests
     }
 
     [Fact]
+    public void Denies_power_shell_child_hard_deny_command()
+    {
+        var decision = _policy.EvaluateBash(
+            "pwsh -NoProfile -NonInteractive -Command 'netclaw daemon stop'");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
+    }
+
+    [Fact]
     public void Allows_bash_c_wrapping_safe_command()
     {
         var decision = _policy.Evaluate("bash -c \"git status\"");

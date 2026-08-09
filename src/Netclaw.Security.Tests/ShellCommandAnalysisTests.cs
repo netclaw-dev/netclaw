@@ -55,6 +55,138 @@ public sealed class ShellCommandAnalysisTests
         Assert.Contains(analysis.Commands, command => command.Clause.Verb.Joined == "git status");
     }
 
+    [Theory]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("pwsh -noprofile -NONINTERACTIVE -command \"git status\"")]
+    public void Exact_power_shell_wrapper_retains_host_and_child(string command)
+    {
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        Assert.Equal(["pwsh", "git status"], analysis.Commands.Select(
+            occurrence => occurrence.Clause.Verb.Joined));
+        Assert.False(analysis.Commands[0].Clause.IsCommandStringWrapped);
+        Assert.True(analysis.Commands[1].Clause.IsCommandStringWrapped);
+    }
+
+    [Fact]
+    public void Power_shell_host_is_retained_for_ambient_bash_resolution_controls()
+    {
+        var analysis = _analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command 'git status'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal("pwsh", analysis.Commands[0].Clause.Verb.Joined);
+        Assert.False(analysis.Commands[0].Clause.IsCommandStringWrapped);
+
+        // BASH_ENV and exported functions can replace this authored host at
+        // execution time. The policy must therefore approve it separately.
+        Assert.Equal("git status", analysis.Commands[1].Clause.Verb.Joined);
+    }
+
+    [Theory]
+    [InlineData("PWSH -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("pwsh.exe -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("powershell -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("pwsh -NonInteractive -NoProfile -Command 'git status'")]
+    [InlineData("pwsh -NoProfile -Command 'git status'")]
+    [InlineData("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'")]
+    [InlineData("pwsh -NoProfile -NonInteractive -File script.ps1")]
+    [InlineData("pwsh -NoProfile -NonInteractive -EncodedCommand RwBlAHQALQBEAGEAdABlAA==")]
+    [InlineData("pwsh -NoProfile -NonInteractive -CommandWithArgs 'git status'")]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command -")]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command git status")]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status' trailing")]
+    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status' > out.txt")]
+    [InlineData("env pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("builtin command pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("/usr/bin/env pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("xargs pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("/usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    [InlineData("xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git status'")]
+    public void Power_shell_wrapper_near_miss_is_unresolved(string command)
+    {
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.Commands);
+    }
+
+    [Theory]
+    [InlineData("echo pwsh")]
+    [InlineData("rg pwsh .")]
+    [InlineData("printf '%s\\n' pwsh")]
+    [InlineData("git commit -m pwsh")]
+    public void Power_shell_host_token_used_as_data_stays_one_shot(string command)
+    {
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.Commands);
+    }
+
+    [Fact]
+    public void Bash_dynamic_power_shell_payload_is_unresolved()
+    {
+        var analysis = _analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command \"git $operation\"",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.Commands);
+    }
+
+    [Fact]
+    public void Bash_decoded_power_shell_payload_is_the_child_source_of_truth()
+    {
+        var analysis = _analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #'''",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Contains(
+            analysis.Commands,
+            command => command.Clause.Verb.Joined == "netclaw daemon stop");
+    }
+
+    [Fact]
+    public void Power_shell_dynamic_child_stays_dynamic()
+    {
+        var analysis = _analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command 'git $operation'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(
+            analysis.HasDynamicSyntax,
+            string.Join(" | ", analysis.Commands.Select(command =>
+                $"{command.Clause.Verb.Joined}:{command.IsComplete}:" +
+                string.Join(",", command.Clause.Args.Select(arg => $"{arg.Raw}={arg.Kind}")))));
+        Assert.Equal("pwsh", analysis.Commands[0].Clause.Verb.Joined);
+    }
+
+    [Fact]
+    public void Power_shell_proved_execution_region_is_complete()
+    {
+        var analysis = _analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command '& { git push }'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            ["pwsh", "git push"],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+        Assert.False(
+            analysis.HasDynamicSyntax,
+            string.Join(" | ", analysis.Commands.Select(command =>
+                $"{command.Clause.Verb.Joined}:complete={command.IsComplete}:" +
+                $"role={command.ImmediateRole}:cwd={command.WorkingDirectory.Kind}:" +
+                $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.AncestorKind}/{frame.Region}"))}:" +
+                $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.Resolved}"))}")));
+    }
+
     [Fact]
     public void Command_inspection_option_is_not_treated_as_transparent_shell_dispatch()
     {

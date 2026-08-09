@@ -112,6 +112,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
 
+    private static readonly char[] WindowsCommandTokenSeparators =
+        [' ', '\t', '\r', '\n', '\'', '"', '&', '|', '(', ')', '<', '>', ';', '=', ','];
+
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
 
@@ -144,6 +147,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return patterns.ToList();
         }
 
+        if (ContainsUnanalyzedPowerShellHost(command))
+            return [];
+
         TraverseApprovalUnits(command, unit =>
         {
             var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
@@ -174,6 +180,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
             return ExtractCandidatesViaBashAnalysis(command, GetWorkingDirectory(arguments));
+
+        if (ContainsUnanalyzedPowerShellHost(command))
+            return [];
 
         var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
@@ -876,7 +885,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return false;
 
         if (OperatingSystem.IsWindows())
-            return ShellTokenizer.IsMessyCompoundCommand(command);
+        {
+            return ContainsUnanalyzedPowerShellHost(command)
+                || ShellTokenizer.IsMessyCompoundCommand(command);
+        }
 
         var workingDirectory = GetWorkingDirectory(arguments);
         var analysis = TryAnalyzeCommand(command, workingDirectory);
@@ -904,6 +916,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             .SelectMany(static command => command.Redirects)
             .Any(static redirect => ResolveRedirectDirectories(redirect) is null);
     }
+
+    internal static bool ContainsUnanalyzedPowerShellHost(string command)
+        // cmd.exe can place a complete child command inside quotes and can
+        // escape command-name characters with a caret. The legacy tokenizer
+        // does not model those rules, so use conservative word detection.
+        => command.Replace("^", string.Empty, StringComparison.Ordinal)
+            .Replace("\"", string.Empty, StringComparison.Ordinal)
+            .Split(
+                WindowsCommandTokenSeparators,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(ShellCommandAnalyzer.IsPowerShellHostLike);
 
     private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence)
     {

@@ -58,6 +58,22 @@ internal sealed class ShellCommandAnalyzer
         if (parsed.IsUnparseable || parsed.Commands.Count == 0)
             return ShellAnalysisFailure.Unresolved;
 
+        if (ContainsPowerShellHost(parsed.Commands))
+        {
+            if (!TryAnalyzePowerShellChild(
+                    command,
+                    workingDirectory,
+                    parsed.Commands,
+                    out var childCommands))
+            {
+                return ShellAnalysisFailure.Unresolved;
+            }
+
+            commands.Add(parsed.Commands[0]);
+            commands.AddRange(childCommands);
+            return ShellAnalysisFailure.None;
+        }
+
         var innerCommands = PosixShellApprovalSemantics.Instance.ExtractInnerCommands(command);
         var unexpandedWrappers = parsed.Commands
             .Where(static occurrence => IsUnexpandedWrapperClause(occurrence.Clause))
@@ -99,6 +115,131 @@ internal sealed class ShellCommandAnalyzer
         }
 
         return ShellAnalysisFailure.None;
+    }
+
+    private static bool TryAnalyzePowerShellChild(
+        string source,
+        string? workingDirectory,
+        IReadOnlyList<CommandOccurrence> outerCommands,
+        out IReadOnlyList<CommandOccurrence> childCommands)
+    {
+        childCommands = [];
+        if (outerCommands.Count != 1)
+            return false;
+
+        var outer = outerCommands[0];
+        var clause = outer.Clause;
+        if (!outer.IsComplete
+            || clause.Operator != CompoundOperator.None
+            || clause.IsSubshell
+            || clause.IsCommandStringWrapped
+            || clause.Verb.IsDynamic
+            || clause.Redirects.Count != 0
+            || outer.Redirects.Count != 0
+            || clause.Elements.Count != 5
+            || clause.Args.Any(static arg => arg.Kind == ArgKind.DynamicSkip)
+            || clause.Elements.Any(static element =>
+                element.SourceStart is null
+                || element.SourceLength is null
+                || element.SourceLength < 0))
+        {
+            return false;
+        }
+
+        var elements = clause.Elements;
+        if (!string.Equals(elements[0].Value, "pwsh", StringComparison.Ordinal)
+            || !string.Equals(elements[1].Value, "-NoProfile", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(elements[2].Value, "-NonInteractive", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(elements[3].Value, "-Command", StringComparison.OrdinalIgnoreCase)
+            || elements[4].Kind != ArgKind.Literal
+            || string.IsNullOrWhiteSpace(elements[4].Value)
+            || string.Equals(elements[4].Value, "-", StringComparison.Ordinal)
+            || !HasExactSourceCoverage(source, elements)
+            || !HasStaticQuotedPayload(elements[4]))
+        {
+            return false;
+        }
+
+        ParsedCommand parsed;
+        try
+        {
+            parsed = new PwshParser(new PwshParserOptions
+            {
+                WorkingDirectory = workingDirectory,
+                InitialStateMode = PwshInitialStateMode.Unknown
+            }).Parse(elements[4].Value);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (parsed.IsUnparseable || parsed.Commands.Count == 0)
+        {
+            return false;
+        }
+
+        childCommands = parsed.Commands
+            .Select(static occurrence => occurrence with
+            {
+                Clause = occurrence.Clause with { IsCommandStringWrapped = true }
+            })
+            .ToList();
+        return true;
+    }
+
+    private static bool HasExactSourceCoverage(
+        string source,
+        IReadOnlyList<ClauseElement> elements)
+    {
+        foreach (var element in elements)
+        {
+            var start = element.SourceStart!.Value;
+            var length = element.SourceLength!.Value;
+            if (start < 0
+                || start > source.Length
+                || length > source.Length - start
+                || !source.AsSpan(start, length).SequenceEqual(element.Raw.AsSpan()))
+            {
+                return false;
+            }
+        }
+
+        var firstStart = elements[0].SourceStart!.Value;
+        var last = elements[^1];
+        var lastEnd = last.SourceStart!.Value + last.SourceLength!.Value;
+        return string.IsNullOrWhiteSpace(source[..firstStart])
+            && string.IsNullOrWhiteSpace(source[lastEnd..]);
+    }
+
+    private static bool HasStaticQuotedPayload(ClauseElement payload)
+    {
+        var raw = payload.Raw;
+        if (raw.Length < 2 || raw[0] is not ('\'' or '"') || raw[^1] != raw[0])
+            return false;
+
+        if (raw[0] == '\'')
+            return true;
+
+        var content = raw.AsSpan(1, raw.Length - 2);
+        return content.IndexOfAny('$', '`', '\\') < 0;
+    }
+
+    private static bool ContainsPowerShellHost(IReadOnlyList<CommandOccurrence> commands)
+        => commands.Any(static command => command.Clause.Elements.Any(static element =>
+            IsPowerShellHostLike(element.Value)));
+
+    internal static bool IsPowerShellHostLike(string value)
+    {
+        var normalized = ShellTokenizer.TrimShellPunctuation(value);
+        var separator = Math.Max(
+            normalized.LastIndexOf('/'),
+            normalized.LastIndexOf('\\'));
+        var fileName = separator >= 0 ? normalized[(separator + 1)..] : normalized;
+        return fileName.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("pwsh.exe", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("powershell", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("powershell.exe", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryResolveWrapperWorkingDirectory(
@@ -281,6 +422,10 @@ internal sealed record ShellCommandAnalysis(
         || command.Clause.Verb.IsDynamic
         || command.Clause.Args.Any(static arg =>
             arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
+        || command.Clause.Args.Any(static arg =>
+            arg.Kind == ArgKind.EnvVar
+            && !arg.IsCwdAttribution
+            && string.IsNullOrWhiteSpace(arg.Resolved))
         || command.Clause.Args.Any(static arg =>
             arg.IsPath
             && arg.Kind != ArgKind.Glob
