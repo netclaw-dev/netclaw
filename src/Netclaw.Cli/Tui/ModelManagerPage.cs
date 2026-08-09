@@ -28,7 +28,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
-    private DynamicLayoutNode? _contentNode;
+    private KeyedDynamicLayoutNode<ModelManagerContent>? _contentNode;
     private readonly CompositeDisposable _stepSubs = [];
 
     protected override void OnBound()
@@ -57,27 +57,47 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() =>
-        {
-            _lastFocusedList = null;
-            _lastFocusedInput = null;
-            _stepSubs.Clear();
-
-            return ViewModel.CurrentState.Value switch
+        _contentNode = new KeyedDynamicLayoutNode<ModelManagerContent>(
+            GetContentKey,
+            _ =>
             {
-                ModelManagerState.RoleOverview => BuildRoleOverview(),
-                ModelManagerState.SelectProvider => BuildProviderSelection(),
-                ModelManagerState.DiscoverModels => BuildDiscoverModels(),
-                ModelManagerState.ConfirmAssignment => BuildConfirmAssignment(),
-                _ => Layouts.Empty()
-            };
-        });
+                _lastFocusedList = null;
+                _lastFocusedInput = null;
+                _stepSubs.Clear();
+
+                return ViewModel.CurrentState.Value switch
+                {
+                    ModelManagerState.RoleOverview => BuildRoleOverview(),
+                    ModelManagerState.SelectProvider => BuildProviderSelection(),
+                    ModelManagerState.DiscoverModels => BuildDiscoverModels(),
+                    ModelManagerState.ConfirmAssignment => BuildConfirmAssignment(),
+                    _ => Layouts.Empty()
+                };
+            },
+            KeyedDynamicCachePolicy.EvictOnKeyChange);
 
         ViewModel.StateVersion
             .Subscribe(_ => _contentNode.Invalidate())
             .DisposeWith(Subscriptions);
 
         return _contentNode;
+    }
+
+    private ModelManagerContent GetContentKey()
+    {
+        if (ViewModel.CurrentState.Value != ModelManagerState.DiscoverModels)
+            return (ModelManagerContent)ViewModel.CurrentState.Value;
+
+        if (ViewModel.IsProbing.Value)
+            return ModelManagerContent.DiscoverProbing;
+        if (ViewModel.ProbeResult.Value is { Success: false })
+            return ModelManagerContent.DiscoverFailed;
+        if (ViewModel.ManualModelEntry)
+            return ModelManagerContent.DiscoverManualEntry;
+        if (ViewModel.ProbeResult.Value is not null && ViewModel.DiscoveredModels.Count == 0)
+            return ModelManagerContent.DiscoverEmpty;
+
+        return ModelManagerContent.DiscoverList;
     }
 
     private LayoutNode BuildStatusBar()
@@ -118,14 +138,15 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private ILayoutNode BuildRoleOverview()
     {
         var models = ViewModel.Models;
-        var items = new List<string>
-        {
-            FormatRoleItem("Main", models?.Main),
-            FormatRoleItem("Fallback", models?.Fallback),
-            FormatRoleItem("Compaction", models?.Compaction)
-        };
+        var items = new[] { "Main", "Fallback", "Compaction" };
 
-        _roleList = Layouts.SelectionList(items)
+        _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, role switch
+        {
+            "Main" => ViewModel.Models?.Main,
+            "Fallback" => ViewModel.Models?.Fallback,
+            "Compaction" => ViewModel.Models?.Compaction,
+            _ => null
+        }))
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -137,8 +158,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    var role = selected[0].Split(' ', 2)[0].Trim();
-                    ViewModel.StartAssignment(role);
+                    ViewModel.StartAssignment(selected[0]);
                 }
             })
             .DisposeWith(_stepSubs);
@@ -384,8 +404,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                         var selectedItems = _roleList.SelectedItems;
                         if (selectedItems.Count > 0)
                         {
-                            var role = selectedItems[0].Split(' ', 2)[0].Trim();
-                            ViewModel.ClearRole(role);
+                            ViewModel.ClearRole(selectedItems[0]);
                         }
                     }
                     return;
@@ -404,6 +423,18 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         }
 
         RouteInputToActiveComponent(keyInfo);
+    }
+
+    private enum ModelManagerContent
+    {
+        RoleOverview = ModelManagerState.RoleOverview,
+        SelectProvider = ModelManagerState.SelectProvider,
+        ConfirmAssignment = ModelManagerState.ConfirmAssignment,
+        DiscoverProbing,
+        DiscoverFailed,
+        DiscoverEmpty,
+        DiscoverManualEntry,
+        DiscoverList
     }
 
     private void RouteInputToActiveComponent(ConsoleKeyInfo keyInfo)

@@ -19,7 +19,7 @@ namespace Netclaw.Cli.Mcp;
 public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsViewModel>
 {
     private SelectionListNode<string>? _serverList;
-    private DynamicLayoutNode? _contentNode;
+    private KeyedDynamicLayoutNode<(ToolPermissionsState State, int Revision)>? _contentNode;
     private DynamicLayoutNode? _footerNode;
     private DynamicLayoutNode? _gridHeaderRowsNode;
     private DynamicLayoutNode? _toolRowsNode;
@@ -68,23 +68,26 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() =>
-        {
-            _serverList = null;
-            _toolScrollNode = null;
-            _gridHeaderRowsNode = null;
-            _toolRowsNode = null;
-            _stepSubs.Clear();
-
-            return ViewModel.CurrentState.Value switch
+        _contentNode = new KeyedDynamicLayoutNode<(ToolPermissionsState State, int Revision)>(
+            GetContentKey,
+            _ =>
             {
-                ToolPermissionsState.Loading => BuildLoading(),
-                ToolPermissionsState.ServerList => BuildServerList(),
-                ToolPermissionsState.ToolGrid => BuildToolGrid(),
-                ToolPermissionsState.Saving => BuildLoading(),
-                _ => Layouts.Empty()
-            };
-        });
+                _serverList = null;
+                _toolScrollNode = null;
+                _gridHeaderRowsNode = null;
+                _toolRowsNode = null;
+                _stepSubs.Clear();
+
+                return ViewModel.CurrentState.Value switch
+                {
+                    ToolPermissionsState.Loading => BuildLoading(),
+                    ToolPermissionsState.ServerList => BuildServerList(),
+                    ToolPermissionsState.ToolGrid => BuildToolGrid(),
+                    ToolPermissionsState.Saving => BuildLoading(),
+                    _ => Layouts.Empty()
+                };
+            },
+            KeyedDynamicCachePolicy.EvictOnKeyChange);
 
         // ToolGrid updates invalidate only the header and rows, so the scroll container persists and keeps its scroll position.
         ViewModel.StateVersion
@@ -104,6 +107,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .DisposeWith(Subscriptions);
 
         return _contentNode.Fill();
+    }
+
+    private (ToolPermissionsState State, int Revision) GetContentKey()
+    {
+        var state = ViewModel.CurrentState.Value;
+        var revision = state is ToolPermissionsState.Loading or ToolPermissionsState.Saving
+            ? ViewModel.StateVersion.Value
+            : 0;
+        return (state, revision);
     }
 
     private ILayoutNode BuildLoading()
