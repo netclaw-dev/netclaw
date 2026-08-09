@@ -9,6 +9,8 @@ namespace Netclaw.Security.Tests;
 
 public sealed class ToolPathPolicyTests
 {
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     [Fact]
     public void IsDenied_blocks_exact_match()
     {
@@ -64,7 +66,8 @@ public sealed class ToolPathPolicyTests
         Assert.False(policy.CommandReferencesDeniedPath("echo hello"));
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This regression verifies POSIX Bash decoding before PowerShell child path policy.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The PowerShell child wrapper requires the POSIX Bash host.")]
     public void CommandReferencesDeniedPath_checks_decoded_power_shell_child_path()
     {
         var policy = new ToolPathPolicy(["/protected/config"]);
