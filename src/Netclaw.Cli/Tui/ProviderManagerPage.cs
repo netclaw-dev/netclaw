@@ -45,7 +45,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
-    private DynamicLayoutNode? _contentNode;
+    private KeyedDynamicLayoutNode<(ProviderManagerState State, int Revision)>? _contentNode;
     private readonly CompositeDisposable _stepSubs = [];
 
     protected override void OnBound()
@@ -73,34 +73,37 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() =>
-        {
-            _lastFocusedList = null;
-            _lastFocusedInput = null;
-            _stepSubs.Clear();
-
-            return ViewModel.CurrentState.Value switch
+        _contentNode = new KeyedDynamicLayoutNode<(ProviderManagerState State, int Revision)>(
+            GetContentKey,
+            _ =>
             {
-                ProviderManagerState.Loading => BuildLoadingView(),
-                ProviderManagerState.List => BuildProviderListView(),
-                ProviderManagerState.AddSelectType => BuildAddSelectTypeView(),
-                ProviderManagerState.AddName => BuildAddNameView(),
-                ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
-                ProviderManagerState.AddGitHubCopilotAuthHost => BuildGitHubCopilotAuthHostView(),
-                ProviderManagerState.AddGitHubCopilotEnterpriseHost => BuildGitHubCopilotEnterpriseHostView(),
-                ProviderManagerState.AddGitHubCopilotEnterpriseApiBase => BuildGitHubCopilotEnterpriseApiBaseView(),
-                ProviderManagerState.AddCredentials => BuildCredentialsView(),
-                ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
-                ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
-                ProviderManagerState.AddValidating => BuildValidatingView(),
-                ProviderManagerState.AddComplete => BuildAddCompleteView(),
-                ProviderManagerState.Details => BuildDetailsView(),
-                ProviderManagerState.RenameProvider => BuildRenameView(),
-                ProviderManagerState.FixCredentials => BuildFixCredentialsView(),
-                ProviderManagerState.RemoveConfirm => BuildRemoveConfirmView(),
-                _ => Layouts.Empty()
-            };
-        });
+                _lastFocusedList = null;
+                _lastFocusedInput = null;
+                _stepSubs.Clear();
+
+                return ViewModel.CurrentState.Value switch
+                {
+                    ProviderManagerState.Loading => BuildLoadingView(),
+                    ProviderManagerState.List => BuildProviderListView(),
+                    ProviderManagerState.AddSelectType => BuildAddSelectTypeView(),
+                    ProviderManagerState.AddName => BuildAddNameView(),
+                    ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
+                    ProviderManagerState.AddGitHubCopilotAuthHost => BuildGitHubCopilotAuthHostView(),
+                    ProviderManagerState.AddGitHubCopilotEnterpriseHost => BuildGitHubCopilotEnterpriseHostView(),
+                    ProviderManagerState.AddGitHubCopilotEnterpriseApiBase => BuildGitHubCopilotEnterpriseApiBaseView(),
+                    ProviderManagerState.AddCredentials => BuildCredentialsView(),
+                    ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
+                    ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
+                    ProviderManagerState.AddValidating => BuildValidatingView(),
+                    ProviderManagerState.AddComplete => BuildAddCompleteView(),
+                    ProviderManagerState.Details => BuildDetailsView(),
+                    ProviderManagerState.RenameProvider => BuildRenameView(),
+                    ProviderManagerState.FixCredentials => BuildFixCredentialsView(),
+                    ProviderManagerState.RemoveConfirm => BuildRemoveConfirmView(),
+                    _ => Layouts.Empty()
+                };
+            },
+            KeyedDynamicCachePolicy.EvictOnKeyChange);
 
         ViewModel.StateVersion
             .Subscribe(_ => _contentNode.Invalidate())
@@ -111,6 +114,17 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         // no per-surface tick subscription required.
 
         return _contentNode;
+    }
+
+    private (ProviderManagerState State, int Revision) GetContentKey()
+    {
+        var state = ViewModel.CurrentState.Value;
+        var revision = state is ProviderManagerState.Loading
+            or ProviderManagerState.AddValidating
+            or ProviderManagerState.Details
+            ? ViewModel.StateVersion.Value
+            : 0;
+        return (state, revision);
     }
 
     private LayoutNode BuildStatusBar()
