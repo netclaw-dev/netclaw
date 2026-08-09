@@ -329,12 +329,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                         current.Status.LastErrorAt),
                     CatalogFingerprint = fingerprint,
                 };
-                var promptSkills = CreatePromptSkills(replacement);
-                EnsurePromptSkillNamesAvailable(replacement.Name, promptSkills);
-                // Connection first, tools second — same ordering as the connect path.
-                lifecycle.Publish(replacement);
-                _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
-                PublishPromptSkills(replacement, promptSkills);
+                PublishConnectedCatalog(lifecycle, replacement, publishedTools);
             }
 
             _logger.LogInformation(
@@ -716,13 +711,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     checked(current.Generation + 1),
                     connectedStatus,
                     catalogFingerprint);
-                var promptSkills = CreatePromptSkills(replacement);
-                EnsurePromptSkillNamesAvailable(replacement.Name, promptSkills);
-                // Connection first, tools second. A tool the model can see is then always
-                // dispatchable, because dispatch resolves it from this snapshot.
-                lifecycle.Publish(replacement);
-                _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
-                PublishPromptSkills(replacement, promptSkills);
+                PublishConnectedCatalog(lifecycle, replacement, publishedTools);
                 // The connect path just listed the catalog; skip the next poll window.
                 lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
                 candidate = null;
@@ -900,10 +889,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         try
         {
             var client = lifecycle.Snapshot?.Client;
-            // Tools first, connection second. The model stops seeing the server's tools
-            // before dispatch loses the snapshot that resolves them.
-            _toolRegistry.PublishMcpServerTools(serverName.Value, []);
-            _skillRegistry.PublishMcpPromptSkills(serverName.Value, []);
+            // Remove model-visible surfaces before dispatch loses the connection snapshot.
+            RemovePublishedMcpSurface(serverName.Value);
             _skillIndexPublisher.Publish();
             lifecycle.Publish(null);
 
@@ -1572,6 +1559,27 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _skillIndexPublisher.Publish();
     }
 
+    private void PublishConnectedCatalog(
+        McpServerLifecycle lifecycle,
+        McpServerSnapshot snapshot,
+        IReadOnlyList<McpToolAdapter> tools)
+    {
+        var promptSkills = CreatePromptSkills(snapshot);
+        EnsurePromptSkillNamesAvailable(snapshot.Name, promptSkills);
+
+        // Publish the connection first. A model-visible tool or prompt must always resolve
+        // against the replacement snapshot before the old snapshot becomes unreachable.
+        lifecycle.Publish(snapshot);
+        _toolRegistry.PublishMcpServerTools(snapshot.Name.Value, tools);
+        PublishPromptSkills(snapshot, promptSkills);
+    }
+
+    private void RemovePublishedMcpSurface(string serverName)
+    {
+        _toolRegistry.PublishMcpServerTools(serverName, []);
+        _skillRegistry.PublishMcpPromptSkills(serverName, []);
+    }
+
     private static string? BuildArgumentHint(IReadOnlyList<SkillArgumentDescriptor> arguments)
     {
         if (arguments.Count == 0)
@@ -1716,11 +1724,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             foreach (var (serverName, lifecycle) in _servers)
             {
-                _toolRegistry.PublishMcpServerTools(serverName.Value, []);
-                _skillRegistry.PublishMcpPromptSkills(serverName.Value, []);
-                _skillIndexPublisher.Publish();
+                RemovePublishedMcpSurface(serverName.Value);
                 lifecycle.Publish(null);
             }
+
+            if (_servers.Count > 0)
+                _skillIndexPublisher.Publish();
         }
 
         _lifetimeCancellation.Dispose();
