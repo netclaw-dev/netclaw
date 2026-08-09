@@ -12,6 +12,7 @@
     <Project Path="src/Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <Project Path="src/Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
     <Project Path="src/Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
+    <Project Path="src/Netclaw.Channels.Telegram/Netclaw.Channels.Telegram.csproj" />
     <Project Path="src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <Project Path="src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj" />
@@ -37,6 +38,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/Netclaw.Demo.AppHost/Netclaw.Demo.AppHost.csproj" />
     <Project Path="samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj" />
+    <Project Path="samples/Netclaw.Telegram.TestHost/Netclaw.Telegram.TestHost.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" />

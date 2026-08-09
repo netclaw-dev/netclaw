@@ -79,3 +79,10 @@ public sealed class DiscordGatewayActorKey;
 /// Mode B reminder turns through the Mattermost channel's existing routing hierarchy.
 /// </summary>
 public sealed class MattermostGatewayActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// Telegram gateway parent actor. Reminder delivery will use this key after
+/// the Telegram actor hierarchy is connected.
+/// </summary>
+public sealed class TelegramGatewayActorKey;
