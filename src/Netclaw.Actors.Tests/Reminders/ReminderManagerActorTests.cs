@@ -1238,7 +1238,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Successful_retry_resets_failure_count_and_soft_deletes_oneshot()
+    public async Task Successful_retry_deletes_oneshot_definition_and_history()
     {
         var manager = await GetManagerAsync();
         var gatewayProbe = CreateTestProbe("retry-success-gateway");
@@ -1271,17 +1271,9 @@ public class ReminderManagerActorTests : TestKit
 
         await AwaitAssertAsync(async () =>
         {
-            var stored = _definitionStore.Get(definition.Id);
-            Assert.NotNull(stored);
-            Assert.False(stored!.Enabled);
-            Assert.Equal(0, stored.ConsecutiveFailures);
-            Assert.Equal(ReminderTerminalOutcome.Completed, stored.TerminalOutcome);
-
-            var status = await manager.Ask<ReminderStatusResponse>(
-                new GetReminderStatusQuery(definition.Id),
-                TimeSpan.FromSeconds(3),
-                TestContext.Current.CancellationToken);
-            Assert.Equal("Delivered", status.Occurrence?.CompletionStatus);
+            Assert.Null(_definitionStore.Get(definition.Id));
+            var historyStore = new ReminderHistoryStore(new NetclawPaths(_basePath));
+            Assert.Empty(await historyStore.ReadAsync(definition.Id, 10));
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }
 

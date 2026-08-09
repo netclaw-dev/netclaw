@@ -872,22 +872,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
-        {
-            try
-            {
-                _definitionStore.Save(definition with
-                {
-                    Enabled = false,
-                    ConsecutiveFailures = 0,
-                    TerminalOutcome = ReminderTerminalOutcome.Completed,
-                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
-                });
-            }
-            catch (Exception ex)
-            {
-                _log.Error(ex, "Failed to save completed state for one-shot reminder '{0}'", outcome.Id.Value);
-            }
-        }
+            await DeleteReminderInternalAsync(outcome.Id);
 
         _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
     }
