@@ -283,15 +283,15 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
     [InlineData("..\\..\\windows\\system32\\config")]
     [InlineData("/etc/passwd")]
     [InlineData("C:\\Windows\\System32")]
-    public void Exists_with_traversal_id_does_not_escape_reminders_directory(string maliciousId)
+    public void Get_with_traversal_id_does_not_escape_reminders_directory(string maliciousId)
     {
         var store = new ReminderDefinitionStore(_paths);
 
         // Uri.EscapeDataString neutralizes path separators, so the canonical
-        // path stays inside _basePath and Exists() simply returns false. The
+        // path stays inside _basePath and Get() simply returns null. The
         // explicit containment check in GetPath would throw if that invariant
         // ever regressed.
-        Assert.False(store.Exists(new ReminderId(maliciousId)));
+        Assert.Null(store.Get(new ReminderId(maliciousId)));
     }
 
     [Fact]

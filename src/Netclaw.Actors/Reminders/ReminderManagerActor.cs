@@ -398,8 +398,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private async Task HandlePermanentDeleteAsync(DeleteReminderCommand cmd)
     {
         var replyTo = Sender;
-        var found = _definitionStore.Exists(cmd.Id);
-        await DeleteReminderInternalAsync(cmd.Id);
+        var found = await DeleteReminderInternalAsync(cmd.Id);
 
         _log.Info("Permanently delete reminder '{0}': {1}", cmd.Id.Value, found ? "deleted" : "not found");
         replyTo.Tell(new ReminderDeletedResponse(cmd.Id, found));
@@ -447,7 +446,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// Permanently removes a reminder definition, its schedule, history, and process state.
     /// Only an explicit delete command uses this path.
     /// </summary>
-    private async Task DeleteReminderInternalAsync(ReminderId id)
+    private async Task<bool> DeleteReminderInternalAsync(ReminderId id)
     {
         try
         {
@@ -458,9 +457,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Warning(ex, "Failed to delete history for reminder '{0}'", id.Value);
         }
 
-        _definitionStore.Delete(id);
+        var deleted = _definitionStore.Delete(id);
         await CancelScheduleOnlyAsync(id);
         _skipCounts.Remove(id);
+        return deleted;
     }
 
     private async Task<ReminderStateResponse> EnableReminderInternalAsync(ReminderId id)

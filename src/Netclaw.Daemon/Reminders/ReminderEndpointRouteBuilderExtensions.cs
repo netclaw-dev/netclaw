@@ -304,7 +304,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             CancellationToken ct) =>
         {
             var rid = new ReminderId(id);
-            if (!definitionStore.Exists(rid))
+            if (definitionStore.Get(rid) is null)
                 return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
 
             var maxRecords = Math.Clamp(last ?? 20, 1, 500);

@@ -78,12 +78,6 @@ public sealed class ReminderDefinitionStore
         }
     }
 
-    public bool Exists(ReminderId id)
-    {
-        lock (_sync)
-            return TryResolveDefinition(id, out _, out _);
-    }
-
     public ReminderDefinition? Get(ReminderId id)
     {
         lock (_sync)
