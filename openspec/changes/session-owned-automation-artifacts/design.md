@@ -43,7 +43,16 @@ Netclaw will use these canonical paths:
 
 `CurrentSession` reminder files will use the session paths. All background job files will use the session paths.
 
-`Channel` and `None` reminder files will remain under `~/.netclaw/schedules/reminders/`. Those reminders create new sessions and have daemon scope.
+The reminder delivery kind defines its physical owner:
+
+| Reminder behavior | Delivery kind | Physical owner | Definition directory |
+|---|---|---|---|
+| Return to the source session | `CurrentSession` | The source session | `~/.netclaw/sessions/{session-key}/reminders/` |
+| Create a new session | `Channel` or `None` | The daemon | `~/.netclaw/schedules/reminders/` |
+
+A reminder that creates a new session will remain in the daemon reminder directory. Its definition and history will not use the creator session directory.
+
+This change moves only new `CurrentSession` reminder files. It does not move daemon-scoped reminder files.
 
 The implementation will reuse `NetclawPaths.SessionsDirectory` and `SessionDirectoryHelper`. It will not add a parallel path configuration.
 
