@@ -1043,6 +1043,17 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var definitions = _definitionStore.List();
             var definitionsById = definitions.ToDictionary(d => d.Id.Value, StringComparer.Ordinal);
 
+            var deletedCompletedOneShots = 0;
+            foreach (var definition in definitions.Where(d =>
+                         !d.Enabled &&
+                         d.Schedule.Type == ReminderScheduleType.OneShot &&
+                         d.TerminalOutcome == ReminderTerminalOutcome.Completed))
+            {
+                await DeleteReminderInternalAsync(definition.Id);
+                definitionsById.Remove(definition.Id.Value);
+                deletedCompletedOneShots++;
+            }
+
             var cancelledOrphans = 0;
             foreach (var (id, _) in scheduled)
             {
@@ -1099,6 +1110,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 if (outcome is null)
                     continue;
 
+                if (outcome == ReminderTerminalOutcome.Completed)
+                {
+                    await DeleteReminderInternalAsync(definition.Id);
+                    deletedCompletedOneShots++;
+                    continue;
+                }
+
                 var terminalDefinition = definition with
                 {
                     Enabled = false,
@@ -1120,13 +1138,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 disabledExpired++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0 || softDeletedOneShots > 0 || disabledExpired > 0)
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || softDeletedOneShots > 0
+                || disabledExpired > 0 || deletedCompletedOneShots > 0)
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, soft_deleted_oneshots={2}, disabled_expired={3}",
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, soft_deleted_oneshots={2}, disabled_expired={3}, deleted_completed_oneshots={4}",
                     cancelledOrphans,
                     restoredSchedules,
                     softDeletedOneShots,
-                    disabledExpired);
+                    disabledExpired,
+                    deletedCompletedOneShots);
             }
 
             // Only ack external callers — skip Self.Tell from PreStart

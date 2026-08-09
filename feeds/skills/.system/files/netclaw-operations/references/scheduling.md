@@ -70,6 +70,7 @@ A one-shot reminder stays enabled while an occurrence can retry. After a
 successful acknowledgement, Netclaw deletes its definition and history. A poison
 one-shot becomes disabled with a `Failed` outcome. Its definition and history
 remain available until an operator uses the permanent delete command.
+Startup reconciliation also removes completed one-shots from prior versions.
 
 Each attempt has a 20-minute inactivity limit and a one-hour absolute limit.
 The durable acknowledgement lease is 70 minutes. A daemon crash therefore lets

@@ -321,7 +321,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Reconcile_retains_past_oneshot_without_durable_outcome()
+    public async Task Reconcile_deletes_completed_oneshot_and_retains_ambiguous_or_failed_oneshots()
     {
         var manager = await GetManagerAsync();
         var now = TimeProvider.System.GetUtcNow();
@@ -361,6 +361,23 @@ public class ReminderManagerActorTests : TestKit
         await historyStore.AppendAsync(
             zombie.Id,
             new HistoryRecord(now.AddMinutes(-30), false, 100, "session-1", "recovery failed"));
+        var completed = zombie with
+        {
+            Id = new ReminderId("completed-old"),
+            Enabled = false,
+            TerminalOutcome = ReminderTerminalOutcome.Completed
+        };
+        var failed = zombie with
+        {
+            Id = new ReminderId("failed-old"),
+            Enabled = false,
+            ConsecutiveFailures = ReminderManagerActor.FailurePauseThreshold,
+            TerminalOutcome = ReminderTerminalOutcome.Failed
+        };
+        _definitionStore.Save(completed);
+        _definitionStore.Save(failed);
+        await historyStore.AppendAsync(completed.Id, new HistoryRecord(now, true, 100, "session-1", null));
+        await historyStore.AppendAsync(failed.Id, new HistoryRecord(now, false, 100, "session-1", "failed"));
 
         // Confirm it shows up as scheduled
         var healthBefore = await manager.Ask<ReminderHealthResponse>(
@@ -379,6 +396,10 @@ public class ReminderManagerActorTests : TestKit
         Assert.True(afterReconcile!.Enabled);
         Assert.Null(afterReconcile.TerminalOutcome);
         Assert.Single(await historyStore.ReadAsync(zombie.Id, 10));
+        Assert.Null(_definitionStore.Get(completed.Id));
+        Assert.Empty(await historyStore.ReadAsync(completed.Id, 10));
+        Assert.NotNull(_definitionStore.Get(failed.Id));
+        Assert.Single(await historyStore.ReadAsync(failed.Id, 10));
     }
 
     [Theory]
