@@ -149,10 +149,17 @@ Done when:
   keeps the outer host and every complete PowerShell child as independent
   approval occurrences.
 - [x] The 204-case shell approval review table proves PowerShell host and child
-  grant composition, intrinsic direct-call script blocks, nested hard deny,
-  decoded protected paths, and strict handling for dynamic values, named
-  script-block receivers, command-resolution changes, host-option near misses,
-  Windows wrappers, `BASH_ENV`, and exported-function risk.
+      grant composition, intrinsic direct-call script blocks, nested hard deny,
+      decoded protected paths, and strict handling for dynamic values, named
+      script-block receivers, command-resolution changes, host-option near misses,
+      Windows wrappers, `BASH_ENV`, and exported-function risk.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.4` for authored PowerShell
+      completeness. Static cmdlets and pipeline stages can reuse narrow grants
+      without profile, module, alias, function, `PATH`, inherited-variable, or
+      prior-runspace inspection. Parser-proved `Write-Output { ... }` blocks
+      stay data. The 208-case matrix keeps dynamic values, unknown receivers,
+      source-visible command-resolution changes, hard deny, and protected paths
+      strict.
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.

@@ -533,6 +533,32 @@ public static class ShellApprovalCases
                 "persistent:pwsh",
                 "persistent:git push")),
         Case(
+            "pwsh-static-authored-cmdlet-grants-allow",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output ready'"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:pwsh",
+                "persistent:Write-Output")),
+        Case(
+            "pwsh-static-authored-pipeline-checks-every-stage",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Get-ChildItem | Remove-Item'"),
+            Approvals.PersistentAnywhere("pwsh", "Get-ChildItem"),
+            ExpectedApproval.Require(
+                ["Remove-Item"],
+                approvalMatches: ["persistent:pwsh", "persistent:Get-ChildItem"])),
+        Case(
+            "pwsh-static-authored-pipeline-grants-allow",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Get-ChildItem | Remove-Item'"),
+            Approvals.PersistentAnywhere("pwsh", "Get-ChildItem", "Remove-Item"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:pwsh",
+                "persistent:Get-ChildItem",
+                "persistent:Remove-Item")),
+        Case(
             "pwsh-working-directory-option-fails-closed",
             Bash("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'"),
             Approvals.PersistentAnywhere("pwsh", "git status"),
@@ -578,9 +604,18 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("pwsh", "Invoke-CustomAction", "Remove-Item"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "pwsh-corpus-418-data-script-block-stays-strict",
+            "pwsh-write-output-script-block-stays-data",
             Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item target.txt }'"),
-            Approvals.PersistentAnywhere("pwsh", "Write-Output", "Remove-Item"),
+            Approvals.PersistentAnywhere("pwsh", "Write-Output"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:pwsh",
+                "persistent:Write-Output")),
+        Case(
+            "pwsh-source-mutated-write-output-stays-strict",
+            Bash("pwsh -NoProfile -NonInteractive -Command 'Set-Alias Write-Output Invoke-Command; Write-Output { Remove-Item target.txt }'"),
+            Approvals.PersistentAnywhere("pwsh", "Set-Alias", "Write-Output", "Remove-Item"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "pwsh-executable-script-block-prompts-for-body",

@@ -70,6 +70,83 @@ public sealed class ShellCommandAnalysisTests
         Assert.True(analysis.Commands[1].Clause.IsCommandStringWrapped);
     }
 
+    [Theory]
+    [InlineData(
+        "Write-Output victim.txt",
+        "pwsh|Write-Output")]
+    [InlineData(
+        "Get-Content relative.txt",
+        "pwsh|Get-Content")]
+    [InlineData(
+        "Get-ChildItem | Remove-Item",
+        "pwsh|Get-ChildItem|Remove-Item")]
+    public void Static_power_shell_commands_use_authored_completeness(
+        string payload,
+        string expectedVerbs)
+    {
+        var analysis = _analyzer.Analyze(
+            $"pwsh -NoProfile -NonInteractive -Command '{payload}'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        Assert.Equal(
+            expectedVerbs.Split('|'),
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+    }
+
+    [Theory]
+    [InlineData("Write-Output { Remove-Item victim.txt }", "Write-Output")]
+    [InlineData("Write-Output -InputObject { Remove-Item victim.txt }", "Write-Output")]
+    [InlineData("Write-Output { Remove-Item first.txt } { Remove-Item second.txt }", "Write-Output")]
+    public void Power_shell_write_output_script_block_is_source_level_data(
+        string payload,
+        string expectedVerb)
+    {
+        var analysis = _analyzer.Analyze(
+            $"pwsh -NoProfile -NonInteractive -Command '{payload}'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        Assert.Equal(
+            ["pwsh", expectedVerb],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+    }
+
+    [Fact]
+    public void Bash_wrapped_write_output_dynamic_argument_stays_dynamic()
+    {
+        var analysis = _analyzer.Analyze(
+            "bash -c 'Write-Output {$(printf x),bar}'",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax);
+    }
+
+    [Theory]
+    [InlineData("Write-Output $value")]
+    [InlineData("echo { Remove-Item victim.txt }")]
+    [InlineData("Set-Alias Write-Output Invoke-Command; Write-Output { Remove-Item victim.txt }")]
+    [InlineData("Set-Alias echo Invoke-Command; echo { Remove-Item victim.txt }")]
+    [InlineData("Invoke-CustomAction { Remove-Item victim.txt }")]
+    [InlineData("Write-Output { Remove-Item victim.txt")]
+    public void Power_shell_unknown_or_source_mutated_child_stays_dynamic(string payload)
+    {
+        var analysis = _analyzer.Analyze(
+            $"pwsh -NoProfile -NonInteractive -Command '{payload}'",
+            "/work");
+
+        Assert.True(
+            analysis.Failure == ShellAnalysisFailure.Unresolved
+            || analysis.HasDynamicSyntax,
+            string.Join(" | ", analysis.Commands.Select(command =>
+                $"{command.Clause.Verb.Joined}:complete={command.IsComplete}:" +
+                $"dynamic={command.Clause.Verb.IsDynamic}:" +
+                $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.IsFlag}/{arg.Resolved}"))}")));
+    }
+
     [Fact]
     public void Power_shell_host_is_retained_for_ambient_bash_resolution_controls()
     {

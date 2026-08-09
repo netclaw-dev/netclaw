@@ -24,15 +24,23 @@ internal sealed class ShellCommandAnalyzer
     public ShellCommandAnalysis Analyze(string command, string? workingDirectory = null)
     {
         var commands = new List<CommandOccurrence>();
-        var failure = Analyze(command, workingDirectory, depth: 0, commands);
-        return new ShellCommandAnalysis(commands, failure);
+        var powerShellChildren = new HashSet<CommandOccurrence>(
+            ReferenceEqualityComparer.Instance);
+        var failure = Analyze(
+            command,
+            workingDirectory,
+            depth: 0,
+            commands,
+            powerShellChildren);
+        return new ShellCommandAnalysis(commands, failure, powerShellChildren);
     }
 
     private static ShellAnalysisFailure Analyze(
         string command,
         string? workingDirectory,
         int depth,
-        List<CommandOccurrence> commands)
+        List<CommandOccurrence> commands,
+        HashSet<CommandOccurrence> powerShellChildren)
     {
         if (depth > MaxWrapperDepth)
             return ShellAnalysisFailure.Unresolved;
@@ -71,6 +79,7 @@ internal sealed class ShellCommandAnalyzer
 
             commands.Add(parsed.Commands[0]);
             commands.AddRange(childCommands);
+            powerShellChildren.UnionWith(childCommands);
             return ShellAnalysisFailure.None;
         }
 
@@ -109,7 +118,8 @@ internal sealed class ShellCommandAnalyzer
                 innerCommands[i],
                 innerWorkingDirectory,
                 depth + 1,
-                commands);
+                commands,
+                powerShellChildren);
             if (failure != ShellAnalysisFailure.None)
                 return failure;
         }
@@ -409,7 +419,21 @@ internal sealed record ShellCommandAnalysis(
     IReadOnlyList<CommandOccurrence> Commands,
     ShellAnalysisFailure Failure)
 {
-    public bool HasDynamicSyntax => Commands.Any(static command =>
+    private readonly HashSet<CommandOccurrence> _powerShellChildren = new(
+        ReferenceEqualityComparer.Instance);
+
+    internal ShellCommandAnalysis(
+        IReadOnlyList<CommandOccurrence> commands,
+        ShellAnalysisFailure failure,
+        IEnumerable<CommandOccurrence> powerShellChildren)
+        : this(commands, failure)
+    {
+        // IsCommandStringWrapped also marks Bash children. Keep parser-origin
+        // identity so the PowerShell-only data rule cannot relax Bash syntax.
+        _powerShellChildren.UnionWith(powerShellChildren);
+    }
+
+    public bool HasDynamicSyntax => Commands.Any(command =>
         !command.IsComplete
         || !Enum.IsDefined(command.ImmediateRole)
         || command.ImmediateRole == CommandOccurrenceRole.Unknown
@@ -420,8 +444,13 @@ internal sealed record ShellCommandAnalysis(
             || frame.Region == CommandAncestryRegion.Unknown)
         || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
         || command.Clause.Verb.IsDynamic
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
+        || command.Clause.Args.Any(arg =>
+            arg.Kind == ArgKind.DynamicSkip
+            && !arg.IsCwdAttribution
+            && !IsAuthoredPowerShellScriptBlockData(
+                command,
+                arg,
+                _powerShellChildren.Contains(command)))
         || command.Clause.Args.Any(static arg =>
             arg.Kind == ArgKind.EnvVar
             && !arg.IsCwdAttribution
@@ -434,6 +463,32 @@ internal sealed record ShellCommandAnalysis(
         // Only a leaf glob has a fixed directory scope.
         || command.Clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
         || HasUnresolvedRedirect(command));
+
+    private static bool IsAuthoredPowerShellScriptBlockData(
+        CommandOccurrence occurrence,
+        Arg arg,
+        bool isPowerShellChild)
+    {
+        if (!isPowerShellChild
+            || !occurrence.IsComplete
+            || !occurrence.Clause.IsCommandStringWrapped
+            || arg.IsPath
+            || arg.IsFlag)
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                occurrence.Clause.Verb.Joined,
+                "Write-Output",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var raw = arg.Raw.AsSpan().Trim();
+        return raw.Length >= 2 && raw[0] == '{' && raw[^1] == '}';
+    }
 
     private static bool HasUnsupportedWorkingDirectory(ShellValueDomain workingDirectory)
     {
