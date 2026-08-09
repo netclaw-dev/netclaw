@@ -119,7 +119,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         // patterns list is empty (per ApprovalContext.Patterns above), so
         // the bypass must rely on tool-name match only.
         context.OneTimeApprovedToolName = toolCall.Name;
-        context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
         // The retry must succeed without throwing. Output text varies by
         // environment (bash for-loop expansion); the load-bearing assertion

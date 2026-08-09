@@ -475,32 +475,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         if (approvalContext is null)
             return false;
 
-        // Tool-name match is required for any one-time bypass — without it
-        // we could never tell which tool the grant applies to.
-        if (!string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName)
-            && !string.Equals(context.Approval.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName)
+            || !string.Equals(context.Approval.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
             return false;
 
-        // By this point: either OneTimeApprovedToolName is empty (no
-        // bypass active), or it matched toolCall.Name above. Messy commands
-        // have no extractable patterns, so an active per-tool ApprovedOnce
-        // bypass is the only signal we can use — without this branch a
-        // retry would hit the empty-patterns guard below and throw
-        // ToolApprovalRequiredException. The pipeline clears
-        // OneTimeApprovedToolName after the retry, so the bypass cannot
-        // leak into a subsequent call.
-        if (approvalContext.IsMessy && !string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName))
-            return true;
-
-        if (context.Approval.OneTimeApprovedPatterns.Count == 0)
-            return false;
-
-        if (approvalContext.Patterns.Count == 0)
-            return false;
-
-        if (string.IsNullOrEmpty(context.Approval.OneTimeApprovedToolName))
-            return false;
-
-        return approvalContext.Patterns.All(pattern => context.Approval.OneTimeApprovedPatterns.Contains(pattern));
+        // Patterns bind the authored approval units. Candidate keys bind the
+        // filtered verb and effective-directory set that the user approved.
+        // Exact equality forces a new prompt when a formerly safe candidate
+        // becomes unsafe before the retry, for example after a symlink swap.
+        // An unchanged messy command has an empty key set on both attempts,
+        // while a clean-to-messy transition cannot match its original keys.
+        return context.Approval.OneTimeApprovedPatterns.SetEquals(
+            OneTimeApprovalKeys.Create(approvalContext));
     }
 }

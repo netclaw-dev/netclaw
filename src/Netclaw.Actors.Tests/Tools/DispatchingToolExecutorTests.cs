@@ -871,7 +871,7 @@ public class DispatchingToolExecutorTests
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
             context.OneTimeApprovedToolName = toolCall.Name;
-            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
             // The one-time-approval bypass should let the call succeed.
             // Output text varies by test environment (git status); meaningful
@@ -941,7 +941,7 @@ public class DispatchingToolExecutorTests
             executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
         context.OneTimeApprovedToolName = toolCall.Name;
-        context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
         var decision = await executor.EvaluateAuthorizationAsync(
             toolCall,
@@ -1006,7 +1006,7 @@ public class DispatchingToolExecutorTests
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
             context.OneTimeApprovedToolName = toolCall.Name;
-            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
             var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Successfully wrote", retryResult, StringComparison.Ordinal);
@@ -1095,7 +1095,7 @@ public class DispatchingToolExecutorTests
             Assert.Contains("ls", firstAttempt.ApprovalContext.Patterns);
 
             context.OneTimeApprovedToolName = call.Name;
-            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
             var retryResult = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
             Assert.Contains("Exit code: 0", retryResult, StringComparison.Ordinal);

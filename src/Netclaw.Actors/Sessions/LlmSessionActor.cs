@@ -1964,11 +1964,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// same dispatch logic — there is no divergent second copy.
     /// </summary>
     /// <param name="oneTimeApprovalPreSeed">
-    /// Optional map of <c>callId → approved patterns</c>. For each entry, the
-    /// pipeline pre-seeds the one-time approval bypass on that call's execution
-    /// context before the first attempt, so an <c>ApprovedOnce</c> re-drive
-    /// skips the approval gate for exactly that call without emitting a second
-    /// approval prompt. Scoped per call id — never widens scope to other calls.
+    /// Optional map of <c>callId → one-time authorization keys</c>. Each value
+    /// binds the approved patterns and exact approval-candidate snapshot. The
+    /// pipeline pre-seeds the bypass before the first attempt, so an
+    /// <c>ApprovedOnce</c> re-drive cannot emit a duplicate prompt or authorize
+    /// a newly unsafe candidate. The keys apply only to that call id.
     /// </param>
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
@@ -4325,7 +4325,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // record their durable grant separately. This only authorizes the
                 // immediate re-drive, matching the live pipeline and the sub-agent.
                 // See https://github.com/netclaw-dev/netclaw/issues/1802.
-                preSeed[call.CallId.Value] = resolved.Pending.Patterns;
+                preSeed[call.CallId.Value] = OneTimeApprovalKeys.Create(
+                    resolved.Pending.Patterns,
+                    resolved.Pending.Candidates,
+                    resolved.Pending.Cwd);
             }
 
             if (resolved.Decision is ApprovalDecision.Denied or ApprovalDecision.TimedOut)

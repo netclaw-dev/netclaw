@@ -25,8 +25,8 @@
 | mutating-verb-project-prompts | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | four-safe-mixed-operator-clauses-allow | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| mixed-safe-unsafe-compound-prompts | Personal | Project | Interactive | git status && git push | none | RequiresApproval | approval required | git status, git push | No |
-| safe-pipe-unsafe-tail-prompts | Personal | Project | Interactive | git status \| git push | none | RequiresApproval | approval required | git status, git push | No |
+| mixed-safe-unsafe-compound-prompts | Personal | Project | Interactive | git status && git push | none | RequiresApproval | approval required | git push | No |
+| safe-pipe-unsafe-tail-prompts | Personal | Project | Interactive | git status \| git push | none | RequiresApproval | approval required | git push | No |
 | safe-pipeline-allows | Personal | Project | Interactive | git log \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | native-project-path-operand-allows-safe-verb | Personal | Project | Interactive | git diff install-skills.sh | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | native-external-path-operand-prompts | Personal | Project | Interactive | git diff /etc/passwd | none | RequiresApproval | approval required | git diff | No |
@@ -50,9 +50,9 @@
 | directory-listing-glob-external-offers-persistent-grant | Personal | External | Interactive | ls -d subdirs/*/ | none | RequiresApproval | approval required | ls | No |
 | directory-listing-glob-pipeline-offers-persistent-grant | Personal | External | Interactive | ls -d subdirs/*/ \| xargs -n1 basename | none | RequiresApproval | approval required | ls, xargs | No |
 | native-global-option-identity-gap-currently-prompts | Personal | Project | Interactive | git --no-pager status | persistent[project]:git status | RequiresApproval | approval required | git | No |
-| semicolon-sequence-prompts | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git status, git push | No |
-| newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git status, git push | No |
-| or-chain-prompts | Personal | Project | Interactive | git status \|\| git push | none | RequiresApproval | approval required | git status, git push | No |
+| semicolon-sequence-prompts | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git push | No |
+| newline-sequence-prompts | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git push | No |
+| or-chain-prompts | Personal | Project | Interactive | git status \|\| git push | none | RequiresApproval | approval required | git push | No |
 | three-step-release-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push origin dev | none | RequiresApproval | approval required | git add, git commit, git push origin dev | No |
 | hard-deny-pipeline-tail-blocks | Personal | Project | Interactive | echo safe \| netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | hard-deny-nested-shell-blocks | Personal | Project | Interactive | bash -lc "netclaw daemon stop" | none | Denied | hard_deny_self_destructive | none | Not applicable |
@@ -61,7 +61,7 @@
 | nested-shell-wrapper-grant-does-not-cover-inner-command | Personal | Project | Interactive | bash -lc "git push" | persistent[anywhere]:bash | RequiresApproval | approval required | git push | No |
 | env-nested-shell-prompts | Personal | Project | Interactive | env bash -lc "git push" | none | RequiresApproval | approval required | git push | No |
 | timeout-nested-shell-prompts | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
-| subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git status, git push | No |
+| subshell-prompts | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git push | No |
 | command-substitution-fails-closed | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | none | Yes |
 | dynamic-path-fails-closed | Personal | Project | Interactive | cat "$FILE" | none | RequiresApproval | approval required | none | Yes |
 | dynamic-redirect-fails-closed | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | none | Yes |
@@ -69,7 +69,7 @@
 | fd-dup-redirect-safe-pipeline-allows | Personal | Project | Interactive | git log --oneline -5 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-close-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-move-redirect-safe-verb-allows | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| fd-dup-redirect-mutating-no-grant-prompts-not-messy | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev, tail | No |
+| fd-dup-redirect-mutating-no-grant-prompts-not-messy | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev | No |
 | dynamic-fd-redirect-fails-closed | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
 | background-list-prompts-for-mutating-tail | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
 | unbalanced-quote-fails-closed | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
@@ -95,14 +95,16 @@
 | workload-search-rg-head-pipeline-allows | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-grep-tail-pipeline-allows | Personal | Project | Interactive | grep -R "error" logs \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-find-head-pipeline-allows | Personal | Project | Interactive | find src -name "*.cs" -print \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| workload-search-cat-jq-pipeline-currently-prompts | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | RequiresApproval | approval required | cat, jq | No |
+| workload-search-cat-jq-pipeline-prompts-for-tail | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | RequiresApproval | approval required | jq | No |
 | workload-search-jq-direct-prompts | Personal | Project | Interactive | jq '.items[]' config.json | none | RequiresApproval | approval required | jq | No |
 | workload-search-jq-direct-grant-allows | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
-| workload-search-cat-jq-stored-tail-currently-prompts | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | RequiresApproval | approval required | cat, jq | No |
-| workload-edit-grep-tee-pipeline-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | none | RequiresApproval | approval required | grep, tee | No |
+| workload-search-cat-jq-stored-tail-allows | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
+| workload-search-cat-jq-external-stored-tail-still-prompts | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | RequiresApproval | approval required | cat, jq | No |
+| workload-edit-grep-tee-pipeline-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-prompts | Personal | Project | Interactive | tee reports/output.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-grant-allows | Personal | Project | Interactive | tee reports/output.txt | persistent[project]:tee | Allowed | StoredApproval | none | Not applicable |
-| workload-edit-grep-tee-stored-tail-currently-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | persistent[project]:tee | RequiresApproval | approval required | grep, tee | No |
+| workload-edit-grep-tee-stored-tail-allows | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | persistent[project]:tee | Allowed | StoredApproval | none | Not applicable |
+| workload-edit-grep-tee-mismatched-tail-grant-prompts | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | persistent[external]:tee | RequiresApproval | approval required | tee | No |
 | workload-edit-sed-in-place-prompts | Personal | Project | Interactive | sed -i 's/old/new/' src/file.txt | none | RequiresApproval | approval required | sed | No |
 | workload-edit-sed-in-place-grant-allows | Personal | Project | Interactive | sed -i 's/old/new/' src/file.txt | persistent[project]:sed | Allowed | StoredApproval | none | Not applicable |
 | workload-edit-copy-prompts | Personal | Project | Interactive | cp src/input.txt src/output.txt | none | RequiresApproval | approval required | cp | No |
@@ -147,7 +149,7 @@
 | persistent-here-directory-mismatch-prompts | Personal | External | Interactive | git push | persistent[project]:git push | RequiresApproval | approval required | git push | No |
 | other-audience-grant-prompts | Personal | Project | Interactive | git push | persistent[anywhere,Team]:git push | RequiresApproval | approval required | git push | No |
 | mixed-session-persistent-compound-allows | Personal | Project | Interactive | git status && git push | session[this-chat]:git status, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
-| partial-compound-grant-prompts | Personal | Project | Interactive | git status && git push | persistent[anywhere]:git status | RequiresApproval | approval required | git status, git push | No |
+| partial-compound-grant-prompts | Personal | Project | Interactive | git status && git push | persistent[anywhere]:git status | RequiresApproval | approval required | git push | No |
 | four-unapproved-clauses-prompt | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | none | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
 | four-anywhere-grants-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-one-missing-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
@@ -156,7 +158,7 @@
 | four-one-other-session-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:git commit, session[this-chat]:git push, session[other-chat]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
 | four-one-other-audience-grant-prompts | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere,Team]:gh pr merge | RequiresApproval | approval required | git add, git commit, git push, gh pr merge | No |
 | four-mixed-grant-sources-allow | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:gh pr merge, persistent[project]:git commit, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
-| safe-and-stored-authority-currently-do-not-compose | Personal | Project | Interactive | git status && git push && git log && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | RequiresApproval | approval required | git status, git push, git log, gh pr merge | No |
+| safe-and-stored-authority-compose | Personal | Project | Interactive | git status && git push && git log && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-hard-deny-beats-grants | Personal | Project | Interactive | git add . && git commit -m fix && netclaw daemon stop && git push | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:netclaw daemon stop, persistent[anywhere]:git push | Denied | hard_deny_self_destructive | none | Not applicable |
 | four-or-branches-with-grants-allow | Personal | Project | Interactive | git add . \|\| git commit -m fix \|\| git push \|\| gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-newline-statements-with-grants-allow | Personal | Project | Interactive | git add .\ngit commit -m fix\ngit push\ngh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
