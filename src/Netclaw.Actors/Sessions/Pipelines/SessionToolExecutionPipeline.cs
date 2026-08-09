@@ -265,8 +265,8 @@ internal sealed class SessionToolExecutionPipeline
                 var result = await ExecuteSingleToolAsync(
                     tc,
                     batch,
-                    batch.OneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedPatterns)
-                        ? preSeedPatterns
+                    batch.OneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedKeys)
+                        ? preSeedKeys
                         : null,
                     batch.DecisionOverrides.TryGetValue(tc.CallId, out var overrideDecision)
                         ? overrideDecision
@@ -454,7 +454,8 @@ internal sealed class SessionToolExecutionPipeline
         // persisted grant to satisfy the gate on the cold-recovered re-drive.
         // Pre-seed the one-time approval bypass for exactly this call id so the
         // gate passes once without emitting a duplicate approval prompt. The
-        // bypass is still tool-name- and pattern-matched inside the gate
+        // bypass is still matched against the tool name, patterns, and exact
+        // approval-candidate snapshot inside the gate
         // (DispatchingToolExecutor.IsOneTimeApprovalSatisfied) and the pipeline
         // clears it after the attempt — it cannot leak to any other call.
         if (oneTimeApprovalPreSeed is not null)
@@ -577,9 +578,10 @@ internal sealed class SessionToolExecutionPipeline
                 // (by design). Without the transient bypass, the immediate retry
                 // re-hits the gate and fails a call the user just approved. This
                 // matches the sub-agent loop (SubAgentActor), which seeds for every
-                // approved scope. The bypass is per-call, pattern-scoped, and
-                // cleared after the attempt, so it cannot leak to any other call.
-                context.Approval.SeedOneTimeApproval(tc.Name, ctx.Patterns);
+                // approved scope. The bypass is per-call and bound to the exact
+                // prompted candidate set. It is cleared after the attempt, so it
+                // cannot leak to another call.
+                context.Approval.SeedOneTimeApproval(tc.Name, OneTimeApprovalKeys.Create(ctx));
 
                 sw = Stopwatch.StartNew();
                 if (meta is { Background: true }

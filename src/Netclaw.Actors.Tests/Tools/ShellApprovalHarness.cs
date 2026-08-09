@@ -31,6 +31,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private const string OtherSessionId = "signalr/other-session";
 
     private readonly string _rootDirectory;
+    private readonly string _projectDirectory;
+    private readonly string _externalDirectory;
     private readonly IActorRef _approvalActor;
     private readonly FunctionCallContent _toolCall;
     private readonly ToolExecutionContext _context;
@@ -38,6 +40,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     private ShellApprovalHarness(
         string rootDirectory,
+        string projectDirectory,
+        string externalDirectory,
         IActorRef approvalActor,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -45,6 +49,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         CountingApprovalService approvalService)
     {
         _rootDirectory = rootDirectory;
+        _projectDirectory = projectDirectory;
+        _externalDirectory = externalDirectory;
         _approvalActor = approvalActor;
         _toolCall = toolCall;
         _context = context;
@@ -155,6 +161,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         return new ShellApprovalHarness(
             rootDirectory,
+            projectDirectory,
+            externalDirectory,
             approvalActor,
             toolCall,
             context,
@@ -176,6 +184,32 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             decision.ApprovalMatches
                 .Select(match => $"{match.Source}:{match.Pattern}")
                 .ToList());
+    }
+
+    public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
+        => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
+
+    public void SeedOneTimeApproval(ToolApprovalContext approvalContext)
+        => _context.Approval.SeedOneTimeApproval(
+            _toolCall.Name,
+            OneTimeApprovalKeys.Create(approvalContext));
+
+    public void ReplaceProjectDirectoryWithExternalSymlink(string relativeDirectory)
+    {
+        var path = Path.Combine(_projectDirectory, relativeDirectory);
+        Directory.CreateDirectory(path);
+        Directory.Delete(path);
+        Directory.CreateSymbolicLink(path, _externalDirectory);
+    }
+
+    public void CreateProjectDirectory(string relativeDirectory)
+        => Directory.CreateDirectory(Path.Combine(_projectDirectory, relativeDirectory));
+
+    public void CreateProjectFileSymlinkToExternalFile(string relativePath)
+    {
+        var externalFile = Path.Combine(_externalDirectory, "secret.txt");
+        File.WriteAllText(externalFile, "synthetic test data");
+        File.CreateSymbolicLink(Path.Combine(_projectDirectory, relativePath), externalFile);
     }
 
     public async ValueTask DisposeAsync()
