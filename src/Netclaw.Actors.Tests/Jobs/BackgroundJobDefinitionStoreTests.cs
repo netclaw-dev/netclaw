@@ -205,6 +205,68 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             && message.Contains(sessionDirectory, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Invalid_session_candidate_does_not_shadow_valid_daemon_definition(bool corruptCandidate)
+    {
+        var definition = CreateDefinition("invalid-candidate", "C0ABC/1712000000.000001");
+        WriteDefinition(Path.Combine(_paths.JobsDirectory, "invalid-candidate.json"), definition);
+        var sessionDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            corruptCandidate
+                ? definition.SessionId
+                : new SessionId("C0OTHER/1712000000.000002"),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(sessionDirectory);
+        var candidatePath = Path.Combine(sessionDirectory, "invalid-candidate.json");
+        if (corruptCandidate)
+            File.WriteAllText(candidatePath, "not json");
+        else
+            WriteDefinition(candidatePath, definition);
+
+        var loaded = new BackgroundJobDefinitionStore(_paths).Get(definition.Id);
+
+        Assert.Equal(definition, loaded);
+    }
+
+    [Fact]
+    public void Session_job_directory_symlink_is_rejected_before_write()
+    {
+        var definition = CreateDefinition("linked-job", "C0ABC/1712000000.000001");
+        var jobDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            definition.SessionId,
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(jobDirectory)!);
+        var externalDirectory = Path.Combine(_basePath, "external-jobs");
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(jobDirectory, externalDirectory);
+        var store = new BackgroundJobDefinitionStore(_paths);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => store.Save(definition));
+
+        Assert.Contains("symbolic link", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(externalDirectory, "linked-job.json")));
+    }
+
+    [Fact]
+    public void Session_job_output_directory_symlink_is_rejected_before_access()
+    {
+        var definition = CreateDefinition("linked-output", "C0ABC/1712000000.000001");
+        var store = new BackgroundJobDefinitionStore(_paths);
+        store.Save(definition);
+        var jobDirectory = SessionDirectoryHelper.GetSessionJobsDirectory(
+            definition.SessionId,
+            _paths.SessionsDirectory);
+        var externalDirectory = Path.Combine(_basePath, "external-output");
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(Path.Combine(jobDirectory, definition.Id.Value), externalDirectory);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            store.GetOutputLogPathOnly(definition.Id, definition.SessionId));
+
+        Assert.Contains("symbolic link", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Session_directory_owner_mismatch_is_rejected()
     {

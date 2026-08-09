@@ -68,6 +68,14 @@ The manager SHALL deliver the lost result and output path to the source session 
 - **THEN** the store rejects the ambiguous duplicate
 - **AND** it logs both paths
 
+#### Scenario: Invalid candidate does not shadow a valid job
+
+- **GIVEN** one valid job claims an ID
+- **AND** a corrupt or owner-mismatched file uses the same encoded file name in another scope
+- **WHEN** the store resolves the job ID
+- **THEN** the store returns the valid job
+- **AND** it logs the rejected candidate
+
 ### Requirement: Background job execution
 
 The system SHALL create one `BackgroundJobExecutionActor` child for each job. The daemon manager SHALL remain the parent actor.

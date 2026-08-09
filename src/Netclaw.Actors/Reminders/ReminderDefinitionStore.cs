@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderDefinitionStore.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -102,20 +102,10 @@ public sealed class ReminderDefinitionStore
 
             foreach (var path in EnumerateDefinitionFiles())
             {
-                var result = TryReadDefinition(path);
-                if (result.Definition is null)
-                {
-                    if (result.ShouldDelete)
-                        DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
+                if (TryReadValidDefinition(path) is not { } stored)
                     continue;
-                }
 
-                var definition = result.Definition;
-                if (!IsValidStoragePath(definition, path, out var reason))
-                {
-                    _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
-                    continue;
-                }
+                var definition = stored.Definition;
 
                 if (duplicates.Contains(definition.Id.Value))
                     continue;
@@ -141,21 +131,8 @@ public sealed class ReminderDefinitionStore
     {
         lock (_sync)
         {
-            var existingPaths = FindDefinitionPaths(definition.Id);
-            if (existingPaths.Count > 1)
-            {
-                LogDuplicate(definition.Id, existingPaths[0], existingPaths[1]);
-                throw new InvalidOperationException(
-                    $"Reminder '{definition.Id.Value}' has definitions in more than one storage directory.");
-            }
-
-            var path = existingPaths.Count == 1
-                ? existingPaths[0]
-                : GetDefinitionPath(GetDirectoryForNewDefinition(definition), definition.Id);
-
-            if (!IsDaemonPath(path) && !IsValidSessionStoragePath(definition, path, out var reason))
-                throw new InvalidOperationException(
-                    $"Reminder '{definition.Id.Value}' cannot use its existing storage directory: {reason}");
+            if (!TryGetSavePath(definition, out var path, out var error))
+                throw new InvalidOperationException(error);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var tempPath = $"{path}.tmp";
@@ -164,20 +141,26 @@ public sealed class ReminderDefinitionStore
         }
     }
 
+    internal bool TryValidateSave(ReminderDefinition definition, out string error)
+    {
+        lock (_sync)
+            return TryGetSavePath(definition, out _, out error);
+    }
+
     public bool Delete(ReminderId id)
     {
         lock (_sync)
         {
-            var paths = FindDefinitionPaths(id);
-            if (paths.Count == 0)
+            var definitions = FindValidDefinitions(id);
+            if (definitions.Count == 0)
                 return false;
-            if (paths.Count > 1)
+            if (definitions.Count > 1)
             {
-                LogDuplicate(id, paths[0], paths[1]);
+                LogDuplicate(id, definitions[0].Path, definitions[1].Path);
                 return false;
             }
 
-            File.Delete(paths[0]);
+            File.Delete(definitions[0].Path);
             return true;
         }
     }
@@ -202,53 +185,62 @@ public sealed class ReminderDefinitionStore
         out ReminderDefinition definition,
         out string path)
     {
-        var paths = FindDefinitionPaths(id);
-        if (paths.Count == 0)
+        var definitions = FindValidDefinitions(id);
+        if (definitions.Count == 0)
         {
             definition = null!;
             path = string.Empty;
             return false;
         }
 
-        if (paths.Count > 1)
+        if (definitions.Count > 1)
         {
-            LogDuplicate(id, paths[0], paths[1]);
+            LogDuplicate(id, definitions[0].Path, definitions[1].Path);
             definition = null!;
             path = string.Empty;
             return false;
         }
 
-        path = paths[0];
-        var result = TryReadDefinition(path);
-        if (result.Definition is null)
-        {
-            if (result.ShouldDelete)
-                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        if (result.Definition.Id != id)
-        {
-            _logger.LogError(
-                "Reminder document {Path} contains id {StoredId}, but its file name identifies {RequestedId}",
-                path, result.Definition.Id.Value, id.Value);
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        if (!IsValidStoragePath(result.Definition, path, out var reason))
-        {
-            _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        definition = result.Definition;
+        definition = definitions[0].Definition;
+        path = definitions[0].Path;
         return true;
+    }
+
+    private bool TryGetSavePath(ReminderDefinition definition, out string path, out string error)
+    {
+        var definitions = FindValidDefinitions(definition.Id);
+        if (definitions.Count > 1)
+        {
+            LogDuplicate(definition.Id, definitions[0].Path, definitions[1].Path);
+            path = string.Empty;
+            error = $"Reminder '{definition.Id.Value}' has definitions in more than one storage directory.";
+            return false;
+        }
+
+        path = definitions.Count == 1
+            ? definitions[0].Path
+            : GetDefinitionPath(GetDirectoryForNewDefinition(definition), definition.Id);
+
+        if (!IsDaemonPath(path) && !IsValidSessionStoragePath(definition, path, out var reason))
+        {
+            error = $"Reminder '{definition.Id.Value}' cannot use its existing storage directory: {reason}";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private List<(ReminderDefinition Definition, string Path)> FindValidDefinitions(ReminderId id)
+    {
+        var definitions = new List<(ReminderDefinition, string)>();
+        foreach (var path in FindDefinitionPaths(id))
+        {
+            if (TryReadValidDefinition(path) is { } stored && stored.Definition.Id == id)
+                definitions.Add(stored);
+        }
+
+        return definitions;
     }
 
     private List<string> FindDefinitionPaths(ReminderId id)
@@ -257,11 +249,13 @@ public sealed class ReminderDefinitionStore
         var fileName = $"{Uri.EscapeDataString(id.Value)}.json";
         AddIfPresent(paths, GetContainedPath(_daemonDirectory, fileName, id));
 
-        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        foreach (var reminderDirectory in EnumerateSessionReminderDirectories())
         {
-            var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
-            if (Directory.Exists(reminderDirectory))
-                AddIfPresent(paths, GetContainedPath(reminderDirectory, fileName, id));
+            var path = GetContainedPath(reminderDirectory, fileName, id);
+            if (IsSafeSessionPath(path, out var reason))
+                AddIfPresent(paths, path);
+            else
+                _logger.LogError("Session reminder definition {Path} is unsafe: {Reason}", path, reason);
         }
 
         return paths;
@@ -272,14 +266,37 @@ public sealed class ReminderDefinitionStore
         foreach (var path in Directory.EnumerateFiles(_daemonDirectory, "*.json", SearchOption.TopDirectoryOnly))
             yield return path;
 
+        foreach (var reminderDirectory in EnumerateSessionReminderDirectories())
+        {
+            foreach (var path in Directory.EnumerateFiles(reminderDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                if (IsSafeSessionPath(path, out var reason))
+                    yield return path;
+                else
+                    _logger.LogError("Session reminder definition {Path} is unsafe: {Reason}", path, reason);
+            }
+        }
+    }
+
+    private IEnumerable<string> EnumerateSessionReminderDirectories()
+    {
+        if (!IsSafeSessionPath(_sessionsDirectory, out var rootReason))
+        {
+            _logger.LogError("Session reminder root {Path} is unsafe: {Reason}", _sessionsDirectory, rootReason);
+            yield break;
+        }
+
         foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
         {
             var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
-            if (!Directory.Exists(reminderDirectory))
+            if (!IsSafeSessionPath(reminderDirectory, out var reason))
+            {
+                _logger.LogError("Session reminder directory {Path} is unsafe: {Reason}", reminderDirectory, reason);
                 continue;
+            }
 
-            foreach (var path in Directory.EnumerateFiles(reminderDirectory, "*.json", SearchOption.TopDirectoryOnly))
-                yield return path;
+            if (Directory.Exists(reminderDirectory))
+                yield return reminderDirectory;
         }
     }
 
@@ -309,6 +326,9 @@ public sealed class ReminderDefinitionStore
 
     private bool IsValidSessionStoragePath(ReminderDefinition definition, string path, out string reason)
     {
+        if (!IsSafeSessionPath(path, out reason))
+            return false;
+
         if (definition.Delivery.Kind != DeliveryKind.CurrentSession)
         {
             reason = $"delivery kind {definition.Delivery.Kind} requires the daemon reminder directory";
@@ -326,6 +346,24 @@ public sealed class ReminderDefinitionStore
         if (!PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, expectedDirectory))
         {
             reason = $"the stored session owner resolves to '{expectedDirectory}'";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool IsSafeSessionPath(string path, out string reason)
+    {
+        if (!PathUtility.IsWithinRoot(path, _sessionsDirectory))
+        {
+            reason = "the path is outside the session directory";
+            return false;
+        }
+
+        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_sessionsDirectory)!, path))
+        {
+            reason = "the path contains a symbolic link or reparse point";
             return false;
         }
 
@@ -463,6 +501,23 @@ public sealed class ReminderDefinitionStore
         {
             return new ReadResult(null, null, ShouldDelete: false);
         }
+    }
+
+    private (ReminderDefinition Definition, string Path)? TryReadValidDefinition(string path)
+    {
+        var result = TryReadDefinition(path);
+        if (result.Definition is null)
+        {
+            if (result.ShouldDelete)
+                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
+            return null;
+        }
+
+        if (IsValidStoragePath(result.Definition, path, out var reason))
+            return (result.Definition, path);
+
+        _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
+        return null;
     }
 
     private sealed record ReadResult(ReminderDefinition? Definition, string? ErrorMessage, bool ShouldDelete);

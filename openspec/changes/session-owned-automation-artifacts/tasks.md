@@ -30,3 +30,12 @@
 - [x] 5.2 Run the affected project test suites and record all environment-dependent skips.
 - [x] 5.3 Run `dotnet slopwatch analyze` and `pwsh ./scripts/Add-FileHeaders.ps1 -Verify`.
 - [x] 5.4 Run strict OpenSpec validation and `git diff --check`.
+
+## 6. Adversarial Review Hardening
+
+- [x] 6.1 Reserve session reminder and job definition JSON files from generic writes.
+- [x] 6.2 Reject session artifact paths that contain a symbolic link or reparse point.
+- [x] 6.3 Count only valid definitions when duplicate IDs are resolved.
+- [x] 6.4 Validate reminder storage ownership before a scheduler mutation.
+- [x] 6.5 Add focused regression tests and update operations guidance.
+- [x] 6.6 Run the focused suites, quality gates, strict OpenSpec validation, and `git diff --check`.

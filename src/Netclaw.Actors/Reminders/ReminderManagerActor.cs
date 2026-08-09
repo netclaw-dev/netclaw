@@ -285,6 +285,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         normalized.UpdatedAtMs = now.ToUnixTimeMilliseconds();
 
+        if (!_definitionStore.TryValidateSave(normalized, out var storageError))
+        {
+            replyTo.Tell(ValidationFailure(id, title, storageError));
+            return;
+        }
+
         if (exists)
         {
             await CancelScheduleOnlyAsync(id);

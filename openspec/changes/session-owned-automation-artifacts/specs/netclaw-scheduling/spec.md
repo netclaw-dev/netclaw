@@ -66,6 +66,21 @@ On startup, the system SHALL load all valid definitions and reconcile all active
 - **AND** it logs both paths
 - **AND** the manager does not schedule the duplicate
 
+#### Scenario: Invalid candidate does not shadow a valid reminder
+
+- **GIVEN** one valid reminder claims an ID
+- **AND** a corrupt or owner-mismatched file uses the same encoded file name in another scope
+- **WHEN** the store resolves the reminder ID
+- **THEN** the store returns the valid reminder
+- **AND** it applies the current invalid-file policy to the invalid candidate
+
+#### Scenario: Invalid owner transition keeps the current schedule
+
+- **GIVEN** an enabled reminder definition is stored in a session directory
+- **WHEN** an update changes its session owner or daemon ownership scope
+- **THEN** the manager rejects the update before a scheduler mutation
+- **AND** the current definition and schedule remain active
+
 #### Scenario: Session owner mismatch fails loud
 
 - **GIVEN** a session reminder file names a different `Delivery.SessionId`

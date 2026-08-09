@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobDefinitionStore.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -81,15 +81,10 @@ public sealed class BackgroundJobDefinitionStore
 
             foreach (var path in EnumerateDefinitionFiles())
             {
-                var definition = ReadDefinition(path);
-                if (definition is null)
+                if (TryReadValidDefinition(path) is not { } stored)
                     continue;
 
-                if (!IsValidStoragePath(definition, path, out var reason))
-                {
-                    _logger.LogError("Background job document {Path} has invalid storage ownership: {Reason}", path, reason);
-                    continue;
-                }
+                var definition = stored.Definition;
 
                 if (duplicates.Contains(definition.Id.Value))
                     continue;
@@ -115,16 +110,16 @@ public sealed class BackgroundJobDefinitionStore
     {
         lock (_sync)
         {
-            var existingPaths = FindDefinitionPaths(definition.Id);
-            if (existingPaths.Count > 1)
+            var definitions = FindValidDefinitions(definition.Id);
+            if (definitions.Count > 1)
             {
-                LogDuplicate(definition.Id, existingPaths[0], existingPaths[1]);
+                LogDuplicate(definition.Id, definitions[0].Path, definitions[1].Path);
                 throw new InvalidOperationException(
                     $"Background job '{definition.Id.Value}' has definitions in more than one storage directory.");
             }
 
-            var path = existingPaths.Count == 1
-                ? existingPaths[0]
+            var path = definitions.Count == 1
+                ? definitions[0].Path
                 : GetDefinitionPath(GetSessionDirectory(definition.SessionId), definition.Id);
 
             if (!IsLegacyPath(path) && !IsValidSessionStoragePath(definition, path, out var reason))
@@ -142,16 +137,16 @@ public sealed class BackgroundJobDefinitionStore
     {
         lock (_sync)
         {
-            var paths = FindDefinitionPaths(id);
-            if (paths.Count == 0)
+            var definitions = FindValidDefinitions(id);
+            if (definitions.Count == 0)
                 return false;
-            if (paths.Count > 1)
+            if (definitions.Count > 1)
             {
-                LogDuplicate(id, paths[0], paths[1]);
+                LogDuplicate(id, definitions[0].Path, definitions[1].Path);
                 return false;
             }
 
-            File.Delete(paths[0]);
+            File.Delete(definitions[0].Path);
             return true;
         }
     }
@@ -165,6 +160,7 @@ public sealed class BackgroundJobDefinitionStore
     public string GetOutputDirectory(BackgroundJobId id, SessionId sessionId)
     {
         var directory = GetOutputDirectoryPath(GetStorageDirectory(id, sessionId), id);
+        EnsureSafeOutputPath(directory);
         Directory.CreateDirectory(directory);
         return directory;
     }
@@ -175,26 +171,30 @@ public sealed class BackgroundJobDefinitionStore
     /// <summary>
     /// Returns the output log path without directory creation.
     /// </summary>
-    public string GetOutputLogPathOnly(BackgroundJobId id, SessionId sessionId) =>
-        Path.Combine(GetOutputDirectoryPath(GetStorageDirectory(id, sessionId), id), "output.log");
+    public string GetOutputLogPathOnly(BackgroundJobId id, SessionId sessionId)
+    {
+        var directory = GetOutputDirectoryPath(GetStorageDirectory(id, sessionId), id);
+        EnsureSafeOutputPath(directory);
+        return Path.Combine(directory, "output.log");
+    }
 
     private string GetStorageDirectory(BackgroundJobId id, SessionId sessionId)
     {
         lock (_sync)
         {
-            var paths = FindDefinitionPaths(id);
-            if (paths.Count == 0)
+            var definitions = FindValidDefinitions(id);
+            if (definitions.Count == 0)
                 return GetSessionDirectory(sessionId);
 
-            if (paths.Count > 1)
+            if (definitions.Count > 1)
             {
-                LogDuplicate(id, paths[0], paths[1]);
+                LogDuplicate(id, definitions[0].Path, definitions[1].Path);
                 throw new InvalidOperationException(
                     $"Background job '{id.Value}' has definitions in more than one storage directory.");
             }
 
-            if (!TryResolveDefinition(id, out var definition, out var path))
-                throw new InvalidOperationException($"Background job '{id.Value}' does not have a valid definition.");
+            var definition = definitions[0].Definition;
+            var path = definitions[0].Path;
             if (definition.SessionId != sessionId)
                 throw new InvalidOperationException(
                     $"Background job '{id.Value}' belongs to session '{definition.SessionId.Value}'.");
@@ -207,51 +207,37 @@ public sealed class BackgroundJobDefinitionStore
         out BackgroundJobDefinition definition,
         out string path)
     {
-        var paths = FindDefinitionPaths(id);
-        if (paths.Count == 0)
+        var definitions = FindValidDefinitions(id);
+        if (definitions.Count == 0)
         {
             definition = null!;
             path = string.Empty;
             return false;
         }
 
-        if (paths.Count > 1)
+        if (definitions.Count > 1)
         {
-            LogDuplicate(id, paths[0], paths[1]);
+            LogDuplicate(id, definitions[0].Path, definitions[1].Path);
             definition = null!;
             path = string.Empty;
             return false;
         }
 
-        path = paths[0];
-        var stored = ReadDefinition(path);
-        if (stored is null)
-        {
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        if (stored.Id != id)
-        {
-            _logger.LogError(
-                "Background job document {Path} contains id {StoredId}, but its file name identifies {RequestedId}",
-                path, stored.Id.Value, id.Value);
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        if (!IsValidStoragePath(stored, path, out var reason))
-        {
-            _logger.LogError("Background job document {Path} has invalid storage ownership: {Reason}", path, reason);
-            definition = null!;
-            path = string.Empty;
-            return false;
-        }
-
-        definition = stored;
+        definition = definitions[0].Definition;
+        path = definitions[0].Path;
         return true;
+    }
+
+    private List<(BackgroundJobDefinition Definition, string Path)> FindValidDefinitions(BackgroundJobId id)
+    {
+        var definitions = new List<(BackgroundJobDefinition, string)>();
+        foreach (var path in FindDefinitionPaths(id))
+        {
+            if (TryReadValidDefinition(path) is { } stored && stored.Definition.Id == id)
+                definitions.Add(stored);
+        }
+
+        return definitions;
     }
 
     private List<string> FindDefinitionPaths(BackgroundJobId id)
@@ -260,11 +246,13 @@ public sealed class BackgroundJobDefinitionStore
         var fileName = $"{Uri.EscapeDataString(id.Value)}.json";
         AddIfPresent(paths, GetContainedPath(_legacyDirectory, fileName, id));
 
-        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        foreach (var jobDirectory in EnumerateSessionJobDirectories())
         {
-            var jobDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.JobsSubdirectory);
-            if (Directory.Exists(jobDirectory))
-                AddIfPresent(paths, GetContainedPath(jobDirectory, fileName, id));
+            var path = GetContainedPath(jobDirectory, fileName, id);
+            if (IsSafeSessionPath(path, out var reason))
+                AddIfPresent(paths, path);
+            else
+                _logger.LogError("Session job definition {Path} is unsafe: {Reason}", path, reason);
         }
 
         return paths;
@@ -275,14 +263,37 @@ public sealed class BackgroundJobDefinitionStore
         foreach (var path in Directory.EnumerateFiles(_legacyDirectory, "*.json", SearchOption.TopDirectoryOnly))
             yield return path;
 
+        foreach (var jobDirectory in EnumerateSessionJobDirectories())
+        {
+            foreach (var path in Directory.EnumerateFiles(jobDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                if (IsSafeSessionPath(path, out var reason))
+                    yield return path;
+                else
+                    _logger.LogError("Session job definition {Path} is unsafe: {Reason}", path, reason);
+            }
+        }
+    }
+
+    private IEnumerable<string> EnumerateSessionJobDirectories()
+    {
+        if (!IsSafeSessionPath(_sessionsDirectory, out var rootReason))
+        {
+            _logger.LogError("Session job root {Path} is unsafe: {Reason}", _sessionsDirectory, rootReason);
+            yield break;
+        }
+
         foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
         {
             var jobDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.JobsSubdirectory);
-            if (!Directory.Exists(jobDirectory))
+            if (!IsSafeSessionPath(jobDirectory, out var reason))
+            {
+                _logger.LogError("Session job directory {Path} is unsafe: {Reason}", jobDirectory, reason);
                 continue;
+            }
 
-            foreach (var path in Directory.EnumerateFiles(jobDirectory, "*.json", SearchOption.TopDirectoryOnly))
-                yield return path;
+            if (Directory.Exists(jobDirectory))
+                yield return jobDirectory;
         }
     }
 
@@ -312,6 +323,9 @@ public sealed class BackgroundJobDefinitionStore
 
     private bool IsValidSessionStoragePath(BackgroundJobDefinition definition, string path, out string reason)
     {
+        if (!IsSafeSessionPath(path, out reason))
+            return false;
+
         var expectedDirectory = GetSessionDirectory(definition.SessionId);
         if (!PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, expectedDirectory))
         {
@@ -321,6 +335,33 @@ public sealed class BackgroundJobDefinitionStore
 
         reason = string.Empty;
         return true;
+    }
+
+    private bool IsSafeSessionPath(string path, out string reason)
+    {
+        if (!PathUtility.IsWithinRoot(path, _sessionsDirectory))
+        {
+            reason = "the path is outside the session directory";
+            return false;
+        }
+
+        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_sessionsDirectory)!, path))
+        {
+            reason = "the path contains a symbolic link or reparse point";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private void EnsureSafeOutputPath(string path)
+    {
+        if (PathUtility.IsWithinRoot(path, _sessionsDirectory)
+            && !IsSafeSessionPath(path, out var reason))
+        {
+            throw new InvalidOperationException($"Background job output path is unsafe: {reason}");
+        }
     }
 
     private bool IsLegacyPath(string path) =>
@@ -360,6 +401,19 @@ public sealed class BackgroundJobDefinitionStore
             _logger.LogError(ex, "Failed to read background job document {Path}", path);
             return null;
         }
+    }
+
+    private (BackgroundJobDefinition Definition, string Path)? TryReadValidDefinition(string path)
+    {
+        var definition = ReadDefinition(path);
+        if (definition is null)
+            return null;
+
+        if (IsValidStoragePath(definition, path, out var reason))
+            return (definition, path);
+
+        _logger.LogError("Background job document {Path} has invalid storage ownership: {Reason}", path, reason);
+        return null;
     }
 
     private BackgroundJobDefinition? Deserialize(string text, string path)
@@ -407,6 +461,7 @@ public sealed class BackgroundJobDefinitionStore
             return encoded;
         }
     }
+
 }
 
 public sealed record RejectedLegacyBackgroundJobDefinition(string JobId, string Reason);

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
@@ -86,6 +87,48 @@ public sealed class AutonomousZoneClampTests : IDisposable
 
         Assert.True(policy.TryResolveWritePath(Path.Combine(_sessionDir, "f.txt"), ctx, out _, out var e1), e1);
         Assert.True(policy.TryResolveWritePath(Path.Combine(_projectDir, "f.txt"), ctx, out _, out var e2), e2);
+    }
+
+    [Theory]
+    [InlineData(SessionDirectoryHelper.RemindersSubdirectory, "daily.json")]
+    [InlineData(SessionDirectoryHelper.JobsSubdirectory, "job-1.json")]
+    public void Generic_writes_cannot_change_session_automation_definitions(
+        string artifactDirectory,
+        string fileName)
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var definitionPath = Path.Combine(_sessionDir, artifactDirectory, fileName);
+
+        foreach (var autonomous in new[] { true, false })
+        {
+            var allowed = policy.TryResolveWritePath(
+                definitionPath,
+                Ctx(TrustAudience.Personal, autonomous),
+                out _,
+                out var error);
+
+            Assert.False(allowed);
+            Assert.Contains("automation definition", error, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void Generic_writes_keep_session_automation_logs_and_history_writable()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var ctx = Ctx(TrustAudience.Personal, autonomous: true);
+        var historyPath = Path.Combine(
+            _sessionDir,
+            SessionDirectoryHelper.RemindersSubdirectory,
+            "daily.history.jsonl");
+        var outputPath = Path.Combine(
+            _sessionDir,
+            SessionDirectoryHelper.JobsSubdirectory,
+            "job-1",
+            "output.log");
+
+        Assert.True(policy.TryResolveWritePath(historyPath, ctx, out _, out var historyError), historyError);
+        Assert.True(policy.TryResolveWritePath(outputPath, ctx, out _, out var outputError), outputError);
     }
 
     [Fact]

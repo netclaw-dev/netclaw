@@ -1,8 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ScopedFileAccessPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -87,6 +88,13 @@ internal sealed class ScopedFileAccessPolicy
         {
             fullPath = string.Empty;
             error = $"Error: Invalid path: {ex.Message}";
+            return false;
+        }
+
+        if (accessKind == AccessKind.Write
+            && IsSessionAutomationDefinitionPath(fullPath, context.SessionDirectory))
+        {
+            error = "Error: Session automation definition files can only be changed through reminder and background job tools.";
             return false;
         }
 
@@ -178,6 +186,26 @@ internal sealed class ScopedFileAccessPolicy
             AccessKind.Attach => profile.AttachFiles,
             _ => profile.ReadFiles
         };
+
+    private static bool IsSessionAutomationDefinitionPath(string fullPath, string? sessionDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(sessionDirectory)
+            || !string.Equals(Path.GetExtension(fullPath), ".json", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parent = Path.GetDirectoryName(fullPath);
+        if (parent is null)
+            return false;
+
+        return PathUtility.AreEquivalentPaths(
+                   parent,
+                   Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory))
+               || PathUtility.AreEquivalentPaths(
+                   parent,
+                   Path.Combine(sessionDirectory, SessionDirectoryHelper.JobsSubdirectory));
+    }
 
     /// <summary>
     /// Resolves profile roots and merges global read roots for read access.

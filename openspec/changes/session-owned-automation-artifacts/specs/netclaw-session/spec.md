@@ -36,3 +36,17 @@ The system SHALL derive each artifact path from the typed `SessionId`. It SHALL 
 - **AND** the path is outside the exact source session directory
 - **WHEN** the store validates a session-owned artifact path
 - **THEN** the store rejects the path
+
+#### Scenario: Session artifact path contains a symbolic link
+
+- **GIVEN** a session reminder or job path contains a symbolic link or reparse point
+- **WHEN** a store reads, writes, deletes, or enumerates that path
+- **THEN** the store rejects the path
+- **AND** it does not access the link target
+
+#### Scenario: Generic file write targets a definition
+
+- **GIVEN** an agent can write other files in its session directory
+- **WHEN** it uses a generic file or safe shell path to write a direct `reminders/*.json` or `jobs/*.json` definition
+- **THEN** the file access policy rejects the write
+- **AND** reminder history and job output paths remain writable

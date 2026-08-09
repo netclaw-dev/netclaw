@@ -453,6 +453,47 @@ public class ReminderManagerActorTests : TestKit
         Assert.Contains("one-shot", response.ErrorMessage, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Save_rejects_session_storage_owner_change_before_scheduler_mutation(bool changeSessionId)
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateCurrentSessionDefinition("owner-transition", deliveryRequired: false);
+        var authorization = new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test");
+        var created = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition, Authorization: authorization),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(created.Success, created.ErrorMessage);
+        var before = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        var changedDelivery = changeSessionId
+            ? definition.Delivery with { SessionId = "C0OTHER/1712000000.000002" }
+            : definition.Delivery with { Kind = DeliveryKind.Channel };
+        var response = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition with { Delivery = changedDelivery },
+                ReminderWriteMode.Replace,
+                authorization),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        var after = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(response.Success);
+        Assert.Equal(ReminderSaveError.Validation, response.Error);
+        Assert.Equal(definition.Delivery, _definitionStore.Get(definition.Id)!.Delivery);
+        Assert.True(after.Found);
+        Assert.True(after.Enabled);
+        Assert.Equal(before.NextFire, after.NextFire);
+    }
+
     [Fact]
     public async Task Save_explicit_audience_within_source_authority_is_persisted()
     {

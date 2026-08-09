@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderDefinitionStoreTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -379,6 +379,58 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         Assert.Contains(logger.Errors, message =>
             message.Contains(daemonPath, StringComparison.Ordinal)
             && message.Contains(sessionDirectory, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Invalid_session_candidate_does_not_shadow_valid_daemon_definition(bool corruptCandidate)
+    {
+        var definition = CreateDefinition(
+            "invalid-candidate",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+        var daemonPath = Path.Combine(_paths.RemindersDirectory, "invalid-candidate.json");
+        WriteDefinition(daemonPath, definition);
+        var sessionDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId(corruptCandidate
+                ? definition.Delivery.SessionId!
+                : "C0OTHER/1712000000.000002"),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(sessionDirectory);
+        var candidatePath = Path.Combine(sessionDirectory, "invalid-candidate.json");
+        var store = new ReminderDefinitionStore(_paths);
+        if (corruptCandidate)
+            File.WriteAllText(candidatePath, "not json");
+        else
+            WriteDefinition(candidatePath, definition);
+
+        var loaded = store.Get(definition.Id);
+
+        Assert.Equal(definition, loaded);
+        Assert.Equal(!corruptCandidate, File.Exists(candidatePath));
+    }
+
+    [Fact]
+    public void Session_reminder_directory_symlink_is_rejected_before_write()
+    {
+        var definition = CreateDefinition(
+            "linked-reminder",
+            DeliveryKind.CurrentSession,
+            "C0ABC/1712000000.000001");
+        var reminderDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
+            new SessionId(definition.Delivery.SessionId!),
+            _paths.SessionsDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(reminderDirectory)!);
+        var externalDirectory = Path.Combine(_basePath, "external-reminders");
+        Directory.CreateDirectory(externalDirectory);
+        Directory.CreateSymbolicLink(reminderDirectory, externalDirectory);
+        var store = new ReminderDefinitionStore(_paths);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => store.Save(definition));
+
+        Assert.Contains("symbolic link", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(externalDirectory, "linked-reminder.json")));
     }
 
     [Fact]

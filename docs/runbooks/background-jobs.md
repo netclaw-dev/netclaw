@@ -128,6 +128,10 @@ category as `shell_execute`).
 Existing jobs can remain under `~/.netclaw/jobs/`. Netclaw reads and updates
 these jobs at their current paths. Netclaw does not move them automatically.
 
+The generic file tools cannot change a direct session `jobs/{id}.json`
+definition. Use the background job tools for job state changes. The output log
+files remain readable and writable inside the session file scope.
+
 ## Configuration
 
 The `_timeout_seconds` metadata field on the tool call arms a per-job kill
