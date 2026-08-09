@@ -349,6 +349,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // Invariant: a failed refresh must never empty the catalog. Roll back the
             // throttle claim so the next 30s tick retries instead of waiting 5 minutes.
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+            if (IsAuthFailure(ex))
+            {
+                MarkAwaitingAuthorization(lifecycle, current, ex);
+                return false;
+            }
+
             _logger.LogWarning(ex,
                 "MCP server '{Name}' catalog refresh failed; keeping generation {Generation} unchanged",
                 current.Name.Value,
@@ -1160,12 +1166,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             Scopes = ParseScopes(entry.OAuthScope),
             TokenCache = cache,
 
-            // A background reconnect has no flow and therefore no operator at a browser.
-            // Returning null makes the SDK fail the connection instead of blocking on a
-            // redirect nobody will complete.
-            AuthorizationCallbackHandler = authorizationFlow is null
-                ? static (_, _) => Task.FromResult<AuthorizationResult?>(null)
-                : authorizationFlow.HandleAuthorizationCallbackAsync,
+            AuthorizationCallbackHandler = CreateAuthorizationCallbackHandler(authorizationFlow),
 
             // DynamicClientRegistration is deliberately left unset. McpOAuthClientRegistrar
             // owns registration because the SDK hard-codes client_secret_post and cannot
@@ -1173,6 +1174,23 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // ClientId here short-circuits the SDK's registration path entirely.
         };
     }
+
+    /// <summary>
+    /// Builds the SDK authorization callback delegate for a client. A background reconnect
+    /// has no flow and therefore no operator at a browser: returning null makes the SDK fail
+    /// the connection instead of blocking on a redirect nobody will complete. A flow-built
+    /// client gets a handler that forwards only while its flow is still pending: hours later,
+    /// when the access token expires and the SDK re-invokes the delegate, the consumed flow
+    /// must answer null (a loud "null authorization result" failure) instead of throwing
+    /// "authorization already in progress" on every retry forever.
+    /// </summary>
+    internal static Func<AuthorizationCallbackContext, CancellationToken, Task<AuthorizationResult?>> CreateAuthorizationCallbackHandler(
+        McpOAuthFlow? authorizationFlow)
+        => authorizationFlow is null
+            ? static (_, _) => Task.FromResult<AuthorizationResult?>(null)
+            : (context, ct) => authorizationFlow.IsTerminal
+                ? Task.FromResult<AuthorizationResult?>(null)
+                : authorizationFlow.HandleAuthorizationCallbackAsync(context, ct);
 
     private Uri BuildRedirectUri()
         => new($"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
@@ -1334,9 +1352,35 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return scopeString.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
+    /// <summary>
+    /// A Connected server whose catalog refresh fails on authentication cannot repair itself:
+    /// the SDK's recovery path needs an operator at a browser. Demote the status so health
+    /// reporting stops claiming a working connection and the 30s refresh loop stops retrying
+    /// a dead token, but keep the catalog visible — wiping it would hide which server needs
+    /// reauthorization.
+    /// </summary>
+    private void MarkAwaitingAuthorization(
+        McpServerLifecycle lifecycle,
+        McpServerSnapshot current,
+        Exception ex)
+    {
+        var status = CreateAwaitingAuthStatus(current.Name, _timeProvider.GetUtcNow())
+            with { ToolCount = current.ToolFunctions.Count };
+        lifecycle.Publish(current with { Status = status });
+        _logger.LogWarning(ex,
+            "MCP server '{Name}' lost OAuth authorization during catalog refresh; marked AwaitingAuth",
+            current.Name.Value);
+        EmitAuthAlert(current.Name,
+            $"MCP server '{current.Name.Value}' lost OAuth authorization. Run: netclaw mcp auth {current.Name.Value}",
+            "authorization_expired");
+    }
+
     private static bool IsAuthFailure(Exception ex)
     {
         if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
+            return true;
+
+        if (ex is McpOAuthAuthorizationInProgressException)
             return true;
 
         if (IsAuthFailureMessage(ex.Message))
