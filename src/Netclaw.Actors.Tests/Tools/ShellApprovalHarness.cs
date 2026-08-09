@@ -66,7 +66,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         CancellationToken ct)
     {
         var rootDirectory = Path.Combine(
-            Path.GetTempPath(),
+            CanonicalTemporaryDirectory(),
             "netclaw-approval-matrix",
             Guid.NewGuid().ToString("N"));
         var projectDirectory = Path.Combine(rootDirectory, "project");
@@ -225,6 +225,25 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ShellMode = ShellExecutionMode.HostAllowed,
             AudienceProfiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal)
         };
+
+    private static string CanonicalTemporaryDirectory()
+    {
+        var fullPath = Path.GetFullPath(Path.GetTempPath());
+        var pathRoot = Path.GetPathRoot(fullPath)
+            ?? throw new InvalidOperationException("The temporary directory has no path root.");
+        var current = pathRoot;
+        var relative = fullPath[pathRoot.Length..];
+        foreach (var segment in relative.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(current, segment);
+            current = new DirectoryInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                ?? candidate;
+        }
+
+        return current;
+    }
 
     private static IActorRef CreateApprovalActor(ActorSystem actorSystem, ToolApprovalStore store)
         => actorSystem.ActorOf(

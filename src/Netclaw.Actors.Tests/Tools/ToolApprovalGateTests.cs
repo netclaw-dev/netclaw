@@ -929,7 +929,9 @@ public sealed class ToolApprovalGateTests
     public void Shell_multi_root_command_uses_fixed_labels()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = ToolInput.Create("Command", "cat /home/user/.netclaw/logs/app.log > /home/user/.netclaw/output/report.txt");
+        var args = ToolInput.Create(
+            "Command",
+            "cat /netclaw-approval-test/logs/app.log > /netclaw-approval-test/output/report.txt");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 

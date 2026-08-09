@@ -50,6 +50,11 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal("ls", clause.Verb.Joined);
         Assert.Contains(clause.Args, a => a.Raw == "-la" && a.IsFlag);
         Assert.Contains(clause.Args, a => a.Raw == "/tmp" && a.IsPath);
+
+        var occurrence = Assert.Single(result.Commands);
+        Assert.Same(clause, occurrence.Clause);
+        Assert.Equal(CommandOccurrenceRole.Ordinary, occurrence.ImmediateRole);
+        Assert.True(occurrence.IsComplete);
     }
 
     [Fact]
@@ -163,22 +168,18 @@ public sealed class ShellSyntaxTreeIntegrationTests
     }
 
     [Fact]
-    public void Dynamic_token_marked_for_skip()
+    public void Unknown_variable_state_is_unparseable()
     {
-        // Unresolved env var must be flagged so consumers don't extract
-        // a literal "$UNRESOLVED/foo" as a path candidate.
+        // Netclaw cannot prove the inherited Bash variable attributes.
+        // Alpha.1 rejects the full command before a nameref can hide
+        // execution inside the path expression.
         var parser = new BashParser();
 
         var result = parser.Parse("rm $UNRESOLVED/foo");
 
-        Assert.False(result.IsUnparseable);
-        Assert.Single(result.Clauses);
-
-        var argWithDynamic = result.Clauses[0].Args
-            .FirstOrDefault(a => a.Raw.Contains("$UNRESOLVED"));
-        Assert.NotNull(argWithDynamic);
-        Assert.Equal(ArgKind.DynamicSkip, argWithDynamic.Kind);
-        Assert.Null(argWithDynamic.Resolved);
+        Assert.True(result.IsUnparseable);
+        Assert.Empty(result.Clauses);
+        Assert.Empty(result.Commands);
     }
 
     [Fact]
@@ -279,6 +280,23 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal(2, result.Clauses.Count);
         Assert.Equal("cat", result.Clauses[0].Verb.Joined);
         Assert.Equal("echo after", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Static_descriptor_redirect_has_explicit_non_path_facts()
+    {
+        var parser = new BashParser();
+
+        var result = parser.Parse("dotnet test 2>&1");
+
+        Assert.False(result.IsUnparseable);
+        var redirect = Assert.Single(Assert.Single(result.Commands).Redirects);
+        Assert.Equal(RedirectSourceKind.Descriptor, redirect.Source.Kind);
+        Assert.Equal(2, redirect.Source.Descriptor);
+        Assert.Equal(RedirectOperation.DescriptorDuplicate, redirect.Operation);
+        Assert.Equal(1, redirect.TargetDescriptor);
+        Assert.False(redirect.IsPathRelevant);
+        Assert.True(redirect.IsComplete);
     }
 
     [Fact]

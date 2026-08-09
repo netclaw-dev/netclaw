@@ -417,8 +417,11 @@ internal sealed class PosixShellApprovalSemantics : ShellApprovalSemanticsBase
 
     internal static bool IsPosixShellInvoker(string verb)
     {
-        return verb is "bash" or "sh" or "/bin/bash" or "/bin/sh"
-            or "/usr/bin/bash" or "/usr/bin/sh" or "zsh" or "/bin/zsh";
+        return verb is "bash" or "sh" or "dash" or "ash" or "ksh" or "mksh" or "zsh"
+            or "/bin/bash" or "/bin/sh" or "/bin/dash" or "/bin/ash"
+            or "/bin/ksh" or "/bin/mksh" or "/bin/zsh"
+            or "/usr/bin/bash" or "/usr/bin/sh" or "/usr/bin/dash" or "/usr/bin/ash"
+            or "/usr/bin/ksh" or "/usr/bin/mksh" or "/usr/bin/zsh";
     }
 
     private static bool LooksLikePosixAbsoluteShellPath(string path)
