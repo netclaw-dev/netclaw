@@ -87,6 +87,32 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Empty(retry.ApprovalContext.CandidateVerbs);
     }
 
+    [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The symlink retry regression defines Bash authorization behavior.")]
+    public async Task One_time_retry_rechecks_a_candidate_whose_stored_grant_stops_matching()
+    {
+        var testCase = new ShellApprovalCase(
+            "one-time-retry-rechecks-stored-candidates",
+            new ShellApprovalInvocation("git -C repo push && gh pr merge 123"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git push"),
+            ExpectedApproval.Require(["gh pr merge"]));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+        harness.CreateProjectDirectory("repo");
+
+        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["gh pr merge"], initial.ApprovalContext!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        harness.ReplaceProjectDirectoryWithExternalSymlink("repo");
+
+        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
+        Assert.Equal(["git push", "gh pr merge"], retry.ApprovalContext!.CandidateVerbs);
+    }
+
     [Fact]
     public Task Shell_approval_cases_match_review_table()
         => Verifier.Verify(ShellApprovalCases.RenderReviewTable(), extension: "md");

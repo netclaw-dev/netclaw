@@ -563,7 +563,7 @@ public static class ShellApprovalCases
             Bash("git push | curl https://example.com"),
             Approvals.PersistentAnywhere("git push"),
             ExpectedApproval.Require(
-                ["git push", "curl"],
+                ["curl"],
                 approvalMatches: ["persistent:git push"])),
         Case(
             "all-pipeline-clauses-approved",
@@ -603,7 +603,7 @@ public static class ShellApprovalCases
             "side-effect-before-mutation-prompts",
             Bash("echo ready && git push"),
             Approvals.None,
-            ExpectedApproval.Require(["echo", "git push"])),
+            ExpectedApproval.Require(["git push"])),
         Case(
             "heredoc-prompts",
             Bash("cat <<'EOF'\nhello\nEOF"),
@@ -698,7 +698,7 @@ public static class ShellApprovalCases
             Bash("cat config.json | jq '.items[]'", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "jq"),
             ExpectedApproval.Require(
-                ["cat", "jq"],
+                ["cat"],
                 approvalMatches: ["persistent:jq"])),
         Case(
             "workload-edit-grep-tee-pipeline-prompts",
@@ -986,7 +986,7 @@ public static class ShellApprovalCases
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push"),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",
@@ -1020,7 +1020,7 @@ public static class ShellApprovalCases
                     "git push"),
                 Approvals.PersistentHere(ApprovalDirectoryShape.External, "gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",
@@ -1034,7 +1034,7 @@ public static class ShellApprovalCases
                 Approvals.Session("git add", "git commit", "git push"),
                 Approvals.SessionForOtherSession("gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "session:git add",
@@ -1048,7 +1048,7 @@ public static class ShellApprovalCases
                 Approvals.PersistentAnywhere("git add", "git commit", "git push"),
                 Approvals.PersistentForOtherAudience("gh pr merge")),
             ExpectedApproval.Require(
-                ["git add", "git commit", "git push", "gh pr merge"],
+                ["gh pr merge"],
                 approvalMatches:
                 [
                     "persistent:git add",

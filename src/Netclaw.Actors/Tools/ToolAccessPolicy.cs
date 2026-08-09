@@ -409,6 +409,32 @@ public sealed class ToolAccessPolicy
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
 
+    internal static ToolApprovalContext NarrowShellApprovalContext(
+        ToolApprovalContext context,
+        IReadOnlyList<ApprovalCandidate> unapprovedCandidates,
+        string? sessionDirectory)
+    {
+        var candidateVerbs = unapprovedCandidates
+            .Select(static candidate => candidate.Verb)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var options = BuildApprovalOptions(
+            isMessy: false,
+            isCwdShallow: IsCwdTooShallow(context.Cwd),
+            allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
+                unapprovedCandidates, context.Cwd, sessionDirectory),
+            supportsDirectoryScope: true,
+            isMcpTool: false);
+
+        return context with
+        {
+            Patterns = candidateVerbs,
+            CandidateVerbs = candidateVerbs,
+            Candidates = unapprovedCandidates,
+            Options = options
+        };
+    }
+
     /// <summary>
     /// Returns true when every candidate's effective directory resolves to
     /// the session's ephemeral <c>session_dir</c>. Persisting an "Always

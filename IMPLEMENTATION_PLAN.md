@@ -128,6 +128,8 @@ Done when:
   still requires approval.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
   can persist.
+- [x] A prompt excludes candidates that existing session or persistent grants
+  already cover, while it preserves exact directory-scoped occurrences.
 - [x] A one-time retry is bound to the exact prompted candidate set, including
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
