@@ -360,6 +360,32 @@ public class SkillRegistryTests
         Assert.NotNull(registry.GetByName("local-skill"));
     }
 
+    [Theory]
+    [InlineData("a", "b__c", "a__b", "c")]
+    [InlineData("analytics", "month__summary", "analytics__month", "summary")]
+    public void Mcp_prompt_collision_from_different_servers_rejects_candidate_without_replacing_owner(
+        string firstServer,
+        string firstPrompt,
+        string secondServer,
+        string secondPrompt)
+    {
+        var registry = new SkillRegistry();
+        var first = MakePromptEntry(firstPrompt, firstServer);
+        var second = MakePromptEntry(secondPrompt, secondServer);
+        registry.PublishMcpPromptSkills(firstServer, [first]);
+
+        var conflicts = registry.GetMcpPromptNameConflicts(secondServer, [second]);
+        var error = Assert.Throws<InvalidOperationException>(
+            () => registry.PublishMcpPromptSkills(secondServer, [second]));
+
+        Assert.Equal(first.Name, Assert.Single(conflicts));
+        Assert.Contains(first.Name, error.Message, StringComparison.Ordinal);
+        var published = Assert.Single(registry.GetAll());
+        var source = Assert.IsType<McpPromptSkillSource>(published.Source);
+        Assert.Equal(firstServer, source.ServerName);
+        Assert.Equal(firstPrompt, source.PromptName);
+    }
+
     [Fact]
     public void Mcp_prompt_index_includes_compact_argument_hint()
     {
@@ -413,13 +439,13 @@ public class SkillRegistryTests
         Assert.Contains("mcp__gigatron__summary", layer.GetContextLayer(TrustAudience.Personal));
     }
 
-    private static SkillEntry MakePromptEntry(string promptName)
+    private static SkillEntry MakePromptEntry(string promptName, string serverName = "gigatron")
         => new(
-            $"mcp__gigatron__{promptName}",
+            $"mcp__{serverName}__{promptName}".ToLowerInvariant(),
             promptName,
             "Remote workflow",
             new McpPromptSkillSource(
-                "gigatron",
+                serverName,
                 promptName,
                 3,
                 [

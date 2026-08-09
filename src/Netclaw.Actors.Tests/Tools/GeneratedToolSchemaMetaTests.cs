@@ -88,6 +88,41 @@ public class GeneratedToolSchemaMetaTests
         Assert.Equal("string", arguments.GetProperty("additionalProperties").GetProperty("type").GetString());
     }
 
+    [Fact]
+    public void GeneratedDictionaryBinderSupportsAllDeclaredMapShapes()
+    {
+        var tool = new DictionaryShapeTool();
+        var parsed = tool.ParseArguments(CreateDictionaryArguments());
+
+        Assert.Equal("read-only", parsed.ReadOnlyMap["kind"]);
+        Assert.Equal("interface", parsed.InterfaceMap["kind"]);
+        Assert.Equal("concrete", parsed.ConcreteMap["kind"]);
+    }
+
+    [Theory]
+    [InlineData("ReadOnlyMap")]
+    [InlineData("InterfaceMap")]
+    [InlineData("ConcreteMap")]
+    public void GeneratedDictionaryBinderRejectsMissingRequiredMap(string missingParameter)
+    {
+        var tool = new DictionaryShapeTool();
+        var arguments = CreateDictionaryArguments();
+        arguments.Remove(missingParameter);
+
+        var error = Assert.Throws<ArgumentException>(() => tool.ParseArguments(arguments));
+
+        Assert.Contains(missingParameter, error.Message, StringComparison.Ordinal);
+        Assert.Contains("required", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Dictionary<string, object?> CreateDictionaryArguments()
+        => new(StringComparer.Ordinal)
+        {
+            ["ReadOnlyMap"] = new Dictionary<string, string> { ["kind"] = "read-only" },
+            ["InterfaceMap"] = new Dictionary<string, string> { ["kind"] = "interface" },
+            ["ConcreteMap"] = new Dictionary<string, string> { ["kind"] = "concrete" },
+        };
+
     private sealed class UnavailablePromptLoader : IMcpPromptSkillLoader
     {
         public ValueTask<McpPromptSkillLoadResult> LoadAsync(
@@ -97,4 +132,19 @@ public class GeneratedToolSchemaMetaTests
             CancellationToken cancellationToken)
             => ValueTask.FromResult(McpPromptSkillLoadResult.Failed("Unavailable."));
     }
+}
+
+[NetclawTool("dictionary_shape_test", "Exercise each string-map parameter shape.")]
+internal sealed partial class DictionaryShapeTool : NetclawTool<DictionaryShapeTool.Params>
+{
+    public sealed record Params(
+        IReadOnlyDictionary<string, string> ReadOnlyMap,
+        IDictionary<string, string> InterfaceMap,
+        Dictionary<string, string> ConcreteMap);
+
+    protected override Task<string> ExecuteAsync(
+        Params args,
+        ToolInvocationContext context,
+        CancellationToken ct)
+        => Task.FromResult(string.Empty);
 }

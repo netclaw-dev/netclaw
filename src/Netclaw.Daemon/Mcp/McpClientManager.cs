@@ -329,10 +329,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                         current.Status.LastErrorAt),
                     CatalogFingerprint = fingerprint,
                 };
+                var promptSkills = CreatePromptSkills(replacement);
+                EnsurePromptSkillNamesAvailable(replacement.Name, promptSkills);
                 // Connection first, tools second — same ordering as the connect path.
                 lifecycle.Publish(replacement);
                 _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
-                PublishPromptSkills(replacement);
+                PublishPromptSkills(replacement, promptSkills);
             }
 
             _logger.LogInformation(
@@ -714,11 +716,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     checked(current.Generation + 1),
                     connectedStatus,
                     catalogFingerprint);
+                var promptSkills = CreatePromptSkills(replacement);
+                EnsurePromptSkillNamesAvailable(replacement.Name, promptSkills);
                 // Connection first, tools second. A tool the model can see is then always
                 // dispatchable, because dispatch resolves it from this snapshot.
                 lifecycle.Publish(replacement);
                 _toolRegistry.PublishMcpServerTools(current.Name.Value, publishedTools);
-                PublishPromptSkills(replacement);
+                PublishPromptSkills(replacement, promptSkills);
                 // The connect path just listed the catalog; skip the next poll window.
                 lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
                 candidate = null;
@@ -1503,19 +1507,24 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     argument.Description,
                     argument.Required is true))
                 .ToArray() ?? [];
-            map[prompt.Name] = new McpPromptDescriptor(
+            var descriptor = new McpPromptDescriptor(
                 prompt.Name,
                 prompt.Title,
                 prompt.Description,
                 arguments);
+            if (!map.TryAdd(prompt.Name, descriptor))
+            {
+                throw new InvalidOperationException(
+                    $"MCP prompt catalog contains duplicate name '{prompt.Name}' after case normalization.");
+            }
         }
 
         return new ReadOnlyDictionary<string, McpPromptDescriptor>(map);
     }
 
-    private void PublishPromptSkills(McpServerSnapshot snapshot)
+    private static SkillEntry[] CreatePromptSkills(McpServerSnapshot snapshot)
     {
-        var skills = snapshot.PromptDescriptors.Values
+        return snapshot.PromptDescriptors.Values
             .OrderBy(static prompt => prompt.Name, StringComparer.Ordinal)
             .Select(prompt => new SkillEntry(
                 $"mcp__{snapshot.Name.Value}__{prompt.Name}".ToLowerInvariant(),
@@ -1532,7 +1541,25 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 ArgumentHint = BuildArgumentHint(prompt.Arguments),
             })
             .ToArray();
+    }
 
+    private void EnsurePromptSkillNamesAvailable(
+        McpServerName serverName,
+        IReadOnlyList<SkillEntry> skills)
+    {
+        var conflicts = _skillRegistry.GetMcpPromptNameConflicts(serverName.Value, skills);
+        if (conflicts.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"MCP server '{serverName.Value}' prompt catalog uses logical skill name(s) "
+                + $"that another MCP server already owns: {string.Join(", ", conflicts)}");
+        }
+    }
+
+    private void PublishPromptSkills(
+        McpServerSnapshot snapshot,
+        IReadOnlyList<SkillEntry> skills)
+    {
         var conflicts = _skillRegistry.PublishMcpPromptSkills(snapshot.Name.Value, skills);
         foreach (var conflict in conflicts)
         {

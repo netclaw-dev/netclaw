@@ -161,7 +161,7 @@ public static class ToolArgumentHelper
         };
     }
 
-    public static IReadOnlyDictionary<string, string>? GetStringDictionary(
+    public static Dictionary<string, string>? GetStringDictionary(
         IDictionary<string, object?>? arguments,
         string key)
     {

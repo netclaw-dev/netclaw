@@ -71,19 +71,16 @@ public sealed class SkillRegistry
     public IReadOnlyList<string> PublishMcpPromptSkills(string serverName, IEnumerable<SkillEntry> skills)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        var promptSkills = ValidateMcpPromptSkills(serverName, skills);
 
         lock (_writeLock)
         {
-            var promptSkills = skills.ToArray();
-            foreach (var skill in promptSkills)
+            var remoteConflicts = FindMcpPromptNameConflicts(serverName, promptSkills);
+            if (remoteConflicts.Count > 0)
             {
-                if (skill.Source is not McpPromptSkillSource source
-                    || !string.Equals(source.ServerName, serverName, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ArgumentException(
-                        $"Skill '{skill.Name}' is not an MCP prompt from server '{serverName}'.",
-                        nameof(skills));
-                }
+                throw new InvalidOperationException(
+                    $"MCP server '{serverName}' cannot publish ambiguous logical skill name(s): "
+                    + string.Join(", ", remoteConflicts));
             }
 
             if (promptSkills.Length == 0)
@@ -101,6 +98,17 @@ public sealed class SkillRegistry
             PublishCombinedSnapshot();
             return conflicts;
         }
+    }
+
+    public IReadOnlyList<string> GetMcpPromptNameConflicts(
+        string serverName,
+        IEnumerable<SkillEntry> skills)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        var promptSkills = ValidateMcpPromptSkills(serverName, skills);
+
+        lock (_writeLock)
+            return FindMcpPromptNameConflicts(serverName, promptSkills);
     }
 
     public IReadOnlyList<SkillEntry> GetAll() => _snapshot.Skills;
@@ -214,6 +222,44 @@ public sealed class SkillRegistry
             .SelectMany(static pair => pair.Value)
             .Where(skill => !fileNames.Contains(skill.Name));
         _snapshot = Snapshot.Create(_fileSkills.Concat(remoteSkills), _scanIssues);
+    }
+
+    private static SkillEntry[] ValidateMcpPromptSkills(
+        string serverName,
+        IEnumerable<SkillEntry> skills)
+    {
+        var promptSkills = skills.ToArray();
+        foreach (var skill in promptSkills)
+        {
+            if (skill.Source is not McpPromptSkillSource source
+                || !string.Equals(source.ServerName, serverName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Skill '{skill.Name}' is not an MCP prompt from server '{serverName}'.",
+                    nameof(skills));
+            }
+        }
+
+        return promptSkills;
+    }
+
+    private IReadOnlyList<string> FindMcpPromptNameConflicts(
+        string serverName,
+        IReadOnlyList<SkillEntry> promptSkills)
+    {
+        var otherServerNames = _mcpPromptSkills
+            .Where(pair => !string.Equals(pair.Key, serverName, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(static pair => pair.Value)
+            .Select(static skill => skill.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return promptSkills
+            .Select(static skill => skill.Name)
+            .GroupBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1 || otherServerNames.Contains(group.Key))
+            .Select(static group => group.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
     }
 
 

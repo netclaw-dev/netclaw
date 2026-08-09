@@ -90,6 +90,50 @@ public sealed class McpPromptSkillTests
             });
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Public)]
+    public async Task LoadDeniedAudienceReturnsGenericErrorBeforePromptRequest(TrustAudience audience)
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(CreatePromptPlan());
+        await using var harness = new McpClientManagerLifecycleTests.ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime));
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        var source = Assert.IsType<McpPromptSkillSource>(
+            harness.SkillRegistry.GetByName("mcp__test__analyze-property")?.Source);
+
+        var result = await harness.Manager.LoadAsync(
+            source,
+            new Dictionary<string, string> { ["property"] = "petabridge-com" },
+            TestToolExecutionContext.CreateUnbound(audience).Invocation,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal("Error: This skill is not available.", result.Error);
+        Assert.Equal(0, plan.PromptInvocationCount);
+        Assert.Null(plan.LastPromptName);
+    }
+
+    [Theory]
+    [InlineData("Summary", "summary")]
+    [InlineData("Analyze-Property", "ANALYZE-PROPERTY")]
+    public void PromptCatalogRejectsNamesThatCollideAfterCaseNormalization(
+        string firstName,
+        string secondName)
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            McpClientManager.CreatePromptMap(
+            [
+                CreatePrompt("First prompt.", firstName),
+                CreatePrompt("Second prompt.", secondName),
+            ]));
+
+        Assert.Contains(secondName, error.Message, StringComparison.Ordinal);
+        Assert.Contains("duplicate name", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task PromptCatalogChangePublishesNewGenerationAndRejectsOldSource()
     {
@@ -218,11 +262,11 @@ public sealed class McpPromptSkillTests
             },
         };
 
-    private static Prompt CreatePrompt(string description)
+    private static Prompt CreatePrompt(string description, string name = "analyze-property")
         => new()
         {
-            Name = "analyze-property",
-            Title = "Analyze a property",
+            Name = name,
+            Title = name,
             Description = description,
             Arguments =
             [

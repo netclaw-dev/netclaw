@@ -650,6 +650,7 @@ public sealed class McpClientManagerLifecycleTests
             CancellationToken cancellationToken)
         {
             var plan = _clients[client];
+            Interlocked.Increment(ref plan.PromptInvocationCountStorage);
             plan.LastPromptName = promptName;
             plan.LastPromptArguments = new Dictionary<string, string>(arguments, StringComparer.Ordinal);
             return plan.GetPromptResult is null
@@ -732,6 +733,8 @@ public sealed class McpClientManagerLifecycleTests
 
         public int PromptRefreshCountStorage;
 
+        public int PromptInvocationCountStorage;
+
         public int InvocationCount => Volatile.Read(ref InvocationCountStorage);
 
         public int DisposeCount => Volatile.Read(ref DisposeCountStorage);
@@ -739,6 +742,8 @@ public sealed class McpClientManagerLifecycleTests
         public int RefreshCount => Volatile.Read(ref RefreshCountStorage);
 
         public int PromptRefreshCount => Volatile.Read(ref PromptRefreshCountStorage);
+
+        public int PromptInvocationCount => Volatile.Read(ref PromptInvocationCountStorage);
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink
