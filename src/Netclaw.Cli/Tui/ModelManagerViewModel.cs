@@ -154,7 +154,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     {
         SelectedProvider = providerName;
         CurrentState.Value = ModelManagerState.DiscoverModels;
-        NotifyStateChanged();
         StartProbe();
     }
 
@@ -255,7 +254,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         SelectedProvider = providerName;
         SelectedRole = null;
         CurrentState.Value = ModelManagerState.DiscoverModels;
-        NotifyStateChanged();
         StartProbe();
     }
 
@@ -309,6 +307,13 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     internal void StartProbe()
     {
         CancelProbe();
+        ManualModelEntry = false;
+        SelectedModelId = null;
+        IsProbing.Value = true;
+        ProbeResult.Value = null;
+        ProbeElapsedSeconds.Value = 0;
+        DiscoveredModels.Clear();
+        NotifyStateChanged();
         ProbeCompletion = ProbeProviderAsync();
     }
 
@@ -339,14 +344,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var probeId = IdGen.ShortId();
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
-
-        ManualModelEntry = false;
-        SelectedModelId = null;
-        IsProbing.Value = true;
-        ProbeResult.Value = null;
-        ProbeElapsedSeconds.Value = 0;
-        DiscoveredModels.Clear();
-        RequestRedraw();
 
         ProbeDiagnosticsLog.Write(
             _paths,

@@ -98,6 +98,61 @@ public sealed class ModelManagerPageTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ModelAssignment_WhenTheUserChangesProvider_ShowsTheSelectedProvidersModels()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["alpha-openai"] = new Dictionary<string, object> { ["Type"] = "openai" },
+                ["bravo-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot" },
+                ["charlie-deepseek"] = new Dictionary<string, object> { ["Type"] = "deepseek" }
+            }
+        });
+        _fakeProbe.TypeResults["openai"] = SuccessfulProbe("openai-model");
+        _fakeProbe.TypeResults["github-copilot"] = SuccessfulProbe("copilot-model");
+        _fakeProbe.TypeResults["deepseek"] = SuccessfulProbe("deepseek-model");
+
+        var (terminal, app) = CreateHeadlessApp(out var input);
+
+        using var appCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(appCts.Token);
+
+        try
+        {
+            await WaitForConditionAsync(() => terminal.Contains("Main"), appCts.Token);
+
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(() => terminal.Contains("alpha-openai"), appCts.Token);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(() => terminal.Contains("openai-model"), appCts.Token);
+
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(() => terminal.Contains("Select provider for Main"), appCts.Token);
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => terminal.Contains("bravo-copilot") && terminal.Contains("copilot-model"),
+                appCts.Token);
+
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(() => terminal.Contains("Select provider for Main"), appCts.Token);
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => terminal.Contains("charlie-deepseek") && terminal.Contains("deepseek-model"),
+                appCts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(appCts.Token);
+        }
+    }
+
     private (VirtualTerminal Terminal, TerminaApplication App) CreateHeadlessApp(
         out VirtualInputSource input)
     {
@@ -125,6 +180,9 @@ public sealed class ModelManagerPageTests : IDisposable
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
+
+    private static ProviderProbeResult SuccessfulProbe(string modelId)
+        => new(true, null, [new DiscoveredModel { ModelId = new ModelId(modelId) }]);
 
     private static async Task WaitForConditionAsync(Func<bool> predicate, CancellationToken ct)
     {
