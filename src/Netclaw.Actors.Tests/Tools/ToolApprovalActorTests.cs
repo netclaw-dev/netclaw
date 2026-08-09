@@ -375,7 +375,57 @@ public sealed class ToolApprovalActorTests : TestKit
                 ct);
 
             Assert.Equal(["cat"], result.UnapprovedPatterns);
+            var check = Assert.Single(result.CandidateChecks!);
+            Assert.Equal(new ApprovalCandidate("cat", outsideDir), check.Candidate);
+            Assert.Null(check.ApprovedMatch);
             Assert.Empty(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Partial_directory_grant_returns_exact_unapproved_occurrence()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
+            var approvedDir = Path.Combine(grantDir, "src");
+            var unapprovedDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "external");
+            var approvedCandidate = new ApprovalCandidate("git push", approvedDir);
+            var unapprovedCandidate = new ApprovalCandidate("git push", unapprovedDir);
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(
+                TrustAudience.Personal,
+                "shell_execute",
+                new ApprovalEntry("git push") { Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [approvedCandidate, unapprovedCandidate],
+                cwd: grantDir,
+                ct);
+
+            Assert.Equal(["git push"], result.UnapprovedPatterns);
+            Assert.Equal(
+                [
+                    new ToolApprovalCandidateCheck(approvedCandidate, result.ApprovedMatches[0]),
+                    new ToolApprovalCandidateCheck(unapprovedCandidate, ApprovedMatch: null)
+                ],
+                result.CandidateChecks);
+            var match = Assert.Single(result.ApprovedMatches);
+            Assert.Equal("persistent", match.Source);
+            Assert.Equal($"git push in {grantDir}", match.Scope);
         }
         finally
         {
