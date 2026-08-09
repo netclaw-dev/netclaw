@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Services;
@@ -28,11 +29,16 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _skillRegistry = new();
     private readonly SkillIndexContextLayer _skillIndexLayer = new();
+    private readonly SkillIndexPublisher _skillIndexPublisher;
 
     public ServerFeedSkillSyncServiceTests()
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
+        _skillIndexPublisher = new SkillIndexPublisher(
+            _skillRegistry,
+            _skillIndexLayer,
+            static (_, _) => true);
     }
 
     public void Dispose() => _dir.Dispose();
@@ -344,7 +350,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             new SkillFeedsConfig(),
             _paths,
             _skillRegistry,
-            _skillIndexLayer,
+            _skillIndexPublisher,
             TimeProvider.System,
             scanner ?? new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,
@@ -362,7 +368,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             feedsConfig,
             _paths,
             _skillRegistry,
-            _skillIndexLayer,
+            _skillIndexPublisher,
             TimeProvider.System,
             new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,
