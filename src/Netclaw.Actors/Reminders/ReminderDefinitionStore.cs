@@ -29,8 +29,7 @@ public sealed class ReminderDefinitionStore
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private readonly string _daemonDirectory;
-    private readonly string _sessionsDirectory;
+    private readonly NetclawPaths _paths;
     private readonly object _sync = new();
     private readonly List<DroppedInvalidReminderDefinition> _droppedInvalidDefinitions = [];
     private readonly Dictionary<string, RejectedLegacyReminderDefinition> _rejectedLegacyDefinitions =
@@ -39,11 +38,10 @@ public sealed class ReminderDefinitionStore
 
     public ReminderDefinitionStore(NetclawPaths paths, ILogger<ReminderDefinitionStore>? logger = null)
     {
-        _daemonDirectory = paths.RemindersDirectory;
-        _sessionsDirectory = paths.SessionsDirectory;
+        _paths = paths;
         _logger = logger ?? NullLogger<ReminderDefinitionStore>.Instance;
-        Directory.CreateDirectory(_daemonDirectory);
-        Directory.CreateDirectory(_sessionsDirectory);
+        Directory.CreateDirectory(_paths.RemindersDirectory);
+        Directory.CreateDirectory(_paths.SessionsDirectory);
         PruneInvalidDefinitions();
     }
 
@@ -247,7 +245,7 @@ public sealed class ReminderDefinitionStore
     {
         var paths = new List<string>();
         var fileName = $"{Uri.EscapeDataString(id.Value)}.json";
-        AddIfPresent(paths, GetContainedPath(_daemonDirectory, fileName, id));
+        AddIfPresent(paths, GetContainedPath(_paths.RemindersDirectory, fileName, id));
 
         foreach (var reminderDirectory in EnumerateSessionReminderDirectories())
         {
@@ -263,7 +261,7 @@ public sealed class ReminderDefinitionStore
 
     private IEnumerable<string> EnumerateDefinitionFiles()
     {
-        foreach (var path in Directory.EnumerateFiles(_daemonDirectory, "*.json", SearchOption.TopDirectoryOnly))
+        foreach (var path in Directory.EnumerateFiles(_paths.RemindersDirectory, "*.json", SearchOption.TopDirectoryOnly))
             yield return path;
 
         foreach (var reminderDirectory in EnumerateSessionReminderDirectories())
@@ -280,13 +278,13 @@ public sealed class ReminderDefinitionStore
 
     private IEnumerable<string> EnumerateSessionReminderDirectories()
     {
-        if (!IsSafeSessionPath(_sessionsDirectory, out var rootReason))
+        if (!IsSafeSessionPath(_paths.SessionsDirectory, out var rootReason))
         {
-            _logger.LogError("Session reminder root {Path} is unsafe: {Reason}", _sessionsDirectory, rootReason);
+            _logger.LogError("Session reminder root {Path} is unsafe: {Reason}", _paths.SessionsDirectory, rootReason);
             yield break;
         }
 
-        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        foreach (var sessionDirectory in Directory.EnumerateDirectories(_paths.SessionsDirectory))
         {
             var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
             if (!IsSafeSessionPath(reminderDirectory, out var reason))
@@ -342,7 +340,7 @@ public sealed class ReminderDefinitionStore
         }
 
         var expectedDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
-            new SessionId(definition.Delivery.SessionId), _sessionsDirectory);
+            new SessionId(definition.Delivery.SessionId), _paths.SessionsDirectory);
         if (!PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, expectedDirectory))
         {
             reason = $"the stored session owner resolves to '{expectedDirectory}'";
@@ -355,13 +353,13 @@ public sealed class ReminderDefinitionStore
 
     private bool IsSafeSessionPath(string path, out string reason)
     {
-        if (!PathUtility.IsWithinRoot(path, _sessionsDirectory))
+        if (!PathUtility.IsWithinRoot(path, _paths.SessionsDirectory))
         {
             reason = "the path is outside the session directory";
             return false;
         }
 
-        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_sessionsDirectory)!, path))
+        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_paths.SessionsDirectory)!, path))
         {
             reason = "the path contains a symbolic link or reparse point";
             return false;
@@ -372,17 +370,17 @@ public sealed class ReminderDefinitionStore
     }
 
     private bool IsDaemonPath(string path) =>
-        PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, _daemonDirectory);
+        PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, _paths.RemindersDirectory);
 
     private string GetDirectoryForNewDefinition(ReminderDefinition definition) =>
         definition.Delivery.Kind switch
         {
             DeliveryKind.CurrentSession when !string.IsNullOrWhiteSpace(definition.Delivery.SessionId) =>
                 SessionDirectoryHelper.GetSessionRemindersDirectory(
-                    new SessionId(definition.Delivery.SessionId), _sessionsDirectory),
+                    new SessionId(definition.Delivery.SessionId), _paths.SessionsDirectory),
             DeliveryKind.CurrentSession => throw new InvalidDataException(
                 $"CurrentSession reminder '{definition.Id.Value}' does not have a session id."),
-            DeliveryKind.Channel or DeliveryKind.None => _daemonDirectory,
+            DeliveryKind.Channel or DeliveryKind.None => _paths.RemindersDirectory,
             _ => throw new InvalidDataException(
                 $"Reminder '{definition.Id.Value}' has unsupported delivery kind '{definition.Delivery.Kind}'.")
         };

@@ -26,8 +26,7 @@ public sealed class BackgroundJobDefinitionStore
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private readonly string _legacyDirectory;
-    private readonly string _sessionsDirectory;
+    private readonly NetclawPaths _paths;
     private readonly object _sync = new();
     private readonly Dictionary<string, RejectedLegacyBackgroundJobDefinition> _rejectedLegacyDefinitions =
         new(StringComparer.Ordinal);
@@ -35,11 +34,10 @@ public sealed class BackgroundJobDefinitionStore
 
     public BackgroundJobDefinitionStore(NetclawPaths paths, ILogger<BackgroundJobDefinitionStore>? logger = null)
     {
-        _legacyDirectory = paths.JobsDirectory;
-        _sessionsDirectory = paths.SessionsDirectory;
+        _paths = paths;
         _logger = logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance;
-        Directory.CreateDirectory(_legacyDirectory);
-        Directory.CreateDirectory(_sessionsDirectory);
+        Directory.CreateDirectory(_paths.JobsDirectory);
+        Directory.CreateDirectory(_paths.SessionsDirectory);
     }
 
     /// <summary>
@@ -244,7 +242,7 @@ public sealed class BackgroundJobDefinitionStore
     {
         var paths = new List<string>();
         var fileName = $"{Uri.EscapeDataString(id.Value)}.json";
-        AddIfPresent(paths, GetContainedPath(_legacyDirectory, fileName, id));
+        AddIfPresent(paths, GetContainedPath(_paths.JobsDirectory, fileName, id));
 
         foreach (var jobDirectory in EnumerateSessionJobDirectories())
         {
@@ -260,7 +258,7 @@ public sealed class BackgroundJobDefinitionStore
 
     private IEnumerable<string> EnumerateDefinitionFiles()
     {
-        foreach (var path in Directory.EnumerateFiles(_legacyDirectory, "*.json", SearchOption.TopDirectoryOnly))
+        foreach (var path in Directory.EnumerateFiles(_paths.JobsDirectory, "*.json", SearchOption.TopDirectoryOnly))
             yield return path;
 
         foreach (var jobDirectory in EnumerateSessionJobDirectories())
@@ -277,13 +275,13 @@ public sealed class BackgroundJobDefinitionStore
 
     private IEnumerable<string> EnumerateSessionJobDirectories()
     {
-        if (!IsSafeSessionPath(_sessionsDirectory, out var rootReason))
+        if (!IsSafeSessionPath(_paths.SessionsDirectory, out var rootReason))
         {
-            _logger.LogError("Session job root {Path} is unsafe: {Reason}", _sessionsDirectory, rootReason);
+            _logger.LogError("Session job root {Path} is unsafe: {Reason}", _paths.SessionsDirectory, rootReason);
             yield break;
         }
 
-        foreach (var sessionDirectory in Directory.EnumerateDirectories(_sessionsDirectory))
+        foreach (var sessionDirectory in Directory.EnumerateDirectories(_paths.SessionsDirectory))
         {
             var jobDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.JobsSubdirectory);
             if (!IsSafeSessionPath(jobDirectory, out var reason))
@@ -339,13 +337,13 @@ public sealed class BackgroundJobDefinitionStore
 
     private bool IsSafeSessionPath(string path, out string reason)
     {
-        if (!PathUtility.IsWithinRoot(path, _sessionsDirectory))
+        if (!PathUtility.IsWithinRoot(path, _paths.SessionsDirectory))
         {
             reason = "the path is outside the session directory";
             return false;
         }
 
-        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_sessionsDirectory)!, path))
+        if (PathUtility.ContainsSymlinkSegment(Path.GetDirectoryName(_paths.SessionsDirectory)!, path))
         {
             reason = "the path contains a symbolic link or reparse point";
             return false;
@@ -357,7 +355,7 @@ public sealed class BackgroundJobDefinitionStore
 
     private void EnsureSafeOutputPath(string path)
     {
-        if (PathUtility.IsWithinRoot(path, _sessionsDirectory)
+        if (PathUtility.IsWithinRoot(path, _paths.SessionsDirectory)
             && !IsSafeSessionPath(path, out var reason))
         {
             throw new InvalidOperationException($"Background job output path is unsafe: {reason}");
@@ -365,10 +363,10 @@ public sealed class BackgroundJobDefinitionStore
     }
 
     private bool IsLegacyPath(string path) =>
-        PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, _legacyDirectory);
+        PathUtility.AreEquivalentPaths(Path.GetDirectoryName(path)!, _paths.JobsDirectory);
 
     private string GetSessionDirectory(SessionId sessionId) =>
-        SessionDirectoryHelper.GetSessionJobsDirectory(sessionId, _sessionsDirectory);
+        SessionDirectoryHelper.GetSessionJobsDirectory(sessionId, _paths.SessionsDirectory);
 
     private static string GetDefinitionPath(string directory, BackgroundJobId id) =>
         GetContainedPath(directory, $"{Uri.EscapeDataString(id.Value)}.json", id);
