@@ -3072,16 +3072,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             errorMsg += hint is not null ? $"  {cmd} {hint}\n" : $"  {cmd}\n";
         }
 
-        EmitOutput(new TextOutput(errorMsg.TrimEnd()) { SessionId = _sessionId }, OutputFilter.Text);
-        EmitOutput(new TurnCompleted
-        {
-            SessionId = _sessionId,
-            TurnNumber = new TurnNumber(_state.TurnCount),
-            Outcome = TurnOutcome.Skipped,
-            SourceReminderId = _currentTurnSource?.ReminderId
-        });
-        TryReplyAck();
-        return true;
+        return RejectSlashCommand(errorMsg.TrimEnd());
     }
 
     private bool RejectSlashCommand(string message)
