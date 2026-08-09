@@ -1197,7 +1197,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         // session's scope. Keep that retry-local so approve-once cannot bleed
                         // across parallel tool calls or later iterations.
                         var retryContext = CreatePerToolExecutionContext(executionContext, meta);
-                        retryContext.Approval.SeedOneTimeApproval(tc.Name, ctx.Patterns);
+                        retryContext.Approval.SeedOneTimeApproval(tc.Name, OneTimeApprovalKeys.Create(ctx));
                         var result = await executor.ExecuteAsync(cleanedTc, retryContext, ct);
                         return BuildToolResult(cleanedTc, result, retryContext, modelInputBudget);
                     }

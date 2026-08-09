@@ -110,6 +110,34 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Reduce Shell Approval Fatigue
+
+**PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/tool-approval-gates/spec.md`
+**Surface area:** shell authorization, approval matching, security corpus
+**Verification:** L2
+
+The user promoted this work into `NOW`. The work must reduce repeat prompts
+without allowing an incomplete or unknown shell form.
+
+Done when:
+
+- [x] A synthetic workload corpus covers ordinary search, read, pipeline,
+  redirect, and file-change commands without production command text.
+- [x] A safe pipeline stage can compose with a stored grant for each stage that
+  still requires approval.
+- [x] A prompt excludes a safe stage from the approval candidates that the user
+  can persist.
+- [x] A one-time retry is bound to the exact prompted candidate set, including
+  each effective directory, across live, sub-agent, and redrive paths.
+- [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
+  keep their strict behavior.
+- [ ] A constrained executable grammar proves any future safe `sed` form. The
+  `-n` option alone is not proof because a `sed` program can write files or
+  execute commands.
+- [ ] Netclaw consumes the ShellSyntaxTree v0.3 occurrence model for bounded
+  loops, substitutions, and explicit redirects after the composition slice.
+
 ### Priority: Simplify Tool Execution Context Architecture
 
 **PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`, `docs/prd/PRD-007-agent-personality-and-local-memory.md`

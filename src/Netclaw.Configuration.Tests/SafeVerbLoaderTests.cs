@@ -18,7 +18,7 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("ls"));
         Assert.True(list.Contains("grep"));
         Assert.True(list.Contains("git status"));
-        Assert.True(list.Contains("sed -n"));
+        Assert.False(list.Contains("sed -n"));
         Assert.False(list.Contains("git push"));
         Assert.False(list.Contains("rm"));
 
