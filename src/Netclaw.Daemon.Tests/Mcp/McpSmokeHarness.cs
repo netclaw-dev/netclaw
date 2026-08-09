@@ -9,6 +9,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Tools;
+using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
@@ -30,6 +31,25 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
     }
 
     public McpClientManager Manager { get; }
+
+    /// <summary>
+    /// Asserts that the named MCP server reached the <see cref="McpConnectionState.Connected"/>
+    /// state after <see cref="Manager.StartAsync"/> completed. `StartAsync` awaits the whole
+    /// connect attempt — either tools are published to the registry or a failure status with
+    /// the underlying error is published — so there is nothing to poll: this is the
+    /// deterministic completion signal. Asserting on it turns an intermittent Windows CI
+    /// connect failure (previously a bare `Assert.NotNull` null on the tool lookup) into a
+    /// failure that carries the manager's actual error message.
+    /// </summary>
+    public void AssertConnected(string serverName)
+    {
+        var status = Manager.GetServerStatuses().GetValueOrDefault(new McpServerName(serverName));
+        Assert.NotNull(status);
+        Assert.True(
+            status.State is McpConnectionState.Connected,
+            $"MCP server '{serverName}' failed to connect: state={status.State}, " +
+            $"error={status.ErrorMessage ?? "(none)"}");
+    }
 
     public static McpSmokeHarness Create(
         Dictionary<string, McpServerEntry> serverEntries,
