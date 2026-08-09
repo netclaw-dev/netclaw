@@ -349,10 +349,11 @@ the library would mark an occurrence terminally failed. If either
 default changes in a way that breaks this ordering, add back a single
 operator knob.
 
-The reminder manager SHALL enforce a maximum concurrent execution limit
-(`MaxConcurrentExecutions`, internal const) and SHALL enforce a
-per-execution timeout (`ExecutionTimeoutSeconds`, internal const on
-`ReminderExecutionActor`).
+The reminder manager SHALL allow any number of reminder executions to run
+concurrently — there is no execution cap, because each execution already has a
+one-hour absolute timeout and Akka.Reminders owns failure retry. The manager
+SHALL enforce a per-execution timeout (`ExecutionTimeoutSeconds`, internal
+const on `ReminderExecutionActor`).
 
 #### Scenario: Consecutive failures auto-pause task
 
@@ -371,14 +372,12 @@ per-execution timeout (`ExecutionTimeoutSeconds`, internal const on
 - **THEN** the internal failure count for that reminder is reset to zero
 - **AND** subsequent failures start counting from zero again
 
-#### Scenario: Max concurrent execution limit enforced
+#### Scenario: Reminders run concurrently without an execution cap
 
-- **GIVEN** `MaxConcurrentExecutions` is reached and that many reminders are currently executing
+- **GIVEN** several reminders are already executing
 - **WHEN** another reminder fires
-- **THEN** the new reminder is deferred to an internal queue
-- **AND** the Akka.Reminders envelope is still acked (both Mode A and
-  Mode B deferred paths — a reminder that can't be dispatched yet is
-  acked and the library's retry/auto-pause machinery covers starvation)
+- **THEN** the new reminder starts executing immediately
+- **AND** no occurrence is skipped or deferred for capacity reasons
 
 #### Scenario: Execution timeout enforced
 

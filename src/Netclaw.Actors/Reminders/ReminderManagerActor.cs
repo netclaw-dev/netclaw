@@ -25,12 +25,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     public const string EntityId = "manager";
 
     /// <summary>
-    /// Maximum number of concurrent reminder executions. Not configurable —
-    /// if we ever need to tune this, add a knob then.
-    /// </summary>
-    internal const int MaxConcurrentExecutions = 3;
-
-    /// <summary>
     /// Consecutive execution failures after which a reminder is auto-paused.
     /// Not configurable. Must stay strictly below Akka.Reminders'
     /// <c>MaxDeliveryAttempts</c> (default 10) so Netclaw's auto-pause fires
@@ -606,20 +600,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 envelope,
                 nack: definition.Schedule.Type == ReminderScheduleType.OneShot || sameOccurrence,
                 "Another execution for this reminder is active.");
-            return;
-        }
-
-        if (_activeExecutions.Count >= MaxConcurrentExecutions)
-        {
-            _log.Info("Concurrency limit reached ({0}), settling blocked reminder '{1}'",
-                MaxConcurrentExecutions, reminderId.Value);
-            if (definition.Schedule.Type != ReminderScheduleType.OneShot)
-                RecordSkippedDuplicate(reminderId, definition.Title, "capacity");
-            await SettleBlockedOccurrenceAsync(
-                definition,
-                envelope,
-                nack: definition.Schedule.Type == ReminderScheduleType.OneShot,
-                "Reminder execution capacity is unavailable.");
             return;
         }
 

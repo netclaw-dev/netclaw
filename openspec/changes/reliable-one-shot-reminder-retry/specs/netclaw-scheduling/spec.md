@@ -6,7 +6,7 @@ The reminder manager SHALL store consecutive failures in each reminder definitio
 
 The manager SHALL disable a reminder when the count reaches `FailurePauseThreshold`. The disabled definition SHALL remain available for status and diagnosis.
 
-The manager SHALL enforce `MaxConcurrentExecutions`. It SHALL apply the bounded capacity policy when no execution slot is available.
+The manager SHALL NOT cap the number of concurrent executions. Capacity was removed because every execution already has a one-hour absolute limit and Akka.Reminders owns failure retry, so unbounded scheduling pressure on the LLM is acceptable.
 
 Each execution SHALL have a one-hour absolute limit. A known timeout SHALL count as a failed attempt.
 
@@ -24,12 +24,12 @@ Each execution SHALL have a one-hour absolute limit. A known timeout SHALL count
 - **WHEN** its next execution succeeds
 - **THEN** the manager saves a zero failure count
 
-#### Scenario: The execution limit is full
+#### Scenario: Reminder fires while other reminders are executing
 
-- **GIVEN** `MaxConcurrentExecutions` reminder attempts are active
+- **GIVEN** several reminder attempts are active
 - **WHEN** another occurrence arrives
-- **THEN** the manager does not retain the envelope in a queue
-- **AND** the manager applies the one-shot or reminder-series capacity policy
+- **THEN** the manager starts the new execution immediately
+- **AND** no occurrence is skipped or deferred for capacity reasons
 
 ### Requirement: Envelope-ack-gated at-least-once delivery for Mode B
 
