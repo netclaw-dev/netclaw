@@ -101,7 +101,7 @@ internal sealed class ScopedFileAccessPolicy
                     return false;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
             {
                 error = $"Error: The path could not be checked for session automation artifacts: {ex.Message}";
                 return false;

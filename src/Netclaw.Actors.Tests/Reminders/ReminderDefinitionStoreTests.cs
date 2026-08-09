@@ -360,25 +360,32 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
     public void Duplicate_id_across_daemon_and_session_directories_is_rejected()
     {
         var definition = CreateDefinition(
-            "duplicate-reminder",
+            "duplicate-reminder\r\n[INF] forged",
             DeliveryKind.CurrentSession,
             "C0ABC/1712000000.000001");
-        var daemonPath = Path.Combine(_paths.RemindersDirectory, "duplicate-reminder.json");
+        var fileName = $"{Uri.EscapeDataString(definition.Id.Value)}.json";
+        var daemonPath = Path.Combine(_paths.RemindersDirectory, fileName);
         WriteDefinition(daemonPath, definition);
         var sessionDirectory = SessionDirectoryHelper.GetSessionRemindersDirectory(
             new SessionId(definition.Delivery.SessionId!),
             _paths.SessionsDirectory);
         Directory.CreateDirectory(sessionDirectory);
-        WriteDefinition(Path.Combine(sessionDirectory, "duplicate-reminder.json"), definition);
+        WriteDefinition(Path.Combine(sessionDirectory, fileName), definition);
         var logger = new CapturingLogger<ReminderDefinitionStore>();
 
         var store = new ReminderDefinitionStore(_paths, logger);
 
         Assert.Null(store.Get(definition.Id));
         Assert.Empty(store.List());
-        Assert.Contains(logger.Errors, message =>
-            message.Contains(daemonPath, StringComparison.Ordinal)
-            && message.Contains(sessionDirectory, StringComparison.Ordinal));
+        Assert.NotEmpty(logger.Errors);
+        Assert.All(logger.Errors, message =>
+        {
+            Assert.DoesNotContain('\r', message);
+            Assert.DoesNotContain('\n', message);
+            Assert.Contains("\\r\\n", message, StringComparison.Ordinal);
+            Assert.Contains(daemonPath, message, StringComparison.Ordinal);
+            Assert.Contains(sessionDirectory, message, StringComparison.Ordinal);
+        });
     }
 
     [Theory]

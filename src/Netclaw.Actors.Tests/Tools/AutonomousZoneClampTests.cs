@@ -164,8 +164,13 @@ public sealed class AutonomousZoneClampTests : IDisposable
             _sessionDir,
             SessionDirectoryHelper.RemindersSubdirectory);
         Directory.CreateDirectory(artifactDirectory);
+        var sessionsAlias = Path.Combine(_outsideDir, "sessions-alias");
+        Directory.CreateSymbolicLink(sessionsAlias, _paths.SessionsDirectory);
         var alias = Path.Combine(_outsideDir, "artifact-alias");
-        Directory.CreateSymbolicLink(alias, artifactDirectory);
+        Directory.CreateSymbolicLink(alias, Path.Combine(
+            sessionsAlias,
+            "s1",
+            SessionDirectoryHelper.RemindersSubdirectory));
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
 
         Assert.False(policy.TryResolveWritePath(

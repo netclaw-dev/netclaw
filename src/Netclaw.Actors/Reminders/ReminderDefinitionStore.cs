@@ -247,7 +247,9 @@ public sealed class ReminderDefinitionStore
             if (IsSafeSessionPath(path, out var reason))
                 AddIfPresent(paths, path);
             else
-                _logger.LogError("Session reminder definition {Path} is unsafe: {Reason}", path, reason);
+                _logger.LogError(
+                    "Session reminder definition {Path} is unsafe: {Reason}",
+                    ForLog(path), ForLog(reason));
         }
 
         return paths;
@@ -265,7 +267,9 @@ public sealed class ReminderDefinitionStore
                 if (IsSafeSessionPath(path, out var reason))
                     yield return path;
                 else
-                    _logger.LogError("Session reminder definition {Path} is unsafe: {Reason}", path, reason);
+                    _logger.LogError(
+                        "Session reminder definition {Path} is unsafe: {Reason}",
+                        ForLog(path), ForLog(reason));
             }
         }
     }
@@ -274,7 +278,9 @@ public sealed class ReminderDefinitionStore
     {
         if (!IsSafeSessionPath(_paths.SessionsDirectory, out var rootReason))
         {
-            _logger.LogError("Session reminder root {Path} is unsafe: {Reason}", _paths.SessionsDirectory, rootReason);
+            _logger.LogError(
+                "Session reminder root {Path} is unsafe: {Reason}",
+                ForLog(_paths.SessionsDirectory), ForLog(rootReason));
             yield break;
         }
 
@@ -283,7 +289,9 @@ public sealed class ReminderDefinitionStore
             var reminderDirectory = Path.Combine(sessionDirectory, SessionDirectoryHelper.RemindersSubdirectory);
             if (!IsSafeSessionPath(reminderDirectory, out var reason))
             {
-                _logger.LogError("Session reminder directory {Path} is unsafe: {Reason}", reminderDirectory, reason);
+                _logger.LogError(
+                    "Session reminder directory {Path} is unsafe: {Reason}",
+                    ForLog(reminderDirectory), ForLog(reason));
                 continue;
             }
 
@@ -410,7 +418,11 @@ public sealed class ReminderDefinitionStore
     private void LogDuplicate(ReminderId id, string firstPath, string secondPath) =>
         _logger.LogError(
             "Reminder id {ReminderId} has duplicate definitions at {FirstPath} and {SecondPath}. Neither definition will run.",
-            id.Value, firstPath, secondPath);
+            ForLog(id.Value), ForLog(firstPath), ForLog(secondPath));
+
+    private static string ForLog(string value) =>
+        value.Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
 
     private void DeleteInvalidDefinition(string path, string reason)
     {
@@ -465,7 +477,7 @@ public sealed class ReminderDefinitionStore
                     "Reminder document {Path} predates issue #994 and is missing required "
                     + "trust field(s): {MissingFields}. The reminder will not be loaded or "
                     + "scheduled. Recreate the reminder or remove the file.",
-                    path, fields);
+                    ForLog(path), fields);
                 RecordRejectedLegacyDefinition(path, $"missing trust field(s): {fields}");
                 return new ReadResult(null, $"missing trust field(s): {fields}", ShouldDelete: false);
             }
@@ -508,7 +520,9 @@ public sealed class ReminderDefinitionStore
         if (IsValidStoragePath(result.Definition, path, out var reason))
             return (result.Definition, path);
 
-        _logger.LogError("Reminder document {Path} has invalid storage ownership: {Reason}", path, reason);
+        _logger.LogError(
+            "Reminder document {Path} has invalid storage ownership: {Reason}",
+            ForLog(path), ForLog(reason));
         return null;
     }
 

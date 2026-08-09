@@ -242,8 +242,10 @@ public static class PathUtility
                     : null;
             if (target is not null)
             {
+                // The target can contain a symbolic-link ancestor, such as macOS /var.
+                // Resolve that path before the segment walk continues.
                 pathBuilder.Clear();
-                pathBuilder.Append(target.FullName);
+                pathBuilder.Append(ResolveSymlinksInPath(target.FullName));
             }
 
             if (File.Exists(partial))
