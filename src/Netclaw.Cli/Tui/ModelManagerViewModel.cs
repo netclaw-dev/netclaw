@@ -22,7 +22,8 @@ public enum ModelManagerState
     RoleOverview,
     SelectProvider,
     DiscoverModels,
-    ConfirmAssignment
+    ConfirmAssignment,
+    Loading
 }
 
 /// <summary>
@@ -47,7 +48,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     /// </summary>
     internal bool IsEmbeddedInConfig { get; set; }
 
-    public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.RoleOverview);
+    public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
@@ -87,6 +88,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     {
         base.OnActivated();
         Refresh();
+        CurrentState.Value = ModelManagerState.RoleOverview;
+        NotifyStateChanged();
 
         Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleGlobalKey)
