@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ShellTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -16,7 +16,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Executes shell commands via /bin/bash (Linux) or cmd.exe (Windows).
+/// Executes commands through the daemon's resolved native shell environment.
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
@@ -38,6 +38,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy _pathPolicy;
     private readonly ShellCommandPolicy _commandPolicy;
+    private readonly ShellExecutionEnvironment _environment;
 
     public record Params(
         [property: Description("The shell command to execute")] string Command,
@@ -48,41 +49,55 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         _config = config;
         _pathPolicy = pathPolicy;
         _commandPolicy = commandPolicy;
+        if (!ReferenceEquals(pathPolicy.Environment, commandPolicy.Environment))
+        {
+            throw new ArgumentException(
+                "Shell command and path policies must use the same shell environment.",
+                nameof(commandPolicy));
+        }
+
+        _environment = commandPolicy.Environment;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(
+        Params args,
+        ToolInvocationContext context,
+        CancellationToken ct)
+        => ExecuteCoreAsync(args, context, authorizedAnalysis: null, ct);
+
+    internal async Task<string> ExecuteAuthorizedAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        ShellCommandAnalysis analysis,
+        CancellationToken ct)
+    {
+        if (!TryParse(arguments, out var error, out var args))
+            return error;
+
+        return await ExecuteCoreAsync(args, context, analysis, ct);
+    }
+
+    private async Task<string> ExecuteCoreAsync(
+        Params args,
+        ToolInvocationContext context,
+        ShellCommandAnalysis? authorizedAnalysis,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
 
-        var commandDecision = _commandPolicy.Evaluate(args.Command);
+        // Resolve once before parsing or execution. The same cwd and parse
+        // facts feed both security policies and the launched process.
+        var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
+        var analysis = ResolveAnalysis(args.Command, resolvedCwd, authorizedAnalysis);
+        var commandDecision = _commandPolicy.Evaluate(analysis);
         if (!commandDecision.Allowed)
             return $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}";
 
-        if (_pathPolicy.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory))
+        if (_pathPolicy.CommandReferencesDeniedPath(analysis))
             return "Error: Command references a protected file path. Access denied by security policy.";
 
-        var isWindows = OperatingSystem.IsWindows();
-        var psi = new ProcessStartInfo
-        {
-            FileName = isWindows ? "cmd.exe" : "/bin/bash",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        if (isWindows)
-        {
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(args.Command);
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(args.Command);
-        }
+        var psi = _environment.CreateProcessStartInfo(args.Command);
 
         // Resolve working directory in priority order: explicit arg →
         // WorkingContext.ProjectDirectory (declared via set_working_directory)
@@ -94,43 +109,12 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         // membership. The matcher reads context.Cwd against the same
         // resolution chain so the gate evaluates folder-scoped ApprovalEntry
         // records against the directory the spawned process will run in.
-        var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
-        if (!string.IsNullOrWhiteSpace(resolvedCwd))
-        {
-            if (IsResolvedSessionDirectory(resolvedCwd, context.SessionDirectory))
-            {
-                try
-                {
-                    Directory.CreateDirectory(resolvedCwd);
-                }
-                catch (Exception ex) when (ex is ArgumentException
-                                           or IOException
-                                           or NotSupportedException
-                                           or UnauthorizedAccessException
-                                           or System.Security.SecurityException)
-                {
-                    return $"Error preparing session working directory: {ex.Message}";
-                }
-            }
-            else if (!Directory.Exists(resolvedCwd))
-            {
-                // ProcessStartInfo.WorkingDirectory must point at an existing directory or
-                // Process.Start throws an opaque, platform-specific error. Only the session
-                // scratch dir is auto-created (above); every other resolved cwd — explicit
-                // arg, project dir, inherited cwd — must already exist. Fail loudly with the
-                // remedy so the agent creates it instead of retry-looping on a cryptic error.
-                // Any approval for this cwd is existence-agnostic, so it still matches once
-                // the agent runs the mkdir.
-                if (File.Exists(resolvedCwd))
-                    return $"Error: Working directory '{resolvedCwd}' is a file, not a directory.";
-
-                var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
-                return $"Error: Working directory '{resolvedCwd}' does not exist. "
-                     + $"Create it first, e.g.: {mkdirHint}";
-            }
-
-            psi.WorkingDirectory = resolvedCwd;
-        }
+        var workingDirectoryError = PrepareWorkingDirectory(
+            psi,
+            resolvedCwd,
+            context.SessionDirectory);
+        if (workingDirectoryError is not null)
+            return workingDirectoryError;
 
         var effectiveTimeout = context.ExecutionTimeout.Value;
 
@@ -144,12 +128,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         }
         catch (Exception ex)
         {
-            return $"Error starting process: {ex.Message}";
+            return FormatStartError(ex);
         }
 
         // Start the timeout countdown only after the shell process exists, so
-        // process-spawn overhead (heavier on Windows: cmd.exe plus the child it
-        // execs) is not charged against the command's execution budget.
+        // process-spawn overhead is not charged against the command's execution budget.
         timeoutCts.CancelAfter(effectiveTimeout);
 
         using (process)
@@ -245,10 +228,28 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     /// <see cref="ToolCompletedUpdate"/> carries the same bounded head+tail result
     /// as the non-streaming path.
     /// </summary>
-    public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+    public override IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+        => ExecuteStreamWithAnalysisAsync(
+            arguments,
+            context,
+            authorizedAnalysis: null,
+            ct);
+
+    internal IAsyncEnumerable<ToolCallUpdate> ExecuteAuthorizedStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        ShellCommandAnalysis analysis,
+        CancellationToken ct)
+        => ExecuteStreamWithAnalysisAsync(arguments, context, analysis, ct);
+
+    private async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamWithAnalysisAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        ShellCommandAnalysis? authorizedAnalysis,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         // All items (activities + completion) are produced by the non-iterator
         // helper and written into a channel. The iterator just relays them.
@@ -257,7 +258,12 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         // internally and writes the error completion before completing the channel.
         var channel = Channel.CreateUnbounded<ToolCallUpdate>(
             new UnboundedChannelOptions { SingleReader = true });
-        _ = ExecuteStreamCoreAsync(arguments, context, channel.Writer, ct);
+        _ = ExecuteStreamCoreAsync(
+            arguments,
+            context,
+            authorizedAnalysis,
+            channel.Writer,
+            ct);
 
         await foreach (var update in channel.Reader.ReadAllAsync(CancellationToken.None))
             yield return update;
@@ -266,6 +272,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private async Task ExecuteStreamCoreAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
+        ShellCommandAnalysis? authorizedAnalysis,
         ChannelWriter<ToolCallUpdate> output,
         CancellationToken ct)
     {
@@ -283,7 +290,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            var commandDecision = _commandPolicy.Evaluate(args.Command);
+            var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
+            var analysis = ResolveAnalysis(args.Command, resolvedCwd, authorizedAnalysis);
+            var commandDecision = _commandPolicy.Evaluate(analysis);
             if (!commandDecision.Allowed)
             {
                 output.TryWrite(new ToolCompletedUpdate(
@@ -291,72 +300,22 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            if (_pathPolicy.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory))
+            if (_pathPolicy.CommandReferencesDeniedPath(analysis))
             {
                 output.TryWrite(new ToolCompletedUpdate(
                     "Error: Command references a protected file path. Access denied by security policy."));
                 return;
             }
 
-            var isWindows = OperatingSystem.IsWindows();
-            var psi = new ProcessStartInfo
+            var psi = _environment.CreateProcessStartInfo(args.Command);
+            var workingDirectoryError = PrepareWorkingDirectory(
+                psi,
+                resolvedCwd,
+                context.SessionDirectory);
+            if (workingDirectoryError is not null)
             {
-                FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            if (isWindows)
-            {
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add(args.Command);
-            }
-            else
-            {
-                psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add(args.Command);
-            }
-
-            var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
-            if (!string.IsNullOrWhiteSpace(resolvedCwd))
-            {
-                if (IsResolvedSessionDirectory(resolvedCwd, context.SessionDirectory))
-                {
-                    try
-                    {
-                        Directory.CreateDirectory(resolvedCwd);
-                    }
-                    catch (Exception ex) when (ex is ArgumentException
-                                                   or IOException
-                                                   or NotSupportedException
-                                                   or UnauthorizedAccessException
-                                                   or System.Security.SecurityException)
-                    {
-                        output.TryWrite(new ToolCompletedUpdate(
-                            $"Error preparing session working directory: {ex.Message}"));
-                        return;
-                    }
-                }
-                else if (!Directory.Exists(resolvedCwd))
-                {
-                    if (File.Exists(resolvedCwd))
-                    {
-                        output.TryWrite(new ToolCompletedUpdate(
-                            $"Error: Working directory '{resolvedCwd}' is a file, not a directory."));
-                        return;
-                    }
-
-                    var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
-                    output.TryWrite(new ToolCompletedUpdate(
-                        $"Error: Working directory '{resolvedCwd}' does not exist. "
-                        + $"Create it first, e.g.: {mkdirHint}"));
-                    return;
-                }
-
-                psi.WorkingDirectory = resolvedCwd;
+                output.TryWrite(new ToolCompletedUpdate(workingDirectoryError));
+                return;
             }
 
             Process process;
@@ -366,7 +325,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
             catch (Exception ex)
             {
-                output.TryWrite(new ToolCompletedUpdate($"Error starting process: {ex.Message}"));
+                output.TryWrite(new ToolCompletedUpdate(FormatStartError(ex)));
                 return;
             }
 
@@ -459,6 +418,27 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         }
     }
 
+    private ShellCommandAnalysis ResolveAnalysis(
+        string command,
+        string? resolvedCwd,
+        ShellCommandAnalysis? authorizedAnalysis)
+    {
+        if (authorizedAnalysis is null)
+            return _commandPolicy.Analyze(command, resolvedCwd);
+
+        if (!string.Equals(authorizedAnalysis.Source, command, StringComparison.Ordinal)
+            || !string.Equals(
+                authorizedAnalysis.WorkingDirectory,
+                resolvedCwd,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The authorized shell analysis does not match the executed command.");
+        }
+
+        return authorizedAnalysis;
+    }
+
     private static readonly TimeSpan CoalesceInterval = TimeSpan.FromMilliseconds(500);
 
     private static async Task DrainPipeToChannelAsync(
@@ -515,6 +495,51 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
         }
     }
+
+    private string? PrepareWorkingDirectory(
+        ProcessStartInfo startInfo,
+        string? resolvedCwd,
+        string? sessionDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(resolvedCwd))
+            return null;
+
+        if (IsResolvedSessionDirectory(resolvedCwd, sessionDirectory))
+        {
+            try
+            {
+                Directory.CreateDirectory(resolvedCwd);
+            }
+            catch (Exception ex) when (ex is ArgumentException
+                                       or IOException
+                                       or NotSupportedException
+                                       or UnauthorizedAccessException
+                                       or System.Security.SecurityException)
+            {
+                return $"Error preparing session working directory: {ex.Message}";
+            }
+        }
+        else if (!Directory.Exists(resolvedCwd))
+        {
+            if (File.Exists(resolvedCwd))
+                return $"Error: Working directory '{resolvedCwd}' is a file, not a directory.";
+
+            return $"Error: Working directory '{resolvedCwd}' does not exist. "
+                   + $"Create it first, e.g.: {CreateDirectoryHint(resolvedCwd)}";
+        }
+
+        startInfo.WorkingDirectory = resolvedCwd;
+        return null;
+    }
+
+    private string CreateDirectoryHint(string path)
+        => _environment.PathStyle == ShellPathStyle.Windows
+            ? $"New-Item -ItemType Directory -Force -Path '{path.Replace("'", "''", StringComparison.Ordinal)}'"
+            : $"mkdir -p -- '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+    private string FormatStartError(Exception exception)
+        => $"Error starting shell '{_environment.ExecutableName}' "
+           + $"at '{_environment.ExecutablePath}': {exception.Message}";
 
     // Retained for compatibility with tests/benchmark that call it directly; the
     // main execution path no longer uses this — output is bounded at read time by

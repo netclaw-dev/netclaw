@@ -14,6 +14,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -62,7 +63,8 @@ public abstract class LlmSessionTestBase : TestKit
         if (VerifySerialization)
             builder.WithSerializationVerification();
 
-        builder.WithNetclawActors();
+        builder.WithNetclawActors(
+            provider.GetRequiredService<ShellExecutionEnvironment>());
     }
 
     protected sealed override void ConfigureServices(HostBuilderContext context, IServiceCollection services)

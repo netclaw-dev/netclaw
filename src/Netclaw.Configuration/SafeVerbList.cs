@@ -18,10 +18,9 @@ namespace Netclaw.Configuration;
 /// through code review and a daemon release, not a config edit. The agent
 /// has no path to extend its own read-only verb list at runtime.
 ///
-/// Membership is exact-equality against the verb chain extracted by the
-/// shell parser (case rules from
-/// <see cref="ToolApprovalEntryComparer.Comparer"/>: Ordinal on POSIX,
-/// OrdinalIgnoreCase on Windows). Mutating verbs (e.g. <c>git push</c>,
+/// Membership is exact equality against the verb chain from the shell parser.
+/// The selected platform uses ordinal comparison on POSIX and case-insensitive
+/// ordinal comparison on Windows. Mutating verbs (e.g. <c>git push</c>,
 /// <c>sed -i</c>) are intentionally absent — they remain subject to the
 /// interactive approval gate.
 /// </summary>
@@ -72,8 +71,8 @@ internal sealed class SafeVerbListFile
 }
 
 /// <summary>
-/// Loads the bundled safe-verbs list for the current OS from the embedded
-/// resource. There is no user-override path — the safe-verbs list is
+/// Loads a bundled platform safe-verb list from the embedded resource.
+/// There is no user-override path. The safe-verbs list is
 /// immutable at runtime so the agent cannot widen its own read-only
 /// auto-pass set through file writes. Widening goes through code review
 /// and a daemon release.
@@ -99,9 +98,14 @@ public static class SafeVerbLoader
     /// </summary>
     public static SafeVerbList Load() => Load(OperatingSystem.IsWindows());
 
-    internal static SafeVerbList Load(bool isWindows)
+    /// <summary>
+    /// Loads the list for the specified platform identity.
+    /// </summary>
+    public static SafeVerbList Load(bool isWindows)
     {
-        var comparer = ToolApprovalEntryComparer.Comparer;
+        var comparer = isWindows
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         var verbs = new HashSet<string>(comparer);
 
         foreach (var verb in LoadBundled(isWindows))

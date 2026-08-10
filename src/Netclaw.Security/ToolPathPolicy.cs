@@ -23,13 +23,23 @@ namespace Netclaw.Security;
 /// </remarks>
 public sealed class ToolPathPolicy
 {
+    private readonly ShellCommandAnalyzer _analyzer;
     private readonly HashSet<string> _writeDeniedPaths;
     private readonly HashSet<string> _readDeniedPaths;
     private readonly HashSet<string> _shellDeniedPaths;
     private readonly HashSet<string> _commandIndicators;
 
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
+        : this(ShellExecutionEnvironmentDefaults.Bash, deniedPaths)
     {
+    }
+
+    public ToolPathPolicy(
+        ShellExecutionEnvironment environment,
+        IEnumerable<string> deniedPaths)
+    {
+        Environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _analyzer = new ShellCommandAnalyzer(environment);
         var materialized = deniedPaths.ToList();
         _writeDeniedPaths = BuildNormalizedSet(materialized);
         _readDeniedPaths = _writeDeniedPaths;
@@ -41,13 +51,30 @@ public sealed class ToolPathPolicy
         IEnumerable<string> writeDeniedPaths,
         IEnumerable<string> readDeniedPaths,
         IEnumerable<string> shellIndicatorPaths)
+        : this(
+            ShellExecutionEnvironmentDefaults.Bash,
+            writeDeniedPaths,
+            readDeniedPaths,
+            shellIndicatorPaths)
     {
+    }
+
+    public ToolPathPolicy(
+        ShellExecutionEnvironment environment,
+        IEnumerable<string> writeDeniedPaths,
+        IEnumerable<string> readDeniedPaths,
+        IEnumerable<string> shellIndicatorPaths)
+    {
+        Environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _analyzer = new ShellCommandAnalyzer(environment);
         _writeDeniedPaths = BuildNormalizedSet(writeDeniedPaths);
         _readDeniedPaths = BuildNormalizedSet(readDeniedPaths);
         var shellList = shellIndicatorPaths.ToList();
         _shellDeniedPaths = BuildNormalizedSet(shellList);
         _commandIndicators = BuildCommandIndicators(shellList);
     }
+
+    public ShellExecutionEnvironment Environment { get; }
 
     private static HashSet<string> BuildNormalizedSet(IEnumerable<string> paths)
     {
@@ -174,6 +201,21 @@ public sealed class ToolPathPolicy
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
+        return CommandReferencesDeniedPath(
+            _analyzer.Analyze(command, workingDirectory));
+    }
+
+    public bool CommandReferencesDeniedPath(ShellCommandAnalysis analysis)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+        if (!ReferenceEquals(analysis.Environment, Environment))
+            throw new ArgumentException(
+                "The command analysis belongs to another shell environment.",
+                nameof(analysis));
+
+        var command = analysis.Source;
+        var workingDirectory = analysis.WorkingDirectory;
+
         var tokens = ShellTokenizer.Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
         foreach (var indicator in _commandIndicators)
@@ -182,8 +224,7 @@ public sealed class ToolPathPolicy
                 return true;
         }
 
-        if (!OperatingSystem.IsWindows()
-            && StructuredAnalysisReferencesDeniedPath(command, workingDirectory))
+        if (StructuredAnalysisReferencesDeniedPath(analysis))
         {
             return true;
         }
@@ -193,7 +234,10 @@ public sealed class ToolPathPolicy
             if (!LooksLikePath(token))
                 continue;
 
-            var normalized = ShellTokenizer.NormalizePathToken(token, workingDirectory);
+            var normalized = ShellTokenizer.NormalizePathToken(
+                token,
+                workingDirectory,
+                Environment.PathStyle);
             if (normalized is not null && IsDeniedNormalized(normalized, _shellDeniedPaths))
             {
                 return true;
@@ -243,10 +287,8 @@ public sealed class ToolPathPolicy
     }
 
     private bool StructuredAnalysisReferencesDeniedPath(
-        string command,
-        string? workingDirectory)
+        ShellCommandAnalysis analysis)
     {
-        var analysis = ShellCommandAnalyzer.Bash.Analyze(command, workingDirectory);
         if (analysis.Failure != ShellAnalysisFailure.None)
             return false;
 

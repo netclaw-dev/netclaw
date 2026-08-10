@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using System.Runtime.CompilerServices;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
@@ -20,10 +21,13 @@ public sealed class ToolAccessPolicy
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly ShellCommandPolicy _shellCommandPolicy;
     private readonly ToolPathPolicy _toolPathPolicy;
+    private readonly ShellApprovalMatcher _shellApprovalMatcher;
     private readonly IShellTrustZonePolicy? _shellTrustZonePolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
     private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
+    private readonly ConditionalWeakTable<ToolExecutionContext, ShellCommandAnalysis>
+        _authorizedShellAnalyses = new();
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
@@ -44,6 +48,14 @@ public sealed class ToolAccessPolicy
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
         _toolPathPolicy = toolPathPolicy;
+        if (!ReferenceEquals(shellCommandPolicy.Environment, toolPathPolicy.Environment))
+        {
+            throw new ArgumentException(
+                "Shell command and path policies must use the same shell environment.",
+                nameof(toolPathPolicy));
+        }
+
+        _shellApprovalMatcher = new ShellApprovalMatcher(shellCommandPolicy.Environment);
         _shellTrustZonePolicy = shellTrustZonePolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
         _featureGates = featureGates ?? FeatureGates.AllEnabled;
@@ -107,6 +119,8 @@ public sealed class ToolAccessPolicy
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
     {
+        _authorizedShellAnalyses.Remove(context);
+
         if (tool is McpToolAdapter mcp)
         {
             if (!_profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), context.Invocation))
@@ -148,21 +162,33 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
 
         var shellCommand = ExtractShellCommand(arguments);
+        var workingDirectory = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
+        ShellCommandAnalysis? shellAnalysis = null;
         if (shellCommand is not null)
         {
-            var hardDenyDecision = _shellCommandPolicy.Evaluate(shellCommand);
+            shellAnalysis = _shellCommandPolicy.Analyze(shellCommand, workingDirectory);
+            var hardDenyDecision = _shellCommandPolicy.Evaluate(shellAnalysis);
             if (!hardDenyDecision.Allowed)
                 return ToolAccessDecision.Deny(
                     $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
+
+            if (_toolPathPolicy.CommandReferencesDeniedPath(shellAnalysis))
+                return ToolAccessDecision.Deny("shell_references_protected_path");
         }
 
-        // All shell policy checks must use the directory that ShellTool uses.
+        // All shell policy checks use the directory that ShellTool executes.
         // The explicit tool argument can be absent while the context supplies
         // an active project, session, or inherited directory.
-        var workingDirectory = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
-        if (shellCommand is not null
-            && _toolPathPolicy.CommandReferencesDeniedPath(shellCommand, workingDirectory))
-            return ToolAccessDecision.Deny("shell_references_protected_path");
+        var analysisArguments = WithResolvedShellWorkingDirectory(arguments, workingDirectory);
+        var shellApproval = shellAnalysis is null
+            ? null
+            : _shellApprovalMatcher.AnalyzeInvocation(
+                toolName,
+                analysisArguments,
+                shellAnalysis);
+
+        if (shellAnalysis is not null)
+            _authorizedShellAnalyses.Add(context, shellAnalysis);
 
         // Non-interactive channels: sandbox shell commands to trust zone paths.
         // Even if the verb-chain is pre-approved, path arguments must fall within
@@ -172,18 +198,37 @@ public sealed class ToolAccessPolicy
         {
             if (_shellTrustZonePolicy is null)
             {
-                if (ShellCommandHasTrustZoneSensitiveInputs(shellCommand, workingDirectory))
+                if (ShellCommandHasTrustZoneSensitiveInputs(shellApproval, workingDirectory))
                     return ToolAccessDecision.Deny("shell_trust_zone_policy_not_configured");
             }
             else
             {
-                var trustZoneDeny = EnforceShellTrustZones(shellCommand, workingDirectory, context);
+                var trustZoneDeny = EnforceShellTrustZones(
+                    shellApproval!,
+                    workingDirectory,
+                    context);
                 if (trustZoneDeny is not null)
                     return trustZoneDeny;
             }
         }
 
-        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(
+            toolName,
+            context,
+            arguments,
+            _shellApprovalMatcher,
+            shellApproval);
+    }
+
+    internal bool TryTakeAuthorizedShellAnalysis(
+        ToolExecutionContext context,
+        out ShellCommandAnalysis? analysis)
+    {
+        if (!_authorizedShellAnalyses.TryGetValue(context, out analysis))
+            return false;
+
+        _authorizedShellAnalyses.Remove(context);
+        return true;
     }
 
     /// <summary>
@@ -195,10 +240,13 @@ public sealed class ToolAccessPolicy
     /// null if all paths are within bounds.
     /// </summary>
     private ToolAccessDecision? EnforceShellTrustZones(
-        string shellCommand,
+        ShellApprovalAnalysis approval,
         string? workingDirectory,
         ToolExecutionContext context)
     {
+        if (approval.IsMessy)
+            return ToolAccessDecision.Deny("shell_unresolved_trust_zone_input");
+
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
@@ -209,55 +257,26 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
-        var pathTokens = ExtractShellPathTokens(shellCommand);
-        if (pathTokens.Count == 0)
-            return null;
-
-        foreach (var pathToken in pathTokens)
+        foreach (var directory in approval.Candidates
+                     .Select(static candidate => candidate.Directory)
+                     .Where(static directory => !string.IsNullOrWhiteSpace(directory))
+                     .Distinct(StringComparer.Ordinal))
         {
-            var expanded = ShellTokenizer.NormalizePathToken(pathToken, workingDirectory);
-            if (expanded is null)
-                continue;
-
-            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expanded, context.Invocation))
+            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(directory!, context.Invocation))
                 return ToolAccessDecision.Deny("shell_path_outside_trust_zone");
         }
 
         return null;
     }
 
-    private static IReadOnlyList<string> ExtractShellPathTokens(string shellCommand)
-    {
-        var pathTokens = new List<string>();
-        foreach (var segment in ShellTokenizer.GetAllCommandSegments(shellCommand))
-        {
-            foreach (var token in ShellTokenizer.Tokenize(segment))
-            {
-                var trimmed = TrimShellTokenPunctuation(token);
-                if (ShellTokenizer.LooksLikePath(trimmed))
-                    pathTokens.Add(trimmed);
-            }
-        }
-
-        return pathTokens;
-    }
-
-    private static bool ShellCommandHasTrustZoneSensitiveInputs(string shellCommand, string? workingDirectory)
-        => !string.IsNullOrWhiteSpace(workingDirectory) || ShellCommandHasPathArguments(shellCommand);
-
-    private static string TrimShellTokenPunctuation(string token)
-        => token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
-
-    private static bool ShellCommandHasPathArguments(string shellCommand)
-    {
-        foreach (var token in ExtractShellPathTokens(shellCommand))
-        {
-            if (!string.IsNullOrWhiteSpace(token))
-                return true;
-        }
-
-        return false;
-    }
+    private static bool ShellCommandHasTrustZoneSensitiveInputs(
+        ShellApprovalAnalysis? approval,
+        string? workingDirectory)
+        => !string.IsNullOrWhiteSpace(workingDirectory)
+           || approval is null
+           || approval.IsMessy
+           || approval.Candidates.Any(static candidate =>
+               !string.IsNullOrWhiteSpace(candidate.Directory));
 
     private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
     {
@@ -308,7 +327,8 @@ public sealed class ToolAccessPolicy
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        IToolApprovalMatcher matcher)
+        IToolApprovalMatcher matcher,
+        ShellApprovalAnalysis? shellApproval = null)
     {
         var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
@@ -359,10 +379,14 @@ public sealed class ToolAccessPolicy
         var analysisArguments = isShell
             ? WithResolvedShellWorkingDirectory(arguments, resolvedShellCwd)
             : arguments;
-        var patterns = matcher.ExtractPatterns(toolName, analysisArguments);
-        var candidates = matcher.ExtractCandidates(toolName, analysisArguments);
-        var displayText = matcher.FormatForDisplay(toolName, arguments);
-        var isMessy = matcher.IsMessy(toolName, analysisArguments);
+        var patterns = shellApproval?.Patterns
+            ?? matcher.ExtractPatterns(toolName, analysisArguments);
+        var candidates = shellApproval?.Candidates
+            ?? matcher.ExtractCandidates(toolName, analysisArguments);
+        var displayText = shellApproval?.DisplayText
+            ?? matcher.FormatForDisplay(toolName, arguments);
+        var isMessy = shellApproval?.IsMessy
+            ?? matcher.IsMessy(toolName, analysisArguments);
 
         IReadOnlyList<ApprovalCandidate> approvalCandidates = candidates;
 

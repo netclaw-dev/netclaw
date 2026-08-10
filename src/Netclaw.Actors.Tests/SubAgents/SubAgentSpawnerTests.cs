@@ -35,6 +35,9 @@ public sealed class SubAgentSpawnerTests : TestKit
     [Fact]
     public async Task Spawn_async_propagates_parent_resolved_cwd_on_run_message()
     {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            ShellSyntaxTree.PwshDialect.PowerShell7);
         var toolRegistry = new ToolRegistry();
         toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
 
@@ -48,13 +51,14 @@ public sealed class SubAgentSpawnerTests : TestKit
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
+                new ShellCommandPolicy(environment),
+                new ToolPathPolicy(environment, [])),
             approvalService: null,
             new StaticSystemPromptProvider("You are a summarizer."),
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
-                NullLogger<WorkingContextSnapshotProvider>.Instance),
+                NullLogger<WorkingContextSnapshotProvider>.Instance,
+                environment),
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
@@ -86,6 +90,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         Assert.Equal("/tmp/netclaw/sessions/parent", bound.SessionDirectory);
         Assert.Equal("/home/user/repos/foo", run.Scope.Authority.ProjectDirectory);
         Assert.Equal("/home/user/repos/foo", run.Scope.Authority.InheritedCwd);
+        Assert.Same(environment, run.Scope.InitialWorkingSnapshot.ShellEnvironment);
 
         childProbe.Reply(new SubAgentResult
         {

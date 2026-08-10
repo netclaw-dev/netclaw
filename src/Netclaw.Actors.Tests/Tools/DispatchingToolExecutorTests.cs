@@ -483,7 +483,9 @@ public class DispatchingToolExecutorTests
         var command = $"touch {markerPath} <(true)";
         var arguments = ToolInput.Create("Command", command);
         Assert.False(ShellTokenizer.IsMessyCompoundCommand(command));
-        Assert.Empty(ShellApprovalMatcher.Instance.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
 
         var executor = CreateApprovalGatedShellExecutor();
         var call = new FunctionCallContent(

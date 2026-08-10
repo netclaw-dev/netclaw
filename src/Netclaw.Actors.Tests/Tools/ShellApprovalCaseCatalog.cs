@@ -6,6 +6,8 @@
 using System.Collections.Frozen;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -55,11 +57,33 @@ internal enum ApprovalSessionShape
     Other
 }
 
+internal enum ShellApprovalHost
+{
+    Bash,
+    PowerShell7,
+    WindowsPowerShell51
+}
+
 internal sealed record ShellApprovalInvocation(
     string Command,
     ApprovalDirectoryShape WorkingDirectory = ApprovalDirectoryShape.Project,
     TrustAudience Audience = TrustAudience.Personal,
-    bool Interactive = true);
+    bool Interactive = true,
+    ShellApprovalHost Host = ShellApprovalHost.Bash)
+{
+    public ShellExecutionEnvironment CreateEnvironment()
+        => Host switch
+        {
+            ShellApprovalHost.Bash => ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            ShellApprovalHost.PowerShell7 => ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7),
+            ShellApprovalHost.WindowsPowerShell51 => ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                PwshDialect.WindowsPowerShell51),
+            _ => throw new ArgumentOutOfRangeException(nameof(Host), Host, "Unknown shell approval host.")
+        };
+}
 
 internal sealed record ApprovalSeed(
     ApprovalSeedSource Source,
@@ -494,110 +518,119 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("bash"),
             ExpectedApproval.Require(["git push"])),
         Case(
-            "pwsh-safe-child-still-requires-host-approval",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            "bash-treats-pwsh-payload-as-ordinary-argument",
+            Bash("pwsh -NoProfile -Command 'Get-Content ./a.txt'"),
             Approvals.None,
             ExpectedApproval.Require(["pwsh"])),
         Case(
-            "pwsh-exported-function-risk-still-requires-host-approval",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
-            Approvals.None,
-            ExpectedApproval.Require(["pwsh"])),
-        Case(
-            "pwsh-bash-env-risk-still-requires-host-approval",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
-            Approvals.PersistentAnywhere("git status"),
-            ExpectedApproval.Require(["pwsh"])),
-        Case(
-            "pwsh-host-grant-composes-with-safe-child",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git status'"),
+            "bash-pwsh-grant-covers-authored-external-command",
+            Bash("pwsh -NoProfile -Command 'git push'"),
             Approvals.PersistentAnywhere("pwsh"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:pwsh")),
         Case(
-            "pwsh-host-grant-does-not-cover-mutating-child",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
-            Approvals.PersistentAnywhere("pwsh"),
-            ExpectedApproval.Require(["git push"], approvalMatches: ["persistent:pwsh"])),
-        Case(
-            "pwsh-child-grant-does-not-cover-host",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
+            "bash-pwsh-payload-grant-does-not-cover-authored-command",
+            Bash("pwsh -NoProfile -Command 'git push'"),
             Approvals.PersistentAnywhere("git push"),
-            ExpectedApproval.Require(["pwsh"], approvalMatches: ["persistent:git push"])),
+            ExpectedApproval.Require(["pwsh"])),
         Case(
-            "pwsh-host-and-child-grants-allow",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git push'"),
-            Approvals.PersistentAnywhere("pwsh", "git push"),
-            ExpectedApproval.Allow(
-                ToolAllowReason.StoredApproval,
-                1,
-                "persistent:pwsh",
-                "persistent:git push")),
+            "bash-treats-windows-powershell-as-ordinary-command",
+            Bash("powershell.exe -NoProfile -Command 'Get-Content ./a.txt'"),
+            Approvals.None,
+            ExpectedApproval.Require(["powershell.exe"])),
         Case(
-            "pwsh-working-directory-option-fails-closed",
-            Bash("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'"),
-            Approvals.PersistentAnywhere("pwsh", "git status"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            "powershell7-safe-command-allows",
+            PowerShell7("Get-ChildItem -Path . -Filter *.cs"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
-            "pwsh-builtin-command-prefix-fails-closed",
-            Bash("builtin command pwsh -NoProfile -NonInteractive -Command 'git push'"),
-            Approvals.PersistentAnywhere("builtin command pwsh", "git push"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            "powershell7-pipeline-prompts-for-unsafe-stage",
+            PowerShell7("Get-ChildItem | Remove-Item"),
+            Approvals.None,
+            ExpectedApproval.Require(["Remove-Item"])),
         Case(
-            "pwsh-absolute-env-prefix-fails-closed",
-            Bash("/usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git push'"),
-            Approvals.PersistentAnywhere("/usr/bin/env", "git push"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            "powershell7-stored-grant-covers-unsafe-stage",
+            PowerShell7("Get-ChildItem | Remove-Item"),
+            Approvals.PersistentAnywhere("Remove-Item"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:Remove-Item")),
         Case(
-            "pwsh-xargs-prefix-fails-closed",
-            Bash("xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git push'"),
-            Approvals.PersistentAnywhere("xargs", "git push"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "windows-powershell-host-fails-closed",
-            Bash("powershell -NoProfile -NonInteractive -Command 'git status'"),
-            Approvals.PersistentAnywhere("powershell", "git status"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "differently-cased-pwsh-host-fails-closed",
-            Bash("PWSH -NoProfile -NonInteractive -Command 'git status'"),
-            Approvals.PersistentAnywhere("PWSH", "git status"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "pwsh-dynamic-child-fails-closed",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'git $operation'"),
-            Approvals.PersistentAnywhere("pwsh", "git"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "pwsh-command-resolution-mutation-fails-closed",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Set-Alias git Remove-Item; git victim.txt'"),
-            Approvals.PersistentAnywhere("pwsh", "Set-Alias", "git"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "pwsh-unknown-script-block-receiver-fails-closed",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-CustomAction { Remove-Item victim.txt }'"),
-            Approvals.PersistentAnywhere("pwsh", "Invoke-CustomAction", "Remove-Item"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "pwsh-corpus-418-data-script-block-stays-strict",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output { Remove-Item target.txt }'"),
-            Approvals.PersistentAnywhere("pwsh", "Write-Output", "Remove-Item"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
-        Case(
-            "pwsh-executable-script-block-prompts-for-body",
-            Bash("pwsh -NoProfile -NonInteractive -Command '& { git push }'"),
-            Approvals.PersistentAnywhere("pwsh"),
-            ExpectedApproval.Require(
-                ["git push"],
-                approvalMatches: ["persistent:pwsh"])),
-        Case(
-            "pwsh-executable-script-block-hard-deny-wins",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Invoke-Command { netclaw daemon stop }'"),
-            Approvals.PersistentAnywhere("pwsh", "Invoke-Command", "netclaw daemon stop"),
+            "powershell7-stop-process-hard-deny",
+            PowerShell7("Stop-Process -Id 42"),
+            Approvals.PersistentAnywhere("Stop-Process"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
-            "pwsh-bash-decoding-cannot-hide-hard-deny",
-            Bash("pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #'''"),
-            Approvals.PersistentAnywhere("pwsh", "Write-Output", "netclaw daemon stop"),
+            "powershell7-elevated-process-hard-deny",
+            PowerShell7("Start-Process pwsh -Verb RunAs"),
+            Approvals.PersistentAnywhere("Start-Process"),
+            ExpectedApproval.Deny("hard_deny_privilege_escalation")),
+        Case(
+            "powershell7-elevated-process-abbreviated-quoted-hard-deny",
+            PowerShell7("Start-Process pwsh -Ve 'RunAs'"),
+            Approvals.PersistentAnywhere("Start-Process"),
+            ExpectedApproval.Deny("hard_deny_privilege_escalation")),
+        Case(
+            "powershell7-recursive-root-removal-hard-deny",
+            PowerShell7(@"Remove-Item C:\ -Recurse -Confirm:$false"),
+            Approvals.PersistentAnywhere("Remove-Item"),
+            ExpectedApproval.Deny("hard_deny_system_destructive")),
+        Case(
+            "powershell7-dynamic-command-fails-closed",
+            PowerShell7("& $command"),
+            Approvals.PersistentAnywhere("Get-ChildItem"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-treats-bash-payload-as-ordinary-argument",
+            PowerShell7("bash -lc 'Remove-Item victim.txt'"),
+            Approvals.None,
+            ExpectedApproval.Require(["bash"])),
+        Case(
+            "powershell7-bash-grant-covers-authored-external-command",
+            PowerShell7("bash -lc 'Remove-Item victim.txt'"),
+            Approvals.PersistentAnywhere("bash"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:bash")),
+        Case(
+            "powershell7-same-language-child-recurses-to-body",
+            PowerShell7("pwsh -NoProfile -Command 'Remove-Item victim.txt'"),
+            Approvals.None,
+            ExpectedApproval.Require(["Remove-Item"])),
+        Case(
+            "powershell7-alias-resolves-before-safe-verb-check",
+            PowerShell7("gci"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell7-local-redirect-keeps-safe-command",
+            PowerShell7(@"Get-Content .\input.txt > .\output.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell7-protected-path-denies-before-approval",
+            PowerShell7(@"Get-Content C:\protected\config\secret.txt"),
+            Approvals.PersistentAnywhere("Get-Content"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "powershell7-provider-drive-is-reviewed",
+            PowerShell7(@"Get-Content Env:\Path"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-incomplete-pipeline-fails-closed",
+            PowerShell7("Get-ChildItem |"),
+            Approvals.PersistentAnywhere("Get-ChildItem"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell51-safe-command-allows",
+            WindowsPowerShell51("Get-ChildItem"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell51-pipeline-chain-fails-closed",
+            WindowsPowerShell51("Get-ChildItem && Get-Content .\\a.txt"),
+            Approvals.PersistentAnywhere("Get-ChildItem", "Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell51-stop-process-hard-deny",
+            WindowsPowerShell51("Stop-Process -Name netclaw"),
+            Approvals.PersistentAnywhere("Stop-Process"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
             "env-nested-shell-prompts",
@@ -1369,10 +1402,21 @@ public static class ShellApprovalCases
         All.ToFrozenDictionary(testCase => testCase.Id, StringComparer.Ordinal);
 
     public static IEnumerable<TheoryDataRow<string>> Rows => All.Select(testCase =>
+        CreateRow(testCase));
+
+    public static IEnumerable<TheoryDataRow<string>> BashRows => All
+        .Where(testCase => testCase.Invocation.Host == ShellApprovalHost.Bash)
+        .Select(CreateRow);
+
+    public static IEnumerable<TheoryDataRow<string>> PowerShellRows => All
+        .Where(testCase => testCase.Invocation.Host != ShellApprovalHost.Bash)
+        .Select(CreateRow);
+
+    private static TheoryDataRow<string> CreateRow(ShellApprovalCase testCase) =>
         new TheoryDataRow<string>(testCase.Id)
             .WithTestDisplayName($"shell approval :: {testCase.Id}")
             .WithTrait("Disposition", testCase.Expected.Outcome.ToString())
-            .WithTrait("AllowReason", testCase.Expected.AllowReason?.ToString() ?? "NotAllowed"));
+            .WithTrait("AllowReason", testCase.Expected.AllowReason?.ToString() ?? "NotAllowed");
 
     internal static ShellApprovalCase Get(string id) => CasesById[id];
 
@@ -1386,12 +1430,12 @@ public static class ShellApprovalCases
             string.Empty,
             "`Personal.ApprovalPolicy.shell_execute`: `Approval`",
             string.Empty,
-            "| ID | Audience | Cwd | Interaction | Command | Approval state | Result | Reason | Candidates | Complex |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            "| ID | Host | Audience | Cwd | Interaction | Command | Approval state | Result | Reason | Candidates | Complex |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         };
 
         lines.AddRange(All.Select(testCase =>
-            $"| {testCase.Id} | {testCase.Invocation.Audience} | {testCase.Invocation.WorkingDirectory} | " +
+            $"| {testCase.Id} | {testCase.Invocation.Host} | {testCase.Invocation.Audience} | {testCase.Invocation.WorkingDirectory} | " +
             $"{(testCase.Invocation.Interactive ? "Interactive" : "Non-interactive")} | " +
             $"{Escape(testCase.Invocation.Command)} | " +
             $"{Escape(testCase.Approvals.Display)} | {testCase.Expected.Outcome} | " +
@@ -1414,6 +1458,20 @@ public static class ShellApprovalCases
         TrustAudience audience = TrustAudience.Personal,
         bool interactive = true)
         => new(command, workingDirectory, audience, interactive);
+
+    private static ShellApprovalInvocation PowerShell7(
+        string command,
+        ApprovalDirectoryShape workingDirectory = ApprovalDirectoryShape.Project,
+        TrustAudience audience = TrustAudience.Personal,
+        bool interactive = true)
+        => new(command, workingDirectory, audience, interactive, ShellApprovalHost.PowerShell7);
+
+    private static ShellApprovalInvocation WindowsPowerShell51(
+        string command,
+        ApprovalDirectoryShape workingDirectory = ApprovalDirectoryShape.Project,
+        TrustAudience audience = TrustAudience.Personal,
+        bool interactive = true)
+        => new(command, workingDirectory, audience, interactive, ShellApprovalHost.WindowsPowerShell51);
 
     private static string TemporaryFile(string fileName)
         => $"/netclaw-approval-external/{fileName}";

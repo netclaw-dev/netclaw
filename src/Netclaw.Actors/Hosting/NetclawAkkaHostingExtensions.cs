@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="NetclawAkkaHostingExtensions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -17,6 +17,7 @@ using Netclaw.Actors.Routing;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Hosting;
 
@@ -134,11 +135,18 @@ public static class NetclawAkkaHostingExtensions
 
     public static AkkaConfigurationBuilder WithBackgroundJobManager(
         this AkkaConfigurationBuilder builder)
+        => builder.WithBackgroundJobManager(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+    public static AkkaConfigurationBuilder WithBackgroundJobManager(
+        this AkkaConfigurationBuilder builder,
+        ShellExecutionEnvironment environment)
     {
+        ArgumentNullException.ThrowIfNull(environment);
         return builder.StartActors((system, registry, resolver) =>
         {
             var actor = system.ActorOf(
-                resolver.Props<BackgroundJobManagerActor>(),
+                resolver.Props<BackgroundJobManagerActor>(environment),
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(actor);
         });
@@ -180,13 +188,22 @@ public static class NetclawAkkaHostingExtensions
     public static AkkaConfigurationBuilder WithNetclawActors(
         this AkkaConfigurationBuilder builder,
         ReminderStorageOptions? reminderStorageOptions = null)
+        => builder.WithNetclawActors(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            reminderStorageOptions);
+
+    public static AkkaConfigurationBuilder WithNetclawActors(
+        this AkkaConfigurationBuilder builder,
+        ShellExecutionEnvironment environment,
+        ReminderStorageOptions? reminderStorageOptions = null)
     {
+        ArgumentNullException.ThrowIfNull(environment);
         return builder
             .WithModelCapabilityCache()
             .WithSessionManager()
             .WithToolApprovalActor()
             .WithReminderManager(reminderStorageOptions)
-            .WithBackgroundJobManager();
+            .WithBackgroundJobManager(environment);
     }
 
     /// <summary>

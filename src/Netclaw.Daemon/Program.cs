@@ -30,7 +30,6 @@ using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers;
-using ShellSyntaxTree;
 using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -128,6 +127,13 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     Directory.CreateDirectory(netclawTempDir);
     Environment.CurrentDirectory = netclawTempDir;
 
+    // Resolve inside each daemon generation. A soft restart is allowed to
+    // select a newly installed compatible host, but one running generation
+    // keeps this exact environment for parsing, authorization, and execution.
+    var shellResolution = await ShellExecutionEnvironmentResolver
+        .CreateDefault(TimeProvider.System)
+        .ResolveAsync(ShellExecutionEnvironmentResolver.DetectCurrentPlatform());
+
     var builder = WebApplication.CreateBuilder(args);
 
     // Register process-lifetime restart signal so services can trigger a restart
@@ -143,7 +149,13 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging(paths);
     builder.AddNetclawTelemetry();
-    ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel, daemonConfig);
+    ConfigureDaemonServices(
+        builder.Services,
+        builder.Configuration,
+        paths,
+        daemonLogLevel,
+        daemonConfig,
+        shellResolution);
 
     // Authentication — a PolicyScheme selector is the default scheme.
     // It routes to DeviceBearer when an Authorization: Bearer header is present,
@@ -197,6 +209,23 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     var app = builder.Build();
     crashMonitor.AttachServices(app.Services);
+
+    var startupLogger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("Netclaw.Startup");
+    startupLogger.LogInformation(
+        "Selected native shell {Executable} at {ExecutablePath} with {Grammar} grammar and {Dialect} dialect.",
+        shellResolution.Environment.ExecutableName,
+        shellResolution.Environment.ExecutablePath,
+        shellResolution.Environment.Grammar,
+        shellResolution.Environment.PowerShellDialect?.ToString() ?? "not-applicable");
+    if (shellResolution.FallbackReason is { } fallbackReason)
+    {
+        startupLogger.LogWarning(
+            "Selected Windows PowerShell 5.1 fallback because {FallbackReason}; rejected preferred version: {RejectedVersion}.",
+            fallbackReason,
+            shellResolution.RejectedPreferredVersion?.ToString() ?? "not-found");
+    }
 
     if (daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
     {
@@ -387,8 +416,12 @@ static void ConfigureDaemonServices(
     IConfigurationManager configuration,
     NetclawPaths paths,
     LogLevel daemonLogLevel,
-    DaemonConfig daemonConfig)
+    DaemonConfig daemonConfig,
+    ShellEnvironmentResolution shellResolution)
 {
+    var shellEnvironment = shellResolution.Environment;
+    services.AddSingleton(shellEnvironment);
+
     // Daemon bind address and exposure mode (computed once in RunDaemonAsync)
     services.AddSingleton(daemonConfig);
 
@@ -618,7 +651,11 @@ static void ConfigureDaemonServices(
         paths.LockFilePath,
         paths.RestartManifestPath,
     };
-    var toolPathPolicy = new ToolPathPolicy(writeDenyList, readDenyList, shellIndicatorList);
+    var toolPathPolicy = new ToolPathPolicy(
+        shellEnvironment,
+        writeDenyList,
+        readDenyList,
+        shellIndicatorList);
     services.AddSingleton(toolPathPolicy);
 
     // Load operator-authored hard-deny overrides (additive only — see
@@ -630,10 +667,13 @@ static void ConfigureDaemonServices(
     var hardDenyOverrides = hardDenyOverridesLoader.Load(paths.HardDenyOverridesPath);
     services.AddSingleton(hardDenyOverridesLoader);
 
-    var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns, hardDenyOverrides);
+    var shellCommandPolicy = new ShellCommandPolicy(
+        shellEnvironment,
+        toolConfig.HardDenyPatterns,
+        hardDenyOverrides);
     services.AddSingleton(shellCommandPolicy);
 
-    services.AddShellParser();
+    services.AddShellParser(shellEnvironment);
 
     // Subagent timeout configuration
     var subAgentConfig = configuration.GetSection("SubAgents")
@@ -671,11 +711,8 @@ static void ConfigureDaemonServices(
     // list goes through code review and a daemon release, not a config
     // edit, so the agent has no path to extend its own auto-pass surface
     // at runtime.
-    var safeVerbs = SafeVerbLoader.Load();
+    var safeVerbs = SafeVerbLoader.Load(shellEnvironment.Platform == ShellPlatform.Windows);
     services.AddSingleton(safeVerbs);
-
-    var bashParser = new BashParser();
-    services.AddSingleton<IShellParser>(bashParser);
 
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,
@@ -1056,7 +1093,7 @@ static void ConfigureDaemonServices(
             : null;
 
         akkaBuilder.WithNetclawSerialization();
-        akkaBuilder.WithNetclawActors(reminderStorage);
+        akkaBuilder.WithNetclawActors(shellEnvironment, reminderStorage);
         akkaBuilder.WithSessionLogDispatcher(paths.SessionLogsDirectory, sp.GetRequiredService<TimeProvider>());
         akkaBuilder.WithSignalRGateway();
         akkaBuilder.WithDailyStatsActor();

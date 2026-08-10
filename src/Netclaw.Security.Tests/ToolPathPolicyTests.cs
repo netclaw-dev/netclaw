@@ -1,8 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolPathPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
@@ -66,16 +67,16 @@ public sealed class ToolPathPolicyTests
         Assert.False(policy.CommandReferencesDeniedPath("echo hello"));
     }
 
-    [SlopwatchSuppress("SW001", "This regression verifies POSIX Bash decoding before PowerShell child path policy.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The PowerShell child wrapper requires the POSIX Bash host.")]
-    public void CommandReferencesDeniedPath_checks_decoded_power_shell_child_path()
+    [Fact]
+    public void CommandReferencesDeniedPath_checks_native_power_shell_path()
     {
-        var policy = new ToolPathPolicy(["/protected/config"]);
-        const string command =
-            "pwsh -NoProfile -NonInteractive -Command 'Get-Content /protected/con\"fig/file.txt\"'";
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var policy = new ToolPathPolicy(environment, [@"C:\protected\config"]);
+        const string command = @"Get-Content C:\protected\config\file.txt";
 
-        Assert.DoesNotContain("/protected/config", command, StringComparison.Ordinal);
-        Assert.True(policy.CommandReferencesDeniedPath(command, "/work"));
+        Assert.True(policy.CommandReferencesDeniedPath(command, @"C:\work"));
     }
 
     [Fact]
@@ -291,49 +292,49 @@ public sealed class ToolPathPolicyTests
             switch (shape)
             {
                 case SymlinkTraversalShape.SingleSymlinkedDirectory:
-                {
-                    var linkDir = Path.Combine(scratch, "link");
-                    Directory.CreateSymbolicLink(linkDir, deniedDir);
-                    createdLinks.Add(linkDir);
+                    {
+                        var linkDir = Path.Combine(scratch, "link");
+                        Directory.CreateSymbolicLink(linkDir, deniedDir);
+                        createdLinks.Add(linkDir);
 
-                    // Lexically this path lives in scratch/link, outside any
-                    // denied root — only segment-walk symlink resolution
-                    // catches it.
-                    viaLink = Path.Combine(linkDir, "netclaw.json");
-                    break;
-                }
+                        // Lexically this path lives in scratch/link, outside any
+                        // denied root — only segment-walk symlink resolution
+                        // catches it.
+                        viaLink = Path.Combine(linkDir, "netclaw.json");
+                        break;
+                    }
 
                 case SymlinkTraversalShape.MultiDepthSymlinkChain:
-                {
-                    // linkA -> linkB -> deniedDir. A resolver that only
-                    // follows one hop would stop at linkB; the walk must
-                    // reach the final real target.
-                    var linkB = Path.Combine(scratch, "linkB");
-                    var linkA = Path.Combine(scratch, "linkA");
-                    Directory.CreateSymbolicLink(linkB, deniedDir);
-                    Directory.CreateSymbolicLink(linkA, linkB);
-                    createdLinks.Add(linkB);
-                    createdLinks.Add(linkA);
+                    {
+                        // linkA -> linkB -> deniedDir. A resolver that only
+                        // follows one hop would stop at linkB; the walk must
+                        // reach the final real target.
+                        var linkB = Path.Combine(scratch, "linkB");
+                        var linkA = Path.Combine(scratch, "linkA");
+                        Directory.CreateSymbolicLink(linkB, deniedDir);
+                        Directory.CreateSymbolicLink(linkA, linkB);
+                        createdLinks.Add(linkB);
+                        createdLinks.Add(linkA);
 
-                    viaLink = Path.Combine(linkA, "netclaw.json");
-                    break;
-                }
+                        viaLink = Path.Combine(linkA, "netclaw.json");
+                        break;
+                    }
 
                 case SymlinkTraversalShape.DotDotTraversalAfterResolvedLink:
-                {
-                    var linkDir = Path.Combine(scratch, "link");
-                    Directory.CreateSymbolicLink(linkDir, deniedDir);
-                    createdLinks.Add(linkDir);
+                    {
+                        var linkDir = Path.Combine(scratch, "link");
+                        Directory.CreateSymbolicLink(linkDir, deniedDir);
+                        createdLinks.Add(linkDir);
 
-                    // "nested" need not exist: Path.GetFullPath collapses the
-                    // ".." lexically before any symlink is resolved, leaving
-                    // "link/netclaw.json" — the link segment itself survives
-                    // the collapse untouched, so resolution still lands
-                    // inside deniedDir. Locks in that a decoy ".." placed
-                    // after the link cannot be used to dodge the walk.
-                    viaLink = Path.Combine(linkDir, "nested", "..", "netclaw.json");
-                    break;
-                }
+                        // "nested" need not exist: Path.GetFullPath collapses the
+                        // ".." lexically before any symlink is resolved, leaving
+                        // "link/netclaw.json" — the link segment itself survives
+                        // the collapse untouched, so resolution still lands
+                        // inside deniedDir. Locks in that a decoy ".." placed
+                        // after the link cannot be used to dodge the walk.
+                        viaLink = Path.Combine(linkDir, "nested", "..", "netclaw.json");
+                        break;
+                    }
 
                 default:
                     throw new ArgumentOutOfRangeException(nameof(shape), shape, null);

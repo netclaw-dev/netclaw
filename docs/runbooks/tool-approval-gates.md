@@ -123,8 +123,11 @@ When the agent calls a tool in `Approval` mode:
 
 ### Command patterns
 
-For `shell_execute`, patterns are verb-chain prefixes extracted by tokenizing
-the command:
+For `shell_execute`, patterns come from the parser for the daemon's selected
+native shell environment. Linux and macOS use Bash. Windows uses a probed
+native PowerShell host: compatible PowerShell 7.6 is preferred, with Windows
+PowerShell 5.1 as the fallback. The exact executable, grammar, and dialect are
+shown in Personal session working context.
 
 | Command | Pattern |
 |---------|---------|
@@ -143,6 +146,21 @@ For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
 independently. If any segment is unapproved, all unapproved patterns are
 batched into one prompt.
 
+The selected host grammar is also the language boundary. Under Bash,
+`pwsh -Command 'Get-Content ./a.txt'` is an ordinary external `pwsh` command;
+the payload is not separately parsed as PowerShell. Under native PowerShell,
+`bash -c 'cat ./a.txt'` is likewise an ordinary external `bash` command.
+Same-language static child hosts can expose nested command occurrences when
+ShellSyntaxTree proves them.
+
+PowerShell 7 and Windows PowerShell 5.1 are analyzed as distinct dialects.
+In particular, `&&` and `||` are unresolved under 5.1 and cannot create a
+persistent approval candidate or receive the read-only safe-verb shortcut.
+Incomplete commands, dynamic command identities, and non-filesystem provider
+drives also remain one-time-only. Netclaw does not claim knowledge of ambient
+profiles, modules, inherited variables, executable lookup, or external script
+contents.
+
 For most **non-shell tools** (MCP tools, `file_read`, etc.), approval is at the
 tool-name level.
 
@@ -157,9 +175,10 @@ path-scoped patterns (for example,
 Demonstrably read-only verbs auto-run with no prompt when invoked inside a
 trusted zone (`session_dir`, or `project_dir` for Personal/Team). The bundled
 safe-verb lists (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover file
-readers (`ls`, `grep`, `cat`), system/info verbs (`date`, `whoami`, `uname`,
-`uptime`), and read-only `git`/`gh` queries (`git status`, `git log`,
-`gh pr view`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
+readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
+`Get-Content`, and `Select-String` on PowerShell), system/info verbs (`date`,
+`whoami`, `uname`, `uptime`), and read-only `git`/`gh` queries (`git status`,
+`git log`, `gh pr view`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
 command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
 (`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
 `ps`) are never auto-allowed — the trusted-zone gate scopes verbs that act on

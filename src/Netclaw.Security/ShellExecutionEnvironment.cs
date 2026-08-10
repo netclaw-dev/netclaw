@@ -245,3 +245,11 @@ public sealed class ShellExecutionEnvironment
 
     private static bool IsWindowsSeparator(char value) => value is '\\' or '/';
 }
+
+internal static class ShellExecutionEnvironmentDefaults
+{
+    // Compatibility-only constructors in Netclaw.Security retain the historical
+    // Bash contract. Daemon composition always supplies its resolved environment.
+    internal static ShellExecutionEnvironment Bash { get; } =
+        ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+}

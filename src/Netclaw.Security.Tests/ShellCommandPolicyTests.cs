@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
@@ -132,13 +133,79 @@ public sealed class ShellCommandPolicyTests
     }
 
     [Fact]
-    public void Denies_power_shell_child_hard_deny_command()
+    public void Bash_does_not_interpret_power_shell_child_source()
     {
         var decision = _policy.EvaluateBash(
             "pwsh -NoProfile -NonInteractive -Command 'netclaw daemon stop'");
 
+        Assert.True(decision.Allowed);
+    }
+
+    [Fact]
+    public void Native_power_shell_denies_same_language_child_hard_deny_command()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var policy = new ShellCommandPolicy(environment);
+
+        var decision = policy.Evaluate(
+            "pwsh -NoProfile -Command 'netclaw daemon stop'",
+            @"C:\work");
+
         Assert.False(decision.Allowed);
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
+    }
+
+    [Theory]
+    [InlineData("Start-Process pwsh -Verb RunAs")]
+    [InlineData("Start-Process pwsh -Ve RunAs")]
+    [InlineData("Start-Process pwsh -V 'RunAs'")]
+    [InlineData("Start-Process pwsh -Verb:\"RunAs\"")]
+    [InlineData("saps pwsh -Verb RunAs")]
+    public void Native_power_shell_denies_elevation_parameter_forms(string command)
+    {
+        var policy = PowerShellPolicy();
+
+        var decision = policy.Evaluate(command, @"C:\work");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(DenyCategory.PrivilegeEscalation, decision.DenyCategory);
+    }
+
+    [Fact]
+    public void Native_power_shell_does_not_treat_verbose_as_the_verb_parameter()
+    {
+        var decision = PowerShellPolicy().Evaluate(
+            "Start-Process pwsh -Verbose RunAs",
+            @"C:\work");
+
+        Assert.True(decision.Allowed);
+    }
+
+    [Theory]
+    [InlineData(@"Remove-Item C:\ -Recurse")]
+    [InlineData(@"Remove-Item 'C:\' -Re")]
+    [InlineData(@"Remove-Item -LiteralPath FileSystem::C:\ -R -Confirm:$false")]
+    [InlineData(@"Remove-Item -Path:C:\ -Recurse")]
+    [InlineData(@"ri C:\ -Recurse")]
+    public void Native_power_shell_denies_recursive_root_removal_without_force(string command)
+    {
+        var decision = PowerShellPolicy().Evaluate(command, @"C:\work");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(DenyCategory.SystemDestructive, decision.DenyCategory);
+    }
+
+    [Theory]
+    [InlineData(@"Remove-Item C:\ -Force")]
+    [InlineData(@"Remove-Item C:\ -Recurse:$false -Force")]
+    public void Native_power_shell_does_not_categorically_deny_non_recursive_root_removal(
+        string command)
+    {
+        var decision = PowerShellPolicy().Evaluate(command, @"C:\work");
+
+        Assert.True(decision.Allowed);
     }
 
     [Fact]
@@ -179,4 +246,9 @@ public sealed class ShellCommandPolicyTests
         var decision = policy.Evaluate("docker build -t myapp .");
         Assert.True(decision.Allowed);
     }
+
+    private static ShellCommandPolicy PowerShellPolicy()
+        => new(ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7));
 }

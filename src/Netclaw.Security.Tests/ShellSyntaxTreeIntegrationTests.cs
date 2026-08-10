@@ -32,7 +32,26 @@ public sealed class ShellSyntaxTreeIntegrationTests
         using var provider = services.BuildServiceProvider();
         var parser = provider.GetRequiredService<IShellParser>();
 
-        Assert.IsType<BashParser>(parser);
+        var result = parser.Parse("git status");
+        Assert.False(result.IsUnparseable);
+        Assert.Equal("git status", Assert.Single(result.Commands).Clause.Verb.Joined);
+    }
+
+    [Fact]
+    public void Explicit_environment_DI_registration_uses_selected_power_shell_dialect()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var services = new ServiceCollection();
+        services.AddShellParser(environment);
+
+        using var provider = services.BuildServiceProvider();
+        var parser = provider.GetRequiredService<IShellParser>();
+
+        var result = parser.Parse("Get-ChildItem && Get-Content .\\input.txt");
+        Assert.False(result.IsUnparseable);
+        Assert.Equal(2, result.Commands.Count);
     }
 
     [Fact]

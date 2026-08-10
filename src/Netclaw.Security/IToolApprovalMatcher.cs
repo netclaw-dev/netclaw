@@ -101,19 +101,34 @@ public interface IToolApprovalMatcher
 }
 
 /// <summary>
-/// Shell-specific approval matcher. Verb-chain extraction stops at the first
-/// flag, path, or URL token; <c>&amp;&amp;</c> / <c>||</c> / <c>;</c> split
-/// approval units while <c>|</c> stays inside one unit; <c>bash -c</c> /
-/// <c>sh -c</c> wrappers recurse into the inner command.
+/// Shell-specific approval matcher bound to one canonical grammar. Approval
+/// units and same-language child occurrences come from the selected
+/// ShellSyntaxTree parser; unresolved syntax never creates a persistent grant.
 /// </summary>
+public sealed record ShellApprovalAnalysis(
+    IReadOnlyList<string> Patterns,
+    IReadOnlyList<ApprovalCandidate> Candidates,
+    string DisplayText,
+    bool IsMessy);
+
 public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
-    private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
+    private readonly ShellCommandAnalyzer _analyzer;
 
-    private static readonly char[] WindowsCommandTokenSeparators =
-        [' ', '\t', '\r', '\n', '\'', '"', '&', '|', '(', ')', '<', '>', ';', '=', ','];
+    public ShellApprovalMatcher()
+        : this(ShellExecutionEnvironmentDefaults.Bash)
+    {
+    }
+
+    public ShellApprovalMatcher(ShellExecutionEnvironment environment)
+    {
+        Environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _analyzer = new ShellCommandAnalyzer(environment);
+    }
+
+    public ShellExecutionEnvironment Environment { get; }
 
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
@@ -122,42 +137,37 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         => true;
 
     public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
+        => AnalyzeInvocation(toolName, arguments).Patterns;
+
+    public ShellApprovalAnalysis AnalyzeInvocation(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        ShellCommandAnalysis? analysis = null)
     {
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
-            return [];
+            return new ShellApprovalAnalysis([], [], "(empty command)", IsMessy: false);
 
         var workingDirectory = GetWorkingDirectory(arguments);
+        analysis ??= _analyzer.Analyze(command, workingDirectory);
+        ValidateAnalysis(analysis, command, workingDirectory);
+
         var patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // POSIX commands route through BashParser so the approval units
-        // match the clause decomposition ExtractCandidates already uses — in
-        // particular a bare newline separates statements, so a multi-line
-        // command yields one unit per statement. Windows keeps the legacy
-        // ShellTokenizer path — ShellSyntaxTree is bash-only.
-        if (!OperatingSystem.IsWindows())
+        foreach (var unit in ExtractApprovalUnitsViaAnalysis(analysis))
         {
-            foreach (var unit in ExtractApprovalUnitsViaBashAnalysis(command, workingDirectory))
-            {
-                var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
-                if (!string.IsNullOrEmpty(normalized))
-                    patterns.Add(normalized);
-            }
-
-            return patterns.ToList();
-        }
-
-        if (ContainsUnanalyzedPowerShellHost(command))
-            return [];
-
-        TraverseApprovalUnits(command, unit =>
-        {
-            var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
+            var normalized = ShellTokenizer.NormalizeApprovalUnit(
+                unit,
+                workingDirectory,
+                Environment.PathStyle);
             if (!string.IsNullOrEmpty(normalized))
                 patterns.Add(normalized);
-        });
+        }
 
-        return patterns.ToList();
+        return new ShellApprovalAnalysis(
+            patterns.ToList(),
+            ExtractCandidatesViaAnalysis(analysis),
+            FormatForDisplay(command, analysis),
+            IsMessy(analysis));
     }
 
     public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
@@ -167,61 +177,38 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             .ToList();
 
     public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        var command = GetCommand(arguments);
-        if (string.IsNullOrWhiteSpace(command))
-            return [];
+        => AnalyzeInvocation(toolName, arguments).Candidates;
 
-        // POSIX commands route through BashParser so we pick up the parser's
-        // cd-in-compound cwd attribution. The parser walks `cd X && verb`,
-        // `bash -c "cd X && verb"`, and multi-step `cd A && cd B && verb`
-        // chains; the candidate's directory inherits the latest cd target
-        // when the clause itself has no anchored path arg. Windows keeps
-        // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
-        if (!OperatingSystem.IsWindows())
-            return ExtractCandidatesViaBashAnalysis(command, GetWorkingDirectory(arguments));
-
-        if (ContainsUnanalyzedPowerShellHost(command))
-            return [];
-
-        var seen = new HashSet<(string, string?)>();
-        var candidates = new List<ApprovalCandidate>();
-        TraverseApprovalUnits(command, unit =>
-        {
-            var verb = ShellTokenizer.ExtractVerbChain(unit);
-            if (string.IsNullOrEmpty(verb))
-                return;
-
-            var directory = ShellTokenizer.ExtractFirstPathArgument(unit);
-            var key = (verb.ToLowerInvariant(), directory);
-            if (seen.Add(key))
-                candidates.Add(new ApprovalCandidate(verb, directory));
-        });
-
-        return candidates;
-    }
-
-    /// <summary>
-    /// Returns null when the parser cannot resolve the complete command.
-    /// Callers then offer only one-time approval or show the raw command.
-    /// </summary>
-    private static ShellCommandAnalysis? TryAnalyzeCommand(
-        string command,
-        string? workingDirectory = null)
-    {
-        var result = Analyzer.Analyze(command, workingDirectory);
-        return result.Failure == ShellAnalysisFailure.None && result.Commands.Count > 0
-            ? result
-            : null;
-    }
-
-    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashAnalysis(
+    private void ValidateAnalysis(
+        ShellCommandAnalysis analysis,
         string command,
         string? workingDirectory)
     {
-        var result = TryAnalyzeCommand(command, workingDirectory);
-        if (result is null || result.HasDynamicSyntax)
+        if (!ReferenceEquals(analysis.Environment, Environment))
+            throw new ArgumentException(
+                "The command analysis belongs to another shell environment.",
+                nameof(analysis));
+        if (!string.Equals(analysis.Source, command, StringComparison.Ordinal)
+            || !string.Equals(
+                analysis.WorkingDirectory,
+                workingDirectory,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The command analysis does not match the submitted source and working directory.",
+                nameof(analysis));
+        }
+    }
+
+    private IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaAnalysis(
+        ShellCommandAnalysis result)
+    {
+        if (!result.IsResolved
+            || result.HasDynamicSyntax
+            || HasUnscopedPowerShellProviderOperand(result))
             return [];
+
+        var workingDirectory = result.WorkingDirectory;
 
         // The prompt groups a pipe as one approval unit. Authorization still
         // checks each clause so an unsafe tail cannot hide behind a safe head.
@@ -254,7 +241,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             var directories = ResolveCommandDirectories(
                 occurrence,
                 isSideEffectVerb,
-                workingDirectory);
+                workingDirectory,
+                Environment.PathStyle);
             if (directories is null)
                 return [];
 
@@ -272,7 +260,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     private static IReadOnlyList<string?>? ResolveCommandDirectories(
         ShellSyntaxTree.CommandOccurrence occurrence,
         bool isSideEffectVerb,
-        string? workingDirectory)
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -290,12 +279,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             foreach (var arg in clause.Args)
             {
-                if (arg.IsCwdAttribution || !IsAuthorizationPathArg(arg, clauseWorkingDirectory))
+                if (arg.IsCwdAttribution
+                    || !IsAuthorizationPathArg(arg, clauseWorkingDirectory, pathStyle))
                     continue;
 
                 if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
                 {
-                    var coveringDirectory = ResolveGlobCoveringDirectory(arg, clauseWorkingDirectory);
+                    var coveringDirectory = ResolveGlobCoveringDirectory(
+                        arg,
+                        clauseWorkingDirectory,
+                        pathStyle);
                     if (coveringDirectory is null)
                         return null;
 
@@ -308,13 +301,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 if (string.IsNullOrWhiteSpace(arg.Resolved))
                     return null;
 
-                directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved));
+                directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved, pathStyle));
             }
         }
 
         foreach (var redirect in occurrence.Redirects)
         {
-            var redirectDirectories = ResolveRedirectDirectories(redirect);
+            var redirectDirectories = ResolveRedirectDirectories(redirect, pathStyle);
             if (redirectDirectories is null)
                 return null;
 
@@ -356,9 +349,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static string? ResolveGlobCoveringDirectory(
         ShellSyntaxTree.Arg arg,
-        string? workingDirectory)
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
     {
-        if (ShellGlobPath.HasUnresolvedDescendantScope(arg))
+        if (ShellGlobPath.HasUnresolvedDescendantScope(arg, pathStyle))
             return null;
 
         var path = arg.Raw.Trim();
@@ -384,15 +378,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
 
         var staticPrefix = path[..firstGlob];
-        var separator = staticPrefix.LastIndexOf('/');
-        var coveringPath = separator switch
-        {
-            < 0 => ".",
-            0 => "/",
-            _ => staticPrefix[..separator]
-        };
+        var separator = pathStyle == ShellPathStyle.Windows
+            ? staticPrefix.LastIndexOfAny(['/', '\\'])
+            : staticPrefix.LastIndexOf('/');
+        var coveringPath = CoveringPath(staticPrefix, separator, pathStyle);
 
-        var coveringDirectory = ShellTokenizer.NormalizePathToken(coveringPath, workingDirectory);
+        var coveringDirectory = ShellTokenizer.NormalizePathToken(
+            coveringPath,
+            workingDirectory,
+            pathStyle);
         if (coveringDirectory is null
             || ContainsSymlinkEntry(coveringDirectory))
         {
@@ -400,6 +394,27 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return coveringDirectory;
+    }
+
+    private static string CoveringPath(
+        string staticPrefix,
+        int separator,
+        ShellPathStyle pathStyle)
+    {
+        if (separator < 0)
+            return ".";
+        if (separator == 0)
+            return staticPrefix[..1];
+        if (pathStyle == ShellPathStyle.Windows
+            && separator == 2
+            && staticPrefix.Length >= 3
+            && char.IsAsciiLetter(staticPrefix[0])
+            && staticPrefix[1] == ':')
+        {
+            return staticPrefix[..3];
+        }
+
+        return staticPrefix[..separator];
     }
 
     private static bool ContainsSymlinkEntry(string directory)
@@ -433,7 +448,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static bool IsAuthorizationPathArg(
         ShellSyntaxTree.Arg arg,
-        string? workingDirectory)
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
     {
         if (!arg.IsPath)
             return false;
@@ -446,7 +462,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return false;
         }
 
-        if (ShellTokenizer.IsPathToken(arg.Raw) || !arg.Raw.Contains('/', StringComparison.Ordinal))
+        var containsSeparator = pathStyle == ShellPathStyle.Windows
+            ? arg.Raw.IndexOfAny(['/', '\\']) >= 0
+            : arg.Raw.Contains('/', StringComparison.Ordinal);
+        if (ShellTokenizer.IsPathToken(arg.Raw) || !containsSeparator)
             return true;
 
         // An internal slash can also name a ref such as feature/x. Native
@@ -522,7 +541,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : null;
 
     private static IReadOnlyList<string>? ResolveRedirectDirectories(
-        ShellSyntaxTree.RedirectAnalysis redirect)
+        ShellSyntaxTree.RedirectAnalysis redirect,
+        ShellPathStyle pathStyle)
     {
         if (!redirect.IsPathRelevant)
             return [];
@@ -552,48 +572,96 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrWhiteSpace(target))
                 return null;
 
-            try
-            {
-                var normalizedTarget = PathUtility.Normalize(target);
-                var pathRoot = Path.GetPathRoot(normalizedTarget);
-                if (string.IsNullOrWhiteSpace(pathRoot)
-                    || PathUtility.ContainsSymlinkSegment(pathRoot, normalizedTarget))
-                {
-                    return null;
-                }
-
-                directories.Add(Path.GetDirectoryName(normalizedTarget) ?? normalizedTarget);
-            }
-            catch (Exception ex) when (ex is ArgumentException
-                                       or IOException
-                                       or NotSupportedException
-                                       or PathTooLongException
-                                       or UnauthorizedAccessException
-                                       or System.Security.SecurityException)
-            {
+            var directory = GetRedirectDirectory(target, pathStyle);
+            if (directory is null)
                 return null;
-            }
+
+            if (UsesHostPathStyle(pathStyle) && HasUnsafeHostPath(target))
+                return null;
+
+            directories.Add(directory);
         }
 
         return directories;
     }
 
+    private static string? GetRedirectDirectory(string target, ShellPathStyle pathStyle)
+    {
+        if (!IsRootedForPathStyle(target, pathStyle))
+            return null;
+
+        var separator = pathStyle == ShellPathStyle.Windows
+            ? target.LastIndexOfAny(['/', '\\'])
+            : target.LastIndexOf('/');
+        if (separator < 0)
+            return null;
+        if (separator == 0)
+            return target[..1];
+        if (pathStyle == ShellPathStyle.Windows
+            && separator == 2
+            && char.IsAsciiLetter(target[0])
+            && target[1] == ':')
+        {
+            return target[..3];
+        }
+
+        return target[..separator];
+    }
+
+    private static bool IsRootedForPathStyle(string path, ShellPathStyle pathStyle)
+        => pathStyle switch
+        {
+            ShellPathStyle.Posix => path.Length > 0 && path[0] == '/',
+            ShellPathStyle.Windows => (path.Length >= 3
+                                       && char.IsAsciiLetter(path[0])
+                                       && path[1] == ':'
+                                       && path[2] is '/' or '\\')
+                                      || (path.Length >= 5
+                                          && path[0] is '/' or '\\'
+                                          && path[1] is '/' or '\\'),
+            _ => false
+        };
+
+    private static bool UsesHostPathStyle(ShellPathStyle pathStyle)
+        => pathStyle == ShellPathStyle.Windows
+            ? OperatingSystem.IsWindows()
+            : !OperatingSystem.IsWindows();
+
+    private static bool HasUnsafeHostPath(string target)
+    {
+        try
+        {
+            var pathRoot = Path.GetPathRoot(target);
+            return string.IsNullOrWhiteSpace(pathRoot)
+                   || PathUtility.ContainsSymlinkSegment(pathRoot, target);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or IOException
+                                   or NotSupportedException
+                                   or PathTooLongException
+                                   or UnauthorizedAccessException
+                                   or System.Security.SecurityException)
+        {
+            return true;
+        }
+    }
+
     /// <summary>
-    /// Splits a POSIX command into approval-unit strings via BashParser:
+    /// Splits the environment-bound command analysis into approval-unit strings:
     /// one unit per statement, with consecutive <c>|</c> clauses folded into
     /// the same unit so <c>cat x | wc -l</c> stays a single decision.
     /// Returns an empty list for messy, unparseable, or parser-rejected
-    /// commands — mirroring the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
+    /// commands. This result matches the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
     /// empty-result contract so the prompt builder offers only Once/Deny.
     /// </summary>
-    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashAnalysis(
-        string command,
-        string? workingDirectory)
+    private IReadOnlyList<string> ExtractApprovalUnitsViaAnalysis(
+        ShellCommandAnalysis result)
     {
         // The parser is the sole structural authority. Dynamic or unresolved
         // syntax cannot produce a persistent approval unit.
-        var result = TryAnalyzeCommand(command, workingDirectory);
-        if (result is null || result.HasDynamicSyntax)
+        if (!result.IsResolved
+            || result.HasDynamicSyntax
+            || HasUnscopedPowerShellProviderOperand(result))
             return [];
 
         try
@@ -780,7 +848,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// internal whitespace, stays in the pattern, and normalizes the same as
     /// its unquoted form.</item>
     /// <item>A path arg is exempt. Its directory is authorization state that
-    /// <see cref="ExtractCandidatesViaBashAnalysis"/> resolves separately from
+    /// candidate extraction resolves separately from
     /// the same parsed <c>Arg</c>, so a quoted path with a space
     /// (<c>cat "my file.txt"</c>) keeps its scope. Only a value operand, never
     /// a path, drops here.</item>
@@ -879,26 +947,24 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => AnalyzeInvocation(toolName, arguments).IsMessy;
+
+    private bool IsMessy(ShellCommandAnalysis analysis)
     {
-        var command = GetCommand(arguments);
-        if (string.IsNullOrWhiteSpace(command))
-            return false;
-
-        if (OperatingSystem.IsWindows())
-        {
-            return ContainsUnanalyzedPowerShellHost(command)
-                || ShellTokenizer.IsMessyCompoundCommand(command);
-        }
-
-        var workingDirectory = GetWorkingDirectory(arguments);
-        var analysis = TryAnalyzeCommand(command, workingDirectory);
-        if (analysis is null || analysis.HasDynamicSyntax)
+        if (!analysis.IsResolved
+            || analysis.HasDynamicSyntax
+            || HasUnscopedPowerShellProviderOperand(analysis))
             return true;
+
+        var workingDirectory = analysis.WorkingDirectory;
 
         if (analysis.Commands
             .SelectMany(static command => command.Clause.Args)
             .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
-            .Any(arg => ResolveGlobCoveringDirectory(arg, workingDirectory) is null))
+            .Any(arg => ResolveGlobCoveringDirectory(
+                arg,
+                workingDirectory,
+                Environment.PathStyle) is null))
         {
             return true;
         }
@@ -907,26 +973,61 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 ResolveCommandDirectories(
                     command,
                     IsSideEffectCommand(command),
-                    workingDirectory) is null))
+                    workingDirectory,
+                    Environment.PathStyle) is null))
         {
             return true;
         }
 
-        return analysis.Commands
-            .SelectMany(static command => command.Redirects)
-            .Any(static redirect => ResolveRedirectDirectories(redirect) is null);
+        return false;
     }
 
-    internal static bool ContainsUnanalyzedPowerShellHost(string command)
-        // cmd.exe can place a complete child command inside quotes and can
-        // escape command-name characters with a caret. The legacy tokenizer
-        // does not model those rules, so use conservative word detection.
-        => command.Replace("^", string.Empty, StringComparison.Ordinal)
-            .Replace("\"", string.Empty, StringComparison.Ordinal)
-            .Split(
-                WindowsCommandTokenSeparators,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(ShellCommandAnalyzer.IsPowerShellHostLike);
+    private bool HasUnscopedPowerShellProviderOperand(ShellCommandAnalysis analysis)
+    {
+        if (Environment.Grammar != ShellGrammar.PowerShell)
+            return false;
+
+        return analysis.Commands
+            .SelectMany(static occurrence => occurrence.Clause.Args)
+            .Any(static arg => LooksLikeNonFileSystemProviderPath(arg.Raw));
+    }
+
+    private static bool LooksLikeNonFileSystemProviderPath(string raw)
+    {
+        var value = raw.Trim();
+        if (value.Length >= 2 && value[0] is '\'' or '"' && value[^1] == value[0])
+            value = value[1..^1];
+
+        var providerSeparator = value.IndexOf("::", StringComparison.Ordinal);
+        if (providerSeparator > 0)
+        {
+            var provider = value[..providerSeparator];
+            return !provider.Equals("FileSystem", StringComparison.OrdinalIgnoreCase)
+                   && !provider.EndsWith(
+                       "\\FileSystem",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        var colon = value.IndexOf(':', StringComparison.Ordinal);
+        if (colon <= 1 || !char.IsAsciiLetter(value[0]))
+            return false;
+
+        // URI schemes are data operands, not PowerShell provider drives.
+        if (value.Length > colon + 2
+            && value[colon + 1] == '/'
+            && value[colon + 2] == '/')
+        {
+            return false;
+        }
+
+        for (var i = 1; i < colon; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]) && value[i] is not ('_' or '-'))
+                return false;
+        }
+
+        return true;
+    }
 
     private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence)
     {
@@ -938,11 +1039,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        var command = GetCommand(arguments);
-        if (string.IsNullOrWhiteSpace(command))
-            return "(empty command)";
+        => AnalyzeInvocation(toolName, arguments).DisplayText;
 
+    private string FormatForDisplay(
+        string command,
+        ShellCommandAnalysis analysis)
+    {
         // Fast path: a command with no embedded line break renders verbatim.
         if (!ContainsLineBreak(command))
             return command;
@@ -950,15 +1052,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // Issue #1402: channel renderers embed DisplayText in single-line
         // code fences, so a multi-line quoted string (a message body, an
         // inline script) dumped verbatim corrupts the approval prompt. On
-        // POSIX, rebuild a one-line view from the parse tree with multi-line
-        // args summarized by size; Windows flattens — ShellSyntaxTree is
-        // bash-only. Heredoc and here-string fallbacks encode line breaks
+        // either grammar, rebuild a one-line view from the environment-bound
+        // parse tree with multi-line args summarized by size. Heredoc and
+        // here-string fallbacks encode line breaks
         // before the trailing replacement so command boundaries stay visible.
         // The trailing replacement catches any other leaked line breaks and
         // collapses CRLF to a single space.
-        var display = OperatingSystem.IsWindows()
-            ? command
-            : BuildSanitizedDisplayViaParser(command);
+        var display = BuildSanitizedDisplayViaParser(command, analysis);
 
         return display.ReplaceLineEndings(" ");
     }
@@ -977,10 +1077,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// misstate which statements a pipe or <c>&amp;&amp;</c> guard applies
     /// to. The raw fallback is ugly but fully disclosed.
     /// </summary>
-    private static string BuildSanitizedDisplayViaParser(string command)
+    private static string BuildSanitizedDisplayViaParser(
+        string command,
+        ShellCommandAnalysis result)
     {
-        var result = TryAnalyzeCommand(command);
-        if (result is null)
+        if (!result.IsResolved)
             return command;
 
         if (result.Commands.Any(static occurrence =>
@@ -1090,25 +1191,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     private static string? GetWorkingDirectory(IDictionary<string, object?>? arguments)
         => ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
 
-    private static void TraverseApprovalUnits(string command, Action<string> visitUnit)
-    {
-        // Approval units recurse through shell wrappers but keep the outer
-        // splitting rules stable, so `bash -c "grep ... | wc -l" && git push`
-        // still becomes two independent approval decisions.
-        foreach (var segment in ShellTokenizer.SplitCompoundCommand(command))
-        {
-            var innerCommands = ShellTokenizer.ExtractInnerCommands(segment);
-            if (innerCommands.Count > 0)
-            {
-                foreach (var inner in innerCommands)
-                    TraverseApprovalUnits(inner, visitUnit);
-
-                continue;
-            }
-
-            visitUnit(segment);
-        }
-    }
 }
 
 /// <summary>

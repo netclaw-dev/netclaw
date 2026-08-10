@@ -10,7 +10,14 @@ namespace Netclaw.Security.Tests;
 
 public sealed class ShellCommandAnalysisTests
 {
-    private readonly ShellCommandAnalyzer _analyzer = ShellCommandAnalyzer.Bash;
+    private static readonly ShellExecutionEnvironment BashEnvironment =
+        ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+    private static readonly ShellExecutionEnvironment PowerShellEnvironment =
+        ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+
+    private readonly ShellCommandAnalyzer _analyzer = new(BashEnvironment);
 
     [Theory]
     [InlineData("bash -lc")]
@@ -56,62 +63,46 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
-    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("pwsh -noprofile -NONINTERACTIVE -command \"git status\"")]
-    public void Exact_power_shell_wrapper_retains_host_and_child(string command)
+    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status'", "pwsh")]
+    [InlineData("powershell.exe -Command 'git status'", "powershell.exe")]
+    public void Bash_treats_power_shell_as_an_ordinary_external_command(
+        string command,
+        string expectedVerb)
     {
         var analysis = _analyzer.Analyze(command, "/work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.False(analysis.HasDynamicSyntax);
-        Assert.Equal(["pwsh", "git status"], analysis.Commands.Select(
-            occurrence => occurrence.Clause.Verb.Joined));
-        Assert.False(analysis.Commands[0].Clause.IsCommandStringWrapped);
-        Assert.True(analysis.Commands[1].Clause.IsCommandStringWrapped);
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.Equal(expectedVerb, occurrence.Clause.Verb.Joined);
+        Assert.False(occurrence.Clause.IsCommandStringWrapped);
     }
 
     [Fact]
-    public void Power_shell_host_is_retained_for_ambient_bash_resolution_controls()
+    public void Bash_does_not_interpret_a_power_shell_command_payload()
     {
         var analysis = _analyzer.Analyze(
-            "pwsh -NoProfile -NonInteractive -Command 'git status'",
+            "pwsh -NoProfile -Command 'Write-Output ok; netclaw daemon stop'",
             "/work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.Equal("pwsh", analysis.Commands[0].Clause.Verb.Joined);
-        Assert.False(analysis.Commands[0].Clause.IsCommandStringWrapped);
-
-        // BASH_ENV and exported functions can replace this authored host at
-        // execution time. The policy must therefore approve it separately.
-        Assert.Equal("git status", analysis.Commands[1].Clause.Verb.Joined);
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.Equal("pwsh", occurrence.Clause.Verb.Joined);
+        Assert.DoesNotContain(
+            analysis.Commands,
+            command => command.Clause.Verb.Joined == "netclaw daemon stop");
     }
 
     [Theory]
-    [InlineData("PWSH -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("pwsh.exe -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("powershell -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("pwsh -NonInteractive -NoProfile -Command 'git status'")]
-    [InlineData("pwsh -NoProfile -Command 'git status'")]
-    [InlineData("pwsh -NoProfile -NonInteractive -WorkingDirectory /etc -Command 'git status'")]
-    [InlineData("pwsh -NoProfile -NonInteractive -File script.ps1")]
-    [InlineData("pwsh -NoProfile -NonInteractive -EncodedCommand RwBlAHQALQBEAGEAdABlAA==")]
-    [InlineData("pwsh -NoProfile -NonInteractive -CommandWithArgs 'git status'")]
-    [InlineData("pwsh -NoProfile -NonInteractive -Command -")]
-    [InlineData("pwsh -NoProfile -NonInteractive -Command git status")]
-    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status' trailing")]
-    [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status' > out.txt")]
-    [InlineData("env pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("builtin command pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("/usr/bin/env pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("xargs pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("/usr/bin/env -i pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    [InlineData("xargs -n1 pwsh -NoProfile -NonInteractive -Command 'git status'")]
-    public void Power_shell_wrapper_near_miss_is_unresolved(string command)
+    [InlineData("PWSH -NoProfile -Command 'git status'")]
+    [InlineData("pwsh.exe -File script.ps1")]
+    [InlineData("powershell -EncodedCommand RwBlAHQALQBEAGEAdABlAA==")]
+    public void Bash_does_not_apply_power_shell_wrapper_rules(string command)
     {
         var analysis = _analyzer.Analyze(command, "/work");
 
-        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
-        Assert.Empty(analysis.Commands);
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Single(analysis.Commands);
     }
 
     [Theory]
@@ -119,16 +110,16 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("rg pwsh .")]
     [InlineData("printf '%s\\n' pwsh")]
     [InlineData("git commit -m pwsh")]
-    public void Power_shell_host_token_used_as_data_stays_one_shot(string command)
+    public void Power_shell_host_token_used_as_data_is_not_special(string command)
     {
         var analysis = _analyzer.Analyze(command, "/work");
 
-        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
-        Assert.Empty(analysis.Commands);
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Single(analysis.Commands);
     }
 
     [Fact]
-    public void Bash_dynamic_power_shell_payload_is_unresolved()
+    public void Bash_dynamic_argument_to_power_shell_stays_dynamic()
     {
         var analysis = _analyzer.Analyze(
             "pwsh -NoProfile -NonInteractive -Command \"git $operation\"",
@@ -139,14 +130,15 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Fact]
-    public void Bash_decoded_power_shell_payload_is_the_child_source_of_truth()
+    public void Bash_does_not_decode_a_power_shell_payload()
     {
         var analysis = _analyzer.Analyze(
             "pwsh -NoProfile -NonInteractive -Command 'Write-Output '' ; netclaw daemon stop; #'''",
             "/work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.Contains(
+        Assert.Equal("pwsh", Assert.Single(analysis.Commands).Clause.Verb.Joined);
+        Assert.DoesNotContain(
             analysis.Commands,
             command => command.Clause.Verb.Joined == "netclaw daemon stop");
     }
@@ -154,9 +146,10 @@ public sealed class ShellCommandAnalysisTests
     [Fact]
     public void Power_shell_dynamic_child_stays_dynamic()
     {
-        var analysis = _analyzer.Analyze(
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
             "pwsh -NoProfile -NonInteractive -Command 'git $operation'",
-            "/work");
+            @"C:\work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.True(
@@ -164,19 +157,20 @@ public sealed class ShellCommandAnalysisTests
             string.Join(" | ", analysis.Commands.Select(command =>
                 $"{command.Clause.Verb.Joined}:{command.IsComplete}:" +
                 string.Join(",", command.Clause.Args.Select(arg => $"{arg.Raw}={arg.Kind}")))));
-        Assert.Equal("pwsh", analysis.Commands[0].Clause.Verb.Joined);
+        Assert.Equal("git", analysis.Commands[0].Clause.Verb.Joined);
     }
 
     [Fact]
     public void Power_shell_proved_execution_region_is_complete()
     {
-        var analysis = _analyzer.Analyze(
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
             "pwsh -NoProfile -NonInteractive -Command '& { git push }'",
-            "/work");
+            @"C:\work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.Equal(
-            ["pwsh", "git push"],
+            ["git push"],
             analysis.Commands.Select(command => command.Clause.Verb.Joined));
         Assert.False(
             analysis.HasDynamicSyntax,
@@ -185,6 +179,22 @@ public sealed class ShellCommandAnalysisTests
                 $"role={command.ImmediateRole}:cwd={command.WorkingDirectory.Kind}:" +
                 $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.AncestorKind}/{frame.Region}"))}:" +
                 $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.Resolved}"))}")));
+    }
+
+    [Fact]
+    public void Power_shell_treats_bash_as_an_ordinary_external_command()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            "bash -c 'Remove-Item victim.txt'",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.Equal("bash", occurrence.Clause.Verb.Joined);
+        Assert.DoesNotContain(
+            analysis.Commands,
+            command => command.Clause.Verb.Joined == "Remove-Item");
     }
 
     [Fact]
@@ -348,7 +358,7 @@ public sealed class ShellCommandAnalysisTests
             ],
             IsComplete = true
         };
-        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+        var analysis = CreateAnalysis(occurrence);
 
         Assert.False(analysis.HasDynamicSyntax);
     }
@@ -379,7 +389,7 @@ public sealed class ShellCommandAnalysisTests
             Redirects = [redirect],
             IsComplete = true
         };
-        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+        var analysis = CreateAnalysis(occurrence);
 
         Assert.True(analysis.HasDynamicSyntax);
     }
@@ -415,7 +425,7 @@ public sealed class ShellCommandAnalysisTests
             Redirects = [redirect],
             IsComplete = true
         };
-        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+        var analysis = CreateAnalysis(occurrence);
 
         Assert.True(analysis.HasDynamicSyntax);
     }
@@ -440,7 +450,7 @@ public sealed class ShellCommandAnalysisTests
             ],
             IsComplete = true
         };
-        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+        var analysis = CreateAnalysis(occurrence);
 
         Assert.True(analysis.HasDynamicSyntax);
     }
@@ -462,7 +472,7 @@ public sealed class ShellCommandAnalysisTests
             WorkingDirectory = new ShellValueDomain { Kind = workingDirectoryKind },
             IsComplete = true
         };
-        var analysis = new ShellCommandAnalysis([occurrence], ShellAnalysisFailure.None);
+        var analysis = CreateAnalysis(occurrence);
 
         Assert.True(analysis.HasDynamicSyntax);
     }
@@ -647,6 +657,14 @@ public sealed class ShellCommandAnalysisTests
                 IsComplete = true
             })
     };
+
+    private static ShellCommandAnalysis CreateAnalysis(CommandOccurrence occurrence)
+        => new(
+            BashEnvironment,
+            source: string.Empty,
+            workingDirectory: null,
+            commands: [occurrence],
+            ShellAnalysisFailure.None);
 
     private static RedirectAnalysis HereDocumentRedirect(
         HereDocumentAnalysis? hereDocument,

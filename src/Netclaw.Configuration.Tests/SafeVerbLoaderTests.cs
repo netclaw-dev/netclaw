@@ -82,20 +82,13 @@ public sealed class SafeVerbLoaderTests
     [Fact]
     public void Contains_uses_platform_correct_case_rules()
     {
-        var list = SafeVerbLoader.Load(isWindows: false);
+        var linux = SafeVerbLoader.Load(isWindows: false);
+        var windows = SafeVerbLoader.Load(isWindows: true);
 
-        if (OperatingSystem.IsWindows())
-        {
-            // OrdinalIgnoreCase
-            Assert.True(list.Contains("LS"));
-            Assert.True(list.Contains("ls"));
-        }
-        else
-        {
-            // Ordinal — `LS` is a different binary from `ls` on POSIX.
-            Assert.False(list.Contains("LS"));
-            Assert.True(list.Contains("ls"));
-        }
+        Assert.False(linux.Contains("LS"));
+        Assert.True(linux.Contains("ls"));
+        Assert.True(windows.Contains("GET-CONTENT"));
+        Assert.True(windows.Contains("Get-Content"));
     }
 
     [Fact]

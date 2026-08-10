@@ -13,10 +13,18 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 {
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
-    [SlopwatchSuppress("SW001", "This theory defines Bash authorization behavior. The Windows shell parser does not implement this contract.")]
-    [Theory(SkipUnless = nameof(IsPosix), Skip = "The first matrix defines Bash authorization behavior.")]
-    [MemberData(nameof(ShellApprovalCases.Rows), MemberType = typeof(ShellApprovalCases))]
-    public async Task Shell_approval_contract(string caseId)
+    [SlopwatchSuppress("SW001", "These rows require a POSIX filesystem in addition to the explicitly selected Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Bash matrix rows require POSIX filesystem semantics.")]
+    [MemberData(nameof(ShellApprovalCases.BashRows), MemberType = typeof(ShellApprovalCases))]
+    public Task Bash_approval_contract(string caseId)
+        => AssertApprovalContract(caseId);
+
+    [Theory]
+    [MemberData(nameof(ShellApprovalCases.PowerShellRows), MemberType = typeof(ShellApprovalCases))]
+    public Task Power_shell_approval_contract(string caseId)
+        => AssertApprovalContract(caseId);
+
+    private async Task AssertApprovalContract(string caseId)
     {
         var testCase = ShellApprovalCases.Get(caseId);
         await using var harness = await ShellApprovalHarness.CreateAsync(

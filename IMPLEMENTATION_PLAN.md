@@ -145,13 +145,12 @@ Done when:
   command-resolution mutation and reserved execution forms into the strict
   181-case review matrix.
 - [x] ShellSyntaxTree `0.3.0-alpha.2` introduced one temporary POSIX PowerShell
-  child wrapper. The current runtime keeps that transitional behavior until
-  activation task 3.1 removes it. The accepted target contract supersedes the
-  design: Bash treats `pwsh` as an external command, and only a native
+  child wrapper. Native-host activation removed that transitional consumer
+  behavior: Bash treats `pwsh` as an external command, and only a native
   PowerShell host uses `PwshParser`.
-- [x] The current 204-case shell approval review table records the transitional
-  child-host behavior. Activation replaces those rows with native PowerShell
-  cases; they do not define the accepted host-language boundary.
+- [x] The shell approval review table separates Bash, PowerShell 7, and Windows
+  PowerShell 5.1 rows. Cross-language payloads remain ordinary external-command
+  arguments; same-language static children use parser-returned occurrences.
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.
@@ -170,25 +169,34 @@ This work replaces `cmd.exe` with a native PowerShell host on Windows. Netclaw
 prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
 5.1. It keeps Bash and PowerShell as separate host languages.
 
-The additive foundation now pins ShellSyntaxTree `0.3.0-alpha.5` and defines
-the immutable environment, strict host probe, and process arguments. The
-current runtime remains transitional until the activation tasks route every
-executor and security consumer through that environment.
+The additive foundation pins ShellSyntaxTree `0.3.0-alpha.5` and defines the
+immutable environment, strict host probe, and process arguments. Runtime
+activation now routes execution, policy, approval, background jobs, and model
+context through the same resolved environment. Native Windows CI and final
+OpenSpec delivery remain before this priority is complete.
+
+Local validation on 2026-08-10 passed restore, the zero-warning Release build,
+the full solution test suite, changed-file format verification, headers,
+Slopwatch, `git diff --check`, and strict OpenSpec validation. The shell-platform
+behavioral evaluation was unavailable because the required
+`NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, and
+`NETCLAW_EVAL_MODEL_ID` settings were absent. This result is blocked evidence,
+not an evaluation pass.
 
 Done when:
 
-- [ ] One immutable shell environment selects the absolute executable path,
+- [x] One immutable shell environment selects the absolute executable path,
   grammar, path style, process arguments, and PowerShell dialect for the daemon
   lifetime.
-- [ ] Windows selects `pwsh.exe` only for versions from 7.6.4 through 7.6.x. It
+- [x] Windows selects `pwsh.exe` only for versions from 7.6.4 through 7.6.x. It
   falls back to `powershell.exe` 5.1 and fails clearly if neither host matches.
-- [ ] Execution, parsing, hard deny, approval matching, prompt display, and
+- [x] Execution, parsing, hard deny, approval matching, prompt display, and
   model context use the same selected environment.
-- [ ] Bash treats `pwsh` as an external command. PowerShell treats `bash` as an
+- [x] Bash treats `pwsh` as an external command. PowerShell treats `bash` as an
   external command. Only same-language child hosts can recurse.
-- [ ] Unknown or incomplete facts cannot produce a stored approval candidate
+- [x] Unknown or incomplete facts cannot produce a stored approval candidate
   or a safe-verb pass. Stored approval cannot bypass hard deny.
-- [ ] Personal sessions state the platform, executable, grammar, and dialect,
+- [x] Personal sessions state the platform, executable, grammar, and dialect,
   including sessions that have no project directory.
 - [ ] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
   The security review table covers direct, child, retry, and background paths.

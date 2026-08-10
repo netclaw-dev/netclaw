@@ -22,6 +22,8 @@ internal static class LlmSessionTestExtensions
     public static IServiceCollection AddLlmSessionCompositeRecords(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
         services.TryAddSingleton<IGitWorkingContextInspector, GitWorkingContextInspector>();
         services.TryAddSingleton<IWorkingContextSnapshotProvider, WorkingContextSnapshotProvider>();
         services.TryAddSingleton(sp => new SessionServices(

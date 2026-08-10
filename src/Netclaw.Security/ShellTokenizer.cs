@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ShellTokenizer.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -239,8 +239,9 @@ public static class ShellTokenizer
 
     /// <summary>
     /// Extracts the verb chain (command name + subcommand chain) from a
-    /// shell command. Backed by <c>ShellSyntaxTree.BashParser</c> on POSIX
-    /// shells: extends through every "verb-like" token (no slash, no dot,
+    /// shell command. This compatibility API selects semantics from the current
+    /// platform. Production approval code uses its canonical shell environment.
+    /// The result extends through every "verb-like" token (no slash, no dot,
     /// no flag prefix) until it hits a path or flag. Path-aware verbs
     /// (cat, grep, find, ls, ...) and single-token side-effect verbs
     /// (echo, printf, ...) are capped at depth 1 by post-check so the
@@ -301,12 +302,26 @@ public static class ShellTokenizer
     public static string NormalizeApprovalUnit(string command, string? workingDirectory = null)
         => ShellApprovalSemantics.ForCommand(command).NormalizeApprovalUnit(command, workingDirectory);
 
+    internal static string NormalizeApprovalUnit(
+        string command,
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
+        => ShellApprovalSemantics.ForPathStyle(pathStyle)
+            .NormalizeApprovalUnit(command, workingDirectory);
+
     /// <summary>
     /// Normalizes a path token using the active shell family's path semantics.
     /// Returns null when the token cannot be normalized as a local path.
     /// </summary>
     public static string? NormalizePathToken(string path, string? workingDirectory = null)
         => ShellApprovalSemantics.ForCommand(path).NormalizePathToken(path, workingDirectory);
+
+    internal static string? NormalizePathToken(
+        string path,
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
+        => ShellApprovalSemantics.ForPathStyle(pathStyle)
+            .NormalizePathToken(path, workingDirectory);
 
     /// <summary>
     /// Extracts inner commands from bash -c / sh -c wrappers. Returns the
@@ -387,22 +402,39 @@ public static class ShellTokenizer
     /// shape.
     /// </remarks>
     internal static string? ApplyFileParentRule(string token)
+        => ApplyFileParentRule(
+            token,
+            OperatingSystem.IsWindows() ? ShellPathStyle.Windows : ShellPathStyle.Posix);
+
+    internal static string? ApplyFileParentRule(string token, ShellPathStyle pathStyle)
     {
         if (string.IsNullOrEmpty(token))
             return token;
 
-        var hasExtension = Path.HasExtension(token);
-        if (!hasExtension && !LooksLikeDotfile(token))
+        var lastSeparator = pathStyle == ShellPathStyle.Windows
+            ? token.LastIndexOfAny(['/', '\\'])
+            : token.LastIndexOf('/');
+        var basename = token[(lastSeparator + 1)..];
+        var lastDot = basename.LastIndexOf('.');
+        var hasExtension = lastDot > 0 && lastDot < basename.Length - 1;
+        var isDotfile = basename.Length > 1 && basename[0] == '.';
+        if (!hasExtension && !isDotfile)
             return token;
 
-        var parent = Path.GetDirectoryName(token);
-        // GetDirectoryName returns "" for a bare filename and the literal
-        // separator for root-level files. Fall back to the token unchanged
-        // when we can't sensibly compute a parent.
-        if (string.IsNullOrEmpty(parent))
+        if (lastSeparator < 0)
             return token;
+        if (lastSeparator == 0)
+            return token[..1];
+        if (pathStyle == ShellPathStyle.Windows
+            && lastSeparator == 2
+            && token.Length >= 3
+            && char.IsAsciiLetter(token[0])
+            && token[1] == ':')
+        {
+            return token[..3];
+        }
 
-        return parent;
+        return token[..lastSeparator];
     }
 
     internal static bool LooksLikeDotfile(string token)
