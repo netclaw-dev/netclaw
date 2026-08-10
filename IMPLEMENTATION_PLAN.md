@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -147,7 +147,8 @@ Done when:
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.2` for one exact POSIX
   `pwsh -NoProfile -NonInteractive -Command '<static payload>'` wrapper. It
   keeps the outer host and every complete PowerShell child as independent
-  approval occurrences.
+  approval occurrences. The native Windows PowerShell work below replaces
+  this temporary cross-language parser.
 - [x] The 204-case shell approval review table proves PowerShell host and child
   grant composition, intrinsic direct-call script blocks, nested hard deny,
   decoded protected paths, and strict handling for dynamic values, named
@@ -159,6 +160,37 @@ Done when:
 - [ ] Netclaw interprets bounded loop arguments only after the executor can
   prove the Bash initial variable state. The inherited shell state remains
   fail closed because an ambient nameref can change assignment semantics.
+
+### Priority: Use Native PowerShell on Windows
+
+**PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Specs:** `openspec/changes/native-windows-powershell-host/`
+**Surface area:** shell execution, parsing, approval policy, model context
+**Verification:** L2 plus native Windows L3
+
+This work replaces `cmd.exe` with a native PowerShell host on Windows. Netclaw
+prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
+5.1. It keeps Bash and PowerShell as separate host languages.
+
+Done when:
+
+- [ ] One immutable shell environment selects the absolute executable path,
+  grammar, path style, process arguments, and PowerShell dialect for the daemon
+  lifetime.
+- [ ] Windows selects `pwsh.exe` only for versions from 7.6.4 through 7.6.x. It
+  falls back to `powershell.exe` 5.1 and fails clearly if neither host matches.
+- [ ] Execution, parsing, hard deny, approval matching, prompt display, and
+  model context use the same selected environment.
+- [ ] Bash treats `pwsh` as an external command. PowerShell treats `bash` as an
+  external command. Only same-language child hosts can recurse.
+- [ ] Unknown or incomplete facts cannot produce a stored approval candidate
+  or a safe-verb pass. Stored approval cannot bypass hard deny.
+- [ ] Personal sessions state the platform, executable, grammar, and dialect,
+  including sessions that have no project directory.
+- [ ] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
+  The security review table covers direct, child, retry, and background paths.
+- [ ] Consumer guidance and canonical specs match the delivered behavior. The
+  OpenSpec change passes verification, is synchronized, and is archived.
 
 ### Priority: Simplify Tool Execution Context Architecture
 
