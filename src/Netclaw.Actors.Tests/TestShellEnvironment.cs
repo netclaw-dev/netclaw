@@ -33,6 +33,11 @@ internal static class TestShellEnvironment
             ? "New-Item"
             : "mkdir";
 
+    public static string ReadFileCommand(string path) =>
+        Current.Grammar == ShellGrammar.PowerShell
+            ? $"Get-Content '{path.Replace("'", "''", StringComparison.Ordinal)}'"
+            : $"cat '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+
     public static string StandardErrorCommand =>
         Current.Grammar == ShellGrammar.PowerShell
             ? "[Console]::Error.WriteLine('error')"
