@@ -1599,11 +1599,13 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     {
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
-            Args("tmux ls 2>/dev/null >/etc/netclaw-output.txt", "/work"));
+            Args(
+                "tmux ls 2>/dev/null >/netclaw-approval-external/netclaw-output.txt",
+                "/work"));
 
         var candidate = Assert.Single(candidates);
         Assert.Equal("tmux ls", candidate.Verb);
-        Assert.Equal("/etc", candidate.Directory);
+        Assert.Equal("/netclaw-approval-external", candidate.Directory);
     }
 
     [SlopwatchSuppress("SW001", "This theory verifies POSIX null device lookalikes, which do not apply to the Windows shell parser.")]
