@@ -110,6 +110,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     internal string AddChannelPlaceholder => _activeAdapterType switch
     {
         ChannelType.Slack => "channel names or IDs, comma-separated",
+        ChannelType.Telegram => "positive user IDs or negative group IDs, comma-separated",
         _ => "channel IDs, comma-separated"
     };
     internal int ManagementMenuIndex => _managementMenuIndex;
@@ -729,8 +730,24 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         var row = rows[_channelRowIndex];
-        if (row.IsAction || row.IsDirectMessage)
+        if (row.IsAction || string.Equals(row.Id, "dm", StringComparison.Ordinal))
             return;
+
+        if (_activeAdapterType == ChannelType.Telegram && row.IsDirectMessage)
+        {
+            var remainingUsers = GetAllowedUserIds(ChannelType.Telegram)
+                .Where(id => !string.Equals(id, row.Id, StringComparison.Ordinal))
+                .ToArray();
+            SetAllowedUserIds(ChannelType.Telegram, remainingUsers);
+            if (_channelAudiences.TryGetValue(ChannelType.Telegram, out var userAudiences))
+                userAudiences.Remove(row.Id);
+
+            UpdateAdapterPickerSummary(ChannelType.Telegram);
+            _channelRowIndex = Clamp(_channelRowIndex, GetChannelRows().Count);
+            AutosaveCompletedAction($"Removed {row.DisplayName} and saved.");
+            NotifyContentChanged();
+            return;
+        }
 
         var remaining = GetChannelIds(_activeAdapterType)
             .Where(id => !string.Equals(id, row.Id, StringComparison.Ordinal))
@@ -771,6 +788,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             Status.Value = new ConfigStatusMessage("At least one channel is required.", ConfigStatusTone.Error);
             NotifyContentChanged();
+            return;
+        }
+
+        if (_activeAdapterType == ChannelType.Telegram)
+        {
+            await ApplyAddTelegramTargetsAsync(references, ct);
             return;
         }
 
@@ -821,6 +844,67 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 ? $"Added {fresh[0]} at the {DefaultChannelAudience()} default and saved."
                 : $"Added {Pluralize(fresh.Count, "channel", "channels")} and saved.", ct))
             await RefreshChannelLabelsAsync(_activeAdapterType, ct);
+    }
+
+    private async Task ApplyAddTelegramTargetsAsync(IReadOnlyList<string> references, CancellationToken ct)
+    {
+        var invalid = references.FirstOrDefault(reference =>
+            !long.TryParse(reference, out var id) || id == 0);
+        if (invalid is not null)
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"Telegram ID is not valid: {invalid}.",
+                ConfigStatusTone.Error);
+            NotifyContentChanged();
+            return;
+        }
+
+        var existingUsers = GetAllowedUserIds(ChannelType.Telegram);
+        var existingChats = GetChannelIds(ChannelType.Telegram);
+        var userSet = new HashSet<string>(existingUsers, StringComparer.Ordinal);
+        var chatSet = new HashSet<string>(existingChats, StringComparer.Ordinal);
+        var freshUsers = references
+            .Where(reference => long.Parse(reference, System.Globalization.CultureInfo.InvariantCulture) > 0)
+            .Where(userSet.Add)
+            .ToArray();
+        var freshChats = references
+            .Where(reference => long.Parse(reference, System.Globalization.CultureInfo.InvariantCulture) < 0)
+            .Where(chatSet.Add)
+            .ToArray();
+
+        if (freshUsers.Length == 0 && freshChats.Length == 0)
+        {
+            Status.Value = new ConfigStatusMessage("Those Telegram users or groups are already configured.", ConfigStatusTone.Neutral);
+            NotifyContentChanged();
+            return;
+        }
+
+        SetAllowedUserIds(ChannelType.Telegram, [.. existingUsers, .. freshUsers]);
+        SetChannelIds(ChannelType.Telegram, [.. existingChats, .. freshChats]);
+        foreach (var userId in freshUsers)
+            SetChannelAudience(ChannelType.Telegram, userId, DefaultDirectMessageAudience());
+        foreach (var chatId in freshChats)
+            SetChannelAudience(ChannelType.Telegram, chatId, DefaultChannelAudience());
+
+        Screen.Value = ChannelsConfigScreen.ChannelPermissions;
+        var lastAddedId = freshChats.LastOrDefault() ?? freshUsers.Last();
+        var focused = GetChannelRows()
+            .Select((row, index) => (row, index))
+            .FirstOrDefault(entry => string.Equals(entry.row.Id, lastAddedId, StringComparison.Ordinal));
+        if (focused.row is not null)
+            _channelRowIndex = focused.index;
+        NotifyContentChanged();
+
+        var addedCount = freshUsers.Length + freshChats.Length;
+        if (await SaveCompletedAsync(
+                addedCount == 1
+                    ? $"Added Telegram {(freshUsers.Length == 1 ? "private user" : "group")} {lastAddedId} and saved."
+                    : $"Added {addedCount} Telegram users or groups and saved.",
+                ct)
+            && freshChats.Length > 0)
+        {
+            await RefreshChannelLabelsAsync(ChannelType.Telegram, ct);
+        }
     }
 
     internal void FinishChannelPermissions()

@@ -224,6 +224,99 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Telegram_add_positive_id_persists_private_user_not_chat()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """{ "configVersion": 1, "Security": { "DeploymentPosture": "Personal" } }""");
+        File.WriteAllText(_paths.SecretsPath, """{ "Telegram": { "BotToken": "saved-token" } }""");
+        using var vm = CreateViewModel();
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            var telegram = (TelegramStepViewModel)adapter;
+            telegram.HasPersistedBotToken = true;
+            telegram.AllowDirectMessages = true;
+        }, isKnown: true);
+        vm.OpenAdapterManagement(ChannelType.Telegram);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "8912834437";
+
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.Equal(["8912834437"], ToStringArray(GetPath(config, "Telegram.AllowedUserIds")));
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Telegram.AllowedChatIds", out _));
+        var audiences = ToStringDictionary(GetPath(config, "Telegram.ChatAudiences"));
+        Assert.Equal("personal", audiences["8912834437"]);
+        Assert.Contains(vm.GetChannelRows(), row =>
+            row.Id == "8912834437" && row.IsDirectMessage && !row.IsUnresolved);
+    }
+
+    [Fact]
+    public async Task Telegram_add_mixed_ids_separates_private_user_and_group()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """{ "configVersion": 1, "Security": { "DeploymentPosture": "Team" } }""");
+        File.WriteAllText(_paths.SecretsPath, """{ "Telegram": { "BotToken": "saved-token" } }""");
+        var probe = new FakeTelegramProbe
+        {
+            NextResolutionResult = new TelegramChatResolutionResult(
+                true, null, [new ResolvedTelegramChat("-5364308250", "Netclaw group")], [])
+        };
+        using var vm = CreateViewModel(telegramProbe: probe);
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            var telegram = (TelegramStepViewModel)adapter;
+            telegram.HasPersistedBotToken = true;
+            telegram.AllowDirectMessages = true;
+        }, isKnown: true);
+        vm.OpenAdapterManagement(ChannelType.Telegram);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "8912834437, -5364308250";
+
+        await vm.ApplyAddChannelAsync(TestContext.Current.CancellationToken);
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.Equal(["8912834437"], ToStringArray(GetPath(config, "Telegram.AllowedUserIds")));
+        Assert.Equal(["-5364308250"], ToStringArray(GetPath(config, "Telegram.AllowedChatIds")));
+        var audiences = ToStringDictionary(GetPath(config, "Telegram.ChatAudiences"));
+        Assert.Equal("personal", audiences["8912834437"]);
+        Assert.Equal("team", audiences["-5364308250"]);
+    }
+
+    [Fact]
+    public async Task Telegram_remove_private_user_removes_user_allow_list_entry()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Telegram": {
+                "Enabled": true,
+                "AllowDirectMessages": true,
+                "AllowedUserIds": ["6875639362", "8912834437"],
+                "ChatAudiences": { "dm": "personal", "6875639362": "personal", "8912834437": "public" }
+              }
+            }
+            """);
+        File.WriteAllText(_paths.SecretsPath, """{ "Telegram": { "BotToken": "saved-token" } }""");
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Telegram);
+        var targetIndex = vm.GetChannelRows()
+            .Select((row, index) => (row, index))
+            .Single(entry => entry.row.Id == "8912834437")
+            .index;
+        vm.MoveChannelRow(targetIndex - vm.ChannelRowIndex);
+
+        vm.RemoveSelectedChannel();
+        await vm.PendingConfigWrite!;
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.Equal(["6875639362"], ToStringArray(GetPath(config, "Telegram.AllowedUserIds")));
+        var audiences = ToStringDictionary(GetPath(config, "Telegram.ChatAudiences"));
+        Assert.False(audiences.ContainsKey("8912834437"));
+    }
+
+    [Fact]
     public void Channels_editor_validator_maps_static_errors_to_fields()
     {
         var model = new ChannelsEditorModel
