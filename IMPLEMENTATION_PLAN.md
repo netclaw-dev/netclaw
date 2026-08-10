@@ -110,6 +110,23 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Preserve The Daemon Working Directory
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Surface area:** daemon lifecycle, path normalization, shell authorization
+**Verification:** L1 plus a live daemon restart
+
+The daemon process directory must survive routine system temporary-directory
+cleanup. Absolute path validation must not depend on that process directory.
+
+Done when:
+
+- [x] The daemon uses a durable runtime directory below the Netclaw home.
+- [x] Absolute path normalization does not read the process working directory.
+- [x] Focused tests and the full repository quality gates pass.
+- [ ] An installed daemon restart confirms the live process uses the durable directory.
+
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
