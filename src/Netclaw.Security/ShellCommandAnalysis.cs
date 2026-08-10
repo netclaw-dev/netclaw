@@ -305,36 +305,113 @@ public sealed record ShellCommandAnalysis
 
     public bool IsResolved => Failure == ShellAnalysisFailure.None && Commands.Count > 0;
 
-    public bool HasDynamicSyntax => Commands.Any(command =>
-        !command.IsComplete
-        || !Enum.IsDefined(command.ImmediateRole)
-        || command.ImmediateRole == CommandOccurrenceRole.Unknown
-        || command.Ancestry.Any(static frame =>
-            !IsKnownAncestor(frame.Ancestor)
-            || !Enum.IsDefined(frame.Region)
-            || frame.Region == CommandAncestryRegion.Unknown)
-        || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
-        || command.Clause.Verb.IsDynamic
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.EnvVar
-            && !arg.IsCwdAttribution
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        || command.Clause.Args.Any(static arg =>
-            arg.IsPath
-            && arg.Kind != ArgKind.Glob
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        || command.Arguments.Any(HasUnsupportedArgumentDomain)
-        // A glob in a directory segment can hide traversal or a symlink.
-        // Only a leaf glob has a fixed directory scope.
-        || command.Clause.Args.Any(arg =>
-            ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
-        || HasUnresolvedRedirect(command));
+    public bool HasDynamicSyntax
+    {
+        get
+        {
+            var accountedRegionArguments = FindAccountedExecutionRegionArguments();
+            return Commands.Any(command =>
+                CommandHasDynamicSyntax(command, accountedRegionArguments));
+        }
+    }
 
     internal ShellExecutionEnvironment Environment { get; }
 
     internal ShellAnalysisFailure Failure { get; }
+
+    private bool CommandHasDynamicSyntax(
+        CommandOccurrence command,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => !command.IsComplete
+            || !Enum.IsDefined(command.ImmediateRole)
+            || command.ImmediateRole == CommandOccurrenceRole.Unknown
+            || command.Ancestry.Any(static frame =>
+                !IsKnownAncestor(frame.Ancestor)
+                || !Enum.IsDefined(frame.Region)
+                || frame.Region == CommandAncestryRegion.Unknown)
+            || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
+            || command.Clause.Verb.IsDynamic
+            || command.Clause.Args.Any(arg =>
+                arg.Kind == ArgKind.DynamicSkip
+                && !arg.IsCwdAttribution
+                && !IsAccountedExecutionRegionArgument(
+                    command,
+                    arg,
+                    accountedRegionArguments))
+            || command.Clause.Args.Any(static arg =>
+                arg.Kind == ArgKind.EnvVar
+                && !arg.IsCwdAttribution
+                && string.IsNullOrWhiteSpace(arg.Resolved))
+            || command.Clause.Args.Any(static arg =>
+                arg.IsPath
+                && arg.Kind != ArgKind.Glob
+                && string.IsNullOrWhiteSpace(arg.Resolved))
+            || command.Arguments.Any(argument =>
+                !IsAccountedExecutionRegionArgument(
+                    argument,
+                    accountedRegionArguments)
+                && HasUnsupportedArgumentDomain(argument))
+            // A glob in a directory segment can hide traversal or a symlink.
+            // Only a leaf glob has a fixed directory scope.
+            || command.Clause.Args.Any(arg =>
+                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+            || HasUnresolvedRedirect(command);
+
+    private HashSet<ClauseElement> FindAccountedExecutionRegionArguments()
+    {
+        // PowerShell keeps a script-block host argument opaque while projecting
+        // its executable body as command occurrences. Suppress only that exact
+        // host element after a complete descendant proves the region metadata.
+        var arguments = new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance);
+        foreach (var command in Commands)
+        {
+            if (!command.IsComplete)
+            {
+                continue;
+            }
+
+            foreach (var frame in command.Ancestry)
+            {
+                if (frame is
+                    {
+                        Region: CommandAncestryRegion.ExecutionRegion,
+                        Ancestor: ExecutionRegionSyntax region
+                    }
+                    && IsKnownCommandArgumentRegion(region))
+                {
+                    arguments.Add(region.HostArgument!);
+                }
+            }
+        }
+
+        return arguments;
+    }
+
+    private static bool IsKnownCommandArgumentRegion(ExecutionRegionSyntax region)
+        => region.Origin == ExecutionRegionOrigin.CommandArgument
+            && region.HostArgument is not null
+            && Enum.IsDefined(region.Phase)
+            && region.Phase != ExecutionRegionPhase.Unknown
+            && Enum.IsDefined(region.Timing)
+            && region.Timing != ExecutionRegionTiming.Unknown
+            && Enum.IsDefined(region.Cardinality)
+            && region.Cardinality != ExecutionRegionCardinality.Unknown;
+
+    private static bool IsAccountedExecutionRegionArgument(
+        CommandOccurrence command,
+        Arg argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => command.Arguments.Any(analyzed =>
+            ReferenceEquals(analyzed.Argument, argument)
+            && IsAccountedExecutionRegionArgument(
+                analyzed,
+                accountedRegionArguments));
+
+    private static bool IsAccountedExecutionRegionArgument(
+        AnalyzedArgument argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => argument.Argument.Kind == ArgKind.DynamicSkip
+            && accountedRegionArguments.Contains(argument.Element);
 
     private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
         => ancestor is ShellBlockSyntax

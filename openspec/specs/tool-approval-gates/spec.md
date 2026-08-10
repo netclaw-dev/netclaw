@@ -1388,6 +1388,31 @@ authorize unresolved text.
 - **THEN** no stored grant or safe verb covers the unknown occurrence
 - **AND** the caller follows the existing deny-or-approval path
 
+#### Scenario: Known PowerShell command-owned region reuses independent grants
+
+- **GIVEN** the parser emits a complete PowerShell host occurrence
+- **AND** its command-argument execution region has known phase, timing, and
+  cardinality facts
+- **AND** the region body contains at least one command occurrence
+- **AND** every command occurrence in the region body is complete
+- **WHEN** approval policy evaluates matching grants for the host and every body
+  command
+- **THEN** the opaque script-block host argument does not independently mark the
+  invocation unresolved
+- **AND** approval policy still evaluates the host and every body occurrence
+  independently
+- **AND** omitting either the host grant or a body-command grant requires
+  approval for the uncovered command
+
+#### Scenario: Incomplete PowerShell command-owned region remains strict
+
+- **GIVEN** a PowerShell command-argument execution region has an unknown
+  receiver, phase, timing, cardinality, an empty body, or an incomplete body
+  occurrence
+- **WHEN** approval policy evaluates the command
+- **THEN** the opaque host argument remains unresolved
+- **AND** stored grants do not authorize the incomplete region
+
 #### Scenario: PowerShell native hard deny precedes approval
 
 - **GIVEN** a PowerShell command stops a process, removes a root recursively,

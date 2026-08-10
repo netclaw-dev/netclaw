@@ -123,7 +123,11 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [Fact]
     public Task Shell_approval_cases_match_review_table()
-        => Verifier.Verify(ShellApprovalCases.RenderReviewTable(), extension: "md");
+    {
+        var settings = new VerifySettings();
+        settings.DisableScrubbers();
+        return Verifier.Verify(ShellApprovalCases.RenderReviewTable(), "md", settings);
+    }
 }
 
 /// <summary>

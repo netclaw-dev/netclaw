@@ -193,6 +193,58 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Fact]
+    public void Power_shell_proved_command_argument_region_is_complete()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            @"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            ["Get-ChildItem", "ForEach-Object", "Remove-Item"],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_unknown_command_argument_region_stays_dynamic()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            @"Invoke-Custom { Remove-Item .\victim.txt }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_empty_command_argument_region_stays_dynamic()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze("ForEach-Object { }", @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_multiple_proved_command_argument_regions_are_complete()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            "ForEach-Object -End { Write-Output end } -Begin { Write-Output begin } -Process { Write-Output process }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            ["ForEach-Object", "Write-Output", "Write-Output", "Write-Output"],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
     public void Power_shell_child_loop_does_not_inherit_initial_state_proof()
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
