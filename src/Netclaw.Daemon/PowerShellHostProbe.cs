@@ -49,10 +49,31 @@ internal sealed class PowerShellHostProbe(
     IPowerShellProbeProcessFactory processFactory) : IPowerShellHostProbe
 {
     internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan ProbeRetryDelay = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(1);
     private const int MaxOutputChars = 4096;
+    private const int MaxProbeAttempts = 2;
 
     public async Task<PowerShellHostProbeResult> ProbeAsync(
+        string executableName,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var result = await ProbeOnceAsync(executableName, cancellationToken).ConfigureAwait(false);
+            if (result is not PowerShellHostProbeResult.Failed { Failure: PowerShellProbeFailure.Timeout }
+                || attempt >= MaxProbeAttempts)
+            {
+                return result;
+            }
+
+            // Cold-start (Defender scan, first-run init) is transient: retry once
+            // before surfacing a Timeout, so a slow-but-healthy host still resolves.
+            await Task.Delay(ProbeRetryDelay, timeProvider, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<PowerShellHostProbeResult> ProbeOnceAsync(
         string executableName,
         CancellationToken cancellationToken)
     {

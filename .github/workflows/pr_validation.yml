@@ -68,6 +68,19 @@ jobs:
         shell: bash
         run: npx -y @modelcontextprotocol/server-everything --version || true
 
+      # Pre-warm the PowerShell host probe so cold-start (Defender scan, first-run
+      # init) doesn't push the in-test 5s probe timeout on loaded Windows runners.
+      # Warm both pwsh.exe and the powershell.exe fallback — the resolver probes
+      # the fallback when pwsh is missing or its probe fails. Use -Command "exit 0"
+      # (no interpolated variables) so the outer pwsh shell can't mangle the args.
+      - name: "Warm PowerShell host probe"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -NonInteractive -Command "exit 0"
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -Command "exit 0"
+          exit 0
+
       # .NET Framework tests can't run reliably on Linux, so we only do .NET 8
 
       - name: "dotnet test"
