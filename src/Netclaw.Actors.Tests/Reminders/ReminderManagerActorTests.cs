@@ -604,9 +604,18 @@ public class ReminderManagerActorTests : TestKit
             TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
 
-        Assert.Contains(sink.Alerts, alert =>
-            alert.Category == AlertType.ReminderSchemaDropped
-            && alert.Summary.Contains(reminderId, StringComparison.Ordinal));
+        // Keep the Ask as the startup barrier (it absorbs dispatcher
+        // scheduling latency under parallel CI load), but poll the sink
+        // instead of trusting a one-shot post-Ask read: the health reply
+        // proves PreStart completed, not that the alert reached the sink.
+        // This test has flaked on CI twice (#1405, #1844) with an empty
+        // sink immediately after a successful Ask reply.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(sink.Alerts, alert =>
+                alert.Category == AlertType.ReminderSchemaDropped
+                && alert.Summary.Contains(reminderId, StringComparison.Ordinal));
+        }, duration: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
