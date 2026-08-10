@@ -7,6 +7,7 @@ using Netclaw.Configuration;
 using Microsoft.Extensions.Logging;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
+using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -28,6 +29,10 @@ public sealed class TelegramTransport(
 
     public event Func<TelegramCallbackQuery, Task>? CallbackReceived;
 
+    public event Func<string, Task>? PollingFailed;
+
+    public event Func<Task>? PollingRecovered;
+
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (_client is not null)
@@ -45,6 +50,7 @@ public sealed class TelegramTransport(
         _botUsername = bot.Username;
         _client.OnMessage += HandleMessageAsync;
         _client.OnUpdate += HandleUpdateAsync;
+        _client.OnError += HandleErrorAsync;
     }
 
     public Task StopAsync()
@@ -53,6 +59,7 @@ public sealed class TelegramTransport(
         {
             _client.OnMessage -= HandleMessageAsync;
             _client.OnUpdate -= HandleUpdateAsync;
+            _client.OnError -= HandleErrorAsync;
         }
 
         _stopSource?.Cancel();
@@ -202,6 +209,7 @@ public sealed class TelegramTransport(
 
     private async Task HandleMessageAsync(Message message, UpdateType updateType)
     {
+        await NotifyPollingRecoveredAsync().ConfigureAwait(false);
         var files = MapFiles(message);
         var text = message.Text ?? message.Caption ?? string.Empty;
         if (string.IsNullOrWhiteSpace(text) && files.Count == 0)
@@ -237,10 +245,11 @@ public sealed class TelegramTransport(
         QueueAlbum(albumId, inbound);
     }
 
-    private Task HandleUpdateAsync(Update update)
+    private async Task HandleUpdateAsync(Update update)
     {
+        await NotifyPollingRecoveredAsync().ConfigureAwait(false);
         if (update.CallbackQuery is not { Message: { } message, Data: { Length: > 0 } data } callback)
-            return Task.CompletedTask;
+            return;
 
         var inbound = new TelegramCallbackQuery(
             message.Chat.Id,
@@ -248,10 +257,21 @@ public sealed class TelegramTransport(
             message.Id,
             callback.Id,
             data);
-        return CallbackReceived is { } handler
-            ? handler(inbound)
-            : AnswerCallbackAsync(callback.Id, "This action is unavailable.", showAlert: true);
+        if (CallbackReceived is { } handler)
+            await handler(inbound).ConfigureAwait(false);
+        else
+            await AnswerCallbackAsync(callback.Id, "This action is unavailable.", showAlert: true).ConfigureAwait(false);
     }
+
+    private Task HandleErrorAsync(Exception exception, HandleErrorSource source)
+    {
+        var detail = $"Telegram polling failed ({source}): {exception.Message}";
+        logger.LogWarning(exception, "{Detail}", detail);
+        return PollingFailed is { } handler ? handler(detail) : Task.CompletedTask;
+    }
+
+    private Task NotifyPollingRecoveredAsync() =>
+        PollingRecovered is { } handler ? handler() : Task.CompletedTask;
 
     private bool ContainsBotMention(Message message, string text)
     {

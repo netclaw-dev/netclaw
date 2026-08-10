@@ -30,8 +30,8 @@ public sealed class TelegramChannel : IChannel
     private readonly NetclawPaths _paths;
     private readonly IChannelRegistry _channelRegistry;
     private IActorRef? _gateway;
-    private bool _connected;
-    private string? _failureDetail;
+    private volatile bool _connected;
+    private volatile string? _failureDetail;
 
     public TelegramChannel(
         ISessionPipeline pipeline,
@@ -103,6 +103,8 @@ public sealed class TelegramChannel : IChannel
             _actorRegistry.Register<TelegramGatewayActorKey>(_gateway);
             _transport.MessageReceived += HandleMessageAsync;
             _transport.CallbackReceived += HandleCallbackAsync;
+            _transport.PollingFailed += HandlePollingFailureAsync;
+            _transport.PollingRecovered += HandlePollingRecoveryAsync;
             await _transport.StartAsync(cancellationToken);
             _connected = true;
             _failureDetail = null;
@@ -121,6 +123,8 @@ public sealed class TelegramChannel : IChannel
         _connected = false;
         _transport.MessageReceived -= HandleMessageAsync;
         _transport.CallbackReceived -= HandleCallbackAsync;
+        _transport.PollingFailed -= HandlePollingFailureAsync;
+        _transport.PollingRecovered -= HandlePollingRecoveryAsync;
         await _transport.StopAsync();
 
         if (_gateway is not null)
@@ -147,6 +151,20 @@ public sealed class TelegramChannel : IChannel
     private Task HandleCallbackAsync(TelegramCallbackQuery callback)
     {
         _gateway?.Tell(callback);
+        return Task.CompletedTask;
+    }
+
+    private Task HandlePollingFailureAsync(string detail)
+    {
+        _connected = false;
+        _failureDetail = detail;
+        return Task.CompletedTask;
+    }
+
+    private Task HandlePollingRecoveryAsync()
+    {
+        _connected = true;
+        _failureDetail = null;
         return Task.CompletedTask;
     }
 }
