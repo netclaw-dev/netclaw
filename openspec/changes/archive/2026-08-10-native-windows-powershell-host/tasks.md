@@ -76,5 +76,5 @@
   auto-merge only after the review passes, and follow required CI to merge.
 - [x] 6.5 Update `IMPLEMENTATION_PLAN.md`, user guidance, and review-table
   evidence with observed results.
-- [ ] 6.6 Run `openspec-verify-change`, sync the capability deltas, and archive
+- [x] 6.6 Run `openspec-verify-change`, sync the capability deltas, and archive
   this change only after all runtime and downstream acceptance gates pass.
