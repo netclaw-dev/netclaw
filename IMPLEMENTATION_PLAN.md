@@ -110,6 +110,25 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Keep MCP HTTP Protocol Fallback Deterministic
+
+**PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/netclaw-mcp/spec.md`
+**Surface area:** MCP HTTP transport, daemon connections, CLI probes
+**Verification:** L1 plus the existing HTTP MCP smoke tests
+
+The MCP SDK can retain its discovery protocol version when probe cancellation
+selects the initialize fallback. Netclaw must not send that stale version in an
+initialize request.
+
+Done when:
+
+- [x] Daemon connections and CLI probes remove a retained protocol-version
+  header only from the initialize request.
+- [x] Discovery and established-session requests keep their protocol-version
+  header.
+- [x] Tests prove the header correction and preserve unrelated headers.
+
 ### Priority: Preserve The Daemon Working Directory
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`

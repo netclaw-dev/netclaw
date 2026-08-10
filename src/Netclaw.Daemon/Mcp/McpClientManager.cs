@@ -22,6 +22,7 @@ using ModelContextProtocol.Protocol;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -1822,6 +1823,9 @@ internal interface IMcpClientRuntime
 
 internal sealed class McpClientRuntime : IMcpClientRuntime
 {
+    public IClientTransport CreateHttpTransport(HttpClientTransportOptions options)
+        => new HttpClientTransport(options, McpHttpClientFactory.Shared);
+
     public Task<McpClient> CreateAsync(
         IClientTransport transport,
         McpClientOptions options,

@@ -7,6 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="netclaw" />
+    <InternalsVisibleTo Include="netclawd" />
     <InternalsVisibleTo Include="Netclaw.Configuration.Tests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
     <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
