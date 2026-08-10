@@ -63,7 +63,7 @@
 
 ## 6. Verification and Delivery
 
-- [ ] 6.1 Run focused security, actor, context, buffered-executor,
+- [x] 6.1 Run focused security, actor, context, buffered-executor,
   streaming-executor, resolver, and approval matrix tests on Linux and native
   Windows.
 - [x] 6.2 Run restore, Release build, the full test suite, format verification,
@@ -72,7 +72,7 @@
 - [x] 6.3 Run the shell-platform behavioral evaluation when provider
   credentials are available. Record an unavailable provider as blocked, not
   passed.
-- [ ] 6.4 Run an adversarial review for every implementation PR, enable
+- [x] 6.4 Run an adversarial review for every implementation PR, enable
   auto-merge only after the review passes, and follow required CI to merge.
 - [x] 6.5 Update `IMPLEMENTATION_PLAN.md`, user guidance, and review-table
   evidence with observed results.
