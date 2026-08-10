@@ -157,6 +157,10 @@ Done when:
 - [ ] Netclaw interprets bounded loop arguments only after the executor can
   prove the Bash initial variable state. The inherited shell state remains
   fail closed because an ambient nameref can change assignment semantics.
+  - [x] The approval matrix pins inherited and same-language child loops as
+    complex under the canonical unknown-state contract for Bash, PowerShell 7,
+    and Windows PowerShell 5.1. It also proves that a stored command grant
+    cannot cover an unproved loop-dependent argument.
 
 ### Priority: Use Native PowerShell on Windows
 
