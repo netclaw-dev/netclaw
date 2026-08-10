@@ -134,9 +134,8 @@ public class ShellExecutionEnvironmentTests
         Assert.False(parsed.IsUnparseable, parsed.UnparseableReason);
         var occurrence = Assert.Single(parsed.Commands);
         Assert.False(occurrence.IsComplete);
-        Assert.Equal(
-            ShellValueDomainKind.Unknown,
-            Assert.Single(occurrence.EffectiveArguments).Value.Kind);
+        Assert.IsType<ShellValueDomain.Unknown>(
+            occurrence.Arguments.Single(argument => argument.Argument.Raw == "$f").Value);
     }
 
     [Fact]

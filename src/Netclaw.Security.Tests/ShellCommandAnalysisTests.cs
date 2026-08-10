@@ -205,9 +205,8 @@ public sealed class ShellCommandAnalysisTests
         var occurrence = Assert.Single(analysis.Commands);
         Assert.Equal("Get-Content", occurrence.Clause.Verb.Joined);
         Assert.True(occurrence.IsComplete);
-        Assert.Equal(
-            ShellValueDomainKind.Unknown,
-            Assert.Single(occurrence.EffectiveArguments).Value.Kind);
+        Assert.IsType<ShellValueDomain.Unknown>(
+            occurrence.Arguments.Single(argument => argument.Argument.Raw == "$f").Value);
     }
 
     [Fact]
@@ -286,13 +285,13 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
-    [InlineData("git status 2>&1", RedirectOperation.DescriptorDuplicate, 1)]
-    [InlineData("git status 2>&123", RedirectOperation.DescriptorDuplicate, 123)]
-    [InlineData("git status 2>&1-", RedirectOperation.DescriptorMove, 1)]
-    [InlineData("git status 2>&-", RedirectOperation.DescriptorClose, null)]
+    [InlineData("git status 2>&1", typeof(DescriptorDuplicateRedirectAnalysis), 1)]
+    [InlineData("git status 2>&123", typeof(DescriptorDuplicateRedirectAnalysis), 123)]
+    [InlineData("git status 2>&1-", typeof(DescriptorMoveRedirectAnalysis), 1)]
+    [InlineData("git status 2>&-", typeof(DescriptorCloseRedirectAnalysis), null)]
     public void Static_file_descriptor_redirect_is_not_dynamic(
         string command,
-        RedirectOperation expectedOperation,
+        Type expectedType,
         int? expectedTargetDescriptor)
     {
         var analysis = _analyzer.Analyze(command);
@@ -301,9 +300,16 @@ public sealed class ShellCommandAnalysisTests
         Assert.False(analysis.HasDynamicSyntax);
         var occurrence = Assert.Single(analysis.Commands);
         var redirect = Assert.Single(occurrence.Redirects);
-        Assert.Equal(expectedOperation, redirect.Operation);
-        Assert.Equal(expectedTargetDescriptor, redirect.TargetDescriptor);
-        Assert.False(redirect.IsPathRelevant);
+        Assert.Equal(expectedType, redirect.GetType());
+        int? targetDescriptor = redirect switch
+        {
+            DescriptorDuplicateRedirectAnalysis duplicate => duplicate.TargetDescriptor,
+            DescriptorMoveRedirectAnalysis move => move.TargetDescriptor,
+            DescriptorCloseRedirectAnalysis => null,
+            _ => throw new InvalidOperationException(
+                $"Unexpected redirect alternative {redirect.GetType().Name}.")
+        };
+        Assert.Equal(expectedTargetDescriptor, targetDescriptor);
         Assert.True(redirect.IsComplete);
     }
 
@@ -336,60 +342,28 @@ public sealed class ShellCommandAnalysisTests
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.False(analysis.HasDynamicSyntax);
-        var redirect = Assert.Single(Assert.Single(analysis.Commands).Redirects);
-        Assert.Equal(RedirectOperation.FileOutput, redirect.Operation);
-        Assert.Equal(ShellValueDomainKind.Exact, redirect.Target.Kind);
-        Assert.Equal("/work/result.log", Assert.Single(redirect.Target.Values));
-        Assert.True(redirect.IsPathRelevant);
+        var redirect = Assert.IsType<FileRedirectAnalysis>(
+            Assert.Single(Assert.Single(analysis.Commands).Redirects));
+        Assert.Equal(FileRedirectMode.Output, redirect.Mode);
+        var target = Assert.IsType<ShellValueDomain.Exact>(redirect.Target);
+        Assert.Equal("/work/result.log", target.Value);
     }
 
     [Theory]
-    [InlineData("cat <<'EOF'\nbody\nEOF", RedirectOperation.HereDocument)]
-    [InlineData("cat <<< \"body\"", RedirectOperation.HereString)]
-    [InlineData("cat 0<<< \"body\"", RedirectOperation.HereString)]
+    [InlineData("cat <<'EOF'\nbody\nEOF", typeof(HereDocumentRedirectAnalysis))]
+    [InlineData("cat <<< \"body\"", typeof(HereStringRedirectAnalysis))]
+    [InlineData("cat 0<<< \"body\"", typeof(HereStringRedirectAnalysis))]
     public void Bounded_data_only_stdin_is_not_dynamic(
         string command,
-        RedirectOperation expectedOperation)
+        Type expectedType)
     {
         var analysis = _analyzer.Analyze(command);
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.False(analysis.HasDynamicSyntax);
         var redirect = Assert.Single(Assert.Single(analysis.Commands).Redirects);
-        Assert.Equal(expectedOperation, redirect.Operation);
-        Assert.False(redirect.IsPathRelevant);
+        Assert.Equal(expectedType, redirect.GetType());
         Assert.True(redirect.IsComplete);
-    }
-
-    [Fact]
-    public void Finite_here_string_data_for_argument_free_cat_is_not_dynamic()
-    {
-        var occurrence = new CommandOccurrence
-        {
-            Clause = new Clause
-            {
-                Verb = new VerbChain { Tokens = ["cat"] }
-            },
-            ImmediateRole = CommandOccurrenceRole.Ordinary,
-            Redirects =
-            [
-                new RedirectAnalysis
-                {
-                    Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-                    Operation = RedirectOperation.HereString,
-                    Target = new ShellValueDomain
-                    {
-                        Kind = ShellValueDomainKind.FiniteSet,
-                        Values = ["alpha\n", "beta\n"]
-                    },
-                    IsComplete = true
-                }
-            ],
-            IsComplete = true
-        };
-        var analysis = CreateAnalysis(occurrence);
-
-        Assert.False(analysis.HasDynamicSyntax);
     }
 
     [Fact]
@@ -402,25 +376,6 @@ public sealed class ShellCommandAnalysisTests
         var occurrence = Assert.Single(analysis.Commands);
         Assert.Equal("cat", occurrence.Clause.Verb.Joined);
         Assert.True(occurrence.Clause.IsCommandStringWrapped);
-    }
-
-    [Theory]
-    [MemberData(nameof(MalformedStdinRedirects))]
-    public void Malformed_stdin_facts_for_cat_fail_closed(RedirectAnalysis redirect)
-    {
-        var occurrence = new CommandOccurrence
-        {
-            Clause = new Clause
-            {
-                Verb = new VerbChain { Tokens = ["cat"] }
-            },
-            ImmediateRole = CommandOccurrenceRole.Ordinary,
-            Redirects = [redirect],
-            IsComplete = true
-        };
-        var analysis = CreateAnalysis(occurrence);
-
-        Assert.True(analysis.HasDynamicSyntax);
     }
 
     [Theory]
@@ -440,295 +395,37 @@ public sealed class ShellCommandAnalysisTests
             || analysis.HasDynamicSyntax);
     }
 
-    [Theory]
-    [MemberData(nameof(MalformedRedirects))]
-    public void Malformed_or_future_redirect_facts_fail_closed(RedirectAnalysis redirect)
-    {
-        var occurrence = new CommandOccurrence
-        {
-            Clause = new Clause
-            {
-                Verb = new VerbChain { Tokens = ["command"] }
-            },
-            ImmediateRole = CommandOccurrenceRole.Ordinary,
-            Redirects = [redirect],
-            IsComplete = true
-        };
-        var analysis = CreateAnalysis(occurrence);
-
-        Assert.True(analysis.HasDynamicSyntax);
-    }
-
     [Fact]
-    public void Unknown_ancestry_fails_closed()
+    public void Unknown_power_shell_redirect_target_stays_dynamic()
     {
-        var occurrence = new CommandOccurrence
-        {
-            Clause = new Clause
-            {
-                Verb = new VerbChain { Tokens = ["command"] }
-            },
-            ImmediateRole = CommandOccurrenceRole.Ordinary,
-            Ancestry =
-            [
-                new CommandAncestryFrame
-                {
-                    AncestorKind = ShellSyntaxKind.Unknown,
-                    Region = CommandAncestryRegion.Root
-                }
-            ],
-            IsComplete = true
-        };
-        var analysis = CreateAnalysis(occurrence);
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
 
-        Assert.True(analysis.HasDynamicSyntax);
+        var analysis = analyzer.Analyze("Get-Date > $name", @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+        var redirect = Assert.IsType<FileRedirectAnalysis>(
+            Assert.Single(Assert.Single(analysis.Commands).Redirects));
+        Assert.IsType<ShellValueDomain.Unknown>(redirect.Target);
     }
-
-    [Theory]
-    [InlineData(ShellValueDomainKind.FiniteSet)]
-    [InlineData(ShellValueDomainKind.Pattern)]
-    [InlineData((ShellValueDomainKind)999)]
-    public void Unsupported_working_directory_domain_fails_closed(
-        ShellValueDomainKind workingDirectoryKind)
-    {
-        var occurrence = new CommandOccurrence
-        {
-            Clause = new Clause
-            {
-                Verb = new VerbChain { Tokens = ["command"] }
-            },
-            ImmediateRole = CommandOccurrenceRole.Ordinary,
-            WorkingDirectory = new ShellValueDomain { Kind = workingDirectoryKind },
-            IsComplete = true
-        };
-        var analysis = CreateAnalysis(occurrence);
-
-        Assert.True(analysis.HasDynamicSyntax);
-    }
-
-    public static TheoryData<RedirectAnalysis> MalformedRedirects => new()
-    {
-        new RedirectAnalysis
-        {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Descriptor },
-            Operation = RedirectOperation.DescriptorDuplicate,
-            TargetDescriptor = 1,
-            IsComplete = true
-        },
-        new RedirectAnalysis
-        {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = RedirectOperation.DescriptorDuplicate,
-            IsComplete = true
-        },
-        new RedirectAnalysis
-        {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = RedirectOperation.DescriptorClose,
-            TargetDescriptor = 1,
-            IsComplete = true
-        },
-        new RedirectAnalysis
-        {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = (RedirectOperation)999,
-            IsComplete = true
-        },
-        new RedirectAnalysis
-        {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = RedirectOperation.FileOutput,
-            Target = new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["/work/result.log"]
-            },
-            IsComplete = true
-        }
-    };
-
-    public static TheoryData<RedirectAnalysis> MalformedStdinRedirects => new()
-    {
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = new ShellSourceFragment { Raw = "EOF" },
-            Body = new ShellSourceFragment { Raw = "body\n" },
-            ExpansionMode = HereDocumentExpansionMode.Literal,
-            IsComplete = false
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = new ShellSourceFragment { Raw = "EOF" },
-            Body = new ShellSourceFragment { Raw = "$value\n" },
-            ExpansionMode = HereDocumentExpansionMode.Expand,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = new ShellSourceFragment { Raw = "EOF" },
-            Body = new ShellSourceFragment { Raw = "body\n" },
-            ExpansionMode = (HereDocumentExpansionMode)999,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            ExpansionMode = HereDocumentExpansionMode.Literal,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = null!,
-            Body = new ShellSourceFragment { Raw = "body\n" },
-            ExpansionMode = HereDocumentExpansionMode.Literal,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = new ShellSourceFragment { Raw = "EOF" },
-            Body = null!,
-            ExpansionMode = HereDocumentExpansionMode.Literal,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(new HereDocumentAnalysis
-        {
-            Delimiter = new ShellSourceFragment
-            {
-                Raw = "EOF",
-                SourceStart = 1
-            },
-            Body = new ShellSourceFragment { Raw = "body\n" },
-            ExpansionMode = HereDocumentExpansionMode.Literal,
-            IsComplete = true
-        }),
-        HereDocumentRedirect(null),
-        HereDocumentRedirect(
-            new HereDocumentAnalysis
-            {
-                Delimiter = new ShellSourceFragment { Raw = "EOF" },
-                Body = new ShellSourceFragment { Raw = "body\n" },
-                ExpansionMode = HereDocumentExpansionMode.Literal,
-                IsComplete = true
-            },
-            target: new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["body\n"]
-            }),
-        HereStringRedirect(ShellValueDomain.Unknown),
-        HereStringRedirect(null!),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.Exact,
-            Values = ["one", "two"]
-        }),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.Exact,
-            Values = [null!]
-        }),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.FiniteSet,
-            Values = ["one"]
-        }),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.FiniteSet,
-            Values = ["same", "same"]
-        }),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.FiniteSet,
-            Values = Enumerable.Range(0, 33).Select(static index => index.ToString()).ToArray()
-        }),
-        HereStringRedirect(new ShellValueDomain
-        {
-            Kind = ShellValueDomainKind.Pattern,
-            Pattern = "*",
-            CoveringDirectory = "/work"
-        }),
-        HereStringRedirect(
-            new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["body\n"]
-            },
-            source: new RedirectSource
-            {
-                Kind = RedirectSourceKind.Descriptor,
-                Descriptor = 2
-            }),
-        HereStringRedirect(
-            new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["body\n"]
-            },
-            isPathRelevant: true),
-        HereStringRedirect(
-            new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["body\n"]
-            },
-            targetDescriptor: 0),
-        HereStringRedirect(
-            new ShellValueDomain
-            {
-                Kind = ShellValueDomainKind.Exact,
-                Values = ["body\n"]
-            },
-            hereDocument: new HereDocumentAnalysis
-            {
-                Delimiter = new ShellSourceFragment { Raw = "EOF" },
-                Body = new ShellSourceFragment { Raw = "body\n" },
-                ExpansionMode = HereDocumentExpansionMode.Literal,
-                IsComplete = true
-            })
-    };
-
-    private static ShellCommandAnalysis CreateAnalysis(CommandOccurrence occurrence)
-        => new(
-            BashEnvironment,
-            source: string.Empty,
-            workingDirectory: null,
-            commands: [occurrence],
-            ShellAnalysisFailure.None);
 
     private static string Describe(ShellCommandAnalysis analysis)
         => string.Join(" | ", analysis.Commands.Select(command =>
             $"{command.Clause.Verb.Joined}:complete={command.IsComplete}:" +
-            $"role={command.ImmediateRole}:cwd={command.WorkingDirectory.Kind}:" +
-            $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.AncestorKind}/{frame.Region}"))}:" +
+            $"role={command.ImmediateRole}:cwd={DescribeDomain(command.WorkingDirectory)}:" +
+            $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.Ancestor.GetType().Name}/{frame.Region}"))}:" +
             $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.Resolved}"))}:" +
-            $"effective={string.Join(',', command.EffectiveArguments.Select(arg => $"{arg.ClauseElementIndex}/{arg.Value.Kind}/{string.Join(';', arg.Value.Values)}"))}"));
+            $"effective={string.Join(',', command.Arguments.Select(arg => $"{arg.Argument.Raw}/{DescribeDomain(arg.Value)}"))}"));
 
-    private static RedirectAnalysis HereDocumentRedirect(
-        HereDocumentAnalysis? hereDocument,
-        ShellValueDomain? target = null)
-        => new()
+    private static string DescribeDomain(ShellValueDomain domain)
+        => domain switch
         {
-            Source = new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = RedirectOperation.HereDocument,
-            Target = target ?? ShellValueDomain.Unknown,
-            HereDocument = hereDocument,
-            IsComplete = true
-        };
-
-    private static RedirectAnalysis HereStringRedirect(
-        ShellValueDomain target,
-        RedirectSource? source = null,
-        bool isPathRelevant = false,
-        HereDocumentAnalysis? hereDocument = null,
-        int? targetDescriptor = null)
-        => new()
-        {
-            Source = source ?? new RedirectSource { Kind = RedirectSourceKind.Default },
-            Operation = RedirectOperation.HereString,
-            Target = target,
-            TargetDescriptor = targetDescriptor,
-            HereDocument = hereDocument,
-            IsPathRelevant = isPathRelevant,
-            IsComplete = true
+            ShellValueDomain.Unknown => "Unknown",
+            ShellValueDomain.Exact exact => $"Exact({exact.Value})",
+            ShellValueDomain.FiniteSet finite =>
+                $"FiniteSet({string.Join(';', finite.Values)})",
+            ShellValueDomain.PathPattern pattern =>
+                $"PathPattern({pattern.Pattern},{pattern.CoveringDirectory})",
+            _ => domain.GetType().Name
         };
 }

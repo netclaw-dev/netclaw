@@ -304,11 +304,9 @@ public sealed class ToolPathPolicy
                 }
             }
 
-            foreach (var effective in occurrence.EffectiveArguments)
+            foreach (var effective in occurrence.Arguments)
             {
-                if (effective.ClauseElementIndex < 0
-                    || effective.ClauseElementIndex >= occurrence.Clause.Elements.Count
-                    || !occurrence.Clause.Elements[effective.ClauseElementIndex].IsPath)
+                if (!effective.Element.IsPath)
                 {
                     continue;
                 }
@@ -319,8 +317,11 @@ public sealed class ToolPathPolicy
 
             foreach (var redirect in occurrence.Redirects)
             {
-                if (redirect.IsPathRelevant && DomainReferencesDeniedPath(redirect.Target))
+                if (redirect is FileRedirectAnalysis file
+                    && DomainReferencesDeniedPath(file.Target))
+                {
                     return true;
+                }
             }
         }
 
@@ -328,18 +329,19 @@ public sealed class ToolPathPolicy
     }
 
     private bool DomainReferencesDeniedPath(ShellValueDomain domain)
-    {
-        if (domain.Kind is ShellValueDomainKind.Exact or ShellValueDomainKind.FiniteSet)
+        => domain switch
         {
-            return domain.Values.Any(value =>
+            ShellValueDomain.Exact exact =>
+                !string.IsNullOrWhiteSpace(exact.Value)
+                && IsDeniedAgainst(exact.Value, _shellDeniedPaths),
+            ShellValueDomain.FiniteSet finite => finite.Values.Any(value =>
                 !string.IsNullOrWhiteSpace(value)
-                && IsDeniedAgainst(value, _shellDeniedPaths));
-        }
-
-        return domain.Kind == ShellValueDomainKind.Pattern
-            && !string.IsNullOrWhiteSpace(domain.CoveringDirectory)
-            && IsDeniedAgainst(domain.CoveringDirectory, _shellDeniedPaths);
-    }
+                && IsDeniedAgainst(value, _shellDeniedPaths)),
+            ShellValueDomain.PathPattern pattern =>
+                !string.IsNullOrWhiteSpace(pattern.CoveringDirectory)
+                && IsDeniedAgainst(pattern.CoveringDirectory, _shellDeniedPaths),
+            _ => false
+        };
 
     private static bool ContainsProtectedPathHint(string slashCommand)
     {

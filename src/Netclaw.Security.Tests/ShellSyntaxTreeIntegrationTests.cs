@@ -309,12 +309,60 @@ public sealed class ShellSyntaxTreeIntegrationTests
         var result = parser.Parse("dotnet test 2>&1");
 
         Assert.False(result.IsUnparseable);
-        var redirect = Assert.Single(Assert.Single(result.Commands).Redirects);
-        Assert.Equal(RedirectSourceKind.Descriptor, redirect.Source.Kind);
-        Assert.Equal(2, redirect.Source.Descriptor);
-        Assert.Equal(RedirectOperation.DescriptorDuplicate, redirect.Operation);
+        var redirect = Assert.IsType<DescriptorDuplicateRedirectAnalysis>(
+            Assert.Single(Assert.Single(result.Commands).Redirects));
+        var source = Assert.IsType<RedirectSource.Descriptor>(redirect.Source);
+        Assert.Equal(2, source.Value);
         Assert.Equal(1, redirect.TargetDescriptor);
-        Assert.False(redirect.IsPathRelevant);
+        Assert.True(redirect.IsComplete);
+    }
+
+    [Fact]
+    public void Analyzed_arguments_join_authored_arguments_to_their_source_elements()
+    {
+        var parser = new BashParser(new BashParserOptions
+        {
+            WorkingDirectory = "/work"
+        });
+
+        var result = parser.Parse("git --work-tree=../repo status");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var occurrence = Assert.Single(result.Commands);
+        Assert.Equal(3, occurrence.Arguments.Count);
+
+        var option = occurrence.Arguments[0];
+        var value = occurrence.Arguments[1];
+        Assert.Equal("--work-tree", option.Argument.Raw);
+        Assert.Equal("../repo", value.Argument.Raw);
+        Assert.Same(option.Element, value.Element);
+        Assert.Contains(
+            occurrence.Clause.Elements,
+            element => ReferenceEquals(element, option.Element));
+        Assert.Equal(
+            "../repo",
+            Assert.IsType<ShellValueDomain.Exact>(value.Value).Value);
+    }
+
+    [Fact]
+    public void PowerShell_all_stream_redirect_uses_closed_source_and_file_alternatives()
+    {
+        var parser = new PwshParser(new PwshParserOptions
+        {
+            Dialect = PwshDialect.PowerShell7,
+            WorkingDirectory = @"C:\work"
+        });
+
+        var result = parser.Parse("Write-Output ok *> output.log");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var redirect = Assert.IsType<FileRedirectAnalysis>(
+            Assert.Single(Assert.Single(result.Commands).Redirects));
+        Assert.IsType<RedirectSource.PowerShellAllStreams>(redirect.Source);
+        Assert.Equal(FileRedirectMode.Output, redirect.Mode);
+        Assert.Equal(
+            "C:/work/output.log",
+            Assert.IsType<ShellValueDomain.Exact>(redirect.Target).Value);
         Assert.True(redirect.IsComplete);
     }
 
