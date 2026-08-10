@@ -11,7 +11,8 @@ namespace Netclaw.Daemon;
 internal enum PowerShellFallbackReason
 {
     PreferredHostNotFound,
-    PreferredVersionUnsupported
+    PreferredVersionUnsupported,
+    PreferredHostProbeFailed
 }
 
 internal sealed record ShellEnvironmentResolution(
@@ -63,15 +64,14 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
                     PwshDialect.PowerShell7));
         }
 
-        if (preferred is PowerShellHostProbeResult.Failed preferredFailure)
-            throw OperationalProbeFailure("pwsh.exe", preferredFailure);
-
         var (fallbackReason, rejectedVersion) = preferred switch
         {
             PowerShellHostProbeResult.NotFound =>
                 (PowerShellFallbackReason.PreferredHostNotFound, (Version?)null),
             PowerShellHostProbeResult.Found found =>
                 (PowerShellFallbackReason.PreferredVersionUnsupported, found.Version),
+            PowerShellHostProbeResult.Failed =>
+                (PowerShellFallbackReason.PreferredHostProbeFailed, (Version?)null),
             _ => throw new InvalidOperationException("The preferred PowerShell probe returned an unknown result.")
         };
 
@@ -88,14 +88,13 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
                 rejectedVersion);
         }
 
-        if (fallback is PowerShellHostProbeResult.Failed fallbackFailure)
-            throw OperationalProbeFailure("powershell.exe", fallbackFailure);
-
         var preferredDescription = preferred switch
         {
             PowerShellHostProbeResult.NotFound => "pwsh.exe was not found",
             PowerShellHostProbeResult.Found found =>
                 $"pwsh.exe reported unsupported version {found.Version}",
+            PowerShellHostProbeResult.Failed failed =>
+                $"pwsh.exe probe failed ({failed.Failure})",
             _ => "pwsh.exe was unavailable"
         };
         var fallbackDescription = fallback switch
@@ -103,6 +102,8 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
             PowerShellHostProbeResult.NotFound => "powershell.exe was not found",
             PowerShellHostProbeResult.Found found =>
                 $"powershell.exe reported unsupported version {found.Version}",
+            PowerShellHostProbeResult.Failed failed =>
+                $"powershell.exe probe failed ({failed.Failure})",
             _ => "powershell.exe was unavailable"
         };
 
@@ -116,11 +117,4 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
 
     private static bool IsWindowsPowerShell51(Version version) =>
         version.Major == 5 && version.Minor == 1;
-
-    private static InvalidOperationException OperationalProbeFailure(
-        string executableName,
-        PowerShellHostProbeResult.Failed failure) =>
-        new(
-            $"Netclaw could not safely probe {executableName} ({failure.Failure}). "
-            + "Startup stopped so an operational probe error cannot change the selected shell grammar.");
 }
