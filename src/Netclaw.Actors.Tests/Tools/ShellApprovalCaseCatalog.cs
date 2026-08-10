@@ -618,10 +618,55 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("Get-ChildItem"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "powershell7-foreach-inherited-state-prompts",
+            PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
+            Approvals.PersistentAnywhere("Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-mutation-inherited-state-prompts",
+            PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Remove-Item -LiteralPath $f }"),
+            Approvals.PersistentAnywhere("Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-dynamic-identity-fails-closed",
+            PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { & $command $f }"),
+            Approvals.PersistentAnywhere("Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-child-unknown-state-prompts",
+            PowerShell7("pwsh -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Get-Content -LiteralPath $f }'"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-child-mutation-prompts",
+            PowerShell7("pwsh -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Remove-Item -LiteralPath $f }'"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-child-grant-does-not-cover-unknown-state",
+            PowerShell7("pwsh -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Remove-Item -LiteralPath $f }'"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-foreach-child-unknown-state-hard-deny",
+            PowerShell7("pwsh -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a\", \"b\")) { Stop-Process -Name netclaw }'"),
+            Approvals.PersistentAnywhere("Stop-Process"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
             "powershell51-safe-command-allows",
             WindowsPowerShell51("Get-ChildItem"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell51-foreach-inherited-state-prompts",
+            WindowsPowerShell51("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
+            Approvals.PersistentAnywhere("Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell51-foreach-child-grant-does-not-cover-unknown-state",
+            WindowsPowerShell51("powershell.exe -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Remove-Item -LiteralPath $f }'"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "powershell51-pipeline-chain-fails-closed",
             WindowsPowerShell51("Get-ChildItem && Get-Content .\\a.txt"),
@@ -1018,14 +1063,24 @@ public static class ShellApprovalCases
                 "persistent:grep",
                 "persistent:head")),
         Case(
-            "workload-search-loop-currently-complex",
+            "workload-search-loop-inherited-state-prompts",
             Bash("for f in src/*.cs; do grep -n \"TODO\" \"$f\"; done"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "workload-edit-loop-currently-complex",
+            "workload-edit-loop-inherited-state-prompts",
             Bash("for f in src/a.txt src/b.txt; do sed -i 's/old/new/' \"$f\"; done"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "sed"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-search-loop-child-unknown-state-prompts",
+            Bash("bash --noprofile --norc -c 'for f in src/a.cs src/b.cs; do grep -n TODO \"$f\"; done'"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "workload-edit-loop-child-grant-does-not-cover-unknown-state",
+            Bash("bash --noprofile --norc -c 'for f in src/a.txt src/b.txt; do rm -- \"$f\"; done'"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "workload-search-dynamic-root-remains-complex",
@@ -1067,6 +1122,16 @@ public static class ShellApprovalCases
             "control-flow-fails-closed",
             Bash("for f in *.txt; do cat \"$f\"; done"),
             Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "printf-variable-target-hidden-execution-fails-closed",
+            Bash("printf -v'value[$(printf marker >&2)0]' '%s' data"),
+            Approvals.PersistentAnywhere("printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "recursive-builtin-eval-fails-closed",
+            Bash("command -p -- builtin -- eval 'printf marker >&2'"),
+            Approvals.PersistentAnywhere("command", "builtin", "eval", "printf"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "process-substitution-fails-closed",

@@ -38,6 +38,21 @@ public sealed class ShellCommandAnalysisTests
         Assert.DoesNotContain(analysis.Commands, command => command.Clause.Verb.Joined == "bash");
     }
 
+    [Fact]
+    public void Bash_child_loop_requires_proved_initial_state()
+    {
+        const string command =
+            "bash --noprofile --norc -c 'for f in src/a.cs src/b.cs; do grep -n TODO \"$f\"; done'";
+        var parsed = BashEnvironment.Parse(command, "/work");
+        Assert.True(parsed.IsUnparseable);
+        Assert.Contains("proved isolated non-interactive initial state", parsed.UnparseableReason);
+
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.Commands);
+    }
+
     [Theory]
     [InlineData("sudo bash -lc", "sudo")]
     [InlineData("sudo /bin/bash -lc", "sudo")]
@@ -174,11 +189,25 @@ public sealed class ShellCommandAnalysisTests
             analysis.Commands.Select(command => command.Clause.Verb.Joined));
         Assert.False(
             analysis.HasDynamicSyntax,
-            string.Join(" | ", analysis.Commands.Select(command =>
-                $"{command.Clause.Verb.Joined}:complete={command.IsComplete}:" +
-                $"role={command.ImmediateRole}:cwd={command.WorkingDirectory.Kind}:" +
-                $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.AncestorKind}/{frame.Region}"))}:" +
-                $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.Resolved}"))}")));
+            Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_child_loop_does_not_inherit_initial_state_proof()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            "pwsh -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Get-Content -LiteralPath $f }'",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.Equal("Get-Content", occurrence.Clause.Verb.Joined);
+        Assert.True(occurrence.IsComplete);
+        Assert.Equal(
+            ShellValueDomainKind.Unknown,
+            Assert.Single(occurrence.EffectiveArguments).Value.Kind);
     }
 
     [Fact]
@@ -665,6 +694,14 @@ public sealed class ShellCommandAnalysisTests
             workingDirectory: null,
             commands: [occurrence],
             ShellAnalysisFailure.None);
+
+    private static string Describe(ShellCommandAnalysis analysis)
+        => string.Join(" | ", analysis.Commands.Select(command =>
+            $"{command.Clause.Verb.Joined}:complete={command.IsComplete}:" +
+            $"role={command.ImmediateRole}:cwd={command.WorkingDirectory.Kind}:" +
+            $"ancestry={string.Join(',', command.Ancestry.Select(frame => $"{frame.AncestorKind}/{frame.Region}"))}:" +
+            $"args={string.Join(',', command.Clause.Args.Select(arg => $"{arg.Raw}/{arg.Kind}/{arg.Resolved}"))}:" +
+            $"effective={string.Join(',', command.EffectiveArguments.Select(arg => $"{arg.ClauseElementIndex}/{arg.Value.Kind}/{string.Join(';', arg.Value.Values)}"))}"));
 
     private static RedirectAnalysis HereDocumentRedirect(
         HereDocumentAnalysis? hereDocument,

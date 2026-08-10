@@ -157,11 +157,15 @@ Done when:
 - [ ] Netclaw interprets bounded loop arguments only after the executor can
   prove the Bash initial variable state. The inherited shell state remains
   fail closed because an ambient nameref can change assignment semantics.
+  - [x] The approval matrix pins inherited and same-language child loops as
+    complex under the canonical unknown-state contract for Bash, PowerShell 7,
+    and Windows PowerShell 5.1. It also proves that a stored command grant
+    cannot cover an unproved loop-dependent argument.
 
 ### Priority: Use Native PowerShell on Windows
 
 **PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**Specs:** `openspec/changes/native-windows-powershell-host/`
+**Specs:** `openspec/changes/archive/2026-08-10-native-windows-powershell-host/`
 **Surface area:** shell execution, parsing, approval policy, model context
 **Verification:** L2 plus native Windows L3
 
@@ -172,8 +176,9 @@ prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
 The additive foundation pins ShellSyntaxTree `0.3.0-alpha.5` and defines the
 immutable environment, strict host probe, and process arguments. Runtime
 activation now routes execution, policy, approval, background jobs, and model
-context through the same resolved environment. Native Windows CI and final
-OpenSpec delivery remain before this priority is complete.
+context through the same resolved environment. PR #1848 auto-merged after
+adversarial review and green native Windows CI. The canonical specifications
+now contain the delivered contract. The OpenSpec change is archived.
 
 Local validation on 2026-08-10 passed restore, the zero-warning Release build,
 the full solution test suite, changed-file format verification, headers,
@@ -182,6 +187,18 @@ behavioral evaluation was unavailable because the required
 `NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, and
 `NETCLAW_EVAL_MODEL_ID` settings were absent. This result is blocked evidence,
 not an evaluation pass.
+
+Native Windows workflow run `31381580072` passed the zero-warning Release build,
+the complete security, actor, and daemon test suites, package staging, and CLI
+smoke tests. The production resolver and deterministic dialect matrix cover
+PowerShell 7.6 and Windows PowerShell 5.1. The Windows suite also executed the
+explicit Windows PowerShell 5.1 host test.
+
+The final OpenSpec verification mapped all 7 requirements and 24 scenarios to
+runtime code and named tests. The focused verification passed 320 security
+tests, 29 daemon tests, and 315 actor tests. One Windows-only actor test skipped
+locally and passed in native Windows workflow run `31381580072`. Strict
+validation passed all 78 OpenSpec items with no failures.
 
 Done when:
 
@@ -198,9 +215,9 @@ Done when:
   or a safe-verb pass. Stored approval cannot bypass hard deny.
 - [x] Personal sessions state the platform, executable, grammar, and dialect,
   including sessions that have no project directory.
-- [ ] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
+- [x] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
   The security review table covers direct, child, retry, and background paths.
-- [ ] Consumer guidance and canonical specs match the delivered behavior. The
+- [x] Consumer guidance and canonical specs match the delivered behavior. The
   OpenSpec change passes verification, is synchronized, and is archived.
 
 ### Priority: Simplify Tool Execution Context Architecture
