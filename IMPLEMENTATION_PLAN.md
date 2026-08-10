@@ -170,6 +170,11 @@ This work replaces `cmd.exe` with a native PowerShell host on Windows. Netclaw
 prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
 5.1. It keeps Bash and PowerShell as separate host languages.
 
+The additive foundation now pins ShellSyntaxTree `0.3.0-alpha.5` and defines
+the immutable environment, strict host probe, and process arguments. The
+current runtime remains transitional until the activation tasks route every
+executor and security consumer through that environment.
+
 Done when:
 
 - [ ] One immutable shell environment selects the absolute executable path,

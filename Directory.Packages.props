@@ -75,7 +75,7 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0-alpha.2" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0-alpha.5" />
     <PackageVersion Include="Termina" Version="0.16.1" />
   </ItemGroup>
   <!-- Serialization -->
@@ -124,7 +124,6 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
   </ItemGroup>
-
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2
        memory corruption in aggregate-term handling). No patched version of

@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add the native Windows shell priority to `IMPLEMENTATION_PLAN.md` and
   link this OpenSpec change.
-- [ ] 1.2 Update the central ShellSyntaxTree package to `0.3.0-alpha.5` through
+- [x] 1.2 Update the central ShellSyntaxTree package to `0.3.0-alpha.5` through
   the package-management workflow.
 - [x] 1.3 Archive `adopt-shellsyntax-alpha2-pwsh` with `--skip-specs` so its
   obsolete cross-language requirement cannot enter the canonical spec.
@@ -11,12 +11,12 @@
 
 ## 2. Canonical Environment Foundation
 
-- [ ] 2.1 Add the immutable shell environment with platform, executable,
+- [x] 2.1 Add the immutable shell environment with platform, executable,
   grammar, path style, command arguments, and optional PowerShell dialect.
-- [ ] 2.2 Add a deterministic Windows resolver that prefers compatible
+- [x] 2.2 Add a deterministic Windows resolver that prefers compatible
   `pwsh.exe`, falls back to PowerShell 5.1, stores the probed absolute path, and
   fails when neither host matches.
-- [ ] 2.3 Add version, priority, probe-failure, startup-failure, parser-options,
+- [x] 2.3 Add version, priority, probe-failure, startup-failure, parser-options,
   and process-argument tests for Bash, PowerShell 7.6, and PowerShell 5.1.
 - [ ] 2.4 Deliver the additive foundation as an adversarially reviewed PR with
   green CI and auto-merge before activation work starts.
