@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WizardConfigBuilder.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -39,6 +39,7 @@ public sealed class WizardConfigBuilder
     public SlackConfigSection? Slack { get; set; }
     public DiscordConfigSection? Discord { get; set; }
     public MattermostConfigSection? Mattermost { get; set; }
+    public TelegramConfigSection? Telegram { get; set; }
     public SecurityConfigSection Security { get; set; } = new();
     public SearchConfigSection? Search { get; set; }
     public ToolConfig? Tools { get; set; }
@@ -605,6 +606,16 @@ public sealed class MattermostConfigSection
     public bool AllowDirectMessages { get; init; }
     public List<string>? AllowedUserIds { get; init; }
     public Dictionary<string, string>? ChannelAudiences { get; init; }
+}
+
+public sealed class TelegramConfigSection
+{
+    public bool Enabled { get; init; }
+    public bool AllowDirectMessages { get; init; }
+    public bool MentionOnly { get; init; }
+    public List<string>? AllowedChatIds { get; init; }
+    public List<string>? AllowedUserIds { get; init; }
+    public Dictionary<string, string>? ChatAudiences { get; init; }
 }
 
 public sealed class SecurityConfigSection

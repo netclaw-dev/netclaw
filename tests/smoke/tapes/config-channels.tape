@@ -24,6 +24,7 @@ Down 2
 Enter
 Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /Slack/
+Wait+Screen@10s /Telegram/
 Wait+Screen@10s /2 channels, 1 user/
 
 # Re-enter configured Slack. This should open management, not token prompts.
@@ -76,7 +77,7 @@ Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /3 channels/
 Wait+Screen@10s /Done adding channels/
 
-Down 3
+Down 4
 Enter
 Wait+Screen@10s /Settings Areas/
 

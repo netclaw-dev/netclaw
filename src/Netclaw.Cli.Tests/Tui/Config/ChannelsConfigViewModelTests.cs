@@ -9,6 +9,7 @@ using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Mattermost;
+using Netclaw.Cli.Telegram;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -28,6 +29,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         { ChannelType.Slack, "Slack", ["Slack.BotToken", "Slack.AppToken"] },
         { ChannelType.Discord, "Discord", ["Discord.BotToken"] },
         { ChannelType.Mattermost, "Mattermost", ["Mattermost.BotToken"] }
+        , { ChannelType.Telegram, "Telegram", ["Telegram.BotToken"] }
     };
 
     public static TheoryData<ChannelType> ChannelTypes { get; } = new()
@@ -35,6 +37,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         ChannelType.Slack,
         ChannelType.Discord,
         ChannelType.Mattermost
+        , ChannelType.Telegram
     };
 
     public ChannelsConfigViewModelTests()
@@ -52,7 +55,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         var labels = vm.Step.Adapters.Select(static item => item.DisplayName).ToArray();
 
-        Assert.Equal(["Slack", "Discord", "Mattermost"], labels);
+        Assert.Equal(["Slack", "Discord", "Mattermost", "Telegram"], labels);
     }
 
     [Fact]
@@ -69,6 +72,155 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         var exception = Record.Exception(() => CreateViewModel().Dispose());
 
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Telegram_load_preserves_dm_fallback_and_distinct_user_and_group_audiences()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Telegram": {
+                "Enabled": true,
+                "AllowDirectMessages": true,
+                "MentionOnly": true,
+                "AllowedChatIds": ["-5364308250"],
+                "AllowedUserIds": ["6875639362"],
+                "ChatAudiences": {
+                  "dm": "public",
+                  "6875639362": "personal",
+                  "-5364308250": "team"
+                }
+              }
+            }
+            """);
+        File.WriteAllText(_paths.SecretsPath, """{ "Telegram": { "BotToken": "saved-token" } }""");
+
+        using var vm = CreateViewModel();
+        var telegram = vm.Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+
+        Assert.True(vm.Step.IsAdapterEnabled(ChannelType.Telegram));
+        Assert.True(telegram.AllowDirectMessages);
+        Assert.True(telegram.MentionOnly);
+        Assert.True(telegram.HasPersistedBotToken);
+        Assert.Equal("-5364308250", telegram.ChannelIdsInput);
+        Assert.Equal("6875639362", telegram.AllowedUserIdsInput);
+        vm.OpenAdapterManagement(ChannelType.Telegram);
+        var rows = vm.GetChannelRows(includeAddAction: false);
+        Assert.Equal(TrustAudience.Team, rows.Single(row => row.Id == "-5364308250").Audience);
+        Assert.Equal(TrustAudience.Personal, rows.Single(row => row.Id == "6875639362").Audience);
+        Assert.Equal(TrustAudience.Public, rows.Single(row => row.Id == "dm").Audience);
+    }
+
+    [Fact]
+    public async Task Telegram_save_persists_canonical_ids_audiences_and_preserves_secret()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """{ "configVersion": 1, "Security": { "DeploymentPosture": "Team" } }""");
+        File.WriteAllText(_paths.SecretsPath, """{ "Telegram": { "BotToken": "saved-token" } }""");
+        var probe = new FakeTelegramProbe
+        {
+            NextResolutionResult = new TelegramChatResolutionResult(
+                true, null, [new ResolvedTelegramChat("-5364308250", "Netclaw group")], [])
+        };
+        using var vm = CreateViewModel(telegramProbe: probe);
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            var telegram = (TelegramStepViewModel)adapter;
+            telegram.HasPersistedBotToken = true;
+            telegram.ChannelIdsInput = "-05364308250";
+            telegram.AllowDirectMessages = true;
+            telegram.MentionOnly = true;
+            telegram.RestrictToSpecificUsers = true;
+            telegram.AllowedUserIdsInput = "6875639362";
+        }, isKnown: true);
+
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(saved);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.Equal(["-5364308250"], ToStringArray(GetPath(config, "Telegram.AllowedChatIds")));
+        Assert.Equal(["6875639362"], ToStringArray(GetPath(config, "Telegram.AllowedUserIds")));
+        Assert.True(Assert.IsType<bool>(GetPath(config, "Telegram.MentionOnly")));
+        var audiences = ToStringDictionary(GetPath(config, "Telegram.ChatAudiences"));
+        Assert.Equal("personal", audiences["6875639362"]);
+        Assert.Equal("personal", audiences["dm"]);
+        Assert.Equal("team", audiences["-5364308250"]);
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.Equal("saved-token", ConfigFileHelper.DecryptIfEncrypted(_paths, GetPath(secrets, "Telegram.BotToken")?.ToString()));
+    }
+
+    [Fact]
+    public async Task Telegram_save_blocks_invalid_private_user_id_before_persistence()
+    {
+        WriteFreshConfig();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var probe = new FakeTelegramProbe();
+        using var vm = CreateViewModel(telegramProbe: probe);
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            var telegram = (TelegramStepViewModel)adapter;
+            telegram.BotToken = "token";
+            telegram.RestrictToSpecificUsers = true;
+            telegram.AllowedUserIdsInput = "not-a-user-id";
+        });
+
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(saved);
+        Assert.Equal(0, probe.ResolveCallCount);
+        Assert.Contains("not-a-user-id", vm.Status.Value.Text);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Telegram_save_blocks_failed_chat_resolution_before_persistence()
+    {
+        WriteFreshConfig();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var probe = new FakeTelegramProbe
+        {
+            NextResolutionResult = new TelegramChatResolutionResult(false, null, [], ["-999"])
+        };
+        using var vm = CreateViewModel(telegramProbe: probe);
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            var telegram = (TelegramStepViewModel)adapter;
+            telegram.BotToken = "token";
+            telegram.ChannelIdsInput = "-999";
+        });
+
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(saved);
+        Assert.Equal(1, probe.ResolveCallCount);
+        Assert.Contains("-999", vm.Status.Value.Text);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Telegram_save_blocks_failed_token_validation_before_persistence()
+    {
+        WriteFreshConfig();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var probe = new FakeTelegramProbe
+        {
+            NextProbeResult = new TelegramProbeResult(false, "Bot token is invalid.", null)
+        };
+        using var vm = CreateViewModel(telegramProbe: probe);
+        vm.Step.LoadAdapterState(ChannelType.Telegram, true, "configured", adapter =>
+        {
+            ((TelegramStepViewModel)adapter).BotToken = "bad-token";
+        });
+
+        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(saved);
+        Assert.Equal(1, probe.ProbeCallCount);
+        Assert.Equal(0, probe.ResolveCallCount);
+        Assert.Contains("Bot token is invalid", vm.Status.Value.Text);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
@@ -1785,14 +1937,22 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     private ChannelsConfigViewModel CreateViewModel(
         FakeSlackProbe? slackProbe = null,
         FakeDiscordProbe? discordProbe = null,
-        FakeMattermostProbe? mattermostProbe = null)
+        FakeMattermostProbe? mattermostProbe = null,
+        FakeTelegramProbe? telegramProbe = null)
         => new(_paths,
             slackProbe ?? new FakeSlackProbe(),
             discordProbe ?? new FakeDiscordProbe(),
-            mattermostProbe ?? new FakeMattermostProbe());
+            mattermostProbe ?? new FakeMattermostProbe(),
+            telegramProbe ?? new FakeTelegramProbe());
 
     private void WriteFreshConfig()
         => File.WriteAllText(_paths.NetclawConfigPath, """{ "configVersion": 1 }""");
+
+    private static object? GetPath(Dictionary<string, object> values, string path)
+    {
+        Assert.True(ConfigFileHelper.TryGetPathValue(values, path, out var value));
+        return value;
+    }
 
     private string[] PersistedChannels(ChannelType type)
     {

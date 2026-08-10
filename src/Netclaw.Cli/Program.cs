@@ -18,6 +18,7 @@ using Netclaw.Cli.Approvals;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Discord;
+using Netclaw.Cli.Telegram;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
@@ -132,6 +133,7 @@ static async Task RunAsync(string[] args)
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<ITelegramProbe, TelegramProbe>();
             builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             builder.Services.AddDoctorChecks();
         }
@@ -152,6 +154,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddProviderOAuthServices();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<ITelegramProbe, TelegramProbe>();
             builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
@@ -1144,6 +1147,7 @@ static async Task RunConfigEditorAsync(string[] args)
     builder.Services.AddProviderOAuthServices();
     builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
     builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+    builder.Services.AddHttpClient<ITelegramProbe, TelegramProbe>();
     builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
     builder.Services
         .AddSectionEditor<SecurityPostureStepViewModel>()
@@ -1188,6 +1192,7 @@ static async Task RunConfigEditorAsync(string[] args)
         ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
         doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
         doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+        doctorBuilder.Services.AddHttpClient<ITelegramProbe, TelegramProbe>();
         doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
         doctorBuilder.Services.AddDoctorChecks();
         doctorBuilder.Logging.ClearProviders();

@@ -10,6 +10,7 @@ using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Mattermost;
+using Netclaw.Cli.Telegram;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -26,6 +27,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private readonly ISlackProbe _slackProbe;
     private readonly IDiscordProbe _discordProbe;
     private readonly IMattermostProbe _mattermostProbe;
+    private readonly ITelegramProbe _telegramProbe;
     private readonly TuiNavigation? _navigation;
     private readonly ChannelsConfigPersistenceMapper _mapper = new();
     private readonly ChannelsEditorValidationAdapter _validator = new();
@@ -54,15 +56,17 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
         IMattermostProbe mattermostProbe,
+        ITelegramProbe telegramProbe,
         TuiNavigation? navigation = null)
     {
         _paths = paths;
         _slackProbe = slackProbe;
         _discordProbe = discordProbe;
         _mattermostProbe = mattermostProbe;
+        _telegramProbe = telegramProbe;
         _navigation = navigation;
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
-        Step = new ChannelPickerStepViewModel(slackProbe, discordProbe, mattermostProbe)
+        Step = new ChannelPickerStepViewModel(slackProbe, discordProbe, mattermostProbe, telegramProbe)
         {
             DoneActionText = "return to Settings Areas",
             DoneKeyActionLabel = "Done",
@@ -500,23 +504,36 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             case ChannelType.Mattermost when result is MattermostChannelResolutionResult mattermostResult:
                 Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).LastChannelResolution = mattermostResult;
                 break;
+            case ChannelType.Telegram when result is TelegramChatResolutionResult telegramResult:
+                Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).LastChannelResolution = telegramResult;
+                break;
         }
     }
 
     internal IReadOnlyList<ChannelsManagementMenuItem> GetManagementMenuItems()
     {
         var enabled = Step.IsAdapterEnabled(_activeAdapterType);
-        return
-        [
+        var items = new List<ChannelsManagementMenuItem>
+        {
             new ChannelsManagementMenuItem(ChannelsManagementAction.ManageChannels, "Manage channels and permissions", "Edit allowed channels and audience levels."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.AddChannel, $"Add a {ActiveAdapterName} channel", "Add channel ingress without touching credentials."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.ManageUsers, "Manage allowed users", "Restrict messages to specific user IDs."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.DirectMessages, "Direct messages", "Enable or disable DM ingress and audience."),
+        };
+        if (_activeAdapterType == ChannelType.Telegram)
+        {
+            var mentionOnly = Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).MentionOnly;
+            items.Add(new ChannelsManagementMenuItem(ChannelsManagementAction.ToggleMentionOnly,
+                mentionOnly ? "Disable mention-only groups" : "Enable mention-only groups",
+                "Require a mention or reply before group messages reach the bot."));
+        }
+        items.AddRange([
             new ChannelsManagementMenuItem(ChannelsManagementAction.RotateCredentials, "Rotate credentials", "Replace tokens only when explicitly entered."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.ToggleEnabled, enabled ? $"Disable {ActiveAdapterName}" : $"Enable {ActiveAdapterName}", "Preserve saved setup while changing runtime state."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.ResetConnection, $"Reset {ActiveAdapterName} connection", "Remove saved config and credentials."),
             new ChannelsManagementMenuItem(ChannelsManagementAction.Done, "Done", "Return to Channels.")
-        ];
+        ]);
+        return items;
     }
 
     internal void MoveManagementMenu(int delta)
@@ -543,6 +560,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 break;
             case ChannelsManagementAction.DirectMessages:
                 BeginDirectMessages();
+                break;
+            case ChannelsManagementAction.ToggleMentionOnly:
+                var telegram = Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+                telegram.MentionOnly = !telegram.MentionOnly;
+                AutosaveCompletedAction($"Telegram mention-only behavior {(telegram.MentionOnly ? "enabled" : "disabled")} and saved.");
                 break;
             case ChannelsManagementAction.RotateCredentials:
                 BeginRotateCredentials();
@@ -589,6 +611,20 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 IsDoneAction: false,
                 IsUnresolved: unresolved.Contains(channelId),
                 MentionRequired: GetChannelMentionRequired(_activeAdapterType, channelId)));
+        }
+
+        if (_activeAdapterType == ChannelType.Telegram)
+        {
+            foreach (var userId in GetAllowedUserIds(ChannelType.Telegram))
+            {
+                rows.Add(new ChannelPermissionRow(
+                    userId,
+                    $"Private user {userId}",
+                    GetChannelAudience(ChannelType.Telegram, userId, DefaultDirectMessageAudience()),
+                    IsDirectMessage: true,
+                    IsAddAction: false,
+                    IsDoneAction: false));
+            }
         }
 
         if (GetAllowDirectMessages(_activeAdapterType))
@@ -881,6 +917,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 new CredentialFieldSpec("bot", "Bot token", IsSecret: true, "Mattermost bot token", GetCredentialPresenceText("bot")),
                 new CredentialFieldSpec("callback", "Callback URL", IsSecret: false, "https://netclaw.example.com/api/mattermost/actions", "Optional interactive button callback URL.")
             ],
+            ChannelType.Telegram =>
+            [
+                new CredentialFieldSpec("bot", "Bot token", IsSecret: true, "Telegram bot token", GetCredentialPresenceText("bot"))
+            ],
             _ => []
         };
     }
@@ -975,6 +1015,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         var mattermost = await ValidateMattermostChannelsAsync(ct);
         ApplyChannelAccessOutcome(mattermost, issues, unresolved);
+
+        var telegram = await ValidateTelegramChatsAsync(ct);
+        ApplyChannelAccessOutcome(telegram, issues, unresolved);
 
         var result = issues.Count == 0
             ? ChannelsEditorValidationResult.Empty
@@ -1075,6 +1118,51 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         RemapChannelAudiences(ChannelType.Slack, remap);
         RemapChannelMentionRequired(ChannelType.Slack, remap);
         UpdateAdapterPickerSummary(ChannelType.Slack);
+        return ChannelAccessOutcome.None;
+    }
+
+    private async Task<ChannelAccessOutcome> ValidateTelegramChatsAsync(CancellationToken ct)
+    {
+        if (!Step.IsAdapterEnabled(ChannelType.Telegram))
+            return ChannelAccessOutcome.None;
+
+        var telegram = Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+        var userIds = ChannelCsv.ParseCsv(telegram.AllowedUserIdsInput, false);
+        var invalidUser = userIds.FirstOrDefault(id => !long.TryParse(id, out var numeric) || numeric <= 0);
+        if (invalidUser is not null)
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.TelegramAllowedUserIds, $"Telegram user ID is not valid: {invalidUser}."));
+
+        var botToken = GetEffectiveSecret("Telegram.BotToken", telegram.BotToken, telegram.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.TelegramBotToken, ChannelsEditorValidationMessages.TelegramBotTokenRequired));
+
+        var auth = await _telegramProbe.ProbeAsync(botToken, ct);
+        if (!auth.Success)
+            return ChannelAccessOutcome.Blocked(Error(
+                ChannelsEditorFieldPaths.TelegramBotToken,
+                $"Telegram auth failed: {auth.ErrorMessage}"));
+
+        var chatIds = ChannelCsv.ParseCsv(telegram.ChannelIdsInput, false);
+        if (chatIds.Count == 0)
+            return ChannelAccessOutcome.None;
+
+        var result = await _telegramProbe.ResolveChatIdsAsync(botToken, chatIds, ct);
+        telegram.LastChannelResolution = result;
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.TelegramAllowedChatIds, $"Telegram chat lookup failed: {result.ErrorMessage}"));
+        if (result.Unresolved.Count > 0)
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.TelegramAllowedChatIds, BuildUnresolvedChannelMessage(result.Unresolved)));
+        var canonicalByNumericId = result.Resolved.ToDictionary(
+            chat => long.Parse(chat.ChatId, System.Globalization.CultureInfo.InvariantCulture),
+            chat => chat.ChatId);
+        var canonicalIds = chatIds.Select(chatId => canonicalByNumericId[long.Parse(
+            chatId, System.Globalization.CultureInfo.InvariantCulture)]).ToArray();
+        var remap = chatIds.Zip(canonicalIds)
+            .Where(pair => !string.Equals(pair.First, pair.Second, StringComparison.Ordinal))
+            .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
+        SetChannelIds(ChannelType.Telegram, canonicalIds);
+        RemapChannelAudiences(ChannelType.Telegram, remap);
+        UpdateAdapterPickerSummary(ChannelType.Telegram);
         return ChannelAccessOutcome.None;
     }
 
@@ -1197,39 +1285,48 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         switch (type)
         {
             case ChannelType.Slack:
-            {
-                var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-                var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(botToken))
-                    return null;
+                {
+                    var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+                    var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
+                    if (string.IsNullOrWhiteSpace(botToken))
+                        return null;
 
-                var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
-                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.Id, c.Name)));
-            }
+                    var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
+                    return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.Id, c.Name)));
+                }
 
             case ChannelType.Discord:
-            {
-                var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-                var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(botToken))
-                    return null;
+                {
+                    var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+                    var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
+                    if (string.IsNullOrWhiteSpace(botToken))
+                        return null;
 
-                var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
-                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
-            }
+                    var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
+                    return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+                }
 
             case ChannelType.Mattermost:
-            {
-                var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-                var serverUrl = Normalize(mattermost.ServerUrl);
-                var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
-                if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(botToken))
-                    return null;
+                {
+                    var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+                    var serverUrl = Normalize(mattermost.ServerUrl);
+                    var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
+                    if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(botToken))
+                        return null;
 
-                var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
-                return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
-            }
+                    var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
+                    return (result, result.ErrorMessage, result.Resolved.Select(static c => (c.ChannelId, c.ChannelName)));
+                }
 
+            case ChannelType.Telegram:
+                {
+                    var telegram = Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+                    var botToken = GetEffectiveSecret("Telegram.BotToken", telegram.BotToken, telegram.HasPersistedBotToken);
+                    if (string.IsNullOrWhiteSpace(botToken))
+                        return null;
+                    var result = await _telegramProbe.ResolveChatIdsAsync(botToken, channelIds, ct);
+                    return (result, result.ErrorMessage, result.Resolved.Select(static chat => (chat.ChatId, chat.DisplayName)));
+                }
             default:
                 return null;
         }
@@ -1323,6 +1420,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ChannelType.Slack => IsSlackChannelId(reference),
         ChannelType.Discord => IsDiscordChannelId(reference),
         ChannelType.Mattermost => IsMattermostChannelId(reference),
+        ChannelType.Telegram => long.TryParse(reference, out var id) && id != 0,
         _ => false
     };
 
@@ -1408,6 +1506,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 model.Mattermost.BotTokenDraft = Normalize(BotTokenInput);
                 model.Mattermost.CallbackUrl = Normalize(CallbackUrlInput);
                 break;
+            case ChannelType.Telegram:
+                model.Telegram.Enabled = true;
+                model.Telegram.BotTokenDraft = Normalize(BotTokenInput);
+                break;
         }
     }
 
@@ -1428,6 +1530,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 ChannelsEditorFieldPaths.MattermostServerUrl,
                 ChannelsEditorFieldPaths.MattermostBotToken,
                 ChannelsEditorFieldPaths.MattermostCallbackUrl,
+            },
+            ChannelType.Telegram => new HashSet<string>(StringComparer.Ordinal)
+            {
+                ChannelsEditorFieldPaths.TelegramBotToken,
             },
             _ => new HashSet<string>(StringComparer.Ordinal),
         };
@@ -1630,6 +1736,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         AddAudienceDraft(ChannelType.Slack, draft.Slack.ChannelAudiences);
         AddAudienceDraft(ChannelType.Discord, draft.Discord.ChannelAudiences);
         AddAudienceDraft(ChannelType.Mattermost, draft.Mattermost.ChannelAudiences);
+        AddAudienceDraft(ChannelType.Telegram, draft.Telegram.ChannelAudiences);
         AddMentionRequiredDraft(ChannelType.Slack, draft.Slack.MentionRequiredInThreadByChannel);
         AddMentionRequiredDraft(ChannelType.Discord, draft.Discord.MentionRequiredInThreadByChannel);
         AddMentionRequiredDraft(ChannelType.Mattermost, draft.Mattermost.MentionRequiredInThreadByChannel);
@@ -1696,6 +1803,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ChannelType.Slack => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).ChannelNamesInput, trimHash: true),
         ChannelType.Discord => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput, trimHash: true),
         ChannelType.Mattermost => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput, trimHash: true),
+        ChannelType.Telegram => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).ChannelIdsInput, trimHash: false),
         _ => []
     };
 
@@ -1713,6 +1821,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             case ChannelType.Mattermost:
                 Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = value;
                 break;
+            case ChannelType.Telegram:
+                Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).ChannelIdsInput = value;
+                break;
         }
     }
 
@@ -1721,6 +1832,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ChannelType.Slack => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).AllowedUserIdsInput, trimHash: false),
         ChannelType.Discord => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).AllowedUserIdsInput, trimHash: false),
         ChannelType.Mattermost => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).AllowedUserIdsInput, trimHash: false),
+        ChannelType.Telegram => ChannelCsv.ParseCsv(Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).AllowedUserIdsInput, trimHash: false),
         _ => []
     };
 
@@ -1744,6 +1856,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 mattermost.RestrictToSpecificUsers = userIds.Count > 0;
                 mattermost.AllowedUserIdsInput = value;
                 break;
+            case ChannelType.Telegram:
+                var telegram = Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+                telegram.RestrictToSpecificUsers = userIds.Count > 0;
+                telegram.AllowedUserIdsInput = value;
+                break;
         }
     }
 
@@ -1752,6 +1869,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ChannelType.Slack => Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).AllowDirectMessages,
         ChannelType.Discord => Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).AllowDirectMessages,
         ChannelType.Mattermost => Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).AllowDirectMessages,
+        ChannelType.Telegram => Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).AllowDirectMessages,
         _ => false
     };
 
@@ -1767,6 +1885,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 break;
             case ChannelType.Mattermost:
                 Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).AllowDirectMessages = enabled;
+                break;
+            case ChannelType.Telegram:
+                Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).AllowDirectMessages = enabled;
                 break;
         }
     }
@@ -1793,6 +1914,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 "configured - leave blank to keep",
             ChannelType.Mattermost when key == "bot" && Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).HasPersistedBotToken =>
                 "configured - leave blank to keep",
+            ChannelType.Telegram when key == "bot" && Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).HasPersistedBotToken =>
+                "configured - leave blank to keep",
             _ => null
         };
     }
@@ -1811,6 +1934,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             ChannelType.Mattermost => Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).HasPersistedBotToken
                 ? "bot token configured"
                 : "bot token missing",
+            ChannelType.Telegram => Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).HasPersistedBotToken
+                ? "bot token configured"
+                : "bot token missing",
             _ => "credentials unknown"
         };
     }
@@ -1820,6 +1946,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ChannelType.Slack => "Slack",
         ChannelType.Discord => "Discord",
         ChannelType.Mattermost => "Mattermost",
+        ChannelType.Telegram => "Telegram",
         _ => type.ToString()
     };
 
@@ -1833,6 +1960,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             ChannelType.Slack => Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).LastChannelResolution?.Unresolved,
             ChannelType.Discord => Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).LastChannelResolution?.Unresolved,
             ChannelType.Mattermost => Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).LastChannelResolution?.Unresolved,
+            ChannelType.Telegram => Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).LastChannelResolution?.Unresolved,
             _ => null
         };
 
@@ -2009,6 +2137,7 @@ internal enum ChannelsManagementAction
     AddChannel,
     ManageUsers,
     DirectMessages,
+    ToggleMentionOnly,
     RotateCredentials,
     ToggleEnabled,
     ResetConnection,
@@ -2052,6 +2181,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             [ChannelType.Slack] = new ChannelPersistenceSpec("Slack", ["Slack.BotToken", "Slack.AppToken"]),
             [ChannelType.Discord] = new ChannelPersistenceSpec("Discord", ["Discord.BotToken"]),
             [ChannelType.Mattermost] = new ChannelPersistenceSpec("Mattermost", ["Mattermost.BotToken"])
+            ,
+            [ChannelType.Telegram] = new ChannelPersistenceSpec("Telegram", ["Telegram.BotToken"])
         };
 
     internal ChannelsConfigDraft Load(NetclawPaths paths)
@@ -2063,11 +2194,14 @@ internal sealed class ChannelsConfigPersistenceMapper
             Slack = LoadSlack(paths, config, secrets),
             Discord = LoadDiscord(paths, config, secrets),
             Mattermost = LoadMattermost(paths, config, secrets)
+            ,
+            Telegram = LoadTelegram(paths, config, secrets)
         };
 
         AddKnownProvider(draft.KnownProviders, ChannelType.Slack, draft.Slack.IsKnown);
         AddKnownProvider(draft.KnownProviders, ChannelType.Discord, draft.Discord.IsKnown);
         AddKnownProvider(draft.KnownProviders, ChannelType.Mattermost, draft.Mattermost.IsKnown);
+        AddKnownProvider(draft.KnownProviders, ChannelType.Telegram, draft.Telegram.IsKnown);
         return draft;
     }
 
@@ -2093,6 +2227,12 @@ internal sealed class ChannelsConfigPersistenceMapper
             BuildSummary(draft.Mattermost),
             vm => ApplyMattermost((MattermostStepViewModel)vm, draft.Mattermost),
             draft.Mattermost.IsKnown);
+        step.LoadAdapterState(
+            ChannelType.Telegram,
+            draft.Telegram.Enabled,
+            BuildSummary(draft.Telegram),
+            vm => ApplyTelegram((TelegramStepViewModel)vm, draft.Telegram),
+            draft.Telegram.IsKnown);
     }
 
     internal SectionContribution BuildContribution(
@@ -2137,6 +2277,14 @@ internal sealed class ChannelsConfigPersistenceMapper
             knownProviders.Contains(ChannelType.Mattermost),
             channelAudiences,
             channelMentionRequired,
+            posture);
+        AddTelegramContribution(
+            fields,
+            secrets,
+            step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram),
+            step.IsAdapterEnabled(ChannelType.Telegram),
+            knownProviders.Contains(ChannelType.Telegram),
+            channelAudiences,
             posture);
 
         return new SectionContribution(fields, secrets);
@@ -2221,6 +2369,23 @@ internal sealed class ChannelsConfigPersistenceMapper
         };
     }
 
+    private static TelegramChannelDraft LoadTelegram(NetclawPaths paths, Dictionary<string, object> config, Dictionary<string, object> secrets)
+    {
+        var hasBotToken = HasSecret(paths, secrets, "Telegram.BotToken");
+        var sectionPresent = SectionPresent(config, "Telegram");
+        return new TelegramChannelDraft
+        {
+            IsKnown = sectionPresent || hasBotToken,
+            Enabled = sectionPresent && GetBool(config, "Telegram.Enabled", false),
+            HasPersistedBotToken = hasBotToken,
+            ChannelIds = GetStringArray(config, "Telegram.AllowedChatIds"),
+            AllowDirectMessages = GetBool(config, "Telegram.AllowDirectMessages", false),
+            MentionOnly = GetBool(config, "Telegram.MentionOnly", true),
+            AllowedUserIds = GetStringArray(config, "Telegram.AllowedUserIds"),
+            ChannelAudiences = GetChannelAudiences(config, "Telegram.ChatAudiences")
+        };
+    }
+
     private static void ApplySlack(SlackStepViewModel vm, SlackChannelDraft draft)
     {
         vm.SlackEnabled = draft.Enabled;
@@ -2256,6 +2421,18 @@ internal sealed class ChannelsConfigPersistenceMapper
         vm.RestrictToSpecificUsers = draft.AllowedUserIds.Count > 0;
         vm.AllowedUserIdsInput = ChannelCsv.JoinOrNull(draft.AllowedUserIds);
         vm.CallbackUrl = draft.CallbackUrl;
+    }
+
+    private static void ApplyTelegram(TelegramStepViewModel vm, TelegramChannelDraft draft)
+    {
+        vm.TelegramEnabled = draft.Enabled;
+        vm.BotToken = null;
+        vm.HasPersistedBotToken = draft.HasPersistedBotToken;
+        vm.ChannelIdsInput = ChannelCsv.JoinOrNull(draft.ChannelIds);
+        vm.AllowDirectMessages = draft.AllowDirectMessages;
+        vm.MentionOnly = draft.MentionOnly;
+        vm.RestrictToSpecificUsers = draft.AllowedUserIds.Count > 0;
+        vm.AllowedUserIdsInput = ChannelCsv.JoinOrNull(draft.AllowedUserIds);
     }
 
     private static void AddSlackContribution(
@@ -2357,6 +2534,34 @@ internal sealed class ChannelsConfigPersistenceMapper
         AddSecretPreserveOrSet(secrets, "Mattermost.BotToken", vm.BotToken, vm.HasPersistedBotToken);
     }
 
+    private static void AddTelegramContribution(
+        List<SectionFieldAction> fields,
+        List<SectionSecretAction> secrets,
+        TelegramStepViewModel vm,
+        bool enabled,
+        bool knownProvider,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
+        DeploymentPosture posture)
+    {
+        if (!enabled)
+        {
+            if (knownProvider)
+                fields.Add(new SectionFieldAction("Telegram.Enabled", SectionFieldActionKind.Set, false));
+            AddSecretPreserveOrSet(secrets, "Telegram.BotToken", vm.BotToken, vm.HasPersistedBotToken);
+            return;
+        }
+
+        var chatIds = ChannelCsv.ParseCsv(vm.ChannelIdsInput, false);
+        var userIds = vm.RestrictToSpecificUsers ? ChannelCsv.ParseCsv(vm.AllowedUserIdsInput, false) : [];
+        fields.Add(new SectionFieldAction("Telegram.Enabled", SectionFieldActionKind.Set, true));
+        fields.Add(new SectionFieldAction("Telegram.AllowDirectMessages", SectionFieldActionKind.Set, vm.AllowDirectMessages));
+        fields.Add(new SectionFieldAction("Telegram.MentionOnly", SectionFieldActionKind.Set, vm.MentionOnly));
+        SetArrayOrDelete(fields, "Telegram.AllowedChatIds", chatIds);
+        SetArrayOrDelete(fields, "Telegram.AllowedUserIds", userIds);
+        SetDictionaryOrDelete(fields, "Telegram.ChatAudiences", BuildAudienceMap(ChannelType.Telegram, chatIds, userIds, vm.AllowDirectMessages, channelAudiences, posture, includeUserIds: true));
+        AddSecretPreserveOrSet(secrets, "Telegram.BotToken", vm.BotToken, vm.HasPersistedBotToken);
+    }
+
     private static void AddSecretPreserveOrSet(
         List<SectionSecretAction> secrets,
         string path,
@@ -2429,7 +2634,8 @@ internal sealed class ChannelsConfigPersistenceMapper
         IReadOnlyList<string> userIds,
         bool allowDirectMessages,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
-        DeploymentPosture posture)
+        DeploymentPosture posture,
+        bool includeUserIds = false)
     {
         channelAudiences.TryGetValue(type, out var explicitAudiences);
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2439,6 +2645,17 @@ internal sealed class ChannelsConfigPersistenceMapper
                 ? explicitAudience
                 : ChannelAudienceDefaults.ForChannel(posture);
             map[channelId] = audience.ToWireValue();
+        }
+
+        if (includeUserIds)
+        {
+            foreach (var userId in userIds)
+            {
+                var audience = explicitAudiences is not null && explicitAudiences.TryGetValue(userId, out var explicitAudience)
+                    ? explicitAudience
+                    : ChannelAudienceDefaults.ForDirectMessage(posture, userIds.Count);
+                map[userId] = audience.ToWireValue();
+            }
         }
 
         if (explicitAudiences is not null && explicitAudiences.TryGetValue("dm", out var explicitDmAudience))
@@ -2638,6 +2855,7 @@ internal sealed class ChannelsConfigDraft
     public required SlackChannelDraft Slack { get; init; }
     public required DiscordChannelDraft Discord { get; init; }
     public required MattermostChannelDraft Mattermost { get; init; }
+    public required TelegramChannelDraft Telegram { get; init; }
     public HashSet<ChannelType> KnownProviders { get; } = [];
 }
 
@@ -2668,6 +2886,12 @@ internal sealed class MattermostChannelDraft : ChannelProviderDraft
     public string? ServerUrl { get; init; }
     public bool HasPersistedBotToken { get; init; }
     public string? CallbackUrl { get; init; }
+}
+
+internal sealed class TelegramChannelDraft : ChannelProviderDraft
+{
+    public bool HasPersistedBotToken { get; init; }
+    public bool MentionOnly { get; init; } = true;
 }
 
 /// <summary>

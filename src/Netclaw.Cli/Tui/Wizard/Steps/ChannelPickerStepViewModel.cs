@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ChannelPickerStepViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -7,6 +7,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Mattermost;
+using Netclaw.Cli.Telegram;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
@@ -34,17 +35,19 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     private readonly Dictionary<ChannelType, string> _summaries = [];
     private readonly HashSet<ChannelType> _knownAdapters = [];
 
-    public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe, IMattermostProbe mattermostProbe)
+    public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe, IMattermostProbe mattermostProbe, ITelegramProbe telegramProbe)
     {
         var slackVm = new SlackStepViewModel(slackProbe) { SkipEnableSubStep = true };
         var discordVm = new DiscordStepViewModel(discordProbe) { SkipEnableSubStep = true };
         var mattermostVm = new MattermostStepViewModel(mattermostProbe) { SkipEnableSubStep = true };
+        var telegramVm = new TelegramStepViewModel(telegramProbe) { SkipEnableSubStep = true };
 
         _adapters =
         [
             new ChannelAdapterEntry(ChannelType.Slack, "Slack", slackVm, new SlackStepView()),
             new ChannelAdapterEntry(ChannelType.Discord, "Discord", discordVm, new DiscordStepView()),
-            new ChannelAdapterEntry(ChannelType.Mattermost, "Mattermost", mattermostVm, new MattermostStepView())
+            new ChannelAdapterEntry(ChannelType.Mattermost, "Mattermost", mattermostVm, new MattermostStepView()),
+            new ChannelAdapterEntry(ChannelType.Telegram, "Telegram", telegramVm, new TelegramStepView())
         ];
 
         foreach (var adapter in _adapters)

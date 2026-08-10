@@ -31,6 +31,8 @@ public sealed class InitWizardPageTests : IDisposable
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly FakeSlackProbe _fakeSlackProbe = new();
     private readonly FakeDiscordProbe _fakeDiscordProbe = new();
+    private readonly FakeMattermostProbe _fakeMattermostProbe = new();
+    private readonly FakeTelegramProbe _fakeTelegramProbe = new();
     private readonly ProviderDescriptorRegistry _registry = ProviderCommand.CreateDefaultRegistry();
 
     public InitWizardPageTests()
@@ -256,6 +258,13 @@ public sealed class InitWizardPageTests : IDisposable
             var postureStep = Assert.IsType<SecurityPostureStepViewModel>(vm.Orchestrator.CurrentStep);
             postureStep.SelectedPosture = DeploymentPosture.Personal;
 
+            AdvanceToStep(vm, WizardStepIds.ChannelPicker);
+            Assert.Contains(
+                vm.Orchestrator.CurrentStep is ChannelPickerStepViewModel picker
+                    ? picker.Adapters
+                    : [],
+                adapter => adapter.Type == Netclaw.Actors.Channels.ChannelType.Telegram);
+
             vm.GoNext();
 
             Assert.Equal(WizardStepIds.HealthCheck, vm.Orchestrator.CurrentStep?.StepId);
@@ -321,5 +330,12 @@ public sealed class InitWizardPageTests : IDisposable
     }
 
     private InitWizardViewModel CreateViewModel()
-        => new(_paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
+        => new(
+            _paths,
+            _registry,
+            _fakeProbe,
+            _fakeSlackProbe,
+            _fakeDiscordProbe,
+            _fakeMattermostProbe,
+            _fakeTelegramProbe);
 }
