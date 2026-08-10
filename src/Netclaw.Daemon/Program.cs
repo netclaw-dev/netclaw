@@ -101,7 +101,7 @@ try
             // surfaced on /api/health/ready so the init wizard can confirm a config
             // reload actually restarted the daemon (#1302).
             restartSignal.AdvanceGeneration();
-            await RunDaemonAsync(args, restartSignal, crashMonitor);
+            await RunDaemonAsync(args, restartSignal, crashMonitor, bootstrapPaths);
         } while (restartSignal.RestartRequested);
     }
 }
@@ -117,15 +117,19 @@ catch (Exception ex)
     throw;
 }
 
-static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSignal, DaemonCrashMonitor crashMonitor)
+static async Task RunDaemonAsync(
+    string[] args,
+    DaemonRestartSignal restartSignal,
+    DaemonCrashMonitor crashMonitor,
+    NetclawPaths bootstrapPaths)
 {
-    // Anchor process CWD to a user-owned temp directory.
+    // Anchor the process CWD to a durable user-owned directory.
     // Without this, the daemon runs from its install location (e.g. /usr/local/bin),
     // which means shell commands, relative file paths, and stdio MCP child processes
     // (Playwright screenshots, etc.) all default to a potentially privileged directory.
-    var netclawTempDir = Path.Combine(Path.GetTempPath(), "netclaw");
-    Directory.CreateDirectory(netclawTempDir);
-    Environment.CurrentDirectory = netclawTempDir;
+    // OS temp cleanup can remove a live process CWD, so this directory must stay
+    // under the Netclaw home instead of the system temp directory.
+    Environment.CurrentDirectory = bootstrapPaths.RuntimeDirectory;
 
     // Resolve inside each daemon generation. A soft restart is allowed to
     // select a newly installed compatible host, but one running generation
@@ -141,7 +145,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Load configuration first (netclaw.json, secrets.json, env vars) so that
     // DaemonConfig.Host/Port can be read before binding the WebHost URL.
-    var paths = ConfigureConfigServices(builder.Services, builder.Configuration);
+    var paths = ConfigureConfigServices(builder.Services, builder.Configuration, bootstrapPaths);
 
     // Bind listen address from DaemonConfig; falls back to 127.0.0.1:5199 if
     // the Daemon section is absent from netclaw.json.
@@ -355,11 +359,11 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 // Shared configuration services
 // ═══════════════════════════════════════════════════════════════════════
 
-static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
+static NetclawPaths ConfigureConfigServices(
+    IServiceCollection services,
+    IConfigurationManager configuration,
+    NetclawPaths bootstrapPaths)
 {
-    // Bootstrap paths with defaults to locate config files.
-    var bootstrapPaths = new NetclawPaths();
-
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
@@ -378,7 +382,7 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
     // Re-create paths with config-driven overrides (e.g. custom workspaces directory).
     var workspacesDir = configuration.GetValue<string>("Workspaces:Directory");
-    var paths = new NetclawPaths(workspacesDirectory: workspacesDir);
+    var paths = new NetclawPaths(bootstrapPaths.BasePath, workspacesDir);
     paths.EnsureDirectoriesExist();
     services.AddSingleton(paths);
 
