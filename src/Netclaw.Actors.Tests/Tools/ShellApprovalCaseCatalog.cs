@@ -598,6 +598,89 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["Remove-Item"])),
         Case(
+            "powershell7-subexpression-standalone-safe-allows",
+            PowerShell7("$(Get-Date)"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell7-subexpression-quoted-path-fails-closed",
+            PowerShell7("Get-Content \"$(Get-Date)\""),
+            Approvals.PersistentAnywhere("Get-Content", "Get-Date"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-subexpression-multiple-nested-fails-closed",
+            PowerShell7("Get-Content \"$(Write-Output $(Get-Date))\" \"$(Get-Location)\""),
+            Approvals.PersistentAnywhere("Get-Content", "Write-Output", "Get-Date", "Get-Location"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-subexpression-redirect-target-fails-closed",
+            PowerShell7("Get-ChildItem > \"$(Write-Output output.txt)\""),
+            Approvals.PersistentAnywhere("Get-ChildItem", "Write-Output"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-subexpression-state-propagates",
+            PowerShell7(@"Get-Content ""$(Set-Location C:\temp; Get-Location)""; Get-Content .\after.txt"),
+            Approvals.PersistentAnywhere("Get-Content", "Set-Location", "Get-Location"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-subexpression-call-operator-fails-closed",
+            PowerShell7("& $(Write-Output Get-Date)"),
+            Approvals.PersistentAnywhere("Write-Output", "Get-Date"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-subexpression-escaped-literal-allows",
+            PowerShell7(@"Get-Content "".\`$(Remove-Item victim.txt)"""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell7-subexpression-malformed-fails-closed",
+            PowerShell7("Get-Content \"$(Get-Date\""),
+            Approvals.PersistentAnywhere("Get-Content", "Get-Date"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell7-direct-region-reuses-body-grant",
+            PowerShell7(@"& { Remove-Item .\victim.txt }"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "Remove-Item"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:Remove-Item")),
+        Case(
+            "powershell7-callback-region-reuses-host-and-body-grants",
+            PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object",
+                "Remove-Item"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:ForEach-Object",
+                "persistent:Remove-Item")),
+        Case(
+            "powershell7-callback-region-host-grant-does-not-cover-body",
+            PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object"),
+            ExpectedApproval.Require(
+                ["Remove-Item"],
+                approvalMatches: ["persistent:ForEach-Object"])),
+        Case(
+            "powershell7-callback-region-body-grant-does-not-cover-host",
+            PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "Remove-Item"),
+            ExpectedApproval.Require(
+                ["ForEach-Object"],
+                approvalMatches: ["persistent:Remove-Item"])),
+        Case(
+            "powershell7-unknown-region-grants-do-not-cover-incomplete-receiver",
+            PowerShell7(@"Invoke-Custom { Remove-Item .\victim.txt }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "Invoke-Custom",
+                "Remove-Item"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
             "powershell7-alias-resolves-before-safe-verb-check",
             PowerShell7("gci"),
             Approvals.None,
@@ -706,6 +789,36 @@ public static class ShellApprovalCases
             "command-substitution-fails-closed",
             Bash("echo $(git push)"),
             Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bash-substitution-quoted-path-fails-closed",
+            Bash("cat \"$(git status)\""),
+            Approvals.PersistentAnywhere("cat", "git status"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bash-substitution-multiple-nested-fails-closed",
+            Bash("cat \"$(printf '%s' \"$(git status)\")\" \"$(dotnet --info)\""),
+            Approvals.PersistentAnywhere("cat", "printf", "git status", "dotnet"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bash-substitution-redirect-target-fails-closed",
+            Bash("git status > \"$(printf result.log)\""),
+            Approvals.PersistentAnywhere("git status", "printf"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bash-substitution-state-is-isolated",
+            Bash("cat \"$(cd /tmp && pwd)\""),
+            Approvals.PersistentAnywhere("cat", "cd", "pwd"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bash-substitution-escaped-literal-allows",
+            Bash("cat \"./\\$(git push)\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "bash-substitution-malformed-fails-closed",
+            Bash("cat \"$(git status\""),
+            Approvals.PersistentAnywhere("cat", "git status"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "dynamic-path-fails-closed",

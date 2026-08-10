@@ -180,6 +180,10 @@ Done when:
   patterns, redirect alternatives, and redirect-source alternatives. The
   unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
   matrix passes locally.
+- [x] The expanded 244-test matrix covers command-substitution and PowerShell
+  execution-region behavior. Known command-owned regions reuse independently
+  matched host and body grants after Netclaw accounts for the parsed body.
+  Unknown receivers and incomplete region facts remain prompt-only.
 - [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
   Static descriptor redirects no longer appear dynamic.
 - [x] The resolved POSIX `/dev/null` device does not create an approval
