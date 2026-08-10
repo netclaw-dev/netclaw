@@ -35,7 +35,10 @@ public class BackgroundJobManagerActorTests : TestKit
         builder.StartActors((system, registry, _) =>
         {
             var manager = system.ActorOf(
-                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+                Props.Create(() => new BackgroundJobManagerActor(
+                    _store,
+                    TimeProvider.System,
+                    TestShellEnvironment.Current)),
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(manager);
         });
@@ -94,7 +97,7 @@ public class BackgroundJobManagerActorTests : TestKit
         for (var i = 0; i < BackgroundJobManagerActor.MaxConcurrentJobs + 2; i++)
         {
             var started = await manager.Ask<BackgroundJobStarted>(
-                MakeStartCommand($"sleep {i + 60}"),
+                MakeStartCommand(TestShellEnvironment.DelayCommand(i + 60)),
                 TimeSpan.FromSeconds(5),
                 TestContext.Current.CancellationToken);
             jobIds.Add(started.JobId);
@@ -113,7 +116,7 @@ public class BackgroundJobManagerActorTests : TestKit
         for (var i = 0; i < BackgroundJobManagerActor.MaxConcurrentJobs + 1; i++)
         {
             var started = await manager.Ask<BackgroundJobStarted>(
-                MakeStartCommand($"sleep {i + 60}"),
+                MakeStartCommand(TestShellEnvironment.DelayCommand(i + 60)),
                 TimeSpan.FromSeconds(5),
                 TestContext.Current.CancellationToken);
             jobIds.Add(started.JobId);
@@ -146,13 +149,13 @@ public class BackgroundJobManagerActorTests : TestKit
         var sessionB = new SessionId("reap/session-b");
 
         var jobA1 = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("sleep 300") with { SessionId = sessionA },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionA },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         var jobA2 = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("sleep 300") with { SessionId = sessionA },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionA },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         var jobB = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("sleep 300") with { SessionId = sessionB },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionB },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Guard against environmental spawn failure (fork pressure under the
@@ -199,7 +202,7 @@ public class BackgroundJobManagerActorTests : TestKit
         ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref);
 
         var started = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("sleep 300") with { SessionId = sessionId },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionId },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await manager.Ask<SessionJobsReaped>(
@@ -276,7 +279,10 @@ public class BackgroundJobManagerActorTests : TestKit
         // A fresh manager's PreStart reconciliation marks the orphan Lost and
         // must notify the owning session through the gateway.
         var manager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+            Props.Create(() => new BackgroundJobManagerActor(
+                _store,
+                TimeProvider.System,
+                TestShellEnvironment.Current)),
             "lost-notify-manager");
 
         // Readiness barrier: reconciliation runs before this reply.
@@ -318,7 +324,10 @@ public class BackgroundJobManagerActorTests : TestKit
 
         // Create a second manager — its PreStart reconciliation should mark the orphan as Lost
         var manager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+            Props.Create(() => new BackgroundJobManagerActor(
+                _store,
+                TimeProvider.System,
+                TestShellEnvironment.Current)),
             "reconcile-test-manager");
 
         // Readiness barrier: reconciliation runs before this reply.
@@ -356,7 +365,11 @@ public class BackgroundJobManagerActorTests : TestKit
         var sink = new RecordingNotificationSink();
 
         var legacyManager = Sys.ActorOf(
-            Props.Create(() => new BackgroundJobManagerActor(store, TimeProvider.System, sink)),
+            Props.Create(() => new BackgroundJobManagerActor(
+                store,
+                TimeProvider.System,
+                TestShellEnvironment.Current,
+                sink)),
             "legacy-job-alert-manager");
 
         // Readiness barrier: startup alert emission runs before this reply.

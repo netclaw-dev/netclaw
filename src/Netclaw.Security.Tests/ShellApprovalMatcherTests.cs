@@ -104,7 +104,7 @@ public sealed class ShellApprovalMatcherTests
         Assert.False(analysis.IsMessy);
         var candidate = Assert.Single(analysis.Candidates);
         Assert.Equal("Get-Content", candidate.Verb);
-        Assert.Equal("C:/work", candidate.Directory);
+        Assert.Equal(OperatingSystem.IsWindows() ? @"C:\work" : "C:/work", candidate.Directory);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public sealed class ShellApprovalMatcherTests
         Assert.False(analysis.IsMessy);
         var candidate = Assert.Single(analysis.Candidates);
         Assert.Equal("Get-Content", candidate.Verb);
-        Assert.Equal("C:/work", candidate.Directory);
+        Assert.Equal(OperatingSystem.IsWindows() ? @"C:\work" : "C:/work", candidate.Directory);
     }
 
     [Fact]

@@ -23,6 +23,16 @@ internal static class TestShellEnvironment
             ? "Start-Sleep -Seconds 300"
             : "sleep 300";
 
+    public static string DelayCommand(int seconds) =>
+        Current.Grammar == ShellGrammar.PowerShell
+            ? $"Start-Sleep -Seconds {seconds}"
+            : $"sleep {seconds}";
+
+    public static string CreateDirectoryCommandName =>
+        Current.Grammar == ShellGrammar.PowerShell
+            ? "New-Item"
+            : "mkdir";
+
     public static string StandardErrorCommand =>
         Current.Grammar == ShellGrammar.PowerShell
             ? "[Console]::Error.WriteLine('error')"

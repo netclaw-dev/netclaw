@@ -255,7 +255,7 @@ public class ShellToolTests
         try
         {
             var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, TrustAudience.Personal);
-            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+            var args = ToolInput.Create("Command", TestShellEnvironment.PrintWorkingDirectoryCommand);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -284,7 +284,7 @@ public class ShellToolTests
             var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, new TestToolExecutionContextOptions
             { Audience = TrustAudience.Personal, ProjectDirectory = projectDir });
             var args = ToolInput.Create(
-                "Command", OperatingSystem.IsWindows() ? "cd" : "pwd",
+                "Command", TestShellEnvironment.PrintWorkingDirectoryCommand,
                 "WorkingDirectory", explicitDir);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -313,7 +313,7 @@ public class ShellToolTests
             // Environment.CurrentDirectory happens to be — proving the
             // ProcessStartInfo default-fall-through is gone.
             var context = TestToolExecutionContext.CreateBound("session-1", sessionDir, TrustAudience.Personal);
-            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+            var args = ToolInput.Create("Command", TestShellEnvironment.PrintWorkingDirectoryCommand);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -348,7 +348,7 @@ public class ShellToolTests
 
         Assert.Contains("does not exist", result);
         Assert.Contains(missingDir, result);
-        Assert.Contains("mkdir", result);
+        Assert.Contains(TestShellEnvironment.CreateDirectoryCommandName, result);
         // The process must never start with a missing cwd...
         Assert.DoesNotContain("Exit code", result);
         // ...and the tool must not silently create the directory either.

@@ -20,6 +20,7 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class DispatchingToolExecutorTests
 {
+    private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly DispatchingToolExecutor _executor;
     private readonly DispatchingToolExecutor _restrictedExecutor;
 
@@ -34,8 +35,10 @@ public class DispatchingToolExecutorTests
             }
         };
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(baseConfig, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(baseConfig, new NetclawPaths(), pathPolicy, commandPolicy);
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -45,8 +48,8 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                commandPolicy,
+                pathPolicy));
 
         var restrictedConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         restrictedConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -58,8 +61,14 @@ public class DispatchingToolExecutorTests
         };
         restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "file_list", "file_write", "file_edit", "attach_file", "shell_execute"];
         restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_list", "attach_file"];
+        var restrictedCommandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var restrictedPathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var restrictedRegistry = new ToolRegistry();
-        restrictedRegistry.WithFirstPartyTools(restrictedConfig, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        restrictedRegistry.WithFirstPartyTools(
+            restrictedConfig,
+            new NetclawPaths(),
+            restrictedPathPolicy,
+            restrictedCommandPolicy);
         _restrictedExecutor = new DispatchingToolExecutor(
             restrictedRegistry,
             new ToolAccessPolicy(
@@ -69,8 +78,8 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                restrictedCommandPolicy,
+                restrictedPathPolicy));
     }
 
     [Fact]
@@ -334,8 +343,10 @@ public class DispatchingToolExecutorTests
         config.AudienceProfiles.Personal.ToolsMode = ToolProfileMode.Allowlist;
         config.AudienceProfiles.Personal.AllowedTools = ["file_read", "file_write", "attach_file"];
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -346,8 +357,8 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                commandPolicy,
+                pathPolicy));
 
         var toolCall = new FunctionCallContent(
             "call-shell-profile-deny", "shell_execute",
@@ -371,8 +382,10 @@ public class DispatchingToolExecutorTests
         config.AudienceProfiles.Personal.ToolsMode = ToolProfileMode.Allowlist;
         config.AudienceProfiles.Personal.AllowedTools.Add("shell_execute");
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -383,8 +396,8 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.Off,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                commandPolicy,
+                pathPolicy));
 
         var toolCall = new FunctionCallContent(
             "call-shell-off", "shell_execute",
@@ -1085,8 +1098,10 @@ public class DispatchingToolExecutorTests
             }
         };
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
 
         var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
         try
@@ -1102,8 +1117,8 @@ public class DispatchingToolExecutorTests
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
                         UsedStrictFallback: false),
-                    new ShellCommandPolicy(),
-                    new ToolPathPolicy([])),
+                    commandPolicy,
+                    pathPolicy),
                 approvalService);
 
             var toolCall = new FunctionCallContent(
@@ -1157,8 +1172,10 @@ public class DispatchingToolExecutorTests
             }
         };
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -1169,8 +1186,8 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                commandPolicy,
+                pathPolicy));
 
         var toolCall = new FunctionCallContent(
             "call-approve-once-bypass",
@@ -1300,8 +1317,10 @@ public class DispatchingToolExecutorTests
             }
         };
 
+        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
 
         var system = ActorSystem.Create($"tool-approval-filtered-once-{Guid.NewGuid():N}");
         try
@@ -1317,8 +1336,8 @@ public class DispatchingToolExecutorTests
                         TrustAudience.Personal,
                         ShellExecutionMode.HostAllowed,
                         UsedStrictFallback: false),
-                    new ShellCommandPolicy(),
-                    new ToolPathPolicy([])),
+                    commandPolicy,
+                    pathPolicy),
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-filtered", null, new TestToolExecutionContextOptions
@@ -1329,11 +1348,21 @@ public class DispatchingToolExecutorTests
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
+            var approvedPattern = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? "Get-Location"
+                : "pwd";
+            var unapprovedPattern = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? "Get-ChildItem"
+                : "ls";
+            var command = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? "Get-Location; Get-ChildItem"
+                : "pwd && ls";
+
             await approvalService.RecordApprovalAsync(
                 "signalr/thread-filtered",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                ["pwd"],
+                [approvedPattern],
                 persistent: false,
                 cwd: null,
                 TestContext.Current.CancellationToken);
@@ -1341,13 +1370,13 @@ public class DispatchingToolExecutorTests
             var call = new FunctionCallContent(
                 "call-filtered-once",
                 "shell_execute",
-                ToolInput.Create("Command", "pwd && ls"));
+                ToolInput.Create("Command", command));
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
 
-            Assert.Equal(["ls"], firstAttempt.ApprovalContext.Patterns);
-            Assert.Equal(["ls"], firstAttempt.ApprovalContext.CandidateVerbs);
+            Assert.Equal([unapprovedPattern], firstAttempt.ApprovalContext.Patterns);
+            Assert.Equal([unapprovedPattern], firstAttempt.ApprovalContext.CandidateVerbs);
 
             context.OneTimeApprovedToolName = call.Name;
             context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));

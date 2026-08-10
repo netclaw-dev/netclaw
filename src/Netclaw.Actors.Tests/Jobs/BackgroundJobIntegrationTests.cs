@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobIntegrationTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -42,7 +42,10 @@ public class BackgroundJobIntegrationTests : TestKit
         builder.StartActors((system, registry, _) =>
         {
             var manager = system.ActorOf(
-                Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)),
+                Props.Create(() => new BackgroundJobManagerActor(
+                    _store,
+                    TimeProvider.System,
+                    TestShellEnvironment.Current)),
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(manager);
         });
@@ -134,7 +137,7 @@ public class BackgroundJobIntegrationTests : TestKit
             TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("does not exist", delivered.Content);
-        Assert.Contains("mkdir", delivered.Content);
+        Assert.Contains(TestShellEnvironment.CreateDirectoryCommandName, delivered.Content);
         Assert.Contains("failed", delivered.Content.ToLowerInvariant());
 
         await AwaitAssertAsync(() =>
@@ -183,7 +186,7 @@ public class BackgroundJobIntegrationTests : TestKit
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
         var started = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("sleep 300"),
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand),
             TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
 

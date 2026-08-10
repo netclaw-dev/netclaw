@@ -25,6 +25,9 @@ public class ToolArgumentValidatorTests
 
     public ToolArgumentValidatorTests()
     {
+        var environment = TestShellEnvironment.Current;
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
         var config = new ToolConfig();
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -35,7 +38,7 @@ public class ToolArgumentValidatorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -45,8 +48,8 @@ public class ToolArgumentValidatorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])));
+                commandPolicy,
+                pathPolicy));
     }
 
     private static ToolExecutionContext PersonalContext(string sessionDir)
