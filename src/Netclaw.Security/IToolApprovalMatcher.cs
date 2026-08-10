@@ -537,39 +537,51 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static string? ExactValue(ShellSyntaxTree.ShellValueDomain domain)
-        => domain.Kind == ShellSyntaxTree.ShellValueDomainKind.Exact
-            && domain.Values.Count == 1
-            ? domain.Values[0]
-            : null;
+        => (domain as ShellSyntaxTree.ShellValueDomain.Exact)?.Value;
 
     private static IReadOnlyList<string>? ResolveRedirectDirectories(
         ShellSyntaxTree.RedirectAnalysis redirect,
         ShellPathStyle pathStyle)
     {
-        if (!redirect.IsPathRelevant)
-            return [];
-
         if (!redirect.IsComplete)
             return null;
 
-        if (redirect.Target.Kind == ShellSyntaxTree.ShellValueDomainKind.Pattern)
+        if (redirect is ShellSyntaxTree.UnresolvedRedirectAnalysis)
+            return null;
+
+        if (redirect is not ShellSyntaxTree.FileRedirectAnalysis file)
         {
-            var coveringDirectory = redirect.Target.CoveringDirectory;
+            return redirect is ShellSyntaxTree.DescriptorDuplicateRedirectAnalysis
+                or ShellSyntaxTree.DescriptorMoveRedirectAnalysis
+                or ShellSyntaxTree.DescriptorCloseRedirectAnalysis
+                or ShellSyntaxTree.HereDocumentRedirectAnalysis
+                or ShellSyntaxTree.HereStringRedirectAnalysis
+                ? []
+                : null;
+        }
+
+        if (file.Target is ShellSyntaxTree.ShellValueDomain.PathPattern pattern)
+        {
+            var coveringDirectory = pattern.CoveringDirectory;
             return string.IsNullOrWhiteSpace(coveringDirectory)
                 || ContainsSymlinkEntry(coveringDirectory)
                 ? null
                 : [coveringDirectory];
         }
 
-        if (redirect.Target.Kind is not (
-            ShellSyntaxTree.ShellValueDomainKind.Exact
-            or ShellSyntaxTree.ShellValueDomainKind.FiniteSet))
+        IReadOnlyList<string> targets = file.Target switch
+        {
+            ShellSyntaxTree.ShellValueDomain.Exact exact => [exact.Value],
+            ShellSyntaxTree.ShellValueDomain.FiniteSet finite => finite.Values,
+            _ => []
+        };
+        if (targets.Count == 0)
         {
             return null;
         }
 
-        var directories = new List<string>(redirect.Target.Values.Count);
-        foreach (var target in redirect.Target.Values)
+        var directories = new List<string>(targets.Count);
+        foreach (var target in targets)
         {
             if (string.IsNullOrWhiteSpace(target))
                 return null;
@@ -1160,8 +1172,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// <see cref="BuildSanitizedDisplayViaParser"/>.
     /// </summary>
     private static bool IsRawDisplayRedirect(ShellSyntaxTree.RedirectAnalysis redirect)
-        => redirect.Operation is ShellSyntaxTree.RedirectOperation.HereDocument
-            or ShellSyntaxTree.RedirectOperation.HereString;
+        => redirect is ShellSyntaxTree.HereDocumentRedirectAnalysis
+            or ShellSyntaxTree.HereStringRedirectAnalysis;
 
     /// <summary>
     /// Size summary shown in place of a multi-line argument. Outer quotes
