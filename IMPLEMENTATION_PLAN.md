@@ -141,6 +141,9 @@ Done when:
   explicit Bash redirect facts for the existing grammar.
 - [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
   Static descriptor redirects no longer appear dynamic.
+- [x] The resolved POSIX `/dev/null` device does not create an approval
+  directory after host symlink checks. Other device paths and dynamic redirect
+  targets stay strict.
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
   command-resolution mutation and reserved execution forms into the strict
   181-case review matrix.

@@ -22,6 +22,7 @@
 | safe-verb-traversal-external-path-prompts | Bash | Personal | Project | Interactive | cat safe/../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
 | safe-verb-bash-provider-looking-relative-path-allows | Bash | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-verb-external-redirect-prompts | Bash | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
+| safe-verb-null-device-redirect-allows | Bash | Personal | Project | Interactive | ls -la 2>/dev/null | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | mutating-verb-project-prompts | Bash | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Bash | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | four-safe-mixed-operator-clauses-allow | Bash | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
