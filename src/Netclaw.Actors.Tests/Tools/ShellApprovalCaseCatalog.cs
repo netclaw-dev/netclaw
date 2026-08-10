@@ -308,6 +308,11 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
+            "safe-verb-null-device-redirect-allows",
+            Bash("ls -la 2>/dev/null"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
             "mutating-verb-project-prompts",
             Bash("git push"),
             Approvals.None,

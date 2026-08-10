@@ -126,6 +126,22 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact]
+    public void Power_shell_redirect_does_not_use_the_posix_null_device_exception()
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args("Get-Content .\\input.txt > /dev/null", @"C:\work"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+    }
+
+    [Fact]
     public void Dialect_change_reparses_before_candidates_can_match_a_grant()
     {
         const string command = @"Get-ChildItem && Get-Content .\input.txt";
@@ -1545,6 +1561,66 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
         Assert.Contains(candidates, candidate =>
             candidate.Verb == "echo" && candidate.Directory == workingDirectory);
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies POSIX null device behavior, which does not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("ls -la 2>/dev/null", "ls")]
+    [InlineData("ls -la 2>/dev/./null", "ls")]
+    [InlineData("cat </dev/null", "cat")]
+    public void ExtractCandidates_ignores_resolved_posix_null_device_redirect(
+        string command,
+        string expectedVerb)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command));
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal(expectedVerb, candidate.Verb);
+        Assert.Null(candidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_uses_invocation_directory_after_null_device_redirect()
+    {
+        const string workingDirectory = "/home/user/repos/demo";
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args("tmux ls 2>/dev/null", workingDirectory));
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal("tmux ls", candidate.Verb);
+        Assert.Equal(workingDirectory, candidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_keeps_other_redirect_scope_after_null_device_redirect()
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(
+                "tmux ls 2>/dev/null >/netclaw-approval-external/netclaw-output.txt",
+                "/work"));
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal("tmux ls", candidate.Verb);
+        Assert.Equal("/netclaw-approval-external", candidate.Directory);
+    }
+
+    [SlopwatchSuppress("SW001", "This theory verifies POSIX null device lookalikes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("ls -la 2>/dev/nul")]
+    [InlineData("ls -la 2>/dev/null.backup")]
+    public void ExtractCandidates_does_not_generalize_posix_null_device_exception(string command)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command));
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal("ls", candidate.Verb);
+        Assert.Equal("/dev", candidate.Directory);
     }
 
     [SlopwatchSuppress("SW001", "This test verifies POSIX symlink redirect behavior, which does not apply to the Windows shell parser.")]
