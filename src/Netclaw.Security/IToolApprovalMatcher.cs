@@ -115,6 +115,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
+    private const string PosixNullDevicePath = "/dev/null";
+
     private readonly ShellCommandAnalyzer _analyzer;
 
     public ShellApprovalMatcher()
@@ -578,7 +580,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             // The resolved POSIX null device creates no reusable filesystem
             // authority. Other device paths stay strict.
             if (pathStyle == ShellPathStyle.Posix
-                && string.Equals(target, "/dev/null", StringComparison.Ordinal))
+                && string.Equals(target, PosixNullDevicePath, StringComparison.Ordinal))
             {
                 continue;
             }

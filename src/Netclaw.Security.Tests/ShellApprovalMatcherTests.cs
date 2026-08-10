@@ -1606,12 +1606,15 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Equal("/etc", candidate.Directory);
     }
 
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    public void ExtractCandidates_does_not_generalize_posix_null_device_exception()
+    [SlopwatchSuppress("SW001", "This theory verifies POSIX null device lookalikes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("ls -la 2>/dev/nul")]
+    [InlineData("ls -la 2>/dev/null.backup")]
+    public void ExtractCandidates_does_not_generalize_posix_null_device_exception(string command)
     {
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
-            Args("ls -la 2>/dev/null.backup"));
+            Args(command));
 
         var candidate = Assert.Single(candidates);
         Assert.Equal("ls", candidate.Verb);
