@@ -99,7 +99,7 @@ public sealed class ShellApprovalMatcherTests
 
         var analysis = matcher.AnalyzeInvocation(
             new ToolName("shell_execute"),
-            Args(@"Get-Content FileSystem::C:\work\input.txt", @"C:\work"));
+            Args(@"Get-Content 'FileSystem::C:\work\input.txt'", @"C:\work"));
 
         Assert.False(analysis.IsMessy);
         var candidate = Assert.Single(analysis.Candidates);

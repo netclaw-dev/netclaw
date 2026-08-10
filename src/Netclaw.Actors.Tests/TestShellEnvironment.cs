@@ -35,7 +35,7 @@ internal static class TestShellEnvironment
 
     public static string ReadFileCommand(string path) =>
         Current.Grammar == ShellGrammar.PowerShell
-            ? $"Get-Content '{path.Replace("'", "''", StringComparison.Ordinal)}'"
+            ? $"Get-Content 'FileSystem::{path.Replace("'", "''", StringComparison.Ordinal)}'"
             : $"cat '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 
     public static string StandardErrorCommand =>
