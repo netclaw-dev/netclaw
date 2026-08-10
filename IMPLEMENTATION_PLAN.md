@@ -144,16 +144,14 @@ Done when:
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
   command-resolution mutation and reserved execution forms into the strict
   181-case review matrix.
-- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.2` for one exact POSIX
-  `pwsh -NoProfile -NonInteractive -Command '<static payload>'` wrapper. It
-  keeps the outer host and every complete PowerShell child as independent
-  approval occurrences. The native Windows PowerShell work below replaces
-  this temporary cross-language parser.
-- [x] The 204-case shell approval review table proves PowerShell host and child
-  grant composition, intrinsic direct-call script blocks, nested hard deny,
-  decoded protected paths, and strict handling for dynamic values, named
-  script-block receivers, command-resolution changes, host-option near misses,
-  Windows wrappers, `BASH_ENV`, and exported-function risk.
+- [x] ShellSyntaxTree `0.3.0-alpha.2` introduced one temporary POSIX PowerShell
+  child wrapper. The current runtime keeps that transitional behavior until
+  activation task 3.1 removes it. The accepted target contract supersedes the
+  design: Bash treats `pwsh` as an external command, and only a native
+  PowerShell host uses `PwshParser`.
+- [x] The current 204-case shell approval review table records the transitional
+  child-host behavior. Activation replaces those rows with native PowerShell
+  cases; they do not define the accepted host-language boundary.
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.

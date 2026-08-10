@@ -4,9 +4,9 @@
   link this OpenSpec change.
 - [ ] 1.2 Update the central ShellSyntaxTree package to `0.3.0-alpha.5` through
   the package-management workflow.
-- [ ] 1.3 Archive `adopt-shellsyntax-alpha2-pwsh` with `--skip-specs` so its
+- [x] 1.3 Archive `adopt-shellsyntax-alpha2-pwsh` with `--skip-specs` so its
   obsolete cross-language requirement cannot enter the canonical spec.
-- [ ] 1.4 Replace stale POSIX PowerShell child-wrapper guidance with the
+- [x] 1.4 Replace stale POSIX PowerShell child-wrapper guidance with the
   canonical host boundary.
 
 ## 2. Canonical Environment Foundation
