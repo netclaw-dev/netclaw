@@ -66,6 +66,11 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         Assert.Equal("client-1", active!.ClientId);
         Assert.Equal("secret-client-1", active.ClientSecret?.Value);
         Assert.Equal("http://127.0.0.1:7331/api/mcp/oauth/callback", server.DynamicClientRegistrations.Single().RedirectUris.Single());
+        Assert.Equal("netclaw", server.DynamicClientRegistrations.Single().ClientName);
+        Assert.Equal("https://netclaw.dev", server.DynamicClientRegistrations.Single().ClientUri);
+        Assert.Equal(
+            "https://raw.githubusercontent.com/netclaw-dev/netclaw-brand/dev/logo/netclaw-icon-purple.png",
+            server.DynamicClientRegistrations.Single().LogoUri);
 
         await harness.Runtime.LastHttpOptions!.OAuth!.TokenCache!.StoreTokensAsync(
             new TokenContainer
@@ -1195,6 +1200,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
             using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
             var root = document.RootElement;
+            var clientName = ReadOptionalString(root, "client_name");
+            var clientUri = ReadOptionalString(root, "client_uri");
+            var logoUri = ReadOptionalString(root, "logo_uri");
             var redirectUris = ReadStringArray(root, "redirect_uris");
             var grantTypes = ReadStringArray(root, "grant_types");
             var responseTypes = ReadStringArray(root, "response_types");
@@ -1207,6 +1215,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             _registrations.Enqueue(new DynamicClientRegistrationObservation(
                 clientId,
                 clientSecret,
+                clientName,
+                clientUri,
+                logoUri,
                 redirectUris,
                 grantTypes,
                 responseTypes,
@@ -1475,6 +1486,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     private sealed record DynamicClientRegistrationObservation(
         string ClientId,
         string ClientSecret,
+        string? ClientName,
+        string? ClientUri,
+        string? LogoUri,
         IReadOnlyList<string> RedirectUris,
         IReadOnlyList<string> GrantTypes,
         IReadOnlyList<string> ResponseTypes,
