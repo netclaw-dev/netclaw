@@ -195,16 +195,67 @@ clause makes the whole command prompt.
 
 ```json
 {
+  "version": 3,
   "audiences": {
     "personal": {
-      "shell_execute": ["git push", "git add", "dotnet build", "dotnet test"]
+      "shell_execute": [
+        {
+          "shell": "Bash",
+          "match": "TokenPrefix",
+          "verbTokens": ["git", "push"],
+          "directory": "/work/project",
+          "createdAt": "2026-08-11T12:00:00+00:00"
+        },
+        {
+          "shell": "Bash",
+          "match": "LegacyExact",
+          "verb": "dotnet build",
+          "directory": null,
+          "createdAt": null
+        }
+      ],
+      "notion/create-page": [
+        {
+          "verb": "create-page",
+          "directory": null,
+          "createdAt": "2026-08-11T12:00:00+00:00"
+        }
+      ]
     }
   }
 }
 ```
 
 This file is **not** monitored by the config watcher — writing to it does not
-restart the daemon. Each audience has its own section.
+restart the daemon. Each audience has its own section. A token-prefix shell
+entry matches the same canonical tokens with optional later tokens. A legacy
+entry matches only its exact phrase. Version-2 shell entries convert to
+`LegacyExact`, so an upgrade does not add authority.
+
+Use the CLI instead of direct file edits:
+
+```bash
+netclaw approvals list
+netclaw approvals list --json
+netclaw approvals trust-verb "git push" --shell bash
+netclaw approvals revoke 'Bash token-prefix "git push" anywhere'
+netclaw approvals revoke --tool shell_execute --all --audience personal
+```
+
+`trust-verb` accepts one complete static ShellSyntaxTree phrase. It rejects a
+flag, redirect, assignment, dynamic command identity, or compound command. For
+a non-shell tool, use `--tool`; the CLI stores the text as an exact non-shell
+entry. Do not use `--shell` with a non-shell tool.
+
+On the first version-2 load, Netclaw creates a byte-identical
+`tool-approvals.json.v2.bak` before it replaces the active file. To recover,
+stop the daemon, copy the backup over the active file, and start the current
+daemon. The current daemon can convert that backup again. Do not run an old
+version-2 daemon against a version-3 file.
+
+Malformed, partial, or future-version files stay untouched. Netclaw marks the
+persistent store unavailable. An uncovered call is denied instead of shown as
+a normal approval prompt.
 
 ## Hard Deny List
 
@@ -300,5 +351,6 @@ the stale prompt is rejected as expired and the interrupted `spawn_agent` call i
 closed before the next turn continues.
 
 **Q: Can I pre-approve common commands?**
-A: Yes. Edit `~/.netclaw/config/tool-approvals.json` directly to add patterns.
-Or use the agent normally — every "Approve always" click adds to the file.
+A: Yes. Use `netclaw approvals trust-verb`, or use the agent normally and
+select an always option. Use `netclaw approvals list` to copy the exact label
+for a later revoke.

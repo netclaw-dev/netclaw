@@ -592,8 +592,8 @@ public class DispatchingToolExecutorTests
             new ToolPathPolicy([]),
             new ShellCommandPolicy());
         var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
-        var approvedCandidate = new ApprovalCandidate("git status", Directory: null);
-        var unapprovedCandidate = new ApprovalCandidate("git push", Directory: null);
+        var approvedCandidate = BashCandidate("git status");
+        var unapprovedCandidate = BashCandidate("git push");
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(
                 ["git push"],
@@ -663,8 +663,8 @@ public class DispatchingToolExecutorTests
                 new ToolPathPolicy([]),
                 new ShellCommandPolicy());
             var approvedMatch = new ToolApprovalMatch("git push", "persistent", approvedDirectory);
-            var approvedCandidate = new ApprovalCandidate("git push", approvedDirectory);
-            var unapprovedCandidate = new ApprovalCandidate("git push", unapprovedDirectory);
+            var approvedCandidate = BashCandidate("git push", approvedDirectory);
+            var unapprovedCandidate = BashCandidate("git push", unapprovedDirectory);
             var approvalService = new FixedApprovalService(
                 new ToolApprovalCheckResult(
                     ["git push"],
@@ -768,6 +768,67 @@ public class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.Equal(["git status", "git push"], decision.ApprovalContext!.CandidateVerbs);
+    }
+
+    [Fact]
+    public async Task Authorization_evaluation_keeps_broad_prompt_for_inconsistent_parser_tokens()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy());
+        var forgedCandidate = new ApprovalCandidate("git status", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(["git", "push"]),
+        };
+        var approvalService = new FixedApprovalService(
+            new ToolApprovalCheckResult(
+                ["git status", "git push"],
+                [])
+            {
+                CandidateChecks =
+                [
+                    new ToolApprovalCandidateCheck(forgedCandidate, ApprovedMatch: null),
+                    new ToolApprovalCandidateCheck(BashCandidate("git push"), ApprovedMatch: null)
+                ]
+            });
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])),
+            approvalService);
+        var call = new FunctionCallContent(
+            "call-inconsistent-parser-tokens",
+            "shell_execute",
+            ToolInput.Create("Command", "git status && git push"));
+        var context = CreateInteractivePersonalContext("signalr/thread-inconsistent-parser-tokens");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        Assert.Equal(["git status", "git push"], decision.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(2, decision.ApprovalContext.Candidates!.Count);
     }
 
     [Fact]
@@ -1107,7 +1168,7 @@ public class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -1227,6 +1288,40 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task One_time_approval_remains_valid_when_persistent_store_is_unavailable()
+    {
+        var initialExecutor = CreateApprovalGatedShellExecutor(new FixedApprovalService(
+            new ToolApprovalCheckResult(["git push"], [])));
+        var context = CreateInteractivePersonalContext("signalr/store-unavailable");
+        var toolCall = new FunctionCallContent(
+            "call-store-unavailable-once",
+            "shell_execute",
+            ToolInput.Create("Command", "git push"));
+
+        var initial = await initialExecutor.EvaluateAuthorizationAsync(
+            toolCall,
+            context,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, initial.Outcome);
+        Assert.NotNull(initial.ApprovalContext);
+        context.OneTimeApprovedToolName = toolCall.Name;
+        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(initial.ApprovalContext));
+
+        var unavailableExecutor = CreateApprovalGatedShellExecutor(new FixedApprovalService(
+            new ToolApprovalCheckResult(["git push"], [])
+            {
+                PersistentStoreFailure = ApprovalStoreFailure.InvalidData,
+            }));
+        var retry = await unavailableExecutor.EvaluateAuthorizationAsync(
+            toolCall,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
+    }
+
+    [Fact]
     public async Task One_time_approval_bypasses_policy_for_path_aware_file_patterns()
     {
         var controlPlaneRoot = Path.Combine(Path.GetTempPath(), $"netclaw-control-plane-{Guid.NewGuid():N}");
@@ -1326,7 +1421,7 @@ public class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -1415,12 +1510,17 @@ public class DispatchingToolExecutorTests
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
         try
         {
-            var store = new ToolApprovalStore(tempFile);
+            File.Delete(tempFile);
+            var store = new ToolApprovalStore(
+                tempFile,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+                lockTimeout: TimeSpan.Zero);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry("git status") { Directory = null });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "status"]));
 
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(store), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -1457,9 +1557,11 @@ public class DispatchingToolExecutorTests
             var match = Assert.Single(decision.ApprovalMatches);
             Assert.Equal("git status", match.Pattern);
             Assert.Equal("persistent", match.Source);
-            Assert.Equal("git status anywhere", match.Scope);
+            Assert.Equal("Bash token-prefix \"git status\" anywhere", match.Scope);
             Assert.Equal("PreviouslyApproved", context.AppliedApprovalDecision);
-            Assert.Equal("git status [persistent: git status anywhere]", context.AppliedApprovalPattern);
+            Assert.Equal(
+                "git status [persistent: Bash token-prefix \"git status\" anywhere]",
+                context.AppliedApprovalPattern);
         }
         finally
         {
@@ -1487,7 +1589,7 @@ public class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -1597,7 +1699,7 @@ public class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -1707,7 +1809,8 @@ public class DispatchingToolExecutorTests
         await executor.AuthorizeAsync(toolCall, context, TestContext.Current.CancellationToken);
     }
 
-    private static DispatchingToolExecutor CreateApprovalGatedShellExecutor()
+    private static DispatchingToolExecutor CreateApprovalGatedShellExecutor(
+        IToolApprovalService? approvalService = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -1734,7 +1837,7 @@ public class DispatchingToolExecutorTests
                     UsedStrictFallback: false),
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
-            new UnexpectedApprovalService());
+            approvalService ?? new UnexpectedApprovalService());
     }
 
     private static ToolExecutionContext CreateInteractivePersonalContext(string sessionId)
@@ -1748,6 +1851,14 @@ public class DispatchingToolExecutorTests
             });
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
+        new(verb, directory)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(
+                verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
+        };
 
     private sealed class UnexpectedApprovalService : IToolApprovalService
     {

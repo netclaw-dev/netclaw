@@ -135,6 +135,43 @@ public sealed class ToolApprovalGateTests
         Assert.Contains("git push", decision.ApprovalContext.Patterns);
     }
 
+    [Fact]
+    public void Compound_command_keeps_distinct_typed_occurrences_with_one_legacy_projection()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "whoami user; whoami admin"));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Collection(
+            decision.ApprovalContext!.Candidates!,
+            first => Assert.Equal(["whoami", "user"], first.VerbTokens),
+            second => Assert.Equal(["whoami", "admin"], second.VerbTokens));
+    }
+
+    [Fact]
+    public void One_time_keys_bind_parser_tokens_not_only_the_legacy_projection()
+    {
+        var first = new ApprovalCandidate("whoami", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(["whoami", "user"]),
+        };
+        var second = new ApprovalCandidate("whoami", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(["whoami", "admin"]),
+        };
+
+        var firstKeys = OneTimeApprovalKeys.Create([], [first], cwd: null);
+        var secondKeys = OneTimeApprovalKeys.Create([], [second], cwd: null);
+
+        Assert.NotEqual(Assert.Single(firstKeys), Assert.Single(secondKeys));
+    }
+
     private const string ControlPlaneRoot = "/home/user/.netclaw/config";
 
     private static ToolAccessPolicy CreateFileWritePolicy(ToolApprovalConfig? approvalPolicy = null)
@@ -1029,5 +1066,31 @@ public sealed class ToolApprovalGateTests
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
         Assert.Equal(ApprovalOptionKeys.DenyLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.Deny).Label);
+    }
+
+    [Fact]
+    public void Narrow_shell_context_omits_reusable_options_for_incomplete_phrase_facts()
+    {
+        var candidate = new ApprovalCandidate("status-report", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+        };
+        var original = new ToolApprovalContext(
+            "shell_execute",
+            "status-report",
+            ["status-report"],
+            ["status-report"],
+            [],
+            Cwd: "/work/repo",
+            Candidates: [candidate]);
+
+        var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
+            original,
+            [candidate],
+            sessionDirectory: null);
+
+        Assert.Equal(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            narrowed.Options.Select(static option => option.Key.Value));
     }
 }

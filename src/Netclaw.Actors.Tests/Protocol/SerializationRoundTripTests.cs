@@ -809,7 +809,11 @@ public sealed class SerializationRoundTripTests : TestKit
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
-                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project"),
+                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project")
+                {
+                    Shell = Netclaw.Configuration.ApprovalShell.Bash,
+                    VerbTokens = Array.AsReadOnly(["git", "push"]),
+                },
                 new Netclaw.Security.ApprovalCandidate("ls", null)
             ],
             TurnContext = new TurnContextRecord
@@ -864,8 +868,12 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
         Assert.Equal("/home/user/project", result.Candidates[0].Directory);
+        Assert.Equal(Netclaw.Configuration.ApprovalShell.Bash, result.Candidates[0].Shell);
+        Assert.Equal(["git", "push"], result.Candidates[0].VerbTokens);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
+        Assert.Null(result.Candidates[1].Shell);
+        Assert.Null(result.Candidates[1].VerbTokens);
         Assert.NotNull(result.TurnContext);
         Assert.Equal(wrapped.TurnContext.SessionId, result.TurnContext.SessionId);
         Assert.Equal(wrapped.TurnContext.TurnId, result.TurnContext.TurnId);

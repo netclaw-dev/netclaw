@@ -45,7 +45,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Empty(unapproved);
@@ -70,7 +70,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
         Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Team, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
@@ -83,38 +83,36 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
         Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("file_write"), ["git push"], cwd: null, ct));
     }
 
     [Fact]
-    public async Task Single_token_approval_requires_exact_match()
+    public async Task Single_token_approval_matches_a_longer_token_phrase()
     {
         var ct = TestContext.Current.CancellationToken;
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, cwd: null, ct);
 
-        // Single-token "gh" should NOT match "gh pr" — prevents approving
-        // "gh --help" from also approving "gh pr create"
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], cwd: null, ct);
-        Assert.Equal(["gh pr"], unapproved);
+        Assert.Empty(unapproved);
     }
 
     [Fact]
-    public async Task Shell_exact_approval_does_not_prefix_match()
+    public async Task Shell_token_prefix_approval_matches_a_longer_phrase()
     {
         var ct = TestContext.Current.CancellationToken;
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], cwd: null, ct);
-        Assert.Equal(["git push origin"], unapproved);
+        Assert.Empty(unapproved);
     }
 
     [Theory]
@@ -127,7 +125,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
 
         Assert.Empty(await service.GetUnapprovedPatternsAsync(
             "session-a",
@@ -146,7 +144,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync(
             "session-a",
@@ -166,11 +164,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var tempFile = Path.GetTempFileName();
         try
         {
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: true, cwd: null, ct);
+            await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: true, cwd: null, ct);
 
             Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
 
@@ -185,26 +183,29 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
-    public async Task Approval_match_follows_host_filesystem_case_rules()
+    public async Task Bash_approval_match_is_case_sensitive_on_all_hosts()
     {
-        // Approval entries embed both filesystem paths and verb tokens that
-        // resolve to executables via $PATH lookup, which honors filesystem case
-        // rules. On POSIX, `Git` and `git` are different executables, and
-        // `/data/` and `/Data/` are different directories — so a grant issued
-        // for one MUST NOT cover the other (binary-substitution / case-distinct
-        // path bypass). On Windows, the filesystem and PATH are
-        // case-insensitive, so the case-folded match is the correct behavior.
         var ct = TestContext.Current.CancellationToken;
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
+        var grant = BashCandidate("Git", directory: null);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["Git Push"], persistent: false, cwd: null, ct);
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
+        await service.RecordApprovalCandidatesAsync(
+            (ToolApprovalSessionId)"session-a",
+            TrustAudience.Personal,
+            new ToolName("shell_execute"),
+            [new ToolApprovalGrant(grant, Directory: null)],
+            persistent: false,
+            ct);
+        var result = await service.CheckApprovalAsync(
+            "session-a",
+            TrustAudience.Personal,
+            new ToolName("shell_execute"),
+            [BashCandidate("git", directory: null)],
+            cwd: null,
+            ct);
 
-        if (OperatingSystem.IsWindows())
-            Assert.Empty(unapproved);
-        else
-            Assert.Equal(["git push"], unapproved);
+        Assert.Equal(["git"], result.UnapprovedPatterns);
     }
 
     [Fact]
@@ -214,7 +215,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
         Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
@@ -227,11 +228,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var tempFile = Path.GetTempFileName();
         try
         {
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+            await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
             Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
 
@@ -253,7 +254,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Parent session approves "git push"
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         // Sub-agent queries with hierarchical scope ID — should inherit parent approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
@@ -271,7 +272,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
         // Sub-agent records its own approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
-        await service.RecordApprovalAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], persistent: false, cwd: null, ct);
 
         // Parent session should NOT see sub-agent's approval
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], cwd: null, ct);
@@ -286,7 +287,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Parent session approves "git status"
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], persistent: false, cwd: null, ct);
 
         // Nested sub-agent (sub-agent spawned by sub-agent) should still inherit
         var nestedScope = "session-a/subagent/orchestrator/def456/subagent/worker/ghi789";
@@ -303,7 +304,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Session B approves "git push"
-        await service.RecordApprovalAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        await RecordApprovalAsync(service, "session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         // Sub-agent of session A should NOT inherit session B's approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
@@ -323,9 +324,9 @@ public sealed class ToolApprovalActorTests : TestKit
             var candidateDir = Path.Combine(grantDir, "src");
             var unrelatedCwd = Path.Combine(Path.GetTempPath(), "netclaw-approval", "other");
 
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry("dotnet test") { Directory = grantDir });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["dotnet", "test"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -334,14 +335,14 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-a",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [new ApprovalCandidate("dotnet test", candidateDir)],
+                [BashCandidate("dotnet test", candidateDir)],
                 cwd: unrelatedCwd,
                 ct);
 
             Assert.Empty(result.UnapprovedPatterns);
             var match = Assert.Single(result.ApprovedMatches);
             Assert.Equal("persistent", match.Source);
-            Assert.Equal($"dotnet test in {grantDir}", match.Scope);
+            Assert.Equal($"Bash token-prefix \"dotnet test\" in {grantDir}", match.Scope);
         }
         finally
         {
@@ -359,9 +360,9 @@ public sealed class ToolApprovalActorTests : TestKit
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
             var outsideDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "outside");
 
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry("cat") { Directory = grantDir });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["cat"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -370,13 +371,13 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-a",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [new ApprovalCandidate("cat", outsideDir)],
+                [BashCandidate("cat", outsideDir)],
                 cwd: grantDir,
                 ct);
 
             Assert.Equal(["cat"], result.UnapprovedPatterns);
             var check = Assert.Single(result.CandidateChecks!);
-            Assert.Equal(new ApprovalCandidate("cat", outsideDir), check.Candidate);
+            Assert.Equal(BashCandidate("cat", outsideDir), check.Candidate);
             Assert.Null(check.ApprovedMatch);
             Assert.Empty(result.ApprovedMatches);
         }
@@ -396,14 +397,14 @@ public sealed class ToolApprovalActorTests : TestKit
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
             var approvedDir = Path.Combine(grantDir, "src");
             var unapprovedDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "external");
-            var approvedCandidate = new ApprovalCandidate("git push", approvedDir);
-            var unapprovedCandidate = new ApprovalCandidate("git push", unapprovedDir);
+            var approvedCandidate = BashCandidate("git push", approvedDir);
+            var unapprovedCandidate = BashCandidate("git push", unapprovedDir);
 
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             store.AddApproval(
                 TrustAudience.Personal,
                 "shell_execute",
-                new ApprovalEntry("git push") { Directory = grantDir });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -425,7 +426,7 @@ public sealed class ToolApprovalActorTests : TestKit
                 result.CandidateChecks);
             var match = Assert.Single(result.ApprovedMatches);
             Assert.Equal("persistent", match.Source);
-            Assert.Equal($"git push in {grantDir}", match.Scope);
+            Assert.Equal($"Bash token-prefix \"git push\" in {grantDir}", match.Scope);
         }
         finally
         {
@@ -444,9 +445,9 @@ public sealed class ToolApprovalActorTests : TestKit
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "grant");
             var otherDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "other");
 
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry("git push") { Directory = grantDir });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -477,9 +478,9 @@ public sealed class ToolApprovalActorTests : TestKit
         {
             // Store holds an unrelated verb, so the prompted verb has no
             // same-verb grant to explain.
-            var store = new ToolApprovalStore(tempFile);
+            var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry("npm install") { Directory = null });
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["npm", "install"]));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -498,8 +499,273 @@ public sealed class ToolApprovalActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task Invalid_persistent_store_returns_typed_failure_without_authority()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
+            var store = new ToolApprovalStore(
+                tempFile,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+                lockTimeout: TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [BashCandidate("git push")],
+                cwd: null,
+                ct);
+
+            Assert.Equal(ApprovalStoreFailure.InvalidData, result.PersistentStoreFailure);
+            Assert.Equal(["git push"], result.UnapprovedPatterns);
+            Assert.Empty(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Version_two_omission_emits_one_bounded_actor_diagnostic()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                tempFile,
+                "{\"version\":2,\"audiences\":{\"personal\":{\"shell_execute\":[{\"verb\":\" git\"}]}}}");
+            var store = new ToolApprovalStore(
+                tempFile,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+                lockTimeout: TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            await EventFilter.Warning(contains: "conversion omitted 1 unrepresentable entries")
+                .ExpectAsync(1, async () =>
+                {
+                    _ = await service.CheckApprovalAsync(
+                        "session-a",
+                        TrustAudience.Personal,
+                        new ToolName("shell_execute"),
+                        [BashCandidate("git")],
+                        cwd: null,
+                        ct);
+                    _ = await service.CheckApprovalAsync(
+                        "session-a",
+                        TrustAudience.Personal,
+                        new ToolName("shell_execute"),
+                        [BashCandidate("git")],
+                        cwd: null,
+                        ct);
+                }, ct);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Raw_shell_compatibility_API_without_environment_fails_closed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.Delete(tempFile);
+            var store = CreateStore(tempFile);
+            store.AddApproval(
+                TrustAudience.Personal,
+                "shell_execute",
+                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]));
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = new AkkaToolApprovalService(new StubRequiredActor(actor));
+
+            var unapproved = await service.GetUnapprovedPatternsAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                ["git push"],
+                cwd: null,
+                ct);
+
+            Assert.Equal(["git push"], unapproved);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.RecordApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                ["git push"],
+                persistent: true,
+                cwd: null,
+                ct));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Session_grant_can_cover_candidate_when_persistent_store_is_invalid()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
+            var store = new ToolApprovalStore(
+                tempFile,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+                lockTimeout: TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            await RecordApprovalAsync(
+                service,
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                ["git push"],
+                persistent: false,
+                cwd: null,
+                ct);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [BashCandidate("git push")],
+                cwd: null,
+                ct);
+
+            Assert.Equal(ApprovalStoreFailure.InvalidData, result.PersistentStoreFailure);
+            Assert.Empty(result.UnapprovedPatterns);
+            Assert.Single(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Persistent_token_prefix_covers_a_longer_candidate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = CreateStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(BashCandidate("git push"), Directory: null)],
+                persistent: true,
+                ct);
+
+            var result = await service.CheckApprovalAsync(
+                "session-b",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [BashCandidate("git push origin")],
+                cwd: null,
+                ct);
+
+            Assert.Empty(result.UnapprovedPatterns);
+            Assert.Single(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Persistent_phrase_uses_parser_tokens_when_legacy_projection_is_shorter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = CreateStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var candidate = new ApprovalCandidate("git ls-tree", Directory: null)
+            {
+                Shell = ApprovalShell.Bash,
+                VerbTokens = Array.AsReadOnly(["git", "ls-tree", "feature"]),
+            };
+
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(candidate, Directory: null)],
+                persistent: true,
+                ct);
+
+            var entry = Assert.Single(
+                store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+            Assert.Equal(["git", "ls-tree", "feature"], entry.VerbTokens);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     private static AkkaToolApprovalService CreateService(IActorRef actor)
-        => new(new StubRequiredActor(actor));
+        => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
+
+    private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
+        new(verb, directory)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(
+                verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
+        };
+
+    private static Task RecordApprovalAsync(
+        AkkaToolApprovalService service,
+        string sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<string> patterns,
+        bool persistent,
+        string? cwd,
+        CancellationToken ct) =>
+        service.RecordApprovalAsync(
+            sessionId,
+            audience,
+            toolName,
+            patterns,
+            persistent,
+            cwd,
+            ct);
+
+    private static ToolApprovalStore CreateStore(string path)
+    {
+        File.Delete(path);
+        return new ToolApprovalStore(
+            path,
+            timeProvider: null,
+            migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+            lockTimeout: TimeSpan.Zero);
+    }
 
     private sealed class StubRequiredActor : IRequiredActor<ToolApprovalActorKey>
     {

@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-10
+Last updated: 2026-08-11
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -164,11 +164,21 @@ Done when:
   coordinator and actor protocol, per-candidate coverage, real and intent
   scopes, token-boundary grants, reviewed policy catalog, bounded trace,
   migration, and validation tasks.
-- [ ] The maintainer approves the ShellSyntaxTree 0.3.1 API names and the
+- [x] The maintainer approves the ShellSyntaxTree 0.3.1 API names and the
   use of separate authored-source facts for approval matching before
   implementation.
-- [ ] The maintainer approves whether simple v2 grants gain token-prefix
+- [x] The maintainer approves whether simple v2 grants gain token-prefix
   authority during schema-3 migration or remain exact until re-approved.
+- [x] Approval-store schema 3 uses closed shell token-prefix, shell legacy-exact,
+  and non-shell exact forms. Version-2 conversion keeps prior shell authority
+  exact, creates a byte-identical backup, and fails closed on invalid data or
+  storage errors.
+- [x] New reusable shell grants use ShellSyntaxTree token facts with explicit
+  Bash or PowerShell identity. Distinct command occurrences remain visible
+  through actor checks, one-time keys, persisted events, and subagent prompts.
+- [x] CLI and TUI list and revoke typed phrases with unambiguous labels. The
+  native approvals tape proves version-2 conversion, non-shell label display,
+  and revoke behavior against a published binary.
 - [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
   and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
   authorize, create candidates, or widen scope.
@@ -215,6 +225,10 @@ Done when:
   patterns, redirect alternatives, and redirect-source alternatives. The
   unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
   matrix passes locally.
+- [x] Netclaw resolves ShellSyntaxTree `0.3.1` for separate authored-source and
+  path-shape facts. This store-v3 slice preserves those parser token facts
+  without executable-private command rules; later parent tasks consume the new
+  value-domain facts in the coordinator.
 - [x] The expanded 247-test matrix covers command-substitution and PowerShell
   execution-region behavior. Known command-owned regions reuse independently
   matched host and body grants after Netclaw accounts for the parsed body.

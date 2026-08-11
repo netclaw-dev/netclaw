@@ -47,4 +47,11 @@ internal static class ToolApprovalProtocol
         IReadOnlyList<string> Patterns,
         bool Persistent,
         string? Cwd) : IToolApprovalCommand;
+
+    internal sealed record RecordStructuredToolApproval(
+        SessionId SessionId,
+        TrustAudience Audience,
+        ToolName ToolName,
+        IReadOnlyList<ToolApprovalGrant> Grants,
+        bool Persistent) : IToolApprovalCommand;
 }

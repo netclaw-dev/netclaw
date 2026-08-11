@@ -376,34 +376,46 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     var hasInconsistentCandidateChecks = approvalCheck.CandidateChecks is not null
                                                          && !hasExactCandidateChecks;
 
-                    if (approvalCheck.UnapprovedPatterns.Count == 0
-                        && !hasInconsistentCandidateChecks)
+                    var storeUnavailableForMiss = approvalCheck.PersistentStoreFailure is not null &&
+                                                  approvalCheck.UnapprovedPatterns.Count > 0;
+                    if (storeUnavailableForMiss)
                     {
-                        context.Approval.ApplyDecision(
-                            "PreviouslyApproved",
-                            FormatApprovalMatches(approvalCheck.ApprovedMatches));
-                    }
-
-                    if (approvalCheck.UnapprovedPatterns.Count == 0
-                        && !hasInconsistentCandidateChecks)
-                    {
-                        accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
+                        accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
+                            ? ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval)
+                            : ToolAccessDecision.Deny("approval_store_unavailable");
                     }
                     else
                     {
-                        // New approval services return exact candidate occurrences.
-                        // An older implementation can only return verb strings, so
-                        // keep the broader context instead of guessing which scoped
-                        // candidate lacks approval.
-                        var promptContext = hasExactCandidateChecks
-                            && unapprovedCandidates.Count > 0
-                            && string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal)
-                                ? ToolAccessPolicy.NarrowShellApprovalContext(
-                                    approvalContext,
-                                    unapprovedCandidates,
-                                    context.SessionDirectory)
-                                : approvalContext;
-                        accessDecision = ToolAccessDecision.RequiresApproval(promptContext);
+                        if (approvalCheck.UnapprovedPatterns.Count == 0
+                            && !hasInconsistentCandidateChecks)
+                        {
+                            context.Approval.ApplyDecision(
+                                "PreviouslyApproved",
+                                FormatApprovalMatches(approvalCheck.ApprovedMatches));
+                        }
+
+                        if (accessDecision.Allowed
+                            && approvalCheck.UnapprovedPatterns.Count == 0
+                            && !hasInconsistentCandidateChecks)
+                        {
+                            accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
+                        }
+                        else if (accessDecision.Allowed)
+                        {
+                            // New approval services return exact candidate occurrences.
+                            // An older implementation can only return verb strings, so
+                            // keep the broader context instead of guessing which scoped
+                            // candidate lacks approval.
+                            var promptContext = hasExactCandidateChecks
+                                && unapprovedCandidates.Count > 0
+                                && string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal)
+                                    ? ToolAccessPolicy.NarrowShellApprovalContext(
+                                        approvalContext,
+                                        unapprovedCandidates,
+                                        context.SessionDirectory)
+                                    : approvalContext;
+                            accessDecision = ToolAccessDecision.RequiresApproval(promptContext);
+                        }
                     }
                 }
             }
@@ -488,15 +500,16 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         for (var index = 0; index < candidateChecks.Count; index++)
         {
             var check = candidateChecks[index];
-            if (check.Candidate != checkedCandidates[index])
+            var checkedCandidate = checkedCandidates[index];
+            if (!HasSameCandidateFacts(check.Candidate, checkedCandidate))
                 return false;
 
             if (check.ApprovedMatch is { } approvedMatch)
                 exactApprovedMatches.Add(approvedMatch);
             else
             {
-                exactUnapprovedCandidates.Add(check.Candidate);
-                exactUnapprovedPatterns.Add(check.Candidate.Verb);
+                exactUnapprovedCandidates.Add(checkedCandidate);
+                exactUnapprovedPatterns.Add(checkedCandidate.Verb);
             }
         }
 
@@ -511,6 +524,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         unapprovedCandidates = exactUnapprovedCandidates;
         return true;
     }
+
+    private static bool HasSameCandidateFacts(
+        ApprovalCandidate first,
+        ApprovalCandidate second) =>
+        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
+        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
+        first.Shell == second.Shell &&
+        ((first.VerbTokens is null && second.VerbTokens is null) ||
+         (first.VerbTokens is not null &&
+          second.VerbTokens is not null &&
+          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 
     private void LogAuthorizationDecision(string toolName, ToolAuthorizationDecision decision)
     {

@@ -18,7 +18,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
 {
     private readonly ToolApprovalStore? _persistentStore;
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _sessionApprovals = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, List<ApprovalEntry>>> _structuredSessionApprovals =
+        new(StringComparer.Ordinal);
     private readonly ILoggingAdapter _log = Context.GetLogger();
+    private bool _reportedMigrationOmissions;
 
     public ToolApprovalActor(ToolApprovalStore? persistentStore = null)
     {
@@ -31,9 +34,23 @@ internal sealed class ToolApprovalActor : ReceiveActor
             // state, and Load() does a synchronous file read + JSON parse
             // each call. For a compound shell with N candidate verbs this
             // collapses N reads into 1.
-            var approved = _persistentStore is not null
-                ? _persistentStore.GetApprovedEntries(msg.Audience, msg.ToolName.Value)
-                : (IReadOnlyList<ApprovalEntry>)[];
+            IReadOnlyList<ApprovalEntry> approved = [];
+            ApprovalStoreFailure? storeFailure = null;
+            if (_persistentStore is not null)
+            {
+                var load = _persistentStore.TryLoad();
+                ReportMigrationOmissions();
+                if (load is ApprovalStoreLoadResult.Ready ready &&
+                    ready.Data.Audiences.TryGetValue(msg.Audience.ToWireValue(), out var tools) &&
+                    tools.TryGetValue(msg.ToolName.Value, out var entries))
+                {
+                    approved = entries;
+                }
+                else if (load is ApprovalStoreLoadResult.Unavailable unavailable)
+                {
+                    storeFailure = unavailable.Failure;
+                }
+            }
 
             var unapproved = new List<string>(msg.Candidates.Count);
             var candidateChecks = new List<ToolApprovalCandidateCheck>(msg.Candidates.Count);
@@ -55,16 +72,22 @@ internal sealed class ToolApprovalActor : ReceiveActor
             Sender.Tell(new UnapprovedPatternsResponse(
                 new ToolApprovalCheckResult(unapproved, approvedMatches)
                 {
-                    CandidateChecks = candidateChecks
+                    CandidateChecks = candidateChecks,
+                    PersistentStoreFailure = storeFailure
                 }));
         });
 
         Receive<RecordToolApproval>(msg =>
         {
+            if (string.Equals(msg.ToolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
+            {
+                Sender.Tell(new ToolApprovalRecorded(ApprovalStoreFailure.InvalidData));
+                return;
+            }
+
+            ApprovalStoreFailure? storeFailure = null;
             foreach (var pattern in msg.Patterns)
             {
-                AddSessionApproval(msg.SessionId, msg.Audience, msg.ToolName, pattern);
-
                 if (msg.Persistent)
                 {
                     // The cwd field encodes scope: a non-null value writes a
@@ -74,15 +97,90 @@ internal sealed class ToolApprovalActor : ReceiveActor
                     // cwd. The caller (LlmSessionActor) chooses based on the
                     // user's button click — Always here → cwd; Always
                     // anywhere → null.
-                    _persistentStore?.AddApproval(
+                    if (_persistentStore is null)
+                    {
+                        storeFailure = ApprovalStoreFailure.IoFailure;
+                        break;
+                    }
+
+                    var change = _persistentStore.TryAddApproval(
                         msg.Audience,
                         msg.ToolName.Value,
                         new ApprovalEntry(pattern) { Directory = msg.Cwd });
+                    ReportMigrationOmissions();
+                    if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+                    {
+                        storeFailure = unavailable.Failure;
+                        break;
+                    }
+                }
+
+                AddSessionApproval(msg.SessionId, msg.Audience, msg.ToolName, pattern);
+            }
+
+            Sender.Tell(storeFailure is null
+                ? ToolApprovalRecorded.Success
+                : new ToolApprovalRecorded(storeFailure));
+        });
+
+        Receive<RecordStructuredToolApproval>(msg =>
+        {
+            if (!TryCreateEntries(msg.ToolName, msg.Grants, out var persistentEntries, out var sessionEntries))
+            {
+                Sender.Tell(new ToolApprovalRecorded(ApprovalStoreFailure.InvalidData));
+                return;
+            }
+
+            if (msg.Persistent)
+            {
+                if (_persistentStore is null)
+                {
+                    Sender.Tell(new ToolApprovalRecorded(ApprovalStoreFailure.IoFailure));
+                    return;
+                }
+
+                var change = _persistentStore.TryAddApprovals(
+                    msg.Audience,
+                    msg.ToolName.Value,
+                    persistentEntries);
+                ReportMigrationOmissions();
+                if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+                {
+                    Sender.Tell(new ToolApprovalRecorded(unavailable.Failure));
+                    return;
                 }
             }
 
-            Sender.Tell(ToolApprovalRecorded.Instance);
+            foreach (var entry in sessionEntries)
+            {
+                AddStructuredSessionApproval(
+                    msg.SessionId,
+                    msg.Audience,
+                    msg.ToolName,
+                    entry);
+            }
+
+            Sender.Tell(ToolApprovalRecorded.Success);
         });
+    }
+
+    private void ReportMigrationOmissions()
+    {
+        if (_reportedMigrationOmissions || _persistentStore is null)
+        {
+            return;
+        }
+
+        var omitted = _persistentStore.LastMigrationOmittedEntryCount;
+        if (omitted == 0)
+        {
+            return;
+        }
+
+        _reportedMigrationOmissions = true;
+        _log.Warning(
+            "Approval store version-2 conversion omitted {OmittedEntryCount} unrepresentable entries.",
+            omitted);
     }
 
     public static Props CreateProps(ToolApprovalStore? persistentStore = null)
@@ -90,13 +188,18 @@ internal sealed class ToolApprovalActor : ReceiveActor
 
     private ToolApprovalMatch? MatchApproval(SessionId? sessionId, TrustAudience audience, ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> persistedApprovals)
     {
-        if (sessionId.HasValue && IsSessionApproved(sessionId.Value, audience, toolName, candidate.Verb))
+        if (sessionId.HasValue &&
+            IsSessionApproved(sessionId.Value, audience, toolName, candidate))
             return new ToolApprovalMatch(candidate.Verb, "session", "this chat");
 
         return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
     }
 
-    private bool IsSessionApproved(SessionId sessionId, TrustAudience audience, ToolName toolName, string candidateVerb)
+    private bool IsSessionApproved(
+        SessionId sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        ApprovalCandidate candidate)
     {
         // Walk up the scope chain: sub-agent scopes inherit parent session approvals.
         // Scope format: "{parentSessionId}/subagent/{name}/{runId}" — parent is the prefix before "/subagent/".
@@ -106,9 +209,21 @@ internal sealed class ToolApprovalActor : ReceiveActor
             var sessionKey = BuildSessionKey((SessionId)scopeId, audience);
             if (_sessionApprovals.TryGetValue(sessionKey, out var toolMap)
                 && toolMap.TryGetValue(toolName.Value, out var verbs)
-                && verbs.Contains(candidateVerb))
+                && verbs.Contains(candidate.Verb))
             {
                 return true;
+            }
+
+            if (_structuredSessionApprovals.TryGetValue(sessionKey, out var structuredTools)
+                && structuredTools.TryGetValue(toolName.Value, out var entries))
+            {
+                var matches = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
+                    ? ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, entries)
+                    : ApprovalPatternMatching.MatchesAny(candidate.Verb, entries);
+                if (matches)
+                {
+                    return true;
+                }
             }
 
             // Walk to the parent session so a sub-agent inherits its parent's approvals.
@@ -146,16 +261,89 @@ internal sealed class ToolApprovalActor : ReceiveActor
         verbs.Add(candidateVerb);
     }
 
+    private void AddStructuredSessionApproval(
+        SessionId sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        ApprovalEntry entry)
+    {
+        var sessionKey = BuildSessionKey(sessionId, audience);
+        if (!_structuredSessionApprovals.TryGetValue(sessionKey, out var toolMap))
+        {
+            toolMap = new Dictionary<string, List<ApprovalEntry>>(StringComparer.Ordinal);
+            _structuredSessionApprovals[sessionKey] = toolMap;
+        }
+
+        if (!toolMap.TryGetValue(toolName.Value, out var entries))
+        {
+            entries = [];
+            toolMap[toolName.Value] = entries;
+        }
+
+        if (!entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, entry)))
+        {
+            entries.Add(entry);
+        }
+    }
+
+    private static bool TryCreateEntries(
+        ToolName toolName,
+        IReadOnlyList<ToolApprovalGrant> grants,
+        out IReadOnlyList<ApprovalEntry> persistentEntries,
+        out IReadOnlyList<ApprovalEntry> sessionEntries)
+    {
+        var persisted = new List<ApprovalEntry>(grants.Count);
+        var session = new List<ApprovalEntry>(grants.Count);
+        try
+        {
+            foreach (var grant in grants)
+            {
+                ApprovalEntry persistedEntry;
+                if (string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
+                {
+                    if (grant.Candidate.Shell is not { } shell ||
+                        grant.Candidate.VerbTokens is not { } tokens)
+                    {
+                        persistentEntries = [];
+                        sessionEntries = [];
+                        return false;
+                    }
+
+                    persistedEntry = ApprovalEntry.CreateTokenPrefix(
+                        shell,
+                        tokens,
+                        grant.Directory);
+                }
+                else
+                {
+                    persistedEntry = ApprovalEntry.CreateNonShell(
+                        grant.Candidate.Verb,
+                        grant.Directory);
+                }
+
+                persisted.Add(persistedEntry);
+                session.Add(persistedEntry with { Directory = null });
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or System.Text.Json.JsonException)
+        {
+            persistentEntries = [];
+            sessionEntries = [];
+            return false;
+        }
+
+        persistentEntries = persisted;
+        sessionEntries = session;
+        return true;
+    }
+
     private static ToolApprovalMatch? MatchPersistedEntry(ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> approved)
     {
         foreach (var entry in approved)
         {
-            if (!ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb))
-                continue;
-
             var matches = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
-                ? ApprovalPatternMatching.MatchesShellApproval(candidate.Verb, candidate.Directory, cwd, [entry])
-                : ApprovalPatternMatching.MatchesAny(candidate.Verb, [entry]);
+                ? ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, [entry])
+                : ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
 
             if (matches)
                 return new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope());
@@ -199,7 +387,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         => $"{sessionId.Value}|{audience.ToWireValue()}";
 }
 
-internal sealed record ToolApprovalRecorded
+internal sealed record ToolApprovalRecorded(ApprovalStoreFailure? Failure)
 {
-    public static ToolApprovalRecorded Instance { get; } = new();
+    public static ToolApprovalRecorded Success { get; } = new((ApprovalStoreFailure?)null);
 }

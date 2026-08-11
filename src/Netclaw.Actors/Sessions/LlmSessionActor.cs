@@ -4553,6 +4553,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // with no path arg (curl, gh, git status).
         var sessionDirectory = GetSessionDirectory();
 
+        if (_approvalService is IStructuredToolApprovalService structuredApprovalService)
+        {
+            var grants = ApprovalBucketBuilder.BuildGrants(
+                pending.Candidates,
+                persistent,
+                globalWildcard,
+                pending.Cwd,
+                sessionDirectory);
+            if (grants.Count > 0)
+            {
+                await structuredApprovalService.RecordApprovalCandidatesAsync(
+                    (ToolApprovalSessionId)_sessionId.Value,
+                    audience,
+                    new ToolName(pending.ToolName),
+                    grants,
+                    persistent,
+                    ct);
+            }
+
+            return;
+        }
+
         var grouping = ApprovalBucketBuilder.Build(
             pending.Candidates,
             persistent,

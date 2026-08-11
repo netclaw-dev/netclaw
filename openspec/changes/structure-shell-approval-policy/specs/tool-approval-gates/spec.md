@@ -410,9 +410,8 @@ contain canonical shell, match kind, immutable verb-token array, optional
 absolute directory, and creation timestamp. Null directory SHALL mean global.
 
 On first successful version-2 load, the daemon SHALL back up the original file.
-Plain whitespace-separated unquoted atoms SHALL migrate according to the
-maintainer-approved authority choice. Quoted, escaped, or ambiguous strings
-SHALL migrate as exact-only legacy phrases. A structurally valid v2 entry whose
+Every valid version-2 shell phrase SHALL migrate as an exact-only legacy
+phrase. No migrated phrase SHALL gain token-prefix authority. A valid v2 entry whose
 phrase contains controls or cannot be represented safely SHALL be omitted with
 a bounded migration diagnostic and SHALL NOT authorize. A structurally invalid
 v2 file SHALL fail as a whole. The version-3 write SHALL be atomic.

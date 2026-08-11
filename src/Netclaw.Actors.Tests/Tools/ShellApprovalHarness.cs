@@ -88,7 +88,14 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             approvalExternalDirectory = $"{windowsRoot}/external";
         }
 
-        var store = new ToolApprovalStore(Path.Combine(rootDirectory, "tool-approvals.json"));
+        var approvalShell = environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        var store = new ToolApprovalStore(
+            Path.Combine(rootDirectory, "tool-approvals.json"),
+            timeProvider: null,
+            migrationContext: new ApprovalStoreMigrationContext(approvalShell),
+            lockTimeout: TimeSpan.Zero);
         var approvalActor = CreateApprovalActor(actorSystem, store);
         var approvalService = CreateApprovalService(approvalActor);
 
@@ -97,17 +104,16 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             .ToList();
         foreach (var seed in persistentSeeds)
         {
-            await approvalService.RecordApprovalAsync(
+            await approvalService.RecordApprovalCandidatesAsync(
                 (ToolApprovalSessionId)"seed/persistent",
                 seed.Audience,
                 new ToolName(ShellTool.ToolName),
-                [seed.Pattern],
-                persistent: true,
-                ResolveDirectory(
+                [CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
                     seed.Directory,
                     approvalProjectDirectory,
                     approvalSessionDirectory,
-                    approvalExternalDirectory),
+                    approvalExternalDirectory))],
+                persistent: true,
                 ct);
         }
 
@@ -120,13 +126,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         foreach (var seed in testCase.Approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
         {
-            await approvalService.RecordApprovalAsync(
+            await approvalService.RecordApprovalCandidatesAsync(
                 (ToolApprovalSessionId)ResolveSession(seed.Session),
                 seed.Audience,
                 new ToolName(ShellTool.ToolName),
-                [seed.Pattern],
+                [CreateGrant(seed.Pattern, approvalShell, directory: null)],
                 persistent: false,
-                cwd: null,
                 ct);
         }
 
@@ -189,6 +194,22 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             context,
             executor,
             countingApprovalService);
+    }
+
+    private static ToolApprovalGrant CreateGrant(
+        string pattern,
+        ApprovalShell shell,
+        string? directory)
+    {
+        var tokens = Array.AsReadOnly(
+            pattern.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return new ToolApprovalGrant(
+            new ApprovalCandidate(pattern, Directory: null)
+            {
+                Shell = shell,
+                VerbTokens = tokens,
+            },
+            directory);
     }
 
     public async Task<ObservedApproval> EvaluateAsync(CancellationToken ct)
@@ -272,7 +293,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             $"approval-matrix-{Guid.NewGuid():N}");
 
     private static AkkaToolApprovalService CreateApprovalService(IActorRef actor)
-        => new(new StubRequiredActor(actor));
+        => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 
     private static string ResolveSession(ApprovalSessionShape session)
         => session switch
@@ -305,7 +326,9 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     }
 }
 
-internal sealed class CountingApprovalService(IToolApprovalService inner) : IToolApprovalService
+internal sealed class CountingApprovalService(IToolApprovalService inner) :
+    IToolApprovalService,
+    IStructuredToolApprovalService
 {
     private int _checkCount;
 
@@ -341,6 +364,21 @@ internal sealed class CountingApprovalService(IToolApprovalService inner) : IToo
         string? cwd,
         CancellationToken ct = default)
         => inner.RecordApprovalAsync(sessionId, audience, toolName, patterns, persistent, cwd, ct);
+
+    public Task RecordApprovalCandidatesAsync(
+        ToolApprovalSessionId sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<ToolApprovalGrant> grants,
+        bool persistent,
+        CancellationToken ct = default)
+        => ((IStructuredToolApprovalService)inner).RecordApprovalCandidatesAsync(
+            sessionId,
+            audience,
+            toolName,
+            grants,
+            persistent,
+            ct);
 }
 
 public sealed class ShellApprovalMatrixFixture : IAsyncLifetime

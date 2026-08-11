@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
 
@@ -166,5 +167,35 @@ public sealed class BuildApprovalBucketsTests
         var bucket = Assert.Single(sessionBuckets);
         Assert.DoesNotContain("echo", bucket.Value);
         Assert.Contains("git status", bucket.Value);
+    }
+
+    [Fact]
+    public void Structured_grants_keep_distinct_parser_tokens_with_one_legacy_projection()
+    {
+        var candidates = new[]
+        {
+            new ApprovalCandidate("whoami", null)
+            {
+                Shell = ApprovalShell.Bash,
+                VerbTokens = Array.AsReadOnly(["whoami", "user"]),
+            },
+            new ApprovalCandidate("whoami", null)
+            {
+                Shell = ApprovalShell.Bash,
+                VerbTokens = Array.AsReadOnly(["whoami", "admin"]),
+            }
+        };
+
+        var grants = ApprovalBucketBuilder.BuildGrants(
+            candidates,
+            persistent: true,
+            globalWildcard: true,
+            cwd: SessionDir,
+            sessionDirectory: SessionDir);
+
+        Assert.Collection(
+            grants,
+            first => Assert.Equal(["whoami", "user"], first.Candidate.VerbTokens),
+            second => Assert.Equal(["whoami", "admin"], second.Candidate.VerbTokens));
     }
 }

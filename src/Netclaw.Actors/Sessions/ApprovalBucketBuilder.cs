@@ -9,6 +9,39 @@ namespace Netclaw.Actors.Sessions;
 
 internal static class ApprovalBucketBuilder
 {
+    public static IReadOnlyList<ToolApprovalGrant> BuildGrants(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        bool persistent,
+        bool globalWildcard,
+        string? cwd,
+        string? sessionDirectory)
+    {
+        var grants = new List<ToolApprovalGrant>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            if (ApprovalPatternMatching.IsPureSideEffect(candidate))
+            {
+                continue;
+            }
+
+            var effectiveDirectory = ResolveDirectory(
+                candidate,
+                persistent,
+                globalWildcard,
+                cwd);
+            if (persistent && effectiveDirectory is not null
+                && sessionDirectory is not null
+                && PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory))
+            {
+                continue;
+            }
+
+            grants.Add(new ToolApprovalGrant(candidate, effectiveDirectory));
+        }
+
+        return grants;
+    }
+
     /// <summary>
     /// Groups approval candidates into the per-directory buckets that become
     /// <c>RecordApprovalAsync</c> calls.
@@ -37,25 +70,16 @@ internal static class ApprovalBucketBuilder
             if (ApprovalPatternMatching.IsPureSideEffect(candidate))
                 continue;
 
-            string? effectiveDirectory;
-            if (globalWildcard)
+            var effectiveDirectory = ResolveDirectory(
+                candidate,
+                persistent,
+                globalWildcard,
+                cwd);
+            if (persistent && effectiveDirectory is not null
+                && sessionDirectory is not null
+                && PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory))
             {
-                effectiveDirectory = null;
-            }
-            else if (!persistent)
-            {
-                effectiveDirectory = candidate.Directory;
-            }
-            else
-            {
-                effectiveDirectory = candidate.Directory ?? cwd;
-
-                if (effectiveDirectory is not null
-                    && sessionDirectory is not null
-                    && PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory))
-                {
-                    continue;
-                }
+                continue;
             }
 
             var key = effectiveDirectory ?? string.Empty;
@@ -70,5 +94,21 @@ internal static class ApprovalBucketBuilder
         }
 
         return grouping;
+    }
+
+    private static string? ResolveDirectory(
+        ApprovalCandidate candidate,
+        bool persistent,
+        bool globalWildcard,
+        string? cwd)
+    {
+        if (globalWildcard)
+        {
+            return null;
+        }
+
+        return persistent
+            ? candidate.Directory ?? cwd
+            : candidate.Directory;
     }
 }

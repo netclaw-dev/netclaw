@@ -46,8 +46,7 @@ No production branch will parse an executable's private options or operands.
 - Security: hard deny and protected paths remain first and terminal; internal
   evaluator failures deny rather than prompt.
 - Persistence: approval store advances to version 3 with typed token phrases;
-  simple v2 authority follows the recorded maintainer choice, and ambiguous
-  entries remain exact-only.
+  each valid v2 shell entry remains exact-only.
 - Actors: `ToolApprovalActor` receives one batch match request and returns
   per-candidate coverage from one atomic snapshot.
 - UX: covered diagnostic chains stop prompting; unresolved syntax remains

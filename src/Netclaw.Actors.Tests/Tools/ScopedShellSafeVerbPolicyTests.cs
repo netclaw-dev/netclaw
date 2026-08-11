@@ -217,12 +217,18 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
     public void Git_ls_tree_operand_normalizes_to_read_only_verb()
     {
         var policy = new ScopedShellSafeVerbPolicy(VerbList("git ls-tree"));
-        var candidate = new ApprovalCandidate("git ls-tree feature", _projectDir);
+        var candidate = new ApprovalCandidate("git ls-tree feature", _projectDir)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(["git", "ls-tree", "feature"]),
+        };
 
         var normalized = policy.NormalizeCandidate(candidate);
 
         Assert.Equal("git ls-tree", normalized.Verb);
         Assert.Equal(_projectDir, normalized.Directory);
+        Assert.Equal(["git", "ls-tree", "feature"], normalized.VerbTokens);
+        Assert.Equal(ApprovalShell.Bash, normalized.Shell);
     }
 
     [Fact]

@@ -33,7 +33,11 @@ public sealed class ApprovalsManagerPageTests : IDisposable
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
-        _store = new ToolApprovalStore(_paths.ToolApprovalsPath, _time);
+        _store = new ToolApprovalStore(
+            _paths.ToolApprovalsPath,
+            _time,
+            new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+            TimeSpan.Zero);
     }
 
     public void Dispose() => _dir.Dispose();
@@ -53,14 +57,47 @@ public sealed class ApprovalsManagerPageTests : IDisposable
             $"Expected empty-state message. Screen:\n{terminal}");
     }
 
-    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
+    [Fact]
+    public void Refresh_reports_one_bounded_version_two_omission()
+    {
+        File.WriteAllText(_paths.ToolApprovalsPath, """
+            {
+              "version": 2,
+              "audiences": {
+                "personal": {
+                  "shell_execute": [
+                    { "verb": " git push", "directory": null },
+                    { "verb": "git status", "directory": null }
+                  ]
+                }
+              }
+            }
+            """);
+        var viewModel = new ApprovalsManagerViewModel(_paths, _time);
+
+        viewModel.Refresh();
+        var firstMessage = viewModel.StatusMessage.Value;
+        viewModel.StatusMessage.Value = "ready";
+        viewModel.Refresh();
+
+        Assert.Equal(
+            "Approval store version-2 conversion omitted 1 unrepresentable entries.",
+            firstMessage);
+        Assert.Equal("ready", viewModel.StatusMessage.Value);
+    }
+
+    private static ApprovalEntry Verb(string verb) => ApprovalEntry.CreateTokenPrefix(
+        ApprovalShell.Bash,
+        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
     [Fact]
     public async Task SeededEntries_RenderedInList()
     {
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
-        _store.AddApproval(TrustAudience.Personal, "file_write", InDir("file_write", "/tmp/scratch"));
+        _store.AddApproval(
+            TrustAudience.Personal,
+            "file_write",
+            new ApprovalEntry("file_write") { Directory = "/tmp/scratch" });
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
 
         var (terminal, app, _) = CreateHeadlessApp(out var input);
@@ -71,12 +108,12 @@ public sealed class ApprovalsManagerPageTests : IDisposable
 
         Assert.True(terminal.Contains("personal"),
             $"Expected audience 'personal'. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("git push anywhere"),
-            $"Expected entry 'git push anywhere'. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Bash token-prefix \"git push\" anywhere"),
+            $"Expected typed git push entry. Screen:\n{terminal}");
         Assert.True(terminal.Contains("/tmp/scratch"),
             $"Expected directory '/tmp/scratch'. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("ls anywhere"),
-            $"Expected entry 'ls anywhere' (public audience). Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Bash token-prefix \"ls\" anywhere"),
+            $"Expected typed ls entry (public audience). Screen:\n{terminal}");
     }
 
     [Fact]

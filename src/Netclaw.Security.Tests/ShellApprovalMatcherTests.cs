@@ -1335,6 +1335,42 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.True(ApprovalPatternMatching.IsPureSideEffect(c));
     }
 
+    [Fact]
+    public void ExtractCandidates_keeps_parser_tokens_when_legacy_verb_is_shortened()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?> { ["Command"] = "whoami user" }));
+
+        Assert.Equal("whoami", candidate.Verb);
+        Assert.Equal(["whoami", "user"], candidate.VerbTokens);
+        Assert.Equal(ApprovalShell.Bash, candidate.Shell);
+    }
+
+    [Fact]
+    public void ExtractCandidates_keeps_distinct_occurrences_with_one_legacy_projection()
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "whoami user; whoami admin"
+            });
+
+        Assert.Collection(
+            candidates,
+            first =>
+            {
+                Assert.Equal("whoami", first.Verb);
+                Assert.Equal(["whoami", "user"], first.VerbTokens);
+            },
+            second =>
+            {
+                Assert.Equal("whoami", second.Verb);
+                Assert.Equal(["whoami", "admin"], second.VerbTokens);
+            });
+    }
+
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_extracts_cd_target_as_directory()
     {

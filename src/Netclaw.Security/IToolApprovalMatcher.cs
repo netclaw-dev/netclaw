@@ -19,7 +19,26 @@ namespace Netclaw.Security;
 /// One shell clause can produce multiple candidates when it accesses multiple
 /// authorization scopes.
 /// </summary>
-public sealed record ApprovalCandidate(string Verb, string? Directory);
+public sealed record ApprovalCandidate(string Verb, string? Directory)
+{
+    /// <summary>The immutable parser-owned canonical verb tokens.</summary>
+    public IReadOnlyList<string>? VerbTokens { get; init; }
+
+    /// <summary>The native shell grammar that produced the candidate.</summary>
+    public ApprovalShell? Shell { get; init; }
+
+    /// <summary>
+    /// Retains the released candidate identity contract. Parser metadata does
+    /// not change occurrence identity.
+    /// </summary>
+    public bool Equals(ApprovalCandidate? other) =>
+        other is not null &&
+        string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
+}
 
 /// <summary>
 /// Tool-specific pattern extraction and matching for the approval system.
@@ -214,7 +233,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         // The prompt groups a pipe as one approval unit. Authorization still
         // checks each clause so an unsafe tail cannot hide behind a safe head.
-        var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
 
         foreach (var occurrence in result.Commands)
@@ -251,13 +269,35 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
             foreach (var directory in directories)
             {
-                var key = (verb.ToLowerInvariant(), directory);
-                if (seen.Add(key))
-                    candidates.Add(new ApprovalCandidate(verb, directory));
+                var shell = Environment.Grammar == ShellGrammar.Bash
+                    ? ApprovalShell.Bash
+                    : ApprovalShell.PowerShell;
+                candidates.Add(new ApprovalCandidate(verb, directory)
+                {
+                    VerbTokens = GetCanonicalVerbTokens(clause),
+                    Shell = shell,
+                });
             }
         }
 
         return candidates;
+    }
+
+    private static IReadOnlyList<string>? GetCanonicalVerbTokens(
+        ShellSyntaxTree.Clause clause)
+    {
+        var tokens = clause.Verb.Tokens.ToArray();
+        if (tokens.Length == 0)
+        {
+            return null;
+        }
+
+        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+        {
+            tokens[0] = canonicalVerb;
+        }
+
+        return Array.AsReadOnly(tokens);
     }
 
     private static IReadOnlyList<string?>? ResolveCommandDirectories(
@@ -997,7 +1037,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 continue;
 
             if (!ApprovalPatternMatching.MatchesShellApproval(
-                    candidate.Verb, candidate.Directory, cwd, approvedEntries))
+                    candidate, cwd, approvedEntries))
                 return false;
         }
 

@@ -29,7 +29,7 @@ public interface IToolApprovalService
     /// Returns the subset of <paramref name="patterns"/> (candidate verb chains)
     /// that are not approved for the given audience and tool. The
     /// <paramref name="cwd"/> is the candidate's resolved working directory; it
-    /// is used by the v2 matcher to evaluate folder-scoped
+    /// is used by the compatibility matcher to evaluate folder-scoped
     /// <see cref="Netclaw.Configuration.ApprovalEntry"/> records. May be null
     /// for tools whose approvals are not directory-anchored.
     /// </summary>
@@ -50,6 +50,27 @@ public interface IToolApprovalService
         string? cwd,
         CancellationToken ct = default);
 }
+
+/// <summary>
+/// Records the structured candidates the user reviewed in one atomic batch.
+/// </summary>
+public interface IStructuredToolApprovalService
+{
+    Task RecordApprovalCandidatesAsync(
+        ToolApprovalSessionId sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<ToolApprovalGrant> grants,
+        bool persistent,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// One reviewed candidate and the directory scope selected by the user.
+/// </summary>
+public sealed record ToolApprovalGrant(
+    ApprovalCandidate Candidate,
+    string? Directory);
 
 /// <summary>
 /// Approval-service session identity. Kept in the security layer because
@@ -73,6 +94,12 @@ public sealed record ToolApprovalCheckResult(
     /// Callers must retain the full prompt candidate set in that case.
     /// </summary>
     public IReadOnlyList<ToolApprovalCandidateCheck>? CandidateChecks { get; init; }
+
+    /// <summary>
+    /// Gets the persistent-store failure, or <c>null</c> when the actor had a
+    /// complete persistent snapshot.
+    /// </summary>
+    public ApprovalStoreFailure? PersistentStoreFailure { get; init; }
 }
 
 public sealed record ToolApprovalCandidateCheck(

@@ -1157,7 +1157,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 {
                     var ctx = approvalEx.ApprovalContext;
                     var bridgeCandidates = ctx.Candidates is { Count: > 0 } c
-                        ? c.Select(x => new ParentApprovalCandidate(x.Verb, x.Directory)).ToList()
+                        ? c.Select(x => new ParentApprovalCandidate(x.Verb, x.Directory)
+                        {
+                            Shell = x.Shell,
+                            VerbTokens = x.VerbTokens,
+                        }).ToList()
                         : (IReadOnlyList<ParentApprovalCandidate>)[];
                     var bridgeOptions = ctx.Options
                         .Select(o => new ParentApprovalOption(o.Key.Value, o.Label))

@@ -129,6 +129,8 @@ message ToolApprovalRequestedProto {
   message ApprovalCandidateProto {
     string verb = 1;
     optional string directory = 2;
+    repeated string verb_tokens = 3;
+    optional int32 shell = 4;
   }
 
   message TurnContextRecordProto {

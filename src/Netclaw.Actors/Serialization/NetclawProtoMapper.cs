@@ -11,6 +11,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Media;
 using Proto = Netclaw.Actors.Serialization.Proto;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -365,12 +366,24 @@ internal static class NetclawProtoMapper
         };
         if (c.Directory is not null)
             proto.Directory = c.Directory;
+        if (c.VerbTokens is not null)
+            proto.VerbTokens.AddRange(c.VerbTokens);
+        if (c.Shell is not null)
+            proto.Shell = (int)c.Shell.Value;
         return proto;
     }
 
     private static Netclaw.Security.ApprovalCandidate FromApprovalCandidateProto(
         Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto) =>
-        new(proto.Verb, proto.HasDirectory ? proto.Directory : null);
+        new(proto.Verb, proto.HasDirectory ? proto.Directory : null)
+        {
+            VerbTokens = proto.VerbTokens.Count == 0
+                ? null
+                : Array.AsReadOnly(proto.VerbTokens.ToArray()),
+            Shell = proto.HasShell && Enum.IsDefined(typeof(ApprovalShell), proto.Shell)
+                ? (ApprovalShell)proto.Shell
+                : null,
+        };
 
     private static Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto ToProto(TurnContextRecord record)
     {

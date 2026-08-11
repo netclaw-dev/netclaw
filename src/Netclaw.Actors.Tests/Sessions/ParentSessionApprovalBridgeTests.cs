@@ -42,7 +42,11 @@ public sealed class ParentSessionApprovalBridgeTests
             "grep timeout logs/app.log | wc -l",
             ["grep timeout logs/app.log | wc -l"],
             ["grep timeout logs/app.log"],
-            [new ParentApprovalCandidate("grep timeout logs/app.log", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("grep", "/home/user/repos/foo")
+            {
+                Shell = ApprovalShell.Bash,
+                VerbTokens = Array.AsReadOnly(["grep", "timeout"]),
+            }],
             "/home/user/repos/foo",
             [
                 new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -70,6 +74,8 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal("/home/user/repos/foo", emitted.Cwd);
         Assert.Single(emitted.Candidates);
         Assert.Equal("/home/user/repos/foo", emitted.Candidates[0].Directory);
+        Assert.Equal(ApprovalShell.Bash, emitted.Candidates[0].Shell);
+        Assert.Equal(["grep", "timeout"], emitted.Candidates[0].VerbTokens);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveEverywhereLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveEverywhere).Label);

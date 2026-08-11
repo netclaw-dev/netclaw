@@ -1,9 +1,9 @@
 ## 1. Decisions and exact evidence
 
-- [ ] 1.1 Approve Netclaw's use of ShellSyntaxTree `AuthoredValue` for approval
-  matching while effective facts retain runtime meaning.
-- [ ] 1.2 Approve whether simple v2 grants gain token-prefix authority during
-  migration or remain exact until re-approved.
+- [x] 1.1 Approve Netclaw's use of ShellSyntaxTree `AuthoredValue` as an
+  approval fact. Effective facts retain runtime semantics.
+- [x] 1.2 Keep all v2 grants exact until the user approves a new token-prefix
+  grant.
 - [ ] 1.3 Keep `evidence/approval-matrix.json` byte-identical to the paired
   ShellSyntaxTree artifact.
 - [ ] 1.4 Add `evidence/netclaw-policy-fixtures.json` with exact structured
@@ -52,21 +52,20 @@
 
 ## 4. Typed grant phrases and persistence
 
-- [ ] 4.1 Add version-3 token-prefix and legacy-exact approval entry shapes with
+- [x] 4.1 Add version-3 token-prefix and legacy-exact approval entry shapes with
   explicit canonical shell tags.
-- [ ] 4.2 Implement backed-up atomic v2 migration; migrate only plain unquoted
-  atoms according to the approved authority choice and retain ambiguous
-  entries exact-only.
-- [ ] 4.3 Specify and test absent, v1, malformed, partial-v3, future-version,
+- [x] 4.2 Implement backed-up atomic v2 migration; keep each valid shell entry
+  exact and do not add token-prefix authority.
+- [x] 4.3 Specify and test absent, v1, malformed, partial-v3, future-version,
   invalid-enum/token, backup-failure, and atomic-replacement-failure behavior;
   internal store failures deny and never salvage partial authority.
-- [ ] 4.4 Use the same typed phrase comparison for one-time, session,
+- [x] 4.4 Use the same typed phrase comparison for one-time, session,
   persistent, global, and folder coverage.
 - [ ] 4.5 Require real exact scope, normalization, containment, and symlink
   checks for folder grants; global grants do not require cwd.
 - [ ] 4.6 Preserve prompt display/spoof protections and store one clean entry per
   persistable candidate.
-- [ ] 4.7 Update CLI list/add/revoke behavior and operator docs for schema 3,
+- [x] 4.7 Update CLI list/add/revoke behavior and operator docs for schema 3,
   including manual rollback by restoring the preserved `.v2.bak` while the
   daemon is stopped.
 
@@ -99,7 +98,7 @@
 
 ## 7. ShellSyntaxTree 0.3.1 adoption
 
-- [ ] 7.1 Upgrade the central package after 0.3.1 is published.
+- [x] 7.1 Upgrade the central package after 0.3.1 is published.
 - [ ] 7.2 Consume effective `Value` for runtime checks and approved
   `AuthoredValue` only for the documented approval perspective.
 - [ ] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.

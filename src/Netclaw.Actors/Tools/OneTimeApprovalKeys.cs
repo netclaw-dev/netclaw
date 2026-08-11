@@ -5,13 +5,14 @@
 // -----------------------------------------------------------------------
 using System.Security.Cryptography;
 using System.Text;
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
 
 internal static class OneTimeApprovalKeys
 {
-    private const string CandidateKeyPrefix = "\0candidate-v1:";
+    private const string CandidateKeyPrefix = "\0candidate-v2:";
 
     public static IReadOnlyList<string> Create(ToolApprovalContext context)
         => Create(context.Patterns, context.Candidates ?? [], context.Cwd);
@@ -29,12 +30,24 @@ internal static class OneTimeApprovalKeys
 
     private static string CreateCandidateKey(ApprovalCandidate candidate, string? cwd)
     {
-        var verb = candidate.Verb.ToUpperInvariant();
+        var ignoreCase = candidate.Shell == ApprovalShell.PowerShell ||
+                         (candidate.Shell is null && OperatingSystem.IsWindows());
+        var tokens = candidate.VerbTokens ?? [candidate.Verb];
         var effectiveDirectory = candidate.Directory ?? cwd ?? string.Empty;
-        if (OperatingSystem.IsWindows())
+        if (ignoreCase)
             effectiveDirectory = effectiveDirectory.ToUpperInvariant();
 
-        var payload = $"{verb.Length}:{verb}{effectiveDirectory.Length}:{effectiveDirectory}";
+        var payloadBuilder = new StringBuilder();
+        payloadBuilder.Append((int?)candidate.Shell ?? -1).Append(':');
+        payloadBuilder.Append(tokens.Count).Append(':');
+        foreach (var token in tokens)
+        {
+            var normalizedToken = ignoreCase ? token.ToUpperInvariant() : token;
+            payloadBuilder.Append(normalizedToken.Length).Append(':').Append(normalizedToken);
+        }
+
+        payloadBuilder.Append(effectiveDirectory.Length).Append(':').Append(effectiveDirectory);
+        var payload = payloadBuilder.ToString();
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
         return CandidateKeyPrefix + Convert.ToHexString(hash);
     }

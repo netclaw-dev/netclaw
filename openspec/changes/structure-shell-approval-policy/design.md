@@ -220,15 +220,12 @@ New entries persist canonical token arrays plus the canonical shell:
 Matching compares token arrays with the selected shell's case rule. A shorter
 grant matches only whole leading tokens. Raw string prefix is never used.
 
-On first successful load of version 2, plain entries whose `verb` is a
-whitespace-separated sequence of safe unquoted atoms migrate according to the
-maintainer-approved authority choice. Entries containing quotes, escapes, or
-ambiguous whitespace migrate as `LegacyExact` and retain exact-string behavior
-only. A structurally valid entry containing controls or otherwise not safely
-representable is omitted with one bounded migration diagnostic; it never enters
-`LegacyExact`. The original file is copied to `.v2.bak` before one atomic
-version-3 replacement. Session grants use the same typed phrase model but are
-not persisted.
+On first successful load of version 2, each valid shell entry becomes
+`LegacyExact`. It keeps exact-text behavior. No old grant gains token-prefix
+authority. A valid entry that has controls or no safe form is omitted. One
+bounded migration diagnostic reports the omission count. The original file is
+copied to `.v2.bak` before one atomic version-3 replacement. Session grants use
+the same typed phrase model but are not persisted.
 
 Storage recovery is explicit and fail closed:
 
@@ -249,9 +246,8 @@ Storage recovery is explicit and fail closed:
 The implementation never salvages individual grants from a partially corrupt
 file. This avoids silently changing the authority set.
 
-This intentionally widens simple existing grants such as `git push` to cover
-later static candidate tokens such as `upstream`. It is a material authority
-change and requires maintainer approval before implementation.
+Only a new version-3 grant can use `TokenPrefix`. The user sees that phrase in
+the approval surface before Netclaw stores the grant.
 
 ### 6. Use a reviewed immutable safe-policy catalog
 
@@ -353,8 +349,9 @@ Final: Allow(AllCandidatesCovered)
 
 ## Risks / Trade-offs
 
-- **Token-prefix migration widens authority.** It is versioned, token-boundary
-  based, shell-tagged, backed up, and gated on maintainer approval.
+- **New token-prefix grants add authority.** They are token-boundary based,
+  shell-tagged, and visible before the user approves them. Migrated grants stay
+  exact.
 - **Causal intent differs from one runtime failure path.** It is approval-only;
   real facts still control execution and denial.
 - **The safe catalog can be wrong.** Whole-argument safety is reviewed in code,
@@ -366,8 +363,7 @@ Final: Allow(AllCandidatesCovered)
 
 ## Migration Plan
 
-1. Approve the ShellSyntaxTree API/threat boundary and token-prefix authority
-   widening.
+1. Record the approved ShellSyntaxTree boundary and exact v2 conversion rule.
 2. Freeze exact D01-D18 and current prompt snapshots.
 3. Add coordinator, coverage types, and actor batch protocol without behavior
    changes.
@@ -380,14 +376,12 @@ Final: Allow(AllCandidatesCovered)
 9. Update operator skill, guides, behavioral evals, and exact trace snapshots.
 10. Validate Linux and native Windows before staged delivery.
 
-Rollback requires stopping the daemon, preserving the version-3 file, and
-manually restoring the migration-created `.v2.bak` before starting an older
-binary. No old binary reads version 3 and no automatic downgrade occurs.
+For recovery, the operator stops the daemon and keeps the version-3 file. The
+operator restores `.v2.bak` and starts the current daemon. The current daemon
+can convert version 2 again. No automatic downgrade occurs.
 
 ## Open Questions
 
-- Maintainer approval is required to use ShellSyntaxTree `AuthoredValue` for
-  approval matching.
-- Maintainer approval is required to migrate simple v2 grants to token-prefix
-  authority. The conservative alternative is exact matching for all migrated
-  entries and prefix matching only for newly approved version-3 entries.
+None. The maintainer approved `AuthoredValue` for approval facts. Effective
+facts keep their runtime semantics. All version-2 grants stay exact after
+migration. Only a new version-3 approval can create token-prefix authority.

@@ -389,7 +389,7 @@ public sealed class ToolAccessPolicy
             ?? matcher.IsMessy(toolName, analysisArguments);
 
         IReadOnlyList<ApprovalCandidate> approvalCandidates = _safeVerbPolicy is not null && isShell
-            ? candidates.Select(_safeVerbPolicy.NormalizeCandidate).Distinct().ToList()
+            ? candidates.Select(_safeVerbPolicy.NormalizeCandidate).ToList()
             : candidates;
 
         // A clean shell command can combine safe candidates with candidates
@@ -419,6 +419,8 @@ public sealed class ToolAccessPolicy
 
         var options = BuildApprovalOptions(
             isMessy,
+            hasReusablePhraseForEveryCandidate: !isShell ||
+                approvalCandidates.All(HasReusableShellPhrase),
             isCwdShallow: IsCwdTooShallow(context.Approval.Cwd),
             allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
                 approvalCandidates, context.Approval.Cwd, context.SessionDirectory),
@@ -449,6 +451,8 @@ public sealed class ToolAccessPolicy
             .ToList();
         var options = BuildApprovalOptions(
             isMessy: false,
+            hasReusablePhraseForEveryCandidate:
+                unapprovedCandidates.All(HasReusableShellPhrase),
             isCwdShallow: IsCwdTooShallow(context.Cwd),
             allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
                 unapprovedCandidates, context.Cwd, sessionDirectory),
@@ -521,12 +525,13 @@ public sealed class ToolAccessPolicy
     /// </summary>
     private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(
         bool isMessy,
+        bool hasReusablePhraseForEveryCandidate,
         bool isCwdShallow,
         bool allEffectiveDirsAreSessionScratch,
         bool supportsDirectoryScope,
         bool isMcpTool)
     {
-        if (isMessy)
+        if (isMessy || !hasReusablePhraseForEveryCandidate)
         {
             return
             [
@@ -553,6 +558,12 @@ public sealed class ToolAccessPolicy
 
         return options;
     }
+
+    private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
+        candidate.Shell is not null &&
+        candidate.VerbTokens is { Count: > 0 } tokens &&
+        tokens.All(static token =>
+            token.Length > 0 && !token.Any(char.IsWhiteSpace));
 
     /// <summary>
     /// Returns true when the cwd is too shallow to support a folder-scoped
