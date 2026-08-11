@@ -275,8 +275,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // Each parser path is an authorization scope. A grant must cover all
         // scopes, or a later external path could hide behind an earlier local
         // path. The resolved value also handles native forms such as @file.
-        // ShellSyntaxTree 0.3.0-alpha still has the #1795 classification.
-        // Remove this guard after a later v0.3 prerelease contains the parser correction.
+        // ShellSyntaxTree 0.3.0 still has the #1795 classification.
+        // Remove this guard after a later release contains the parser correction.
         if (!isSideEffectVerb)
         {
             foreach (var arg in clause.Args)
@@ -456,8 +456,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (!arg.IsPath)
             return false;
 
-        // ShellSyntaxTree 0.3.0-alpha still has the #1795 classification.
-        // Remove this guard after a later v0.3 prerelease contains the parser correction.
+        // ShellSyntaxTree 0.3.0 still has the #1795 classification.
+        // Remove this guard after a later release contains the parser correction.
         if (arg.Raw.Length > 0 && arg.Raw.All(char.IsAsciiDigit)
             && ShouldDropNumericToken(arg, workingDirectory))
         {

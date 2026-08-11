@@ -175,7 +175,7 @@ Done when:
   execute commands.
 - [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
   explicit Bash redirect facts for the existing grammar.
-- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.6` through its corrected
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0` through its corrected
   closed analysis API. The consumer uses joined arguments, value-domain type
   patterns, redirect alternatives, and redirect-source alternatives. The
   unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
