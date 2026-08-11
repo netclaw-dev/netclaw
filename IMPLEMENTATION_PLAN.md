@@ -158,6 +158,26 @@ without allowing an incomplete or unknown shell form.
 
 Done when:
 
+- [x] The sanitized v0.26.0-beta.3 approval window has 18 classified cases in
+  the linked ShellSyntaxTree and Netclaw OpenSpec changes.
+- [x] `openspec/changes/structure-shell-approval-policy/` defines the typed
+  coordinator and actor protocol, per-candidate coverage, real and intent
+  scopes, token-boundary grants, reviewed policy catalog, bounded trace,
+  migration, and validation tasks.
+- [ ] The maintainer approves the ShellSyntaxTree 0.3.1 API names and the
+  use of separate authored-source facts for approval matching before
+  implementation.
+- [ ] The maintainer approves whether simple v2 grants gain token-prefix
+  authority during schema-3 migration or remain exact until re-approved.
+- [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
+  and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
+  authorize, create candidates, or widen scope.
+- [ ] The bundled safe catalog removes every executable whose accepted
+  arguments can write, delete, execute code, or mutate a remote service through
+  executable argv interpretation. Redirect, parser-owned path/provider, and
+  unknown shell-expansion checks remain separate.
+- [ ] The `git ls-tree` production special case is removed. Token-boundary
+  policy match handles longer parser phrases without private command grammar.
 - [x] A synthetic workload corpus covers ordinary search, read, pipeline,
   redirect, and file-change commands without production command text.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
@@ -215,13 +235,17 @@ Done when:
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.
-- [ ] Netclaw interprets bounded loop arguments only after the executor can
-  prove the Bash initial variable state. The inherited shell state remains
-  fail closed because an ambient nameref can change assignment semantics.
+- [ ] Netclaw interprets bounded loop arguments only after the maintainer
+  accepts ShellSyntaxTree 0.3.1's separate authored-source projection for
+  approval matching. Effective runtime values remain unknown when hidden
+  ambient Bash attributes can transform them.
   - [x] The approval matrix pins inherited and same-language child loops as
     complex under the canonical unknown-state contract for Bash, PowerShell 7,
     and Windows PowerShell 5.1. It also proves that a stored command grant
     cannot cover an unproved loop-dependent argument.
+  - [ ] Netclaw adopts `AuthoredValue`, positive authored path evidence,
+    bounded status concatenation, and the typed consumer boundary after the
+    paired package release.
 
 ### Priority: Use Native PowerShell on Windows
 
