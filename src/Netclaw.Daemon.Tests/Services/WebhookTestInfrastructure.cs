@@ -17,9 +17,17 @@ internal static class WebhookTestInfrastructure
         int expectedCount,
         int timeoutMs = 5000)
     {
-        using var cts = new CancellationTokenSource(timeoutMs);
+        // One budget per delivery — this is a hang guard, not a wall-clock limit
+        // for the whole batch. Deliveries are sequential (DeliverToAllTargetsAsync),
+        // so a single shared CTS let a slow delivery #1 consume the budget of the
+        // rest on loaded CI machines. A genuinely stuck delivery still fails in
+        // timeoutMs. A bare timeout bump would keep the coupling between
+        // deliveries; per-delivery removes it.
         for (var i = 0; i < expectedCount; i++)
+        {
+            using var cts = new CancellationTokenSource(timeoutMs);
             await handler.DeliverySemaphore.WaitAsync(cts.Token);
+        }
     }
 }
 
