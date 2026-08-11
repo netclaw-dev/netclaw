@@ -51,6 +51,82 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact]
+    public void Gh_run_diagnostic_with_exit_status_is_reusable()
+    {
+        const string command =
+            "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 "
+            + "| head -200; echo \"---EXIT $?---\"";
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, "/work"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            [
+                new ApprovalCandidate("gh run view", "/work"),
+                new ApprovalCandidate("head", "/work"),
+                new ApprovalCandidate("echo", null)
+            ],
+            analysis.Candidates);
+    }
+
+    [Theory]
+    [InlineData("gh run view 123456 --repo example/project", "gh run view")]
+    [InlineData("gh run view 123456 -R example/project", "gh run view")]
+    [InlineData("gh run view 123456 --repo=example/project", "gh run view")]
+    [InlineData("gh api repos/example/project/actions/jobs/123456/logs", "gh api")]
+    public void Gh_remote_identifiers_are_not_file_system_scopes(
+        string command,
+        string expectedVerb)
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/work")));
+
+        Assert.Equal(expectedVerb, candidate.Verb);
+        Assert.Equal("/work", candidate.Directory);
+    }
+
+    [Theory]
+    [InlineData("gh api repos/example/project -F data=@/etc/passwd")]
+    [InlineData("gh api repos/example/project -Fdata=@/etc/passwd")]
+    [InlineData("gh api repos/example/project --field data=@/etc/passwd")]
+    [InlineData("gh api repos/example/project --field=data=@/etc/passwd")]
+    [InlineData("gh api repos/example/project --input /etc/passwd")]
+    [InlineData("gh api repos/example/project --input=/etc/passwd")]
+    [InlineData("gh api graphql -F query=@/etc/passwd")]
+    [InlineData("gh api gists -F data=@/etc/passwd")]
+    public void Gh_api_file_options_keep_external_file_scope(string command)
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/work")));
+
+        Assert.Equal("/etc/passwd", candidate.Directory);
+        Assert.StartsWith("gh api", candidate.Verb, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Gh_api_raw_field_at_value_is_not_a_file_scope()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args("gh api repos/example/project --raw-field data=@/etc/passwd", "/work")));
+
+        Assert.Equal(new ApprovalCandidate("gh api", "/work"), candidate);
+    }
+
+    [Fact]
+    public void Gh_api_field_with_embedded_at_value_is_not_a_file_scope()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args("gh api repos/example/project --field data=x=@/etc/passwd", "/work")));
+
+        Assert.Equal(new ApprovalCandidate("gh api", "/work"), candidate);
+    }
+
+    [Fact]
     public void Power_shell_matcher_uses_the_native_power_shell_grammar()
     {
         var matcher = new ShellApprovalMatcher(

@@ -283,7 +283,23 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             foreach (var arg in clause.Args)
             {
-                if (arg.IsCwdAttribution
+                if (arg.IsCwdAttribution)
+                    continue;
+
+                if (TryGetGhApiFileOperand(clause, arg, verb, out var fileOperand))
+                {
+                    var resolvedFile = ShellTokenizer.NormalizePathToken(
+                        fileOperand,
+                        clauseWorkingDirectory,
+                        pathStyle);
+                    if (string.IsNullOrWhiteSpace(resolvedFile))
+                        return null;
+
+                    directories.Add(ShellTokenizer.ApplyFileParentRule(resolvedFile, pathStyle));
+                    continue;
+                }
+
+                if (IsGhNonFileSystemOperand(clause, arg, verb)
                     || !IsAuthorizationPathArg(arg, clauseWorkingDirectory, pathStyle))
                     continue;
 
@@ -350,6 +366,134 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static bool TryGetGhApiFileOperand(
+        ShellSyntaxTree.Clause clause,
+        ShellSyntaxTree.Arg argument,
+        string verb,
+        out string fileOperand)
+    {
+        fileOperand = string.Empty;
+        if (!IsGhApiVerb(verb))
+            return false;
+
+        var authoredArguments = clause.Args
+            .Where(static arg => !arg.IsCwdAttribution)
+            .ToList();
+        var index = authoredArguments.FindIndex(arg => ReferenceEquals(arg, argument));
+        if (index < 0)
+            return false;
+
+        var raw = argument.Raw.Trim('\'', '"');
+        if (TryGetInlineOptionValue(raw, "--input=", out fileOperand))
+            return !string.Equals(fileOperand, "-", StringComparison.Ordinal);
+
+        if (TryGetFieldFileValue(raw, "--field=", out fileOperand)
+            || TryGetFieldFileValue(raw, "-F=", out fileOperand)
+            || TryGetFieldFileValue(raw, "-F", out fileOperand))
+        {
+            return true;
+        }
+
+        if (index == 0)
+            return false;
+
+        var preceding = authoredArguments[index - 1].Raw.Trim('\'', '"');
+        if (preceding == "--input")
+        {
+            fileOperand = raw;
+            return !string.Equals(fileOperand, "-", StringComparison.Ordinal);
+        }
+
+        if (preceding.StartsWith("-F", StringComparison.Ordinal)
+            && preceding.Length > 2
+            && raw.StartsWith('@'))
+        {
+            fileOperand = raw[1..];
+            return fileOperand.Length > 0;
+        }
+
+        return preceding is "--field" or "-F"
+               && TryGetFieldFileValue(raw, string.Empty, out fileOperand);
+    }
+
+    private static bool TryGetInlineOptionValue(
+        string raw,
+        string prefix,
+        out string value)
+    {
+        value = string.Empty;
+        if (!raw.StartsWith(prefix, StringComparison.Ordinal)
+            || raw.Length == prefix.Length)
+        {
+            return false;
+        }
+
+        value = raw[prefix.Length..];
+        return true;
+    }
+
+    private static bool TryGetFieldFileValue(
+        string raw,
+        string prefix,
+        out string fileOperand)
+    {
+        fileOperand = string.Empty;
+        if (!raw.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var field = raw[prefix.Length..];
+        var valueSeparator = field.IndexOf('=', StringComparison.Ordinal);
+        if (valueSeparator <= 0 || valueSeparator + 2 >= field.Length)
+            return false;
+
+        var value = field[(valueSeparator + 1)..];
+        if (!value.StartsWith('@'))
+            return false;
+
+        fileOperand = value[1..];
+        return true;
+    }
+
+    private static bool IsGhApiVerb(string verb)
+        => string.Equals(verb, "gh api", StringComparison.Ordinal)
+           || verb.StartsWith("gh api ", StringComparison.Ordinal);
+
+    private static bool IsGhNonFileSystemOperand(
+        ShellSyntaxTree.Clause clause,
+        ShellSyntaxTree.Arg argument,
+        string verb)
+    {
+        if (!verb.StartsWith("gh ", StringComparison.Ordinal))
+            return false;
+
+        var authoredArguments = clause.Args
+            .Where(static arg => !arg.IsCwdAttribution)
+            .ToList();
+        var index = authoredArguments.FindIndex(arg => ReferenceEquals(arg, argument));
+        if (index < 0)
+            return false;
+
+        var raw = argument.Raw.Trim('\'', '"');
+        if (raw.StartsWith("--repo=", StringComparison.Ordinal)
+            || raw.StartsWith("-R=", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (index > 0)
+        {
+            var preceding = authoredArguments[index - 1].Raw.Trim('\'', '"');
+            if (preceding is "--repo" or "-R")
+                return true;
+        }
+
+        // The first operand of `gh api` is a REST endpoint, not a local path.
+        // Keep later @file and option-bound operands available to path policy.
+        return IsGhApiVerb(verb)
+               && index == 0
+               && !argument.IsFlag;
     }
 
     private static string? ResolveAuthorizationScope(

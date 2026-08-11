@@ -322,7 +322,10 @@ public sealed record ShellCommandAnalysis
     private bool CommandHasDynamicSyntax(
         CommandOccurrence command,
         HashSet<ClauseElement> accountedRegionArguments)
-        => !command.IsComplete
+    {
+        var acceptsUnknownData = IsDataOnlyCommand(command);
+
+        return !command.IsComplete
             || !Enum.IsDefined(command.ImmediateRole)
             || command.ImmediateRole == CommandOccurrenceRole.Unknown
             || command.Ancestry.Any(static frame =>
@@ -338,7 +341,7 @@ public sealed record ShellCommandAnalysis
                     command,
                     arg,
                     accountedRegionArguments))
-            || command.Clause.Args.Any(static arg =>
+            || !acceptsUnknownData && command.Clause.Args.Any(static arg =>
                 arg.Kind == ArgKind.EnvVar
                 && !arg.IsCwdAttribution
                 && string.IsNullOrWhiteSpace(arg.Resolved))
@@ -350,12 +353,21 @@ public sealed record ShellCommandAnalysis
                 !IsAccountedExecutionRegionArgument(
                     argument,
                     accountedRegionArguments)
-                && HasUnsupportedArgumentDomain(argument))
+                && HasUnsupportedArgumentDomain(argument)
+                && (!acceptsUnknownData || argument.Argument.Kind != ArgKind.EnvVar))
             // A glob in a directory segment can hide traversal or a symlink.
             // Only a leaf glob has a fixed directory scope.
             || command.Clause.Args.Any(arg =>
                 ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
             || HasUnresolvedRedirect(command);
+    }
+
+    private static bool IsDataOnlyCommand(CommandOccurrence command)
+        => !command.Clause.Verb.IsDynamic
+           && string.Equals(
+               command.Clause.Verb.CanonicalVerb ?? command.Clause.Verb.Joined,
+               "echo",
+               StringComparison.Ordinal);
 
     private HashSet<ClauseElement> FindAccountedExecutionRegionArguments()
     {

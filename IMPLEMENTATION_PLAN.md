@@ -178,6 +178,12 @@ Done when:
   root from one-command `WorkingDirectory` scope, prevent redundant project
   switches, and preserve `cd` when directory mutation is the requested shell
   behavior.
+- [x] Unknown Bash scalar data for `echo`, including `$?`, does not make an
+  otherwise complete command complex. Executable substitutions and unknown
+  path operands remain strict.
+- [x] Direct `gh api` endpoints and `gh --repo` remote identifiers do not create
+  false local filesystem scopes. File-bound arguments remain subject to path
+  policy.
 - [x] Sanitized behavioral eval cases cover early project declaration,
   one-command typed scope, failed-path recovery, and deliberate inline `cd`.
 - [ ] Run the new behavioral eval cases against a configured model provider.

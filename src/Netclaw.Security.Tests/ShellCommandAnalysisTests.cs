@@ -220,6 +220,28 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Fact]
+    public void Bash_echo_accepts_unknown_exit_status_as_data()
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze("echo \"---EXIT $?---\"", "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        var occurrence = Assert.Single(analysis.Commands);
+        Assert.IsType<ShellValueDomain.Unknown>(Assert.Single(occurrence.Arguments).Value);
+    }
+
+    [Fact]
+    public void Bash_unknown_path_operand_stays_dynamic()
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze("rm \"$?\"", "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
     public void Power_shell_empty_command_argument_region_stays_dynamic()
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
