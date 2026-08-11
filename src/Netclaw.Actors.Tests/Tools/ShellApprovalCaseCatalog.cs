@@ -359,6 +359,14 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
 
         Case(
+            "safe-gh-run-diagnostic-exit-status-allows",
+            Bash(
+                "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 "
+                + "| head -200; echo \"---EXIT $?---\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
+
+        Case(
             "native-project-path-operand-allows-safe-verb",
             Bash("git diff install-skills.sh"),
             Approvals.None,
