@@ -170,6 +170,10 @@ Done when:
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
   keep their strict behavior.
+- [x] Directory operands preserve dotted directory names without weakening the
+  external-path or symlink checks.
+- [x] The policy normalizes a variable `git ls-tree` tree operand to the
+  reviewed read-only verb. Other Git subcommands keep exact parser output.
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
@@ -180,7 +184,7 @@ Done when:
   patterns, redirect alternatives, and redirect-source alternatives. The
   unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
   matrix passes locally.
-- [x] The expanded 244-test matrix covers command-substitution and PowerShell
+- [x] The expanded 247-test matrix covers command-substitution and PowerShell
   execution-region behavior. Known command-owned regions reuse independently
   matched host and body grants after Netclaw accounts for the parsed body.
   Unknown receivers and incomplete region facts remain prompt-only.

@@ -300,10 +300,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
                 // A parser path without a canonical value cannot use the broader
                 // cwd grant. Return no candidates so the command fails closed.
-                if (string.IsNullOrWhiteSpace(arg.Resolved))
+                var resolved = arg.Resolved;
+                if (string.IsNullOrWhiteSpace(resolved))
                     return null;
 
-                directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved, pathStyle));
+                directories.Add(ResolveAuthorizationScope(occurrence, arg, resolved, pathStyle));
             }
         }
 
@@ -347,6 +348,42 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static string? ResolveAuthorizationScope(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        ShellSyntaxTree.Arg arg,
+        string resolved,
+        ShellPathStyle pathStyle)
+    {
+        var raw = arg.Raw.Trim();
+        if (raw.Length >= 2 && raw[0] is '\'' or '"' && raw[^1] == raw[0])
+            raw = raw[1..^1];
+
+        var hasDirectorySyntax = raw is "." or ".."
+            || raw.EndsWith("/", StringComparison.Ordinal)
+            || pathStyle == ShellPathStyle.Windows
+                && raw.EndsWith("\\", StringComparison.Ordinal);
+
+        var parsedVerb = occurrence.Clause.Verb.CanonicalVerb
+            ?? string.Join(" ", TrimTrailingValueTokens(occurrence.Clause.Verb.Tokens));
+        var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
+        var hasDirectoryOperand = verb.Equals("find", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("cd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("chdir", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("pushd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("popd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Set-Location", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Push-Location", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Pop-Location", StringComparison.OrdinalIgnoreCase);
+
+        // A dotted basename can name either a file or a directory. Navigation
+        // and traversal commands need the exact scope, not the file-parent
+        // heuristic. The safe-space policy still rejects external and
+        // symlinked paths.
+        return hasDirectorySyntax || hasDirectoryOperand
+            ? resolved
+            : ShellTokenizer.ApplyFileParentRule(resolved, pathStyle);
     }
 
     private static string? ResolveGlobCoveringDirectory(

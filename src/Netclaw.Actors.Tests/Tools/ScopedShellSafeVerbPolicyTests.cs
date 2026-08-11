@@ -214,6 +214,68 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
     }
 
     [Fact]
+    public void Git_ls_tree_operand_normalizes_to_read_only_verb()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("git ls-tree"));
+        var candidate = new ApprovalCandidate("git ls-tree feature", _projectDir);
+
+        var normalized = policy.NormalizeCandidate(candidate);
+
+        Assert.Equal("git ls-tree", normalized.Verb);
+        Assert.Equal(_projectDir, normalized.Directory);
+    }
+
+    [Fact]
+    public void Git_subcommand_without_an_operand_rule_stays_exact()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("git remote"));
+        var candidate = new ApprovalCandidate("git remote add", _projectDir);
+
+        Assert.Equal(candidate, policy.NormalizeCandidate(candidate));
+    }
+
+    [Fact]
+    public void Same_length_safe_verb_does_not_normalize_to_git_ls_tree()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("git ls-tree", "gh run list"));
+        var candidate = new ApprovalCandidate("gh run list feature", _projectDir);
+
+        Assert.Equal(candidate, policy.NormalizeCandidate(candidate));
+    }
+
+    [Fact]
+    public void Git_ls_tree_normalization_requires_safe_list_membership()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("git status"));
+        var candidate = new ApprovalCandidate("git ls-tree feature", _projectDir);
+
+        Assert.Equal(candidate, policy.NormalizeCandidate(candidate));
+    }
+
+    [Fact]
+    public void Dotted_symlink_directory_does_not_short_circuit()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var target = CreateTempDir("dotted-target");
+        var link = Path.Combine(_projectDir, "service.repo");
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+            var policy = new ScopedShellSafeVerbPolicy(VerbList("find"));
+            var ctx = PersonalContext(projectDir: _projectDir);
+            var candidate = new ApprovalCandidate("find", link);
+
+            Assert.False(policy.AllShortCircuit([candidate], _projectDir, ctx));
+        }
+        finally
+        {
+            SafeDelete(target);
+        }
+    }
+
+    [Fact]
     public void Candidate_path_outside_safe_spaces_falls_through_to_prompt()
     {
         var policy = new ScopedShellSafeVerbPolicy(VerbList("cat"));

@@ -28,6 +28,7 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("uname"));
         Assert.True(list.Contains("whoami"));
         Assert.True(list.Contains("git describe"));
+        Assert.True(list.Contains("git ls-tree"));
         Assert.True(list.Contains("gh pr view"));
         Assert.True(list.Contains("gh run list"));
 
@@ -59,6 +60,7 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("Get-Date"));
         Assert.True(list.Contains("whoami"));
         Assert.True(list.Contains("git describe"));
+        Assert.True(list.Contains("git ls-tree"));
         Assert.True(list.Contains("gh pr view"));
 
         // Excluded on purpose: gh api can issue any HTTP method; Get-Process
@@ -89,6 +91,19 @@ public sealed class SafeVerbLoaderTests
         Assert.True(linux.Contains("ls"));
         Assert.True(windows.Contains("GET-CONTENT"));
         Assert.True(windows.Contains("Get-Content"));
+    }
+
+    [Fact]
+    public void Operand_match_uses_platform_case_rules_and_exact_verb_identity()
+    {
+        var linux = SafeVerbLoader.Load(isWindows: false);
+        var windows = SafeVerbLoader.Load(isWindows: true);
+
+        Assert.True(linux.IsOperandBearingMatch("git ls-tree feature", "git ls-tree"));
+        Assert.False(linux.IsOperandBearingMatch("GIT LS-TREE feature", "git ls-tree"));
+        Assert.True(windows.IsOperandBearingMatch("GIT LS-TREE feature", "git ls-tree"));
+        Assert.False(windows.IsOperandBearingMatch("Get-Content X", "git ls-tree"));
+        Assert.False(windows.IsOperandBearingMatch("gh run list X", "git ls-tree"));
     }
 
     [Fact]

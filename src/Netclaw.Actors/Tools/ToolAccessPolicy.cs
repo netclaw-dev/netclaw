@@ -388,7 +388,9 @@ public sealed class ToolAccessPolicy
         var isMessy = shellApproval?.IsMessy
             ?? matcher.IsMessy(toolName, analysisArguments);
 
-        IReadOnlyList<ApprovalCandidate> approvalCandidates = candidates;
+        IReadOnlyList<ApprovalCandidate> approvalCandidates = _safeVerbPolicy is not null && isShell
+            ? candidates.Select(_safeVerbPolicy.NormalizeCandidate).Distinct().ToList()
+            : candidates;
 
         // A clean shell command can combine safe candidates with candidates
         // that need a stored grant. Remove only candidates that independently
@@ -397,9 +399,9 @@ public sealed class ToolAccessPolicy
         if (_safeVerbPolicy is not null
             && isShell
             && !isMessy
-            && candidates.Count > 0)
+            && approvalCandidates.Count > 0)
         {
-            approvalCandidates = candidates
+            approvalCandidates = approvalCandidates
                 .Where(candidate => !_safeVerbPolicy.AllShortCircuit(
                     [candidate],
                     context.Approval.Cwd,

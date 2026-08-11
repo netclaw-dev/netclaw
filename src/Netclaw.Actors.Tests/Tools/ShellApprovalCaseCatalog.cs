@@ -263,6 +263,21 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
+            "safe-git-ls-tree-ref-allows",
+            Bash("git ls-tree feature"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "safe-git-ls-tree-external-prompts-with-canonical-verb",
+            Bash("git ls-tree feature", ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["git ls-tree"])),
+        Case(
+            "safe-git-ls-tree-external-reuses-canonical-grant",
+            Bash("git ls-tree feature", ApprovalDirectoryShape.External),
+            Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:git ls-tree")),
+        Case(
             "safe-verb-context-project-fallback-allows",
             Bash("cat src/readme.txt", ApprovalDirectoryShape.None),
             Approvals.None,

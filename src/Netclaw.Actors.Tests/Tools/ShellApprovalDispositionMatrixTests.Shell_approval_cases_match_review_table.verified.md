@@ -13,6 +13,9 @@
 | hard-deny-beats-stored-grant | Bash | Personal | Project | Interactive | netclaw daemon stop | persistent[anywhere]:netclaw daemon stop | Denied | hard_deny_self_destructive | none | Not applicable |
 | compound-hard-deny-denies | Bash | Personal | Project | Interactive | git status && netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | safe-verb-project-allows | Bash | Personal | Project | Interactive | git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-git-ls-tree-ref-allows | Bash | Personal | Project | Interactive | git ls-tree feature | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-git-ls-tree-external-prompts-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | RequiresApproval | approval required | git ls-tree | No |
+| safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
 | safe-verb-context-project-fallback-allows | Bash | Personal | None | Interactive | cat src/readme.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-verb-context-project-traversal-prompts | Bash | Personal | None | Interactive | cat ../secret.txt | none | RequiresApproval | approval required | cat | No |
 | safe-verb-session-allows | Bash | Personal | Session | Interactive | git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |

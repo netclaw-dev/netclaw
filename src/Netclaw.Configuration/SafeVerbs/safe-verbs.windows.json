@@ -32,6 +32,7 @@
     "git remote",
     "git rev-parse",
     "git ls-files",
+    "git ls-tree",
     "git blame",
     "git describe",
     "git rev-list",

@@ -57,6 +57,16 @@ public sealed class SafeVerbList
     public bool Contains(string candidateVerb)
         => !string.IsNullOrEmpty(candidateVerb) && _verbs.Contains(candidateVerb);
 
+    /// <summary>
+    /// Returns true when a listed verb starts the candidate and an operand
+    /// follows it. The comparison uses the selected platform rules.
+    /// </summary>
+    public bool IsOperandBearingMatch(string candidateVerb, string listedVerb)
+        => _verbs.Contains(listedVerb)
+           && candidateVerb.Length > listedVerb.Length
+           && candidateVerb[listedVerb.Length] == ' '
+           && _verbs.Comparer.Equals(candidateVerb[..listedVerb.Length], listedVerb);
+
     /// <summary>The verbs in this list. Stable ordering; intended for diagnostics, not lookups.</summary>
     public IReadOnlyCollection<string> Verbs => _verbs;
 }

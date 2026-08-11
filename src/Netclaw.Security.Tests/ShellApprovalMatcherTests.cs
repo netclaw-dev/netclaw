@@ -67,6 +67,27 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Theory]
+    [InlineData(@"Set-Location C:\workspace\service.repo", "Set-Location")]
+    [InlineData(@"cd C:\workspace\service.repo", "Set-Location")]
+    [InlineData(@"Push-Location C:\workspace\service.repo", "Push-Location")]
+    public void Power_shell_location_command_preserves_dotted_directory(
+        string command,
+        string expectedVerb)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7));
+
+        var candidate = Assert.Single(matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, @"C:\workspace")));
+
+        Assert.Equal(expectedVerb, candidate.Verb);
+        Assert.Equal("C:/workspace/service.repo", candidate.Directory);
+    }
+
+    [Theory]
     [InlineData(@"Get-Content Env:\Path")]
     [InlineData(@"Get-Item HKLM:\Software\Vendor")]
     [InlineData(@"Remove-Item CustomDrive:\target")]
@@ -1329,6 +1350,49 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Contains(candidates,
             c => c.Verb == "git remote"
               && c.Directory == "/home/user/repos/example");
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_preserves_dotted_cd_target_as_directory()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "cd /workspace/service.repo"
+            }));
+
+        Assert.Equal("cd", candidate.Verb);
+        Assert.Equal("/workspace/service.repo", candidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_find_dot_preserves_dotted_working_directory()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "find . -maxdepth 1 -type f",
+                ["WorkingDirectory"] = "/workspace/service.repo"
+            }));
+
+        Assert.Equal("find", candidate.Verb);
+        Assert.Equal("/workspace/service.repo", candidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_file_operand_in_dotted_directory_uses_parent_directory()
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "cat /workspace/service.repo/readme.md"
+            }));
+
+        Assert.Equal("cat", candidate.Verb);
+        Assert.Equal("/workspace/service.repo", candidate.Directory);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
