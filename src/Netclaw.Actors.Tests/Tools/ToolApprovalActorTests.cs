@@ -326,7 +326,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["dotnet", "test"], grantDir));
+                ApprovalEntry.CreateTokenPrefix(NativeShell, ["dotnet", "test"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -335,14 +335,14 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-a",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [BashCandidate("dotnet test", candidateDir)],
+                [NativeCandidate("dotnet test", candidateDir)],
                 cwd: unrelatedCwd,
                 ct);
 
             Assert.Empty(result.UnapprovedPatterns);
             var match = Assert.Single(result.ApprovedMatches);
             Assert.Equal("persistent", match.Source);
-            Assert.Equal($"Bash token-prefix \"dotnet test\" in {grantDir}", match.Scope);
+            Assert.Equal($"{NativeShell} token-prefix \"dotnet test\" in {grantDir}", match.Scope);
         }
         finally
         {
@@ -362,7 +362,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["cat"], grantDir));
+                ApprovalEntry.CreateTokenPrefix(NativeShell, ["cat"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -371,13 +371,13 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-a",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [BashCandidate("cat", outsideDir)],
+                [NativeCandidate("cat", outsideDir)],
                 cwd: grantDir,
                 ct);
 
             Assert.Equal(["cat"], result.UnapprovedPatterns);
             var check = Assert.Single(result.CandidateChecks!);
-            Assert.Equal(BashCandidate("cat", outsideDir), check.Candidate);
+            Assert.Equal(NativeCandidate("cat", outsideDir), check.Candidate);
             Assert.Null(check.ApprovedMatch);
             Assert.Empty(result.ApprovedMatches);
         }
@@ -397,14 +397,14 @@ public sealed class ToolApprovalActorTests : TestKit
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
             var approvedDir = Path.Combine(grantDir, "src");
             var unapprovedDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "external");
-            var approvedCandidate = BashCandidate("git push", approvedDir);
-            var unapprovedCandidate = BashCandidate("git push", unapprovedDir);
+            var approvedCandidate = NativeCandidate("git push", approvedDir);
+            var unapprovedCandidate = NativeCandidate("git push", unapprovedDir);
 
             var store = CreateStore(tempFile);
             store.AddApproval(
                 TrustAudience.Personal,
                 "shell_execute",
-                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"], grantDir));
+                ApprovalEntry.CreateTokenPrefix(NativeShell, ["git", "push"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -426,7 +426,7 @@ public sealed class ToolApprovalActorTests : TestKit
                 result.CandidateChecks);
             var match = Assert.Single(result.ApprovedMatches);
             Assert.Equal("persistent", match.Source);
-            Assert.Equal($"Bash token-prefix \"git push\" in {grantDir}", match.Scope);
+            Assert.Equal($"{NativeShell} token-prefix \"git push\" in {grantDir}", match.Scope);
         }
         finally
         {
@@ -447,7 +447,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = CreateStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"], grantDir));
+                ApprovalEntry.CreateTokenPrefix(NativeShell, ["git", "push"], grantDir));
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -645,7 +645,7 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-a",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [BashCandidate("git push")],
+                [NativeCandidate("git push")],
                 cwd: null,
                 ct);
 
@@ -739,6 +739,18 @@ public sealed class ToolApprovalActorTests : TestKit
                 verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
         };
 
+    private static ApprovalShell NativeShell => OperatingSystem.IsWindows()
+        ? ApprovalShell.PowerShell
+        : ApprovalShell.Bash;
+
+    private static ApprovalCandidate NativeCandidate(string verb, string? directory = null) =>
+        new(verb, directory)
+        {
+            Shell = NativeShell,
+            VerbTokens = Array.AsReadOnly(
+                verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
+        };
+
     private static Task RecordApprovalAsync(
         AkkaToolApprovalService service,
         string sessionId,
@@ -763,7 +775,7 @@ public sealed class ToolApprovalActorTests : TestKit
         return new ToolApprovalStore(
             path,
             timeProvider: null,
-            migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+            migrationContext: new ApprovalStoreMigrationContext(NativeShell),
             lockTimeout: TimeSpan.Zero);
     }
 

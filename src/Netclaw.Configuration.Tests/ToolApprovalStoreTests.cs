@@ -26,7 +26,9 @@ public sealed class ToolApprovalStoreTests : IDisposable
             TimeSpan.Zero);
     }
 
-    private static ApprovalShell NativeShell => ApprovalShell.Bash;
+    private static ApprovalShell NativeShell => OperatingSystem.IsWindows()
+        ? ApprovalShell.PowerShell
+        : ApprovalShell.Bash;
 
     public void Dispose()
     {
@@ -38,11 +40,11 @@ public sealed class ToolApprovalStoreTests : IDisposable
     }
 
     private static ApprovalEntry Verb(string verb) => ApprovalEntry.CreateTokenPrefix(
-        NativeShell,
+        ApprovalShell.Bash,
         verb.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
     private static ApprovalEntry InDir(string verb, string dir) => ApprovalEntry.CreateTokenPrefix(
-        NativeShell,
+        ApprovalShell.Bash,
         verb.Split(' ', StringSplitOptions.RemoveEmptyEntries),
         dir);
 
@@ -443,7 +445,9 @@ public sealed class ToolApprovalStoreTests : IDisposable
     [Fact]
     public void Version_two_conversion_preserves_significant_directory_whitespace()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "approval scope ");
+        var directory = OperatingSystem.IsWindows()
+            ? Path.Combine(Path.GetTempPath(), "approval scope", "child")
+            : "/work ";
         var encodedDirectory = JsonSerializer.Serialize(directory);
         File.WriteAllText(_file, $$"""
             {
@@ -461,7 +465,14 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.IsType<ApprovalStoreLoadResult.Ready>(result);
         var entry = Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
         Assert.Equal(Path.GetFullPath(directory), entry.Directory);
-        Assert.EndsWith(" ", entry.Directory);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("approval scope", entry.Directory, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.EndsWith(" ", entry.Directory);
+        }
     }
 
     [Fact]
@@ -745,14 +756,14 @@ public sealed class ToolApprovalStoreTests : IDisposable
     [Fact]
     public void ToolApprovalEntryComparer_preserves_significant_path_whitespace()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "approval-scope");
+        const string directory = "/approval-scope";
         var withSpace = directory + " ";
 
         Assert.False(ToolApprovalEntryComparer.Equals(
             InDir("git", directory),
             InDir("git", withSpace)));
-        Assert.NotNull(ToolApprovalEntryComparer.NormalizeDirectory(withSpace));
-        Assert.EndsWith(" ", ToolApprovalEntryComparer.NormalizeDirectory(withSpace));
+        Assert.NotNull(ToolApprovalEntryComparer.NormalizeDirectory(withSpace, ApprovalShell.Bash));
+        Assert.EndsWith(" ", ToolApprovalEntryComparer.NormalizeDirectory(withSpace, ApprovalShell.Bash));
     }
 
     private ToolApprovalStore CreateStore(IApprovalStoreFileAccess fileAccess) => new(

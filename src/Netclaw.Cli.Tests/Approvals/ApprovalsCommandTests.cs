@@ -53,7 +53,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         _store.AddApproval(
             TrustAudience.Personal,
             "file_write",
-            new ApprovalEntry("file_write") { Directory = "/tmp/scratch" });
+            new ApprovalEntry("file_write") { Directory = Path.Combine(_dir.Path, "scratch") });
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
     }
 
@@ -416,7 +416,11 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Single(entries);
         Assert.Equal("freshdesk", entries[0].Verb);
         Assert.Null(entries[0].Directory);
-        Assert.Contains("Trusted 'Bash token-prefix \"freshdesk\" anywhere'", _output.ToString());
+        var expectedShell = OperatingSystem.IsWindows()
+            ? ApprovalShell.PowerShell
+            : ApprovalShell.Bash;
+        Assert.Equal(expectedShell, entries[0].Shell);
+        Assert.Contains($"Trusted '{expectedShell} token-prefix \"freshdesk\" anywhere'", _output.ToString());
     }
 
     [Fact]

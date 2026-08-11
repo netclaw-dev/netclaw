@@ -93,11 +93,14 @@ public sealed class ApprovalsManagerPageTests : IDisposable
     [Fact]
     public async Task SeededEntries_RenderedInList()
     {
+        var scratchDirectory = Path.Combine(
+            Assert.IsType<string>(Path.GetPathRoot(_dir.Path)),
+            "scratch");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
         _store.AddApproval(
             TrustAudience.Personal,
             "file_write",
-            new ApprovalEntry("file_write") { Directory = "/tmp/scratch" });
+            new ApprovalEntry("file_write") { Directory = scratchDirectory });
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
 
         var (terminal, app, _) = CreateHeadlessApp(out var input);
@@ -110,8 +113,8 @@ public sealed class ApprovalsManagerPageTests : IDisposable
             $"Expected audience 'personal'. Screen:\n{terminal}");
         Assert.True(terminal.Contains("Bash token-prefix \"git push\" anywhere"),
             $"Expected typed git push entry. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("/tmp/scratch"),
-            $"Expected directory '/tmp/scratch'. Screen:\n{terminal}");
+        Assert.True(terminal.Contains(scratchDirectory),
+            $"Expected directory '{scratchDirectory}'. Screen:\n{terminal}");
         Assert.True(terminal.Contains("Bash token-prefix \"ls\" anywhere"),
             $"Expected typed ls entry (public audience). Screen:\n{terminal}");
     }

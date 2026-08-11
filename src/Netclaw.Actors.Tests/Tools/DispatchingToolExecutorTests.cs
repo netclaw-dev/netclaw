@@ -1630,13 +1630,16 @@ public class DispatchingToolExecutorTests
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, firstContext, TestContext.Current.CancellationToken));
 
-            await approvalService.RecordApprovalAsync(
-                "signalr/thread-1",
+            var reviewedCandidates = Assert.IsAssignableFrom<IReadOnlyList<ApprovalCandidate>>(
+                firstAttempt.ApprovalContext.Candidates);
+            await approvalService.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"signalr/thread-1",
                 TrustAudience.Personal,
                 new ToolName(toolCall.Name),
-                firstAttempt.ApprovalContext.CandidateVerbs,
+                reviewedCandidates
+                    .Select(static candidate => new ToolApprovalGrant(candidate, Directory: null))
+                    .ToArray(),
                 persistent: false,
-                cwd: null,
                 TestContext.Current.CancellationToken);
 
             // Approved in firstContext's session — call should succeed.
