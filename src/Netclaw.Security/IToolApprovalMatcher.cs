@@ -242,6 +242,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
             var directories = ResolveCommandDirectories(
                 occurrence,
+                verb,
                 isSideEffectVerb,
                 workingDirectory,
                 Environment.PathStyle);
@@ -261,6 +262,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static IReadOnlyList<string?>? ResolveCommandDirectories(
         ShellSyntaxTree.CommandOccurrence occurrence,
+        string verb,
         bool isSideEffectVerb,
         string? workingDirectory,
         ShellPathStyle pathStyle)
@@ -304,7 +306,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 if (string.IsNullOrWhiteSpace(resolved))
                     return null;
 
-                directories.Add(ResolveAuthorizationScope(occurrence, arg, resolved, pathStyle));
+                directories.Add(ResolveAuthorizationScope(verb, arg, resolved, pathStyle));
             }
         }
 
@@ -351,7 +353,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static string? ResolveAuthorizationScope(
-        ShellSyntaxTree.CommandOccurrence occurrence,
+        string verb,
         ShellSyntaxTree.Arg arg,
         string resolved,
         ShellPathStyle pathStyle)
@@ -365,9 +367,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             || pathStyle == ShellPathStyle.Windows
                 && raw.EndsWith("\\", StringComparison.Ordinal);
 
-        var parsedVerb = occurrence.Clause.Verb.CanonicalVerb
-            ?? string.Join(" ", TrimTrailingValueTokens(occurrence.Clause.Verb.Tokens));
-        var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
         var hasDirectoryOperand = verb.Equals("find", StringComparison.OrdinalIgnoreCase)
             || verb.Equals("cd", StringComparison.OrdinalIgnoreCase)
             || verb.Equals("chdir", StringComparison.OrdinalIgnoreCase)
@@ -1031,6 +1030,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (analysis.Commands.Any(command =>
                 ResolveCommandDirectories(
                     command,
+                    NormalizedVerb(command),
                     IsSideEffectCommand(command),
                     workingDirectory,
                     Environment.PathStyle) is null))
@@ -1089,12 +1089,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence)
+        => ShellTokenizer.SingleTokenSideEffectVerbs.Contains(NormalizedVerb(occurrence));
+
+    private static string NormalizedVerb(ShellSyntaxTree.CommandOccurrence occurrence)
     {
         var clause = occurrence.Clause;
         var parsedVerb = clause.Verb.CanonicalVerb
             ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
-        var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
-        return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
+        return ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
     }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)

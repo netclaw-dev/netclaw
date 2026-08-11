@@ -103,10 +103,11 @@ public sealed class ToolApprovalGateTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void Static_shell_glob_uses_covering_directory_and_offers_persistent_approval()
     {
+        using var dir = new DisposableTempDir();
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create(
-            "Command", "rm /tmp/*.bak",
-            "WorkingDirectory", "/home/user/project");
+            "Command", $"rm {dir.Path}/*.bak",
+            "WorkingDirectory", dir.Path);
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -114,7 +115,7 @@ public sealed class ToolApprovalGateTests
         Assert.False(decision.ApprovalContext!.IsMessy);
         var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
         Assert.Equal("rm", candidate.Verb);
-        Assert.Equal("/tmp", candidate.Directory);
+        Assert.Equal(dir.Path, candidate.Directory);
         Assert.Contains(
             decision.ApprovalContext.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
