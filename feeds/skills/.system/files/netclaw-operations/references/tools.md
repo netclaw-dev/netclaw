@@ -21,6 +21,17 @@ servers therefore run as one process shared by every session authorized to use
 that server; a Slack thread or subagent does not receive a private MCP process.
 State held by the server is shared too.
 
+Netclaw listens for tool and prompt catalog changes when the server supports
+them. Modern servers use `subscriptions/listen`. Older servers can send direct
+list-change notifications when they declare `listChanged` support.
+
+Netclaw still polls each catalog. The poll repairs missed events and supports
+servers without notifications. A failed notification refresh keeps the last
+good catalog. Check the daemon logs for the selected compatibility mode,
+acknowledgement timeouts, unsupported methods, or an ended notification stream.
+
+Resource discovery and resource subscriptions are not part of this behavior.
+
 For Playwright, inspect the existing tabs before acting, create a new tab for
 your work, and close only tabs you created. Tabs help callers coordinate, but
 they are not security boundaries: cookies, local storage, permissions, and

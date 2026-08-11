@@ -9,9 +9,9 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.26.0</VersionPrefix>
-    <VersionSuffix>beta.1</VersionSuffix>
+    <VersionSuffix>beta.2</VersionSuffix>
     <PackageReleaseNotes>
-      Features: MCP OAuth surfaced at add time; mention-required thread replies with history backfill; file-read permissions match shell reach; TUI state preserved across navigation; background job and one-shot reminder cleanup. Bug fixes: approval prompts skip already-granted candidates; safe shell stages compose with one-time grants; background job control bypasses approval; failed one-shot reminders retry; phantom directory scopes and quoted free-text operands removed from stored patterns; trailing-slash globs scoped to parent; ToolAccessPolicy fail-closed. Dependency updates: Termina 0.16.1, SkiaSharp 4.151.1, Verify.XunitV3 31.28.0.
+      Features: MCP server prompts loadable as dynamic skills; native PowerShell on Windows with 5.1 fallback. Bug fixes: reminders no longer skipped on execution capacity; OAuth-broken MCP connections demote to AwaitingAuth with operator alert; MCP HTTP fallback header race fixed; daemon working directory preserved across restarts; /dev/null redirects no longer open a reusable /dev scope; PowerShell host probe retries cold starts and falls back to 5.1. Internal: shell approval analysis migrated to ShellSyntaxTree fail-closed parser; reduced PowerShell approval repetition; pinned Bash hidden-execution boundaries; PowerShell execution-region approvals. Dependency updates: SlackNet 0.17.11, ShellSyntaxTree 0.3.0-alpha.6.
     </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>

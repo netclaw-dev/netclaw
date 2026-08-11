@@ -94,6 +94,21 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("join-probe");
 
+        // Cold-start the session actor OUTSIDE the timed Ask below. The first
+        // JoinSession spawns the child through DI (fresh SQLite store, persistence
+        // recovery, serialization verification) — unbounded cost on a loaded
+        // runner that can exceed the Ask's 3s budget. Warm it first with a guard
+        // ceiling; the second JoinSession measures only the hot mailbox path.
+        var warmupProbe = CreateTestProbe("join-warmup");
+        sessionManager.Tell(new JoinSession(warmupProbe)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        });
+        await warmupProbe.ExpectMsgAsync<SessionJoined>(
+            TimeSpan.FromSeconds(30),
+            cancellationToken: TestContext.Current.CancellationToken);
+
         var joined = await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
@@ -1662,11 +1677,16 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, firstAck.SessionId);
 
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(1, _fakeChatClient.CallCount);
-            return Task.CompletedTask;
-        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+        // The CommandAck fires BEFORE the first turn's LLM call is scheduled —
+        // recall resolution and a working-context mailbox hop run first — so
+        // polling CallCount races the very thing it measures. FirstCallEntered
+        // completes the instant the call enters GetResponseAsync, while the
+        // gate keeps it blocked: that is the deterministic "in flight" proof.
+        // The 30s ceiling is a hang guard only, not the pass/fail mechanism.
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(1, _fakeChatClient.CallCount);
 
         var callsWhileBlocked = _fakeChatClient.CallCount;
 
@@ -1757,6 +1777,13 @@ internal sealed class FakeChatClient : IChatClient
     private int _callCount;
 
     public int CallCount => _callCount;
+
+    // Completes the first time GetResponseAsync is entered (after CallCount is
+    // incremented, before any delay/gate). Lets a test prove a turn is genuinely
+    // "in flight" deterministically instead of polling CallCount, which races the
+    // actor's ack-then-call ordering. One instance per test, so no reset needed.
+    public TaskCompletionSource FirstCallEntered { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // GetResponseAsync is invoked concurrently from multiple actor dispatcher / ThreadPool
     // threads on one shared instance (main-model turn + compaction summarizer sidecar +
@@ -1907,7 +1934,8 @@ internal sealed class FakeChatClient : IChatClient
             _receivedOptions.Add(options);
             _receivedToolNames.Add(toolNames);
         }
-        Interlocked.Increment(ref _callCount);
+        if (Interlocked.Increment(ref _callCount) == 1)
+            FirstCallEntered.TrySetResult();
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
