@@ -11,11 +11,28 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
 
 public sealed class ToolAccessPolicy
 {
+    // This is intentionally narrower than the ordinary safe-verb list. A
+    // causal tail can run from the original directory if the leading cd
+    // fails, so every accepted argv shape must remain non-mutating and must
+    // not launch another command. For example, find, awk, rg, and sort do not
+    // satisfy that contract without parsing their private option grammars.
+    private static readonly HashSet<string> CausalReadOnlyTailVerbs = new(StringComparer.Ordinal)
+    {
+        "cat",
+        "grep",
+        "head",
+        "ls",
+        "pwd",
+        "tail",
+        "wc"
+    };
+
     private readonly ToolConfig _toolConfig;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
@@ -25,6 +42,7 @@ public sealed class ToolAccessPolicy
     private readonly IShellTrustZonePolicy? _shellTrustZonePolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
+    private readonly SafeVerbList? _safeVerbs;
     private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
     private readonly ConditionalWeakTable<ToolExecutionContext, ShellCommandAnalysis>
         _authorizedShellAnalyses = new();
@@ -59,6 +77,7 @@ public sealed class ToolAccessPolicy
         _shellTrustZonePolicy = shellTrustZonePolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
         _featureGates = featureGates ?? FeatureGates.AllEnabled;
+        _safeVerbs = safeVerbs;
         _safeVerbPolicy = safeVerbs is not null ? new ScopedShellSafeVerbPolicy(safeVerbs) : null;
     }
 
@@ -176,16 +195,34 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny("shell_references_protected_path");
         }
 
-        // All shell policy checks use the directory that ShellTool executes.
-        // The explicit tool argument can be absent while the context supplies
-        // an active project, session, or inherited directory.
-        var analysisArguments = WithResolvedShellWorkingDirectory(arguments, workingDirectory);
-        var shellApproval = shellAnalysis is null
+        // Hard-deny and protected-path checks above use the actual execution
+        // start directory. Interactive approval can use a proved leading cd
+        // target, but execution and the stored analysis keep the authored call.
+        var approvalAnalysis = shellAnalysis;
+        var approvalWorkingDirectory = workingDirectory;
+        if (shellAnalysis is not null
+            && shellCommand is not null
+            && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available
+            && TryCreateLeadingDirectoryIntentAnalysis(
+                shellCommand,
+                shellAnalysis,
+                out var intentAnalysis,
+                out var intentWorkingDirectory))
+        {
+            approvalAnalysis = intentAnalysis;
+            approvalWorkingDirectory = intentWorkingDirectory;
+        }
+
+        var analysisArguments = WithShellWorkingDirectory(
+            arguments,
+            approvalWorkingDirectory,
+            replaceExisting: !ReferenceEquals(approvalAnalysis, shellAnalysis));
+        var shellApproval = approvalAnalysis is null
             ? null
             : _shellApprovalMatcher.AnalyzeInvocation(
                 toolName,
                 analysisArguments,
-                shellAnalysis);
+                approvalAnalysis);
 
         if (shellAnalysis is not null)
             _authorizedShellAnalyses.Add(context, shellAnalysis);
@@ -217,7 +254,8 @@ public sealed class ToolAccessPolicy
             context,
             arguments,
             _shellApprovalMatcher,
-            shellApproval);
+            shellApproval,
+            approvalWorkingDirectory);
     }
 
     internal bool TryTakeAuthorizedShellAnalysis(
@@ -305,9 +343,19 @@ public sealed class ToolAccessPolicy
     private static IDictionary<string, object?>? WithResolvedShellWorkingDirectory(
         IDictionary<string, object?>? arguments,
         string? resolvedWorkingDirectory)
+        => WithShellWorkingDirectory(
+            arguments,
+            resolvedWorkingDirectory,
+            replaceExisting: false);
+
+    private static IDictionary<string, object?>? WithShellWorkingDirectory(
+        IDictionary<string, object?>? arguments,
+        string? resolvedWorkingDirectory,
+        bool replaceExisting)
     {
         if (string.IsNullOrWhiteSpace(resolvedWorkingDirectory)
-            || !string.IsNullOrWhiteSpace(ExtractWorkingDirectory(arguments)))
+            || (!replaceExisting
+                && !string.IsNullOrWhiteSpace(ExtractWorkingDirectory(arguments))))
         {
             return arguments;
         }
@@ -323,12 +371,96 @@ public sealed class ToolAccessPolicy
         return analysisArguments;
     }
 
+    private bool TryCreateLeadingDirectoryIntentAnalysis(
+        string command,
+        ShellCommandAnalysis actualAnalysis,
+        out ShellCommandAnalysis intentAnalysis,
+        out string intentWorkingDirectory)
+    {
+        intentAnalysis = actualAnalysis;
+        intentWorkingDirectory = string.Empty;
+
+        if (_safeVerbs is null
+            || _shellCommandPolicy.Environment.Grammar != ShellGrammar.Bash
+            || !actualAnalysis.IsResolved
+            || actualAnalysis.Commands.Count < 3)
+        {
+            return false;
+        }
+
+        var first = actualAnalysis.Commands[0];
+        if (first.Clause.Operator != CompoundOperator.None
+            || first.Clause.IsSubshell
+            || first.Clause.Verb.IsDynamic
+            || !string.Equals(first.Clause.Verb.Joined, "cd", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var cdOperands = first.Clause.Args
+            .Where(static argument => !argument.IsCwdAttribution && !argument.IsFlag)
+            .ToList();
+        if (cdOperands.Count != 1
+            || cdOperands[0].Kind != ArgKind.Literal
+            || !cdOperands[0].IsPath
+            || string.IsNullOrWhiteSpace(cdOperands[0].Resolved))
+        {
+            return false;
+        }
+
+        intentWorkingDirectory = cdOperands[0].Resolved!;
+        var gatedAction = actualAnalysis.Commands[1];
+        if (gatedAction.Clause.Operator != CompoundOperator.AndIf
+            || gatedAction.WorkingDirectory is not ShellValueDomain.Exact gatedDirectory
+            || !PathUtility.AreEquivalentPaths(gatedDirectory.Value, intentWorkingDirectory))
+        {
+            intentWorkingDirectory = string.Empty;
+            return false;
+        }
+
+        var unresolvedTail = actualAnalysis.Commands
+            .Skip(2)
+            .Where(static occurrence => occurrence.WorkingDirectory is ShellValueDomain.Unknown)
+            .ToList();
+        if (unresolvedTail.Count == 0
+            || unresolvedTail.Any(occurrence =>
+                occurrence.Clause.Operator != CompoundOperator.Sequence
+                || occurrence.ImmediateRole != CommandOccurrenceRole.Ordinary
+                || occurrence.Clause.IsSubshell
+                || occurrence.Clause.Verb.IsDynamic
+                || occurrence.Clause.Redirects.Count > 0
+                || !IsCausalReadOnlyTailVerb(occurrence)))
+        {
+            intentWorkingDirectory = string.Empty;
+            return false;
+        }
+
+        var candidate = _shellCommandPolicy.Analyze(command, intentWorkingDirectory);
+        if (!candidate.IsResolved
+            || candidate.HasDynamicSyntax
+            || candidate.Commands.Count != actualAnalysis.Commands.Count)
+        {
+            intentWorkingDirectory = string.Empty;
+            return false;
+        }
+
+        intentAnalysis = candidate;
+        return true;
+    }
+
+    private bool IsCausalReadOnlyTailVerb(CommandOccurrence occurrence)
+    {
+        var verb = occurrence.Clause.Verb.CanonicalVerb ?? occurrence.Clause.Verb.Joined;
+        return _safeVerbs!.Contains(verb) && CausalReadOnlyTailVerbs.Contains(verb);
+    }
+
     private ToolAccessDecision CheckApprovalGate(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
-        ShellApprovalAnalysis? shellApproval = null)
+        ShellApprovalAnalysis? shellApproval = null,
+        string? shellApprovalCwd = null)
     {
         var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
@@ -371,7 +503,8 @@ public sealed class ToolAccessPolicy
         // session directory. Give that resolved value to the parser too.
         var isShell = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal);
         var resolvedShellCwd = isShell
-            ? context.ResolveShellCwd(ExtractWorkingDirectory(arguments))
+            ? shellApprovalCwd
+              ?? context.ResolveShellCwd(ExtractWorkingDirectory(arguments))
             : null;
         if (isShell)
             context.Approval.SetCwd(resolvedShellCwd);

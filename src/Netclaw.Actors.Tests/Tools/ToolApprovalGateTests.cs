@@ -18,7 +18,9 @@ public sealed class ToolApprovalGateTests
 {
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
-    private static ToolAccessPolicy CreatePolicy(ToolApprovalMode shellApprovalMode)
+    private static ToolAccessPolicy CreatePolicy(
+        ToolApprovalMode shellApprovalMode,
+        SafeVerbList? safeVerbs = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -37,7 +39,8 @@ public sealed class ToolApprovalGateTests
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
                 new ShellCommandPolicy(),
-                new ToolPathPolicy([]));
+                new ToolPathPolicy([]),
+                safeVerbs: safeVerbs);
     }
 
     private static ToolExecutionContext PersonalContext(bool supportsApproval = true, string sessionId = "signalr/thread-1") =>
@@ -133,6 +136,149 @@ public sealed class ToolApprovalGateTests
         Assert.Contains("git add .", decision.ApprovalContext!.Patterns);
         Assert.Contains("git commit -m fix", decision.ApprovalContext!.Patterns);
         Assert.Contains("git push", decision.ApprovalContext.Patterns);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash-only directory intent behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Interactive_bash_uses_leading_cd_intent_for_safe_sequence_tail()
+    {
+        const string command =
+            "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs "
+            + "> analysis.log 2>&1; wc -c analysis.log; head -100 analysis.log";
+        var policy = CreatePolicy(
+            ToolApprovalMode.Approval,
+            SafeVerbList.FromVerbs(["head", "wc"]));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/thread-1",
+            sessionDirectory: null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = "/work"
+            });
+        var arguments = ToolInput.Create(
+            "Command", command,
+            "WorkingDirectory", "/work");
+
+        var decision = policy.AuthorizeInvocation(ShellTool(), context, arguments);
+
+        Assert.True(decision.NeedsApproval);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.False(approval.IsMessy);
+        Assert.Equal(command, approval.DisplayText);
+        Assert.Equal("/tmp", approval.Cwd);
+        Assert.Equal(
+            [
+                new ApprovalCandidate("cd", "/tmp"),
+                new ApprovalCandidate("gh api", "/tmp"),
+                new ApprovalCandidate("wc", "/tmp"),
+                new ApprovalCandidate("head", "/tmp")
+            ],
+            approval.Candidates);
+        Assert.DoesNotContain(
+            approval.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
+        Assert.Equal(command, arguments["Command"]);
+        Assert.Equal("/work", arguments["WorkingDirectory"]);
+
+        Assert.True(policy.TryTakeAuthorizedShellAnalysis(context, out var executionAnalysis));
+        Assert.NotNull(executionAnalysis);
+        Assert.Equal("/work", executionAnalysis!.WorkingDirectory);
+        Assert.True(executionAnalysis.HasDynamicSyntax);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash-only directory intent behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("cd /tmp || gh api repos/example/project; wc -c analysis.log")]
+    [InlineData("false && cd /tmp; wc -c analysis.log")]
+    [InlineData("cd /tmp && gh api repos/example/project; rm analysis.log")]
+    [InlineData("cd \"$1\" && gh api repos/example/project; wc -c analysis.log")]
+    [InlineData("cd /tmp && artifact-fetch job/123; find . -exec rm {} +")]
+    [InlineData("cd /tmp && artifact-fetch job/123; awk 'BEGIN { system(\"touch marker\") }'")]
+    [InlineData("cd /tmp && artifact-fetch job/123; rg --pre 'rm marker' pattern .")]
+    [InlineData("cd /tmp && artifact-fetch job/123; sort -o marker input")]
+    public void Interactive_bash_keeps_ambiguous_or_unsafe_directory_tail_complex(
+        string command)
+    {
+        var policy = CreatePolicy(
+            ToolApprovalMode.Approval,
+            SafeVerbList.FromVerbs(["awk", "find", "head", "rg", "sort", "wc"]));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/thread-1",
+            sessionDirectory: null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = "/work"
+            });
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            context,
+            ToolInput.Create("Command", command));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.True(decision.ApprovalContext!.IsMessy);
+        Assert.Equal("/work", decision.ApprovalContext.Cwd);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash-only directory intent behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Leading_cd_intent_does_not_collapse_an_explicit_external_path()
+    {
+        const string command =
+            "cd /tmp && artifact-fetch job/123456 > analysis.log; head /etc/passwd";
+        var policy = CreatePolicy(
+            ToolApprovalMode.Approval,
+            SafeVerbList.FromVerbs(["head", "wc"]));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/thread-1",
+            sessionDirectory: null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = "/work"
+            });
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            context,
+            ToolInput.Create("Command", command));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.False(decision.ApprovalContext!.IsMessy);
+        Assert.Contains(
+            decision.ApprovalContext.Candidates!,
+            candidate => candidate.Verb == "head"
+                         && candidate.Directory == "/etc/passwd");
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies Bash-only directory intent behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Non_interactive_bash_does_not_use_leading_cd_intent()
+    {
+        const string command =
+            "cd /tmp && artifact-fetch job/123456 > analysis.log; wc -c analysis.log";
+        var policy = CreatePolicy(
+            ToolApprovalMode.Approval,
+            SafeVerbList.FromVerbs(["head", "wc"]));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/thread-1",
+            sessionDirectory: null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = "/work",
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
+            });
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            context,
+            ToolInput.Create("Command", command));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("shell_trust_zone_policy_not_configured", decision.DenyReason);
     }
 
     private const string ControlPlaneRoot = "/home/user/.netclaw/config";

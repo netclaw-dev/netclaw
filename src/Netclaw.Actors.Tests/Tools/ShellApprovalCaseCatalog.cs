@@ -367,6 +367,15 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
 
         Case(
+            "leading-cd-gh-log-inspection-prompts-cleanly",
+            Bash(
+                "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs "
+                + "> analysis.log 2>&1; "
+                + "wc -c analysis.log; head -100 analysis.log"),
+            Approvals.None,
+            ExpectedApproval.Require(["cd", "gh api", "wc", "head"])),
+
+        Case(
             "native-project-path-operand-allows-safe-verb",
             Bash("git diff install-skills.sh"),
             Approvals.None,
