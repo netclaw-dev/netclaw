@@ -1,5 +1,19 @@
 # NetClaw Release Notes
 
+## 0.26.0-beta.3 (2026-08-11)
+
+### Features
+- **Agents declare shell working scope up front** — Agents are now guided to declare their working directory once before multi-command work in a named project, pass the directory to the shell tool instead of inline `cd`, and retry rejected paths instead of working around them — fewer redundant approval prompts and more reliable scoped approvals ([#1870](https://github.com/netclaw-dev/netclaw/pull/1870))
+
+### Bug Fixes
+- **Shell approval scopes fixed for dotted paths** — Dotted and hidden paths (e.g. `.netclaw/`) and git refs now produce correct approval scopes, with normalized-verb matching and `git ls-tree` recognized as safe ([#1868](https://github.com/netclaw-dev/netclaw/pull/1868))
+- **MCP: dead OAuth registrations discarded again under SDK 2.1** — The MCP SDK 2.1 discovery probe no longer swallows token-endpoint `invalid_client` rejections during interactive OAuth; rejected client registrations are discarded instead of wedging ([#1865](https://github.com/netclaw-dev/netclaw/pull/1865))
+
+### Dependency Updates
+- **Bump ModelContextProtocol** — 2.0.0 → 2.1.0 ([#1865](https://github.com/netclaw-dev/netclaw/pull/1865))
+- **Bump Anthropic** — 12.39.0 → 12.40.0 ([#1842](https://github.com/netclaw-dev/netclaw/pull/1842))
+- **Bump ShellSyntaxTree** — 0.2.0 → 0.3.0 ([#1867](https://github.com/netclaw-dev/netclaw/pull/1867))
+
 ## 0.26.0-beta.2 (2026-08-10)
 
 ### Features
