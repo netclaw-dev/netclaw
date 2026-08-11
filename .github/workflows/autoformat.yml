@@ -29,13 +29,13 @@ jobs:
 
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           lfs: true
           fetch-depth: 0
 
       - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           global-json-file: "./global.json"
 
@@ -46,7 +46,7 @@ jobs:
         run: dotnet restore Netclaw.slnx
 
       - name: "Autoformat"
-        uses: rolfbjarne/autoformat@v0.5
+        uses: rolfbjarne/autoformat@6651f9ce43cbbc99f74186f20fe17b8e9f8001a3 # v0.5
         with:
           script: 'dotnet format Netclaw.slnx --no-restore'
           onlyFilesModifiedInPullRequest: true
