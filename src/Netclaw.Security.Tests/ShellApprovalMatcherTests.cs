@@ -84,11 +84,7 @@ public sealed class ShellApprovalMatcherTests
             Args(command, @"C:\workspace")));
 
         Assert.Equal(expectedVerb, candidate.Verb);
-        Assert.Equal(
-            OperatingSystem.IsWindows()
-                ? @"C:\workspace\service.repo"
-                : "C:/workspace/service.repo",
-            candidate.Directory);
+        Assert.Equal("C:/workspace/service.repo", candidate.Directory);
     }
 
     [Theory]
