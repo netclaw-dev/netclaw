@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -603,6 +604,10 @@ public sealed class McpClientManagerLifecycleTests
                 throwOnError: true)!;
             var client = (McpClient)RuntimeHelpers.GetUninitializedObject(implementationType);
             plan.Client = client;
+            plan.NotificationHandlers = options.Handlers.NotificationHandlers?.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal) ?? new Dictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>();
             _clients[client] = plan;
             Interlocked.Increment(ref _createCount);
             plan.Created.TrySetResult();
@@ -621,15 +626,36 @@ public sealed class McpClientManagerLifecycleTests
             return new McpClientInitialization(functions.Values.ToList(), plan.Prompts);
         }
 
-        public ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+        public McpCatalogNotificationProfile GetCatalogNotificationProfile(McpClient client)
+            => _clients[client].NotificationProfile;
+
+        public Task ListenForCatalogChangesAsync(
+            McpClient client,
+            RequestId requestId,
+            SubscriptionsListenNotifications notifications,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.ListenCountStorage);
+            plan.ListenRequestId = requestId;
+            plan.ListenNotifications = notifications;
+            plan.ListenStarted.TrySetResult();
+            return plan.Listen is null
+                ? Task.CompletedTask
+                : plan.Listen(cancellationToken);
+        }
+
+        public async ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
             McpClient client,
             CancellationToken cancellationToken)
         {
             var plan = _clients[client];
-            Interlocked.Increment(ref plan.RefreshCountStorage);
+            var refreshCount = Interlocked.Increment(ref plan.RefreshCountStorage);
+            if (plan.BeforeListTools is not null)
+                await plan.BeforeListTools(refreshCount, cancellationToken);
             if (plan.ListFailure is not null)
-                return ValueTask.FromException<IReadOnlyList<AIFunction>>(plan.ListFailure);
-            return ValueTask.FromResult<IReadOnlyList<AIFunction>>(BuildFunctions(plan).Values.ToList());
+                throw plan.ListFailure;
+            return BuildFunctions(plan).Values.ToList();
         }
 
         public ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
@@ -707,6 +733,13 @@ public sealed class McpClientManagerLifecycleTests
 
         public Func<int, CancellationToken, Task<object?>>? Invoke { get; init; }
 
+        public Func<CancellationToken, Task>? Listen { get; init; }
+
+        public Func<int, CancellationToken, Task>? BeforeListTools { get; init; }
+
+        public McpCatalogNotificationProfile NotificationProfile { get; init; } =
+            new("2025-11-25", false, false);
+
         public Exception? DisposeFailure { get; init; }
 
         public Exception? ListFailure { get; set; }
@@ -717,10 +750,20 @@ public sealed class McpClientManagerLifecycleTests
 
         public IReadOnlyDictionary<string, string>? LastPromptArguments { get; set; }
 
+        public IReadOnlyDictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>> NotificationHandlers { get; set; } =
+            new Dictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>();
+
+        public RequestId ListenRequestId { get; set; }
+
+        public SubscriptionsListenNotifications? ListenNotifications { get; set; }
+
         public TaskCompletionSource Created { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Disposed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ListenStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public McpClient? Client { get; set; }
@@ -735,6 +778,8 @@ public sealed class McpClientManagerLifecycleTests
 
         public int PromptInvocationCountStorage;
 
+        public int ListenCountStorage;
+
         public int InvocationCount => Volatile.Read(ref InvocationCountStorage);
 
         public int DisposeCount => Volatile.Read(ref DisposeCountStorage);
@@ -744,6 +789,19 @@ public sealed class McpClientManagerLifecycleTests
         public int PromptRefreshCount => Volatile.Read(ref PromptRefreshCountStorage);
 
         public int PromptInvocationCount => Volatile.Read(ref PromptInvocationCountStorage);
+
+        public int ListenCount => Volatile.Read(ref ListenCountStorage);
+
+        public ValueTask NotifyAsync(
+            string method,
+            JsonNode? parameters,
+            CancellationToken cancellationToken = default)
+        {
+            if (!NotificationHandlers.TryGetValue(method, out var handler))
+                throw new InvalidOperationException($"No notification handler is registered for '{method}'.");
+
+            return handler(new JsonRpcNotification { Method = method, Params = parameters }, cancellationToken);
+        }
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink
