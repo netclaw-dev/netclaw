@@ -503,7 +503,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var containsSeparator = pathStyle == ShellPathStyle.Windows
             ? arg.Raw.IndexOfAny(['/', '\\']) >= 0
             : arg.Raw.Contains('/', StringComparison.Ordinal);
-        if (ShellTokenizer.IsPathToken(arg.Raw) || !containsSeparator)
+        if (ShellTokenizer.IsPathToken(arg.Raw, pathStyle) || !containsSeparator)
             return true;
 
         // An internal slash can also name a ref such as feature/x. Native

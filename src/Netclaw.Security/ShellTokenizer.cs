@@ -295,6 +295,24 @@ public static class ShellTokenizer
             || token.StartsWith("../", StringComparison.Ordinal);
     }
 
+    internal static bool IsPathToken(string token, ShellPathStyle pathStyle)
+    {
+        var isPortablePath = IsPathToken(token);
+        if (isPortablePath || pathStyle != ShellPathStyle.Windows)
+            return isPortablePath;
+
+        var value = token.Trim('\'', '"');
+        return IsPathToken(value)
+            || value.StartsWith('\\')
+            || value.StartsWith("~\\", StringComparison.Ordinal)
+            || value.StartsWith(".\\", StringComparison.Ordinal)
+            || value.StartsWith("..\\", StringComparison.Ordinal)
+            || value.Length >= 3
+            && char.IsAsciiLetter(value[0])
+            && value[1] == ':'
+            && value[2] is '/' or '\\';
+    }
+
     /// <summary>
     /// Produces an exact shell approval unit string with recognizable local paths
     /// normalized against the working directory. Non-path tokens remain in order.
