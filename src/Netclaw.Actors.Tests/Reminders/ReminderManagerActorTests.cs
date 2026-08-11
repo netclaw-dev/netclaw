@@ -1428,6 +1428,137 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    // ── Scheduling-failure surfacing (Tier 1 hardening) ──
+    //
+    // A syntactically valid cron that never occurs (Feb 30) drives a deterministic
+    // scheduling failure through the "no future occurrence" branch — no host, clock,
+    // or timezone dependency. Definitions are written straight to the store to
+    // simulate a persisted reminder whose schedule became unschedulable, then
+    // reconcile is asked to restore it.
+
+    [Fact]
+    public async Task Reconcile_surfaces_scheduling_failure_and_counts_it()
+    {
+        var manager = await GetManagerAsync();
+
+        // Drain PreStart's reconcile (it ran against an empty store) so the write
+        // below is bumped exactly once by our explicit reconcile.
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var definition = CreateCronDefinition("sched-fail", "0 0 30 2 *");
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var after = _definitionStore.Get(definition.Id);
+        Assert.NotNull(after);
+        Assert.Equal(1, after!.ConsecutiveFailures);
+        Assert.True(after.Enabled); // one failure is well below the threshold
+        Assert.Contains(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderScheduleFailed && a.Source == definition.Id.Value);
+    }
+
+    [Fact]
+    public async Task Consecutive_scheduling_failures_auto_disable_and_alert_critical()
+    {
+        var manager = await GetManagerAsync();
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // One below threshold; the next scheduling failure crosses it.
+        var definition = CreateCronDefinition(
+            "sched-disable", "0 0 30 2 *",
+            consecutiveFailures: ReminderManagerActor.FailurePauseThreshold - 1);
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var after = _definitionStore.Get(definition.Id);
+        Assert.NotNull(after);
+        Assert.Equal(ReminderManagerActor.FailurePauseThreshold, after!.ConsecutiveFailures);
+        Assert.False(after.Enabled);
+        Assert.Equal(ReminderTerminalOutcome.Failed, after.TerminalOutcome);
+        Assert.Contains(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderAutoDisabled
+            && a.Source == definition.Id.Value
+            && a.Severity == AlertSeverity.Critical);
+    }
+
+    [Fact]
+    public async Task Scheduling_failure_installs_no_timer()
+    {
+        // Anti-pattern guard: a reminder that cannot compute an occurrence must
+        // install no schedule. It never silently falls back to a bogus fire time.
+        var manager = await GetManagerAsync();
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var definition = CreateCronDefinition("sched-none", "0 0 30 2 *");
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(status.Found);
+        Assert.Null(status.NextFire); // no timer installed
+        Assert.True(status.ConsecutiveFailures >= 1);
+    }
+
+    [Fact]
+    public async Task Health_failed_count_includes_scheduling_failures()
+    {
+        var manager = await GetManagerAsync();
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _definitionStore.Save(CreateCronDefinition("sched-health", "0 0 30 2 *"));
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, health.FailedCount);
+    }
+
+    private static ReminderDefinition CreateCronDefinition(
+        string name, string cron, int consecutiveFailures = 0)
+    {
+        var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);
+        var now = TimeProvider.System.GetUtcNow();
+
+        return new ReminderDefinition
+        {
+            Id = id,
+            Title = name,
+            Instructions = "Cron scheduling-failure test",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
+            DeliveryInstructions = "Reply in-thread with concise status.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Cron,
+                CronExpression = cron
+            },
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            Enabled = true,
+            ConsecutiveFailures = consecutiveFailures,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+    }
+
     private static ReminderDefinition CreateDefinition(string name, string instructions)
     {
         var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);

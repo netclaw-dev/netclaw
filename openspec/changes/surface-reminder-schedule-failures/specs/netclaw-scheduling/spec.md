@@ -6,7 +6,11 @@ Netclaw's reminder manager SHALL track consecutive failures per reminder via the
 persisted `ConsecutiveFailures` count and SHALL auto-pause a reminder when the
 count reaches an internal `FailurePauseThreshold` constant. Both execution
 failures and scheduling failures SHALL increment the same count. A successful
-execution OR a successful (re)schedule SHALL reset the failure count to zero.
+execution SHALL reset the failure count to zero. This is the recovery path for
+both failure kinds: a successful execution proves the reminder both scheduled and
+ran. The manager SHALL NOT reset the count on a successful reschedule alone,
+because the post-fire reschedule of a cron reminder runs before that occurrence
+executes, so a reset there would erase pending execution-failure accumulation.
 Paused reminders SHALL remain persisted with `status: "paused"` and SHALL be
 visible via `netclaw reminders list`.
 
@@ -105,11 +109,19 @@ const on `ReminderExecutionActor`).
 - **AND** an `OperationalAlert.ReminderAutoDisabled` critical alert is emitted
 - **AND** a channel notice is posted
 
-#### Scenario: Successful reschedule resets the failure counter
+#### Scenario: Recovery — a successful execution resets scheduling failures
 
 - **GIVEN** a reminder has failed to schedule twice
-- **WHEN** the next reschedule succeeds
+- **AND** its schedule later recovers so the reminder fires again
+- **WHEN** that occurrence executes successfully
 - **THEN** the consecutive-failure count is reset to zero
+
+#### Scenario: A successful reschedule alone does not reset the counter
+
+- **GIVEN** a cron reminder has a non-zero consecutive-failure count
+- **WHEN** the post-fire reschedule of an occurrence succeeds
+- **THEN** the count is NOT reset by the reschedule
+- **AND** only a later successful execution resets it
 
 #### Scenario: Unresolvable zone never falls back to UTC
 
