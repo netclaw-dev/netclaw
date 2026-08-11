@@ -41,8 +41,10 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ShellExecutionEnvironment _environment;
 
     public record Params(
-        [property: Description("The shell command to execute")] string Command,
-        [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
+        [param: Description("The shell command to execute.")] string Command,
+        [param: Description(
+            "Run the command in this directory. Prefer this argument to an inline cd. Omit it to use the session project or scratch directory.")]
+        string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
     {

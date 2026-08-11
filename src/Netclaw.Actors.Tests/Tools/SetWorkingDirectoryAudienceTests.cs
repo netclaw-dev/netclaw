@@ -21,6 +21,23 @@ public sealed class SetWorkingDirectoryAudienceTests
         UsedStrictFallback: false);
 
     [Fact]
+    public void Path_schema_describes_persistent_multi_command_scope()
+    {
+        var tool = new SetWorkingDirectoryTool(new ToolConfig(), new NetclawPaths());
+        Assert.Contains("before multi-command work", tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not call it again", tool.Description, StringComparison.Ordinal);
+
+        var description = tool.ParameterSchema
+            .GetProperty("properties")
+            .GetProperty("Path")
+            .GetProperty("description")
+            .GetString();
+
+        Assert.Contains("project root", description, StringComparison.Ordinal);
+        Assert.Contains("multi-command task", description, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SetWorkingDirectory_BlockedForPublicAudience_ByDefault()
     {
         var config = new ToolConfig();

@@ -30,8 +30,10 @@ deeper paths, so a future `find /home/user/repo/.netclaw` is auto-allowed.
 where the agent will run multiple commands without explicit path
 arguments — typical interactive REPL work, `git status` followed by
 `git diff` followed by edits, or `make build` and similar tools that
-hide their target behind flags (`make -C`, `git -C`). In those cases
-call `set_working_directory <path>` so the safe-verb short-circuit
+hide their target behind flags (`make -C`, `git -C`). When the user names
+that project, call `set_working_directory <path>` before the first shell
+command. Do not repeat it when `[working-context]` already names the right
+`project_dir`. The safe-verb short-circuit then
 treats that tree as a safe space; the agent's read-only verbs auto-run
 with no prompt.
 
@@ -51,11 +53,21 @@ one-shot lookups against external APIs. Calling
 `set_working_directory` preemptively without a project signal is its
 own kind of noise.
 
+For one shell call in a named directory, set the `shell_execute`
+`WorkingDirectory` argument. Do not prefix the command with an inline `cd`.
+Inline `cd` changes control flow. In `cd <path> && A; B`, command `B` can run
+after a failed `cd`, so approval analysis cannot use the requested directory.
+Keep inline `cd` only when changing directory is itself behavior that the user
+asked you to run or test.
+
 **Recovery from a denied shell call.** If `shell_execute` fails with a denial
 that mentions cwd being outside the safe spaces, the result includes a hint
 pointing at `set_working_directory <path>`. Read the hint, call the tool with
 the directory the user is asking about, then retry the original shell call —
 do not re-prompt the user.
+
+If `set_working_directory` rejects a path, correct the path and retry the tool.
+Do not continue with a stale directory or use an inline `cd` as a workaround.
 
 ## Native Shell Syntax
 

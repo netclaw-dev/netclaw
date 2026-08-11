@@ -43,6 +43,25 @@ public class ShellToolTests
     }
 
     [Fact]
+    public void Working_directory_schema_prefers_the_typed_argument_to_inline_cd()
+    {
+        var commandDescription = _tool.ParameterSchema
+            .GetProperty("properties")
+            .GetProperty("Command")
+            .GetProperty("description")
+            .GetString();
+        var description = _tool.ParameterSchema
+            .GetProperty("properties")
+            .GetProperty("WorkingDirectory")
+            .GetProperty("description")
+            .GetString();
+
+        Assert.Equal("The shell command to execute.", commandDescription);
+        Assert.Contains("Prefer this argument", description, StringComparison.Ordinal);
+        Assert.Contains("inline cd", description, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Missing_selected_executable_fails_without_fallback()
     {
         const string missingExecutable = @"C:\missing\pwsh.exe";

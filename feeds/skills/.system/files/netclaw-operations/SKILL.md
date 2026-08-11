@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.46.0"
+  version: "2.47.0"
 ---
 
 # Netclaw Operations
@@ -43,6 +43,13 @@ a reference file — load the one matching the user's intent with
 allowed roots); the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`,
 `AGENTS.md`, or `CONTEXT.md`) then loads into the prompt. Full rules:
 `skill_read_resource('netclaw-operations', 'references/projects.md')`.
+
+Use the `shell_execute` `WorkingDirectory` argument for one command in another
+directory. Do not add an inline `cd` unless changing directory is itself the
+behavior the user asked you to run or test. Use
+`set_working_directory` when later commands and subagents need the same project
+root. Do not repeat it when `[working-context]` already names that project. If
+the tool rejects a path, correct the path and retry it before work continues.
 
 For Team and Personal sessions, `[working-context]` is refreshed at the start
 of each new turn. In a Git project it includes the active worktree, branch,

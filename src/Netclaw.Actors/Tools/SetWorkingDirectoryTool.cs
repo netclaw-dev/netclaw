@@ -16,7 +16,8 @@ namespace Netclaw.Actors.Tools;
 /// re-assemble the system prompt with project-scoped identity files.
 /// </summary>
 [NetclawTool(ToolName,
-    "Declare your project root and expand your trusted scope. " +
+    "Call this once before multi-command work in a named project. Do not call it again when the current project already matches. " +
+    "It declares the project root and expands your trusted scope. " +
     "Once set, read-only verbs (ls, grep, cat, git status, git log, ...) inside that tree " +
     "auto-run without prompting — the safe-verb short-circuit treats the directory as a safe space. " +
     "Mutating commands still prompt, but the prompt shows the right cwd so persisted approvals are " +
@@ -33,7 +34,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the project root directory.")]
+        [param: Description("Absolute path to the project root for the current multi-command task.")]
         string Path);
 
     public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths paths)

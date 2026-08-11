@@ -71,6 +71,20 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     }
 
     [Fact]
+    public void Personal_rules_prefer_typed_shell_working_directory_and_retry_failed_project_scope()
+    {
+        var prompt = _provider.GetSystemPrompt(TrustAudience.Personal);
+
+        Assert.Contains("`WorkingDirectory` argument", prompt);
+        Assert.Contains("Do not prefix the command with an inline `cd`", prompt);
+        Assert.Contains("before the first shell", prompt);
+        Assert.Contains("Do not repeat it when", prompt);
+        Assert.Contains("changing directory is itself behavior", prompt);
+        Assert.Contains("correct the path and retry the tool", prompt);
+        Assert.Contains("Do not continue with a stale directory", prompt);
+    }
+
+    [Fact]
     public void Public_audience_does_not_include_tooling()
     {
         var prompt = _provider.GetSystemPrompt(TrustAudience.Public);

@@ -107,6 +107,11 @@ check_prerequisites() {
         exit 1
     fi
 
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "ERROR: 'jq' not found. Install jq to run the eval suite." >&2
+        exit 1
+    fi
+
     # Identity files are rendered from repo templates into an isolated eval
     # home; the host does not need a pre-initialized ~/.netclaw tree.
     if [[ ! -f "$REPO_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md" ]]; then
@@ -601,7 +606,7 @@ store_result() {
          VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number, '$esc_prompt', $passed, '$esc_details');"
 }
 
-## Parses a [usage] line and stores performance metrics.
+## Parses text or structured JSON usage output and stores performance metrics.
 ## Args: case_name, run_number, [turn_number (default 1)], [usage_line (default: last [usage] in STDOUT_FILE)]
 ## Called after each run_prompt / run_prompt_resume.
 store_metrics() {
@@ -612,18 +617,30 @@ store_metrics() {
     local turn_number="${3:-1}"
     local usage_line="${4:-}"
 
-    # When no explicit usage line is passed, read the last one in STDOUT_FILE.
+    local input_tokens output_tokens cached_tokens prompt_ms tok_s
+
+    # Structured cases keep tool calls separate from model text so assertions
+    # can prove provenance. Preserve their performance metrics as well.
     if [[ -z "$usage_line" ]]; then
-        usage_line=$(grep -ao '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+        if jq -e '.usage != null' "$STDOUT_FILE" >/dev/null 2>&1; then
+            input_tokens=$(jq -r '.usage.inputTokens // empty' "$STDOUT_FILE")
+            output_tokens=$(jq -r '.usage.outputTokens // empty' "$STDOUT_FILE")
+            cached_tokens=$(jq -r '.usage.cachedInputTokens // empty' "$STDOUT_FILE")
+            prompt_ms=$(jq -r '.usage.promptMs // empty' "$STDOUT_FILE")
+            tok_s=$(jq -r '.usage.predictedPerSecond // empty' "$STDOUT_FILE")
+        else
+            usage_line=$(grep -ao '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+        fi
     fi
 
     # Parse fields from: [usage] in=X out=Y total=Z cached=C prompt_ms=P tok_s=T
-    local input_tokens output_tokens cached_tokens prompt_ms tok_s
-    input_tokens=$(echo "$usage_line" | grep -aoP 'in=\K[0-9]+' || echo "")
-    output_tokens=$(echo "$usage_line" | grep -aoP 'out=\K[0-9]+' || echo "")
-    cached_tokens=$(echo "$usage_line" | grep -aoP 'cached=\K[0-9]+' || echo "")
-    prompt_ms=$(echo "$usage_line" | grep -aoP 'prompt_ms=\K[0-9.]+' || echo "")
-    tok_s=$(echo "$usage_line" | grep -aoP 'tok_s=\K[0-9.]+' || echo "")
+    if [[ -n "$usage_line" ]]; then
+        input_tokens=$(echo "$usage_line" | grep -aoP 'in=\K[0-9]+' || echo "")
+        output_tokens=$(echo "$usage_line" | grep -aoP 'out=\K[0-9]+' || echo "")
+        cached_tokens=$(echo "$usage_line" | grep -aoP 'cached=\K[0-9]+' || echo "")
+        prompt_ms=$(echo "$usage_line" | grep -aoP 'prompt_ms=\K[0-9.]+' || echo "")
+        tok_s=$(echo "$usage_line" | grep -aoP 'tok_s=\K[0-9.]+' || echo "")
+    fi
 
     # Skip if no metrics found
     [[ -z "$input_tokens" && -z "$cached_tokens" && -z "$prompt_ms" ]] && return 0
@@ -744,6 +761,7 @@ check_daemon_alive() {
 
 run_prompt() {
     local prompt="$1"
+    local output_format="${2:-text}"
     STDOUT_FILE="$TMPDIR_EVAL/stdout_$(date +%s%N).txt"
 
     # Record daemon log position before the prompt (the daemon writes to a
@@ -757,9 +775,14 @@ run_prompt() {
 
     # Run prompt via the host CLI, but redirect it at the eval container's
     # daemon and keep CLI-side path resolution inside the eval sandbox.
+    local -a output_args=()
+    if [[ "$output_format" == "json" ]]; then
+        output_args+=(--json)
+    fi
+
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "$prompt" \
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
         > "$STDOUT_FILE" 2>&1 || true
 
     # Brief pause for daemon log flush
@@ -948,6 +971,29 @@ daemon_log_no_skill_loaded() {
 
 stdout_tool_called() {
     grep -qaE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
+}
+
+stdout_json_envelope_valid() {
+    jq -e '
+        type == "object"
+        and (.sessionId | type == "string" and length > 0)
+        and (.response | type == "string")
+        and (.toolCalls == null or (.toolCalls | type == "array"))
+    ' "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+stdout_json_tool_called() {
+    local tool_name="$1"
+    jq -e --arg tool_name "$tool_name" \
+        'any(.toolCalls[]?; .toolName == $tool_name)' \
+        "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+stdout_json_tool_call_arguments() {
+    local tool_name="$1"
+    jq -ce --arg tool_name "$tool_name" \
+        '.toolCalls[]? | select(.toolName == $tool_name) | .argumentsJson | fromjson' \
+        "$STDOUT_FILE" 2>/dev/null
 }
 
 stdout_skill_file_read_called() {
@@ -1489,21 +1535,29 @@ assert_multi_turn_conflicting_speakers() {
 # because calling it after the first shell prompt has already burned the
 # user's attention is the regression we're guarding against.
 assert_approval_set_working_directory_positive() {
-    stdout_tool_called 'set_working_directory' || return 1
+    local set_call
+    stdout_json_envelope_valid || return 1
+    set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
+    jq -e '.Path == "/tmp"' <<<"$set_call" >/dev/null || return 1
 
     # If shell_execute also happened, ensure set_working_directory came first.
-    if stdout_tool_called 'shell_execute'; then
-        local swd_line shell_line
-        swd_line=$(grep -anE '\[tool:call\] set_working_directory' "$STDOUT_FILE" | head -1 | cut -d: -f1)
-        shell_line=$(grep -anE '\[tool:call\] shell_execute' "$STDOUT_FILE" | head -1 | cut -d: -f1)
-        [[ -n "$swd_line" && -n "$shell_line" && "$swd_line" -lt "$shell_line" ]]
+    if stdout_json_tool_called 'shell_execute'; then
+        local shell_call command
+        shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+        command=$(jq -r '.Command // empty' <<<"$shell_call")
+        jq -e '
+            [.toolCalls[]?.toolName] as $names
+            | ($names | index("set_working_directory")) < ($names | index("shell_execute"))
+        ' "$STDOUT_FILE" >/dev/null && \
+            [[ ! "$command" =~ ^[[:space:]]*cd[[:space:]] ]]
     fi
 }
 
 # Negative: no project signal. Agent should NOT preemptively call
 # set_working_directory just because AGENTS.md mentions it.
 assert_approval_set_working_directory_negative() {
-    ! stdout_tool_called 'set_working_directory'
+    stdout_json_envelope_valid || return 1
+    ! stdout_json_tool_called 'set_working_directory'
 }
 
 # Recovery: T1 agent issues a shell call that gets denied for cwd-outside-
@@ -1517,7 +1571,50 @@ assert_approval_set_working_directory_negative() {
 # triggers the prompt path. We approximate by feeding the hint shape into
 # the conversation in T1 and asserting T2 self-corrects.
 assert_approval_recovery_hint() {
-    stdout_tool_called 'set_working_directory'
+    local set_call
+    stdout_json_envelope_valid || return 1
+    set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
+    jq -e '.Path == "/tmp"' <<<"$set_call" >/dev/null
+}
+
+# One command in another directory should use the typed shell argument.
+assert_approval_shell_working_directory_argument() {
+    local shell_call
+    stdout_json_envelope_valid || return 1
+    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+
+    jq -e '.WorkingDirectory == "/tmp" and .Command == "pwd"' \
+        <<<"$shell_call" >/dev/null
+}
+
+# Preserve inline cd when directory mutation is the behavior under test.
+assert_approval_inline_cd_semantics() {
+    local shell_call
+    stdout_json_envelope_valid || return 1
+    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+
+    jq -e '.Command == "cd /tmp && pwd" and (.WorkingDirectory? == null)' \
+        <<<"$shell_call" >/dev/null
+}
+
+# A failed project switch must be corrected before shell work continues.
+assert_approval_set_working_directory_retry() {
+    local shell_call
+    local -a swd_calls
+    stdout_json_envelope_valid || return 1
+    mapfile -t swd_calls < <(stdout_json_tool_call_arguments 'set_working_directory')
+    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+
+    [[ "${#swd_calls[@]}" -ge 2 ]] && \
+        jq -e '.Path == "/tmp/missing-project"' <<<"${swd_calls[0]}" >/dev/null && \
+        jq -e '.Path == "/tmp"' <<<"${swd_calls[1]}" >/dev/null && \
+        jq -e '
+            [.toolCalls[]?.toolName] as $names
+            | [$names[] | select(. == "set_working_directory")] | length >= 2
+            and ($names | index("shell_execute")) > ($names | index("set_working_directory"))
+            and ($names | index("shell_execute")) > ($names | rindex("set_working_directory"))
+        ' "$STDOUT_FILE" >/dev/null && \
+        jq -e '.Command == "pwd"' <<<"$shell_call" >/dev/null
 }
 
 # Schedule pre-approval: user asks to schedule an unattended task that
@@ -1575,6 +1672,11 @@ end_category() {
 }
 
 run_case() {
+    local output_format="text"
+    if [[ "${1:-}" == "--json" ]]; then
+        output_format="json"
+        shift
+    fi
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
@@ -1599,7 +1701,7 @@ run_case() {
         local prompt
         prompt=$(pick_variant "${prompts[@]}")
 
-        run_prompt "$prompt"
+        run_prompt "$prompt" "$output_format"
 
         local passed=0
         local details="fail"
@@ -1972,16 +2074,25 @@ run_all() {
     # rather than waiting for the user to do it manually.
     print_category "Approval Policy v2"
 
-    run_case approval_set_working_directory_positive "calls set_working_directory before shell tool when project mentioned" \
+    run_case --json approval_set_working_directory_positive "calls set_working_directory before shell tool when project mentioned" \
         "I'm starting a debugging session on the project checked out at /tmp. Get oriented in that codebase — look at the layout, identify build files, and figure out what kind of project it is. We'll be running multiple shell commands across the tree." \
         "I want to start working on the Netclaw checkout at /tmp. Plan to run several commands across that tree — start by getting yourself oriented."
 
-    run_case approval_set_working_directory_negative "does NOT call set_working_directory for unrelated prompts" \
+    run_case --json approval_set_working_directory_negative "does NOT call set_working_directory for unrelated prompts" \
         "What's two plus two? Just give me the number." \
         "Explain what a hash table is in one sentence."
 
-    run_case approval_recovery_hint "recovers from cwd-outside-safe-spaces denial by calling set_working_directory" \
+    run_case --json approval_recovery_hint "recovers from cwd-outside-safe-spaces denial by calling set_working_directory" \
         "I just tried to run a shell command in /tmp and the daemon returned: 'Tool access denied: approval_denied_by_user. Hint: \"/tmp\" is outside the session'\\''s trusted scope. Call set_working_directory \"/tmp\" first, then retry — that brings the directory into your trusted scope so the approval policy can reason about it.' How should I unblock this so the next shell call works?"
+
+    run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
+        "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."
+
+    run_case --json approval_inline_cd_semantics "keeps inline cd when directory change is the requested shell behavior" \
+        "Run a Bash control-flow experiment in one shell_execute call: execute 'cd /tmp && pwd' exactly as a compound command. Changing directory is the behavior being tested, so do not replace it with a WorkingDirectory argument."
+
+    run_case --json approval_set_working_directory_retry "corrects a failed project switch before shell work" \
+        "Test project-directory recovery: first call set_working_directory with /tmp/missing-project and observe the rejection. Then correct it by calling set_working_directory with /tmp, and only after that run pwd in the shell."
 
     run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
         "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."

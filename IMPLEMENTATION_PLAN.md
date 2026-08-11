@@ -174,6 +174,15 @@ Done when:
   external-path or symlink checks.
 - [x] The policy normalizes a variable `git ls-tree` tree operand to the
   reviewed read-only verb. Other Git subcommands keep exact parser output.
+- [x] Tool schemas and always-loaded guidance distinguish a persistent project
+  root from one-command `WorkingDirectory` scope, prevent redundant project
+  switches, and preserve `cd` when directory mutation is the requested shell
+  behavior.
+- [x] Sanitized behavioral eval cases cover early project declaration,
+  one-command typed scope, failed-path recovery, and deliberate inline `cd`.
+- [ ] Run the new behavioral eval cases against a configured model provider.
+  The local eval provider type, endpoint, and model ID were unset for this
+  slice; syntax and ShellCheck validation passed.
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
