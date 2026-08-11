@@ -24,7 +24,7 @@
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
     <AspireHostingVersion>13.4.6</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.4.0</CommunityToolkitAspireVersion>
-    <ModelContextProtocolVersion>2.0.0</ModelContextProtocolVersion>
+    <ModelContextProtocolVersion>2.1.0</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
