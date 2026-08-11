@@ -51,6 +51,23 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact]
+    public void Bash_github_diagnostic_with_exit_status_is_reusable()
+    {
+        const string command =
+            "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 "
+            + "| head -200; echo \"---EXIT $?---\"";
+
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, "/work"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            ["gh run view", "head", "echo"],
+            analysis.Candidates.Select(static candidate => candidate.Verb));
+    }
+
+    [Fact]
     public void Power_shell_matcher_uses_the_native_power_shell_grammar()
     {
         var matcher = new ShellApprovalMatcher(
