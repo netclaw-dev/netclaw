@@ -1,5 +1,43 @@
 # NetClaw Release Notes
 
+## 0.26.0-beta.3 (2026-08-11)
+
+### Features
+- **Agents declare shell working scope up front** — Agents are now guided to declare their working directory once before multi-command work in a named project, pass the directory to the shell tool instead of inline `cd`, and retry rejected paths instead of working around them — fewer redundant approval prompts and more reliable scoped approvals ([#1870](https://github.com/netclaw-dev/netclaw/pull/1870))
+
+### Bug Fixes
+- **Shell approval scopes fixed for dotted paths** — Dotted and hidden paths (e.g. `.netclaw/`) and git refs now produce correct approval scopes, with normalized-verb matching and `git ls-tree` recognized as safe ([#1868](https://github.com/netclaw-dev/netclaw/pull/1868))
+- **MCP: dead OAuth registrations discarded again under SDK 2.1** — The MCP SDK 2.1 discovery probe no longer swallows token-endpoint `invalid_client` rejections during interactive OAuth; rejected client registrations are discarded instead of wedging ([#1865](https://github.com/netclaw-dev/netclaw/pull/1865))
+
+### Dependency Updates
+- **Bump ModelContextProtocol** — 2.0.0 → 2.1.0 ([#1865](https://github.com/netclaw-dev/netclaw/pull/1865))
+- **Bump Anthropic** — 12.39.0 → 12.40.0 ([#1842](https://github.com/netclaw-dev/netclaw/pull/1842))
+- **Bump ShellSyntaxTree** — 0.2.0 → 0.3.0 ([#1867](https://github.com/netclaw-dev/netclaw/pull/1867))
+
+## 0.26.0-beta.2 (2026-08-10)
+
+### Features
+- **MCP server prompts as dynamic skills** — Prompts exposed by connected MCP servers are now loadable through the skill index, with argument validation and cross-server conflict rejection ([#1813](https://github.com/netclaw-dev/netclaw/pull/1813))
+- **Native PowerShell on Windows** — The daemon now runs Windows shell execution through native PowerShell (7.6 preferred, 5.1 fallback) instead of cross-language emulation, with unified execution, analysis, and approval policy ([#1848](https://github.com/netclaw-dev/netclaw/pull/1848))
+
+### Bug Fixes
+- **Reminders no longer skipped on capacity** — The execution-capacity gate that settled reminders as skipped is removed; reminders now defer instead of silently dropping ([#1839](https://github.com/netclaw-dev/netclaw/pull/1839))
+- **MCP: dead OAuth connections no longer report Connected forever** — Servers with expired OAuth tokens demote to AwaitingAuth with an operator alert instead of wedging the daemon ([#1841](https://github.com/netclaw-dev/netclaw/pull/1841))
+- **MCP: HTTP protocol fallback header race fixed** — The stale MCP protocol-version header is only removed from initialize requests; daemon and CLI now share one HTTP client ([#1861](https://github.com/netclaw-dev/netclaw/pull/1861))
+- **Daemon working directory preserved** — The daemon no longer runs from a temp directory that cleanup could delete out from under it ([#1853](https://github.com/netclaw-dev/netclaw/pull/1853))
+- **`/dev/null` approval scope fixed** — Safe commands redirecting to `/dev/null` no longer create a reusable `/dev` approval scope ([#1852](https://github.com/netclaw-dev/netclaw/pull/1852))
+- **PowerShell host probe hardened** — Slow `pwsh` cold starts no longer brick daemon startup; the probe retries and falls back to Windows PowerShell 5.1 ([#1859](https://github.com/netclaw-dev/netclaw/pull/1859))
+
+### Internal Improvements
+- **Shell approval analysis migrated to ShellSyntaxTree** — Bash and PowerShell approval decisions now use the ShellSyntaxTree parser with fail-closed unknown syntax ([#1835](https://github.com/netclaw-dev/netclaw/pull/1835), [#1836](https://github.com/netclaw-dev/netclaw/pull/1836), [#1855](https://github.com/netclaw-dev/netclaw/pull/1855))
+- **PowerShell approval repetition reduced** — Safe PowerShell command sequences prompt less often ([#1837](https://github.com/netclaw-dev/netclaw/pull/1837))
+- **Bash hidden-execution approval boundaries pinned** — `source` builtins and nameref-deferred execution now require one-shot approvals ([#1838](https://github.com/netclaw-dev/netclaw/pull/1838))
+- **PowerShell execution-region approvals improved** — Host and body commands must each match approval policy independently ([#1857](https://github.com/netclaw-dev/netclaw/pull/1857))
+
+### Dependency Updates
+- **Bump SlackNet** — 0.17.10 → 0.17.11 ([#1844](https://github.com/netclaw-dev/netclaw/pull/1844))
+- **Bump ShellSyntaxTree** — 0.2.0 → 0.3.0-alpha.6
+
 ## 0.26.0-beta.1 (2026-08-09)
 
 ### Features

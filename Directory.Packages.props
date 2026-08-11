@@ -7,7 +7,7 @@
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.17.0</OpenTelemetryVersion>
-    <SlackNetVersion>0.17.10</SlackNetVersion>
+    <SlackNetVersion>0.17.11</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.7</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
@@ -24,7 +24,7 @@
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
     <AspireHostingVersion>13.4.6</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.4.0</CommunityToolkitAspireVersion>
-    <ModelContextProtocolVersion>2.0.0</ModelContextProtocolVersion>
+    <ModelContextProtocolVersion>2.1.0</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
@@ -35,7 +35,7 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.39.0" />
+    <PackageVersion Include="Anthropic" Version="12.40.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
@@ -75,7 +75,7 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0-alpha.2" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0" />
     <PackageVersion Include="Termina" Version="0.16.1" />
   </ItemGroup>
   <!-- Serialization -->
@@ -124,7 +124,6 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
   </ItemGroup>
-
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2
        memory corruption in aggregate-term handling). No patched version of

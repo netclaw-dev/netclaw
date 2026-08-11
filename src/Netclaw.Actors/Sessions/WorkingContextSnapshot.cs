@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -48,8 +49,11 @@ public sealed record WorkingContextSnapshot
 {
     public required WorkingContext WorkingContext { get; init; }
     public required GitWorkingContextInspection Git { get; init; }
+    public ShellExecutionEnvironment? ShellEnvironment { get; init; }
 
-    public bool IsEmpty => WorkingContext.IsEmpty && Git is GitWorkingContextInspection.Skipped or GitWorkingContextInspection.NotRepository;
+    public bool IsEmpty => ShellEnvironment is null
+                           && WorkingContext.IsEmpty
+                           && Git is GitWorkingContextInspection.Skipped or GitWorkingContextInspection.NotRepository;
 
     public string ToContextBlock()
     {
@@ -57,6 +61,16 @@ public sealed record WorkingContextSnapshot
             return string.Empty;
 
         var sb = new StringBuilder("[working-context]");
+        if (ShellEnvironment is { } shell)
+        {
+            sb.Append("\nshell:")
+                .Append("\n  platform: ").Append(shell.Platform)
+                .Append("\n  executable: ").Append(shell.ExecutablePath)
+                .Append("\n  grammar: ").Append(shell.Grammar);
+            if (shell.PowerShellDialect is { } dialect)
+                sb.Append("\n  dialect: ").Append(dialect);
+        }
+
         if (WorkingContext.ProjectDirectory is not null)
             sb.Append("\nproject_dir: ").Append(WorkingContext.ProjectDirectory);
 
@@ -153,11 +167,32 @@ public interface IWorkingContextSnapshotProvider
         CancellationToken cancellationToken);
 }
 
-public sealed class WorkingContextSnapshotProvider(
-    IGitWorkingContextInspector gitInspector,
-    ILogger<WorkingContextSnapshotProvider> logger)
-    : IWorkingContextSnapshotProvider
+public sealed class WorkingContextSnapshotProvider : IWorkingContextSnapshotProvider
 {
+    private readonly IGitWorkingContextInspector _gitInspector;
+    private readonly ILogger<WorkingContextSnapshotProvider> _logger;
+    private readonly ShellExecutionEnvironment _environment;
+
+    public WorkingContextSnapshotProvider(
+        IGitWorkingContextInspector gitInspector,
+        ILogger<WorkingContextSnapshotProvider> logger)
+        : this(
+            gitInspector,
+            logger,
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))
+    {
+    }
+
+    public WorkingContextSnapshotProvider(
+        IGitWorkingContextInspector gitInspector,
+        ILogger<WorkingContextSnapshotProvider> logger,
+        ShellExecutionEnvironment environment)
+    {
+        _gitInspector = gitInspector;
+        _logger = logger;
+        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+    }
+
     public async Task<WorkingContextSnapshot> CreateAsync(
         WorkingContext context,
         TrustAudience audience,
@@ -170,27 +205,29 @@ public sealed class WorkingContextSnapshotProvider(
             return new WorkingContextSnapshot
             {
                 WorkingContext = audience == TrustAudience.Public ? WorkingContext.Empty : context,
-                Git = new GitWorkingContextInspection.Skipped()
+                Git = new GitWorkingContextInspection.Skipped(),
+                ShellEnvironment = audience == TrustAudience.Personal ? _environment : null
             };
         }
 
         var inspection = Directory.Exists(context.ProjectDirectory)
-            ? await gitInspector.InspectAsync(context.ProjectDirectory, cancellationToken).ConfigureAwait(false)
+            ? await _gitInspector.InspectAsync(context.ProjectDirectory, cancellationToken).ConfigureAwait(false)
             : new GitWorkingContextInspection.Unavailable("project directory does not exist");
 
         switch (inspection)
         {
             case GitWorkingContextInspection.ExecutableNotFound:
-                logger.LogWarning("Git working-context inspection failed: git executable not found");
+                _logger.LogWarning("Git working-context inspection failed: git executable not found");
                 break;
             case GitWorkingContextInspection.Unavailable unavailable:
-                logger.LogWarning("Git working-context inspection failed: {Reason}", unavailable.Reason);
+                _logger.LogWarning("Git working-context inspection failed: {Reason}", unavailable.Reason);
                 break;
         }
 
         return new WorkingContextSnapshot
         {
             WorkingContext = context,
+            ShellEnvironment = audience == TrustAudience.Personal ? _environment : null,
             Git = inspection switch
             {
                 GitWorkingContextInspection.Unavailable failure =>

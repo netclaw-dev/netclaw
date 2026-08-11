@@ -29,17 +29,33 @@ public static class PathUtility
     /// Attempts to normalize a path relative to a working directory.
     /// </summary>
     public static bool TryNormalize(string path, string? workingDirectory, out string normalized)
+        => TryNormalize(
+            path,
+            workingDirectory,
+            static () => Environment.CurrentDirectory,
+            out normalized);
+
+    internal static bool TryNormalize(
+        string path,
+        string? workingDirectory,
+        Func<string> currentDirectoryResolver,
+        out string normalized)
     {
+        ArgumentNullException.ThrowIfNull(currentDirectoryResolver);
         normalized = string.Empty;
         try
         {
+            if (Path.IsPathFullyQualified(path))
+            {
+                normalized = Normalize(path);
+                return true;
+            }
+
             var baseDir = !string.IsNullOrWhiteSpace(workingDirectory)
                 ? workingDirectory
-                : Environment.CurrentDirectory;
+                : currentDirectoryResolver();
 
-            normalized = Path.IsPathRooted(path)
-                ? Normalize(path)
-                : Normalize(Path.Combine(baseDir, path));
+            normalized = Normalize(Path.Combine(baseDir, path));
             return true;
         }
         catch

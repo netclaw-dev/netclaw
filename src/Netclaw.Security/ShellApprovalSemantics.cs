@@ -30,9 +30,12 @@ internal static class ShellApprovalSemantics
     private static readonly IShellApprovalSemantics Posix = PosixShellApprovalSemantics.Instance;
     private static readonly IShellApprovalSemantics Windows = WindowsShellApprovalSemantics.Instance;
 
-    public static IShellApprovalSemantics Current { get; } = OperatingSystem.IsWindows()
-        ? Windows
-        : Posix;
+    public static IShellApprovalSemantics ForPathStyle(ShellPathStyle pathStyle) => pathStyle switch
+    {
+        ShellPathStyle.Posix => Posix,
+        ShellPathStyle.Windows => Windows,
+        _ => throw new ArgumentOutOfRangeException(nameof(pathStyle), pathStyle, "Unknown shell path style.")
+    };
 
     public static IShellApprovalSemantics ForCommand(string? command)
     {
@@ -481,8 +484,9 @@ internal sealed class WindowsShellApprovalSemantics : ShellApprovalSemanticsBase
     public static readonly WindowsShellApprovalSemantics Instance = new();
 
     public override IReadOnlyList<string> SplitCompoundCommand(string command)
-        // Windows approval splitting handles both cmd.exe control operators (`&`, `&&`, `||`)
-        // and PowerShell's `;` because nested PowerShell invocations are common under `cmd /c`.
+        // This legacy tokenizer preserves the historical Windows surface for
+        // public compatibility callers. Runtime authorization uses the selected
+        // PowerShell dialect through ShellCommandAnalyzer instead.
         => SplitCompoundCommand(command, splitOnSemicolon: true, splitOnSingleAmpersand: true);
 
     public override IReadOnlyList<string> ExtractInnerCommands(string command)

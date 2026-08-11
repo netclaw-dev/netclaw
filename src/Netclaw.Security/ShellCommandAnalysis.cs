@@ -8,27 +8,33 @@ using ShellSyntaxTree;
 namespace Netclaw.Security;
 
 /// <summary>
-/// Parses Bash commands and expands nested shell command strings.
+/// Parses commands with one canonical shell environment and expands the extra
+/// bundled Bash wrapper forms that remain outside ShellSyntaxTree's contract.
 /// Approval and hard-deny policies share this analysis.
 /// </summary>
 internal sealed class ShellCommandAnalyzer
 {
     private const int MaxWrapperDepth = 8;
+    private readonly ShellExecutionEnvironment _environment;
 
-    public static readonly ShellCommandAnalyzer Bash = new();
-
-    private ShellCommandAnalyzer()
+    public ShellCommandAnalyzer(ShellExecutionEnvironment environment)
     {
+        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
     }
 
     public ShellCommandAnalysis Analyze(string command, string? workingDirectory = null)
     {
         var commands = new List<CommandOccurrence>();
         var failure = Analyze(command, workingDirectory, depth: 0, commands);
-        return new ShellCommandAnalysis(commands, failure);
+        return new ShellCommandAnalysis(
+            _environment,
+            command,
+            workingDirectory,
+            commands,
+            failure);
     }
 
-    private static ShellAnalysisFailure Analyze(
+    private ShellAnalysisFailure Analyze(
         string command,
         string? workingDirectory,
         int depth,
@@ -39,16 +45,14 @@ internal sealed class ShellCommandAnalyzer
 
         // Stable v0.3 excludes background lists. Keep this guard until the
         // parser exposes their concurrency and shell-state boundaries.
-        if (ContainsBackgroundListOperator(command))
+        if (_environment.Grammar == ShellGrammar.Bash
+            && ContainsBackgroundListOperator(command))
             return ShellAnalysisFailure.Unresolved;
 
         ParsedCommand parsed;
         try
         {
-            var parser = string.IsNullOrWhiteSpace(workingDirectory)
-                ? new BashParser()
-                : new BashParser(new BashParserOptions { WorkingDirectory = workingDirectory });
-            parsed = parser.Parse(command);
+            parsed = _environment.Parse(command, workingDirectory);
         }
         catch
         {
@@ -58,19 +62,9 @@ internal sealed class ShellCommandAnalyzer
         if (parsed.IsUnparseable || parsed.Commands.Count == 0)
             return ShellAnalysisFailure.Unresolved;
 
-        if (ContainsPowerShellHost(parsed.Commands))
+        if (_environment.Grammar == ShellGrammar.PowerShell)
         {
-            if (!TryAnalyzePowerShellChild(
-                    command,
-                    workingDirectory,
-                    parsed.Commands,
-                    out var childCommands))
-            {
-                return ShellAnalysisFailure.Unresolved;
-            }
-
-            commands.Add(parsed.Commands[0]);
-            commands.AddRange(childCommands);
+            commands.AddRange(parsed.Commands);
             return ShellAnalysisFailure.None;
         }
 
@@ -117,131 +111,6 @@ internal sealed class ShellCommandAnalyzer
         return ShellAnalysisFailure.None;
     }
 
-    private static bool TryAnalyzePowerShellChild(
-        string source,
-        string? workingDirectory,
-        IReadOnlyList<CommandOccurrence> outerCommands,
-        out IReadOnlyList<CommandOccurrence> childCommands)
-    {
-        childCommands = [];
-        if (outerCommands.Count != 1)
-            return false;
-
-        var outer = outerCommands[0];
-        var clause = outer.Clause;
-        if (!outer.IsComplete
-            || clause.Operator != CompoundOperator.None
-            || clause.IsSubshell
-            || clause.IsCommandStringWrapped
-            || clause.Verb.IsDynamic
-            || clause.Redirects.Count != 0
-            || outer.Redirects.Count != 0
-            || clause.Elements.Count != 5
-            || clause.Args.Any(static arg => arg.Kind == ArgKind.DynamicSkip)
-            || clause.Elements.Any(static element =>
-                element.SourceStart is null
-                || element.SourceLength is null
-                || element.SourceLength < 0))
-        {
-            return false;
-        }
-
-        var elements = clause.Elements;
-        if (!string.Equals(elements[0].Value, "pwsh", StringComparison.Ordinal)
-            || !string.Equals(elements[1].Value, "-NoProfile", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(elements[2].Value, "-NonInteractive", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(elements[3].Value, "-Command", StringComparison.OrdinalIgnoreCase)
-            || elements[4].Kind != ArgKind.Literal
-            || string.IsNullOrWhiteSpace(elements[4].Value)
-            || string.Equals(elements[4].Value, "-", StringComparison.Ordinal)
-            || !HasExactSourceCoverage(source, elements)
-            || !HasStaticQuotedPayload(elements[4]))
-        {
-            return false;
-        }
-
-        ParsedCommand parsed;
-        try
-        {
-            parsed = new PwshParser(new PwshParserOptions
-            {
-                WorkingDirectory = workingDirectory,
-                InitialStateMode = PwshInitialStateMode.Unknown
-            }).Parse(elements[4].Value);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (parsed.IsUnparseable || parsed.Commands.Count == 0)
-        {
-            return false;
-        }
-
-        childCommands = parsed.Commands
-            .Select(static occurrence => occurrence with
-            {
-                Clause = occurrence.Clause with { IsCommandStringWrapped = true }
-            })
-            .ToList();
-        return true;
-    }
-
-    private static bool HasExactSourceCoverage(
-        string source,
-        IReadOnlyList<ClauseElement> elements)
-    {
-        foreach (var element in elements)
-        {
-            var start = element.SourceStart!.Value;
-            var length = element.SourceLength!.Value;
-            if (start < 0
-                || start > source.Length
-                || length > source.Length - start
-                || !source.AsSpan(start, length).SequenceEqual(element.Raw.AsSpan()))
-            {
-                return false;
-            }
-        }
-
-        var firstStart = elements[0].SourceStart!.Value;
-        var last = elements[^1];
-        var lastEnd = last.SourceStart!.Value + last.SourceLength!.Value;
-        return string.IsNullOrWhiteSpace(source[..firstStart])
-            && string.IsNullOrWhiteSpace(source[lastEnd..]);
-    }
-
-    private static bool HasStaticQuotedPayload(ClauseElement payload)
-    {
-        var raw = payload.Raw;
-        if (raw.Length < 2 || raw[0] is not ('\'' or '"') || raw[^1] != raw[0])
-            return false;
-
-        if (raw[0] == '\'')
-            return true;
-
-        var content = raw.AsSpan(1, raw.Length - 2);
-        return content.IndexOfAny('$', '`', '\\') < 0;
-    }
-
-    private static bool ContainsPowerShellHost(IReadOnlyList<CommandOccurrence> commands)
-        => commands.Any(static command => command.Clause.Elements.Any(static element =>
-            IsPowerShellHostLike(element.Value)));
-
-    internal static bool IsPowerShellHostLike(string value)
-    {
-        var normalized = ShellTokenizer.TrimShellPunctuation(value);
-        var separator = Math.Max(
-            normalized.LastIndexOf('/'),
-            normalized.LastIndexOf('\\'));
-        var fileName = separator >= 0 ? normalized[(separator + 1)..] : normalized;
-        return fileName.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("pwsh.exe", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("powershell.exe", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static bool TryResolveWrapperWorkingDirectory(
         CommandOccurrence occurrence,
         string? inheritedWorkingDirectory,
@@ -255,11 +124,10 @@ internal sealed class ShellCommandAnalyzer
             return true;
         }
 
-        if (occurrence.WorkingDirectory.Kind == ShellValueDomainKind.Exact
-            && occurrence.WorkingDirectory.Values.Count == 1
-            && !string.IsNullOrWhiteSpace(occurrence.WorkingDirectory.Values[0]))
+        if (occurrence.WorkingDirectory is ShellValueDomain.Exact exact
+            && !string.IsNullOrWhiteSpace(exact.Value))
         {
-            workingDirectory = occurrence.WorkingDirectory.Values[0];
+            workingDirectory = exact.Value;
             return true;
         }
 
@@ -386,7 +254,9 @@ internal enum ShellAnalysisFailure
 
 internal static class ShellGlobPath
 {
-    public static bool HasUnresolvedDescendantScope(Arg arg)
+    public static bool HasUnresolvedDescendantScope(
+        Arg arg,
+        ShellPathStyle pathStyle)
     {
         if (!arg.IsPath || arg.Kind != ArgKind.Glob)
             return false;
@@ -398,60 +268,184 @@ internal static class ShellGlobPath
         // scope instead of degrading to a one-shot "complex command". A real
         // segment after the wildcard (foo/*/x, foo/*/*) keeps its separator and
         // stays unresolved.
-        var scope = arg.Raw.TrimEnd('/');
+        var scope = pathStyle == ShellPathStyle.Windows
+            ? arg.Raw.TrimEnd('/', '\\')
+            : arg.Raw.TrimEnd('/');
         var firstGlob = scope.IndexOfAny(['*', '?', '[']);
-        return firstGlob >= 0
-            && scope.IndexOf('/', firstGlob + 1) >= 0;
+        if (firstGlob < 0)
+            return false;
+
+        return pathStyle == ShellPathStyle.Windows
+            ? scope.AsSpan(firstGlob + 1).IndexOfAny('/', '\\') >= 0
+            : scope.IndexOf('/', firstGlob + 1) >= 0;
     }
 }
 
-internal sealed record ShellCommandAnalysis(
-    IReadOnlyList<CommandOccurrence> Commands,
-    ShellAnalysisFailure Failure)
+public sealed record ShellCommandAnalysis
 {
-    public bool HasDynamicSyntax => Commands.Any(static command =>
-        !command.IsComplete
-        || !Enum.IsDefined(command.ImmediateRole)
-        || command.ImmediateRole == CommandOccurrenceRole.Unknown
-        || command.Ancestry.Any(static frame =>
-            !Enum.IsDefined(frame.AncestorKind)
-            || frame.AncestorKind == ShellSyntaxKind.Unknown
-            || !Enum.IsDefined(frame.Region)
-            || frame.Region == CommandAncestryRegion.Unknown)
-        || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
-        || command.Clause.Verb.IsDynamic
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.EnvVar
-            && !arg.IsCwdAttribution
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        || command.Clause.Args.Any(static arg =>
-            arg.IsPath
-            && arg.Kind != ArgKind.Glob
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        // A glob in a directory segment can hide traversal or a symlink.
-        // Only a leaf glob has a fixed directory scope.
-        || command.Clause.Args.Any(ShellGlobPath.HasUnresolvedDescendantScope)
-        || HasUnresolvedRedirect(command));
+    internal ShellCommandAnalysis(
+        ShellExecutionEnvironment environment,
+        string source,
+        string? workingDirectory,
+        IReadOnlyList<CommandOccurrence> commands,
+        ShellAnalysisFailure failure)
+    {
+        Environment = environment;
+        Source = source;
+        WorkingDirectory = workingDirectory;
+        Commands = commands;
+        Failure = failure;
+    }
+
+    public string Source { get; }
+
+    public string? WorkingDirectory { get; }
+
+    public IReadOnlyList<CommandOccurrence> Commands { get; }
+
+    public bool IsResolved => Failure == ShellAnalysisFailure.None && Commands.Count > 0;
+
+    public bool HasDynamicSyntax
+    {
+        get
+        {
+            var accountedRegionArguments = FindAccountedExecutionRegionArguments();
+            return Commands.Any(command =>
+                CommandHasDynamicSyntax(command, accountedRegionArguments));
+        }
+    }
+
+    internal ShellExecutionEnvironment Environment { get; }
+
+    internal ShellAnalysisFailure Failure { get; }
+
+    private bool CommandHasDynamicSyntax(
+        CommandOccurrence command,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => !command.IsComplete
+            || !Enum.IsDefined(command.ImmediateRole)
+            || command.ImmediateRole == CommandOccurrenceRole.Unknown
+            || command.Ancestry.Any(static frame =>
+                !IsKnownAncestor(frame.Ancestor)
+                || !Enum.IsDefined(frame.Region)
+                || frame.Region == CommandAncestryRegion.Unknown)
+            || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
+            || command.Clause.Verb.IsDynamic
+            || command.Clause.Args.Any(arg =>
+                arg.Kind == ArgKind.DynamicSkip
+                && !arg.IsCwdAttribution
+                && !IsAccountedExecutionRegionArgument(
+                    command,
+                    arg,
+                    accountedRegionArguments))
+            || command.Clause.Args.Any(static arg =>
+                arg.Kind == ArgKind.EnvVar
+                && !arg.IsCwdAttribution
+                && string.IsNullOrWhiteSpace(arg.Resolved))
+            || command.Clause.Args.Any(static arg =>
+                arg.IsPath
+                && arg.Kind != ArgKind.Glob
+                && string.IsNullOrWhiteSpace(arg.Resolved))
+            || command.Arguments.Any(argument =>
+                !IsAccountedExecutionRegionArgument(
+                    argument,
+                    accountedRegionArguments)
+                && HasUnsupportedArgumentDomain(argument))
+            // A glob in a directory segment can hide traversal or a symlink.
+            // Only a leaf glob has a fixed directory scope.
+            || command.Clause.Args.Any(arg =>
+                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+            || HasUnresolvedRedirect(command);
+
+    private HashSet<ClauseElement> FindAccountedExecutionRegionArguments()
+    {
+        // PowerShell keeps a script-block host argument opaque while projecting
+        // its executable body as command occurrences. Suppress only that exact
+        // host element after a complete descendant proves the region metadata.
+        var arguments = new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance);
+        foreach (var command in Commands)
+        {
+            if (!command.IsComplete)
+            {
+                continue;
+            }
+
+            foreach (var frame in command.Ancestry)
+            {
+                if (frame is
+                    {
+                        Region: CommandAncestryRegion.ExecutionRegion,
+                        Ancestor: ExecutionRegionSyntax region
+                    }
+                    && IsKnownCommandArgumentRegion(region))
+                {
+                    arguments.Add(region.HostArgument!);
+                }
+            }
+        }
+
+        return arguments;
+    }
+
+    private static bool IsKnownCommandArgumentRegion(ExecutionRegionSyntax region)
+        => region.Origin == ExecutionRegionOrigin.CommandArgument
+            && region.HostArgument is not null
+            && Enum.IsDefined(region.Phase)
+            && region.Phase != ExecutionRegionPhase.Unknown
+            && Enum.IsDefined(region.Timing)
+            && region.Timing != ExecutionRegionTiming.Unknown
+            && Enum.IsDefined(region.Cardinality)
+            && region.Cardinality != ExecutionRegionCardinality.Unknown;
+
+    private static bool IsAccountedExecutionRegionArgument(
+        CommandOccurrence command,
+        Arg argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => command.Arguments.Any(analyzed =>
+            ReferenceEquals(analyzed.Argument, argument)
+            && IsAccountedExecutionRegionArgument(
+                analyzed,
+                accountedRegionArguments));
+
+    private static bool IsAccountedExecutionRegionArgument(
+        AnalyzedArgument argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => argument.Argument.Kind == ArgKind.DynamicSkip
+            && accountedRegionArguments.Contains(argument.Element);
+
+    private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
+        => ancestor is ShellBlockSyntax
+            or SimpleCommandSyntax
+            or PipelineSyntax
+            or CommandListSyntax
+            or GroupSyntax
+            or ForEachSyntax
+            or CommandSubstitutionSyntax
+            or ExecutionRegionSyntax;
 
     private static bool HasUnsupportedWorkingDirectory(ShellValueDomain workingDirectory)
-    {
-        if (!Enum.IsDefined(workingDirectory.Kind))
-            return true;
-
-        return workingDirectory.Kind switch
+        => workingDirectory switch
         {
-            ShellValueDomainKind.Unknown => workingDirectory.Values.Count != 0
-                || workingDirectory.Pattern is not null
-                || workingDirectory.CoveringDirectory is not null,
-            ShellValueDomainKind.Exact => workingDirectory.Values.Count != 1
-                || string.IsNullOrWhiteSpace(workingDirectory.Values[0])
-                || workingDirectory.Pattern is not null
-                || workingDirectory.CoveringDirectory is not null,
+            ShellValueDomain.Unknown => false,
+            ShellValueDomain.Exact exact => string.IsNullOrWhiteSpace(exact.Value),
             _ => true
         };
-    }
+
+    private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
+        => argument.Value switch
+        {
+            // A raw authored glob has no one runtime value. Netclaw applies
+            // its fixed covering-scope checks to the source Arg below.
+            ShellValueDomain.Unknown => argument.Argument.Kind != ArgKind.Glob,
+            ShellValueDomain.Exact => false,
+            ShellValueDomain.FiniteSet finite => finite.Values.Count is < 2 or > 32
+                || finite.Values.Any(static value => value is null)
+                || finite.Values.Distinct(StringComparer.Ordinal).Count() != finite.Values.Count,
+            ShellValueDomain.PathPattern pattern =>
+                string.IsNullOrWhiteSpace(pattern.Pattern)
+                || string.IsNullOrWhiteSpace(pattern.CoveringDirectory),
+            _ => true
+        };
 
     private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)
         => occurrence.Redirects.Any(redirect => HasUnresolvedRedirect(occurrence, redirect));
@@ -460,53 +454,34 @@ internal sealed record ShellCommandAnalysis(
         CommandOccurrence occurrence,
         RedirectAnalysis redirect)
     {
-        if (redirect.Source is null
-            || redirect.Target is null
-            || !redirect.IsComplete
-            || !Enum.IsDefined(redirect.Source.Kind)
-            || redirect.Source.Kind == RedirectSourceKind.Unknown
-            || !Enum.IsDefined(redirect.Operation)
-            || redirect.Operation == RedirectOperation.Unknown)
+        if (!redirect.IsComplete || !IsKnownRedirectSource(redirect.Source))
         {
             return true;
         }
 
-        var hasValidSource = redirect.Source.Kind switch
+        return redirect switch
         {
-            RedirectSourceKind.Default => redirect.Source.Descriptor is null,
-            RedirectSourceKind.Descriptor => redirect.Source.Descriptor is >= 0,
-            _ => false
-        };
-        if (!hasValidSource)
-        {
-            return true;
-        }
-
-        return redirect.Operation switch
-        {
-            RedirectOperation.HereDocument or RedirectOperation.HereString =>
-                !HasBoundedDataOnlyStdin(occurrence, redirect),
-            RedirectOperation.DescriptorDuplicate or RedirectOperation.DescriptorMove =>
-                redirect.IsPathRelevant || redirect.TargetDescriptor is < 0 or null,
-            RedirectOperation.DescriptorClose =>
-                redirect.IsPathRelevant || redirect.TargetDescriptor is not null,
-            RedirectOperation.FileInput
-                or RedirectOperation.FileOutput
-                or RedirectOperation.FileAppend
-                or RedirectOperation.CombinedOutput
-                or RedirectOperation.CombinedOutputAppend =>
-                !redirect.IsPathRelevant || !HasBoundedPathTarget(redirect.Target),
+            HereDocumentRedirectAnalysis heredoc =>
+                !HasBoundedDataOnlyStdin(occurrence, heredoc),
+            HereStringRedirectAnalysis hereString =>
+                !HasBoundedDataOnlyStdin(occurrence, hereString),
+            DescriptorDuplicateRedirectAnalysis duplicate =>
+                duplicate.TargetDescriptor < 0,
+            DescriptorMoveRedirectAnalysis move => move.TargetDescriptor < 0,
+            DescriptorCloseRedirectAnalysis => false,
+            FileRedirectAnalysis file => !IsKnownFileRedirectMode(file.Mode)
+                || !HasBoundedPathTarget(file.Target),
+            UnresolvedRedirectAnalysis => true,
             _ => true
         };
     }
 
     private static bool HasBoundedDataOnlyStdin(
         CommandOccurrence occurrence,
-        RedirectAnalysis redirect)
+        HereDocumentRedirectAnalysis redirect)
     {
         var clause = occurrence.Clause;
         if (!IsStandardInputSource(redirect.Source)
-            || redirect.IsPathRelevant
             || clause.Verb.Tokens.Count != 1
             || !string.Equals(
                 ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
@@ -517,24 +492,41 @@ internal sealed record ShellCommandAnalysis(
             return false;
         }
 
-        return redirect.Operation switch
-        {
-            RedirectOperation.HereDocument when redirect.HereDocument is not null =>
-                redirect.TargetDescriptor is null
-                && HasCanonicalUnknownData(redirect.Target)
-                && HasLiteralHereDocument(
-                    redirect.HereDocument,
-                    clause.IsCommandStringWrapped),
-            RedirectOperation.HereString when redirect.HereDocument is null =>
-                redirect.TargetDescriptor is null
-                && HasBoundedData(redirect.Target),
-            _ => false
-        };
+        return HasLiteralHereDocument(
+            redirect.Document,
+            clause.IsCommandStringWrapped);
     }
 
+    private static bool HasBoundedDataOnlyStdin(
+        CommandOccurrence occurrence,
+        HereStringRedirectAnalysis redirect)
+    {
+        var clause = occurrence.Clause;
+        return IsStandardInputSource(redirect.Source)
+            && clause.Verb.Tokens.Count == 1
+            && string.Equals(
+                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                "cat",
+                StringComparison.Ordinal)
+            && !clause.Args.Any(static arg => !arg.IsCwdAttribution)
+            && HasBoundedData(redirect.Data);
+    }
+
+    private static bool IsKnownRedirectSource(RedirectSource source)
+        => source is RedirectSource.Default
+            or RedirectSource.Descriptor { Value: >= 0 }
+            or RedirectSource.PowerShellAllStreams;
+
+    private static bool IsKnownFileRedirectMode(FileRedirectMode mode)
+        => mode is FileRedirectMode.Input
+            or FileRedirectMode.Output
+            or FileRedirectMode.Append
+            or FileRedirectMode.CombinedOutput
+            or FileRedirectMode.CombinedOutputAppend;
+
     private static bool IsStandardInputSource(RedirectSource source)
-        => source.Kind == RedirectSourceKind.Default
-            || source is { Kind: RedirectSourceKind.Descriptor, Descriptor: 0 };
+        => source is RedirectSource.Default
+            or RedirectSource.Descriptor { Value: 0 };
 
     private static bool HasLiteralHereDocument(
         HereDocumentAnalysis hereDocument,
@@ -564,43 +556,25 @@ internal sealed record ShellCommandAnalysis(
         return fragment.SourceStart >= 0 && fragment.SourceLength >= 0;
     }
 
-    private static bool HasCanonicalUnknownData(ShellValueDomain data)
-        => data is not null
-            && data.Kind == ShellValueDomainKind.Unknown
-            && data.Values.Count == 0
-            && data.Pattern is null
-            && data.CoveringDirectory is null;
-
     private static bool HasBoundedData(ShellValueDomain data)
-    {
-        if (data is null
-            || !Enum.IsDefined(data.Kind)
-            || data.Pattern is not null
-            || data.CoveringDirectory is not null)
+        => data switch
         {
-            return false;
-        }
-
-        return data.Kind switch
-        {
-            ShellValueDomainKind.Exact => data.Values.Count == 1
-                && data.Values[0] is not null,
-            ShellValueDomainKind.FiniteSet => data.Values.Count is >= 2 and <= 32
-                && data.Values.All(static value => value is not null)
-                && data.Values.Distinct(StringComparer.Ordinal).Count() == data.Values.Count,
+            ShellValueDomain.Exact exact => exact.Value is not null,
+            ShellValueDomain.FiniteSet finite => finite.Values.Count is >= 2 and <= 32
+                && finite.Values.All(static value => value is not null)
+                && finite.Values.Distinct(StringComparer.Ordinal).Count() == finite.Values.Count,
             _ => false
         };
-    }
 
     private static bool HasBoundedPathTarget(ShellValueDomain target)
-        => target.Kind switch
+        => target switch
         {
-            ShellValueDomainKind.Exact => target.Values.Count == 1
-                && !string.IsNullOrWhiteSpace(target.Values[0]),
-            ShellValueDomainKind.FiniteSet => target.Values.Count is >= 2 and <= 32
-                && target.Values.All(static value => !string.IsNullOrWhiteSpace(value)),
-            ShellValueDomainKind.Pattern => !string.IsNullOrWhiteSpace(target.Pattern)
-                && !string.IsNullOrWhiteSpace(target.CoveringDirectory),
+            ShellValueDomain.Exact exact => !string.IsNullOrWhiteSpace(exact.Value),
+            ShellValueDomain.FiniteSet finite => finite.Values.Count is >= 2 and <= 32
+                && finite.Values.All(static value => !string.IsNullOrWhiteSpace(value)),
+            ShellValueDomain.PathPattern pattern =>
+                !string.IsNullOrWhiteSpace(pattern.Pattern)
+                && !string.IsNullOrWhiteSpace(pattern.CoveringDirectory),
             _ => false
         };
 }

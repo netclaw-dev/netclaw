@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ShellTokenizerTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -259,6 +259,24 @@ public sealed class ShellTokenizerTests
     public void IsPathToken_classifies_correctly(string token, bool expected)
     {
         Assert.Equal(expected, ShellTokenizer.IsPathToken(token));
+    }
+
+    [Theory]
+    [InlineData(@"C:\workspace\service.repo", true)]
+    [InlineData("\"C:\\workspace\\service.repo\"", true)]
+    [InlineData("C:/workspace/service.repo", true)]
+    [InlineData("'/workspace/service.repo'", true)]
+    [InlineData(@"\\server\share\service.repo", true)]
+    [InlineData(@".\service.repo", true)]
+    [InlineData(@"..\service.repo", true)]
+    [InlineData(@"~\service.repo", true)]
+    [InlineData("origin/main", false)]
+    [InlineData(@"module\command", false)]
+    [InlineData("https://example.com/service", false)]
+    [InlineData(@"Env:\Path", false)]
+    public void Windows_path_style_recognizes_lexical_path_roots(string token, bool expected)
+    {
+        Assert.Equal(expected, ShellTokenizer.IsPathToken(token, ShellPathStyle.Windows));
     }
 
     // ── ExtractFirstPathArgument ──

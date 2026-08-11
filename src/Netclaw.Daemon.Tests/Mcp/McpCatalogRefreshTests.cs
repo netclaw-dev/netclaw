@@ -233,6 +233,52 @@ public sealed class McpCatalogRefreshTests
         Assert.NotEqual(McpClientManager.CanonicalSchema(a), McpClientManager.CanonicalSchema(b));
     }
 
+    [Fact]
+    public async Task AuthorizationFailureDuringRefresh_MarksAwaitingAuthAndStopsTheRefreshLoop()
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new McpClientManagerLifecycleTests.ClientPlan("tool_a"));
+        var time = new FakeTimeProvider(InitialTime);
+        await using var harness = CreateHarness(runtime, time);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        time.Advance(McpClientManager.CatalogRefreshInterval);
+        plan.ListFailure = new ModelContextProtocol.McpException(
+            "Failed to handle unauthorized response with 'Bearer' scheme. " +
+            "The AuthorizationCallbackHandler returned a null authorization result.");
+        Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+
+        // The status must stop claiming a working connection, but the catalog stays
+        // visible so the operator can see which server needs reauthorization.
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.AwaitingAuth, status.State);
+        Assert.Equal(1, status.ToolCount);
+        AssertPublishedTools(harness, "tool_a");
+
+        // The demoted status removes the server from the Connected refresh path:
+        // no further listing attempts while the token is known-dead.
+        time.Advance(McpClientManager.CatalogRefreshInterval);
+        Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+        Assert.Equal(1, plan.RefreshCount);
+    }
+
+    [Fact]
+    public async Task StuckAuthorizationFlowDuringRefresh_MarksAwaitingAuth()
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new McpClientManagerLifecycleTests.ClientPlan("tool_a"));
+        var time = new FakeTimeProvider(InitialTime);
+        await using var harness = CreateHarness(runtime, time);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        time.Advance(McpClientManager.CatalogRefreshInterval);
+        plan.ListFailure = new McpOAuthAuthorizationInProgressException(ServerName);
+        Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+
+        Assert.Equal(McpConnectionState.AwaitingAuth, harness.Manager.GetServerStatuses()[ServerName].State);
+        AssertPublishedTools(harness, "tool_a");
+    }
+
     private static void AssertPublishedTools(McpClientManagerLifecycleTests.ManagerHarness harness, params string[] expected)
     {
         Assert.Equal(expected, harness.Manager.GetToolNames(ServerName));

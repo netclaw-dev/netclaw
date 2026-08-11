@@ -30,8 +30,10 @@ deeper paths, so a future `find /home/user/repo/.netclaw` is auto-allowed.
 where the agent will run multiple commands without explicit path
 arguments — typical interactive REPL work, `git status` followed by
 `git diff` followed by edits, or `make build` and similar tools that
-hide their target behind flags (`make -C`, `git -C`). In those cases
-call `set_working_directory <path>` so the safe-verb short-circuit
+hide their target behind flags (`make -C`, `git -C`). When the user names
+that project, call `set_working_directory <path>` before the first shell
+command. Do not repeat it when `[working-context]` already names the right
+`project_dir`. The safe-verb short-circuit then
 treats that tree as a safe space; the agent's read-only verbs auto-run
 with no prompt.
 
@@ -51,11 +53,46 @@ one-shot lookups against external APIs. Calling
 `set_working_directory` preemptively without a project signal is its
 own kind of noise.
 
+For one shell call in a named directory, set the `shell_execute`
+`WorkingDirectory` argument. Do not prefix the command with an inline `cd`.
+Inline `cd` changes control flow. In `cd <path> && A; B`, command `B` can run
+after a failed `cd`, so approval analysis cannot use the requested directory.
+Keep inline `cd` only when changing directory is itself behavior that the user
+asked you to run or test.
+
 **Recovery from a denied shell call.** If `shell_execute` fails with a denial
 that mentions cwd being outside the safe spaces, the result includes a hint
 pointing at `set_working_directory <path>`. Read the hint, call the tool with
 the directory the user is asking about, then retry the original shell call —
 do not re-prompt the user.
+
+If `set_working_directory` rejects a path, correct the path and retry the tool.
+Do not continue with a stale directory or use an inline `cd` as a workaround.
+
+## Native Shell Syntax
+
+The `[working-context]` block names the exact shell executable, grammar, and
+PowerShell dialect available to `shell_execute`. Author commands in that
+grammar:
+
+- Linux and macOS use Bash, for example `rg -n "TODO" src | head -40`.
+- Windows uses native PowerShell, for example
+  `Get-ChildItem -Path src -Recurse | Select-String -Pattern TODO`.
+- On Windows, use `&&` and `||` only when the context names PowerShell 7.
+  Windows PowerShell 5.1 does not support those pipeline-chain operators; use
+  separate statements or ordinary PowerShell conditionals.
+
+Shell languages do not nest implicitly. A `pwsh -Command ...` call submitted
+to Bash is one external program invocation; Bash approval analysis does not
+reinterpret its payload as PowerShell. Likewise, native PowerShell treats
+`bash -c ...` as an external command. Prefer the native grammar shown in
+context instead of adding a child-shell wrapper.
+
+The shell identity describes only Netclaw's selected executable and parser
+contract. Do not assume a profile, module, alias outside the parser's catalog,
+inherited variable value, executable lookup result, or external script body.
+When a command depends on unknown ambient state or dynamic command identity,
+expect the approval gate to keep it one-time and fail closed.
 
 ## Grounding Rules
 

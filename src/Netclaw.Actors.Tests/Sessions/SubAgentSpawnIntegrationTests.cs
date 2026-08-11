@@ -265,8 +265,13 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             && m.Text.Contains(OperatingRulesMarker, StringComparison.Ordinal)
             && m.Text.Contains("You are a summarizer.", StringComparison.Ordinal)
             && m.Text.Contains("headless, non-interactive worker", StringComparison.Ordinal));
-        Assert.Contains(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User && string.Equals(m.Text, "Summarize src/README.md", StringComparison.Ordinal));
+        var subagentTask = Assert.Single(
+            subagentCall,
+            static message => message.Role == Microsoft.Extensions.AI.ChatRole.User);
+        Assert.Contains("Context:\n[working-context]", subagentTask.Text, StringComparison.Ordinal);
+        Assert.Contains("platform: Linux", subagentTask.Text, StringComparison.Ordinal);
+        Assert.Contains("executable: /bin/bash", subagentTask.Text, StringComparison.Ordinal);
+        Assert.EndsWith("Task:\nSummarize src/README.md", subagentTask.Text, StringComparison.Ordinal);
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System && (m.Text?.Contains("test assistant with subagent support", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
@@ -540,18 +545,19 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Contains(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains("You specialize in daemon health checks.", StringComparison.Ordinal) ?? false));
-        Assert.Contains(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && string.Equals(m.Text, "check daemon health", StringComparison.Ordinal));
+        var routedTask = Assert.Single(
+            subagentCall,
+            static message => message.Role == Microsoft.Extensions.AI.ChatRole.User);
+        Assert.Contains("Context:\n[working-context]", routedTask.Text, StringComparison.Ordinal);
+        Assert.Contains("platform: Linux", routedTask.Text, StringComparison.Ordinal);
+        Assert.Contains("executable: /bin/bash", routedTask.Text, StringComparison.Ordinal);
+        Assert.EndsWith("Task:\ncheck daemon health", routedTask.Text, StringComparison.Ordinal);
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(MainIdentityMarker, StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(AgentsLayerMarker, StringComparison.Ordinal) ?? false));
-        Assert.DoesNotContain(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && (m.Text?.Contains("Context:", StringComparison.Ordinal) ?? false));
     }
 
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the

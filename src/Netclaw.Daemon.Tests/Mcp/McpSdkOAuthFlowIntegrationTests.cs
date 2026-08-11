@@ -25,6 +25,7 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Tests.Utilities;
@@ -812,7 +813,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         public IClientTransport CreateHttpTransport(HttpClientTransportOptions options)
         {
             LastHttpOptions = options;
-            return new HttpClientTransport(options, server.CreateHttpClient(), ownsHttpClient: true);
+            // Mirror the production runtime: the SDK's OAuth token exchange runs through the
+            // rejection handler, so a 400 invalid_client surfaces instead of the SDK's
+            // protocol fallback masking it.
+            return new HttpClientTransport(options, server.CreateTransportHttpClient(), ownsHttpClient: true);
         }
 
         public Task<McpClient> CreateAsync(
@@ -1033,6 +1037,22 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         {
             var client = _app.GetTestClient();
             client.BaseAddress = _state.Origin;
+            return client;
+        }
+
+        /// <summary>
+        /// Builds the client the SDK transport uses, wrapping the in-memory test server with
+        /// the same OAuth rejection handler the production runtime installs.
+        /// </summary>
+        public HttpClient CreateTransportHttpClient()
+        {
+            var client = new HttpClient(new OAuthClientRejectionHandler
+            {
+                InnerHandler = _app.GetTestServer().CreateHandler(),
+            })
+            {
+                BaseAddress = _state.Origin,
+            };
             return client;
         }
 

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="NetclawPaths.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -111,6 +111,7 @@ public sealed class NetclawPaths
     public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");
     public string BootstrapStatePath => Path.Combine(ConfigDirectory, "bootstrap-state.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
+    public string RuntimeDirectory => Path.Combine(BasePath, "runtime");
     /// <summary>
     /// Per-session log files live at <c>{SessionLogsDirectory}/{sanitized_id}/session.log</c>.
     /// This tree is deliberately kept outside <see cref="SessionsDirectory"/> so
@@ -127,11 +128,14 @@ public sealed class NetclawPaths
 
     public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)
     {
-        BasePath = PathExpansion.ExpandHome(basePath)
+        var resolvedBasePath = PathExpansion.ExpandHome(basePath)
             ?? PathExpansion.ExpandHome(Environment.GetEnvironmentVariable("NETCLAW_HOME"))
             ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".netclaw");
+        // The daemon changes its process directory after bootstrap. Freeze the base
+        // path now so soft restarts cannot reinterpret a relative NETCLAW_HOME.
+        BasePath = Path.GetFullPath(resolvedBasePath);
         WorkspacesDirectory = PathExpansion.ExpandHome(workspacesDirectory) ?? Path.Combine(BasePath, "workspaces");
     }
 
@@ -179,6 +183,7 @@ public sealed class NetclawPaths
         yield return ConfigDirectory;
         yield return WebhooksDirectory;
         yield return LogsDirectory;
+        yield return RuntimeDirectory;
         yield return SessionLogsDirectory;
         yield return AgentsDirectory;
         yield return ServerFeedAgentsDirectory;

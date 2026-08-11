@@ -142,6 +142,18 @@ Do not treat UI-level save success or schema validity as sufficient when runtime
 behavior depends on provider IDs, canonical names, permissions, or security
 policy keys.
 
+## Shell Approval Abstraction Rule
+
+Netclaw shell approval code must not parse an executable's private command,
+subcommand, option, or operand grammar. Approval analysis must use general shell
+facts. These facts include syntax, control flow, typed values, path scopes, and
+authority boundaries.
+
+Explicit safe-verb and hard-deny lists are policy data. They must not become
+executable-specific parsers. If ShellSyntaxTree lacks a required fact, keep the
+input unresolved. Propose a general ShellSyntaxTree capability instead. Do not
+move a Netclaw executable special case into ShellSyntaxTree.
+
 ## Automation Floor
 
 Recent regressions define mandatory automated proof classes. TUI text input must

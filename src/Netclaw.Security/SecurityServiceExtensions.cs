@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SecurityServiceExtensions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,13 +31,26 @@ public static class SecurityServiceExtensions
     }
 
     /// <summary>
-    /// Registers <see cref="IShellParser"/> for the approval gate evaluator.
-    /// The bash implementation is the only one shipped today; PowerShell and
-    /// cmd parsers are deferred to ShellSyntaxTree v0.2+.
+    /// Registers the compatibility Bash parser used by hosts that have not yet
+    /// supplied an explicit shell environment.
     /// </summary>
     public static IServiceCollection AddShellParser(this IServiceCollection services)
+        => services.AddShellParser(ShellExecutionEnvironmentDefaults.Bash);
+
+    /// <summary>
+    /// Registers a parser adapter bound to the daemon's canonical shell environment.
+    /// </summary>
+    public static IServiceCollection AddShellParser(
+        this IServiceCollection services,
+        ShellExecutionEnvironment environment)
     {
-        services.AddSingleton<IShellParser, BashParser>();
+        ArgumentNullException.ThrowIfNull(environment);
+        services.AddSingleton<IShellParser>(new EnvironmentShellParser(environment));
         return services;
+    }
+
+    private sealed class EnvironmentShellParser(ShellExecutionEnvironment environment) : IShellParser
+    {
+        public ParsedCommand Parse(string source) => environment.Parse(source);
     }
 }

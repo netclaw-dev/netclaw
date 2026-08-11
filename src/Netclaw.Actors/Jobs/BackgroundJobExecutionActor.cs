@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobExecutionActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -20,6 +20,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
     private readonly BackgroundJobDefinition _definition;
     private readonly string _outputLogPath;
     private readonly TimeProvider _timeProvider;
+    private readonly ShellExecutionEnvironment _environment;
     private readonly ILoggingAdapter _log;
     private Process? _process;
     private ICancelable? _timeoutHandle;
@@ -28,10 +29,24 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
         BackgroundJobDefinition definition,
         string outputLogPath,
         TimeProvider timeProvider)
+        : this(
+            definition,
+            outputLogPath,
+            timeProvider,
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))
+    {
+    }
+
+    public BackgroundJobExecutionActor(
+        BackgroundJobDefinition definition,
+        string outputLogPath,
+        TimeProvider timeProvider,
+        ShellExecutionEnvironment environment)
     {
         _definition = definition;
         _outputLogPath = outputLogPath;
         _timeProvider = timeProvider;
+        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _log = Context.GetLogger();
 
         Receive<CancelBackgroundJob>(_ => HandleCancel());
@@ -77,27 +92,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
     private void SpawnProcess()
     {
-        var isWindows = OperatingSystem.IsWindows();
-        var psi = new ProcessStartInfo
-        {
-            FileName = isWindows ? "cmd.exe" : "/bin/bash",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        if (isWindows)
-        {
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(_definition.Command);
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(_definition.Command);
-        }
+        var psi = _environment.CreateProcessStartInfo(_definition.Command);
 
         if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
         {
@@ -114,9 +109,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                     return;
                 }
 
-                var mkdirHint = isWindows
-                    ? $"mkdir \"{_definition.WorkingDirectory}\""
-                    : $"mkdir -p \"{_definition.WorkingDirectory}\"";
+                var mkdirHint = CreateDirectoryHint(_definition.WorkingDirectory);
                 ReportCompletion(BackgroundJobStatus.Failed, -1,
                     $"Working directory '{_definition.WorkingDirectory}' does not exist. "
                     + $"Create it first, e.g.: {mkdirHint}");
@@ -126,7 +119,20 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             psi.WorkingDirectory = _definition.WorkingDirectory;
         }
 
-        _process = Process.Start(psi);
+        try
+        {
+            _process = Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            ReportCompletion(
+                BackgroundJobStatus.Failed,
+                -1,
+                $"Failed to start shell '{_environment.ExecutableName}' "
+                + $"at '{_environment.ExecutablePath}': {ex.Message}");
+            return;
+        }
+
         if (_process is null)
         {
             ReportCompletion(BackgroundJobStatus.Failed, -1, "Process.Start returned null");
@@ -196,6 +202,11 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             await outputLog.WriteLineAsync(line, isStderr);
         }
     }
+
+    private string CreateDirectoryHint(string path)
+        => _environment.PathStyle == ShellPathStyle.Windows
+            ? $"New-Item -ItemType Directory -Force -Path '{path.Replace("'", "''", StringComparison.Ordinal)}'"
+            : $"mkdir -p -- '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
     private void HandleProcessExited(ProcessExited msg)
     {

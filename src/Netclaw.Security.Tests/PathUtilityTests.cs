@@ -50,6 +50,33 @@ public sealed class PathUtilityTests
     }
 
     [Fact]
+    public void TryNormalize_does_not_resolve_process_directory_for_fully_qualified_path()
+    {
+        var absolutePath = Path.GetTempPath();
+        var success = PathUtility.TryNormalize(
+            absolutePath,
+            workingDirectory: null,
+            static () => throw new DirectoryNotFoundException("Process working directory was deleted."),
+            out var normalized);
+
+        Assert.True(success);
+        Assert.Equal(PathUtility.Normalize(absolutePath), normalized);
+    }
+
+    [Fact]
+    public void TryNormalize_fails_closed_when_relative_path_has_no_process_directory()
+    {
+        var success = PathUtility.TryNormalize(
+            "relative/path",
+            workingDirectory: null,
+            static () => throw new DirectoryNotFoundException("Process working directory was deleted."),
+            out var normalized);
+
+        Assert.False(success);
+        Assert.Empty(normalized);
+    }
+
+    [Fact]
     public void IsWithinRoot_returns_true_for_exact_match()
     {
         Assert.True(PathUtility.IsWithinRoot("/home/user", "/home/user"));

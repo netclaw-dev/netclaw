@@ -70,9 +70,13 @@ public sealed class SmokeMcpServerHttpHeaderTests
         // the tool lookup below.
         harness.AssertConnected("smoke-http");
 
-        var lastAuthHeader = registry.GetAllRegistrations()
+        var publishedTools = registry.GetAllRegistrations()
             .Select(r => r.Tool)
             .OfType<McpToolAdapter>()
+            .ToList();
+        Assert.DoesNotContain(publishedTools, t => t.Name == "smoke-http/add-dynamic-tool");
+
+        var lastAuthHeader = publishedTools
             .SingleOrDefault(t => t.Name == "smoke-http/last_auth_header");
         Assert.NotNull(lastAuthHeader);
 

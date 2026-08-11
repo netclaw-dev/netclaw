@@ -501,7 +501,7 @@ internal sealed class SessionToolExecutionPipeline
                     await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
                     return await RouteToBackgroundJobAsync(
-                        tc, batch,
+                        tc, batch, context,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
                         // kill timer is armed — a background job is a detached
@@ -591,7 +591,7 @@ internal sealed class SessionToolExecutionPipeline
                     await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
                     return await RouteToBackgroundJobAsync(
-                        tc, batch,
+                        tc, batch, context,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
                         // kill timer is armed — a background job is a detached
@@ -821,12 +821,14 @@ internal sealed class SessionToolExecutionPipeline
     private async Task<ToolCallResult> RouteToBackgroundJobAsync(
         FunctionCallContent tc,
         SessionToolBatch batch,
+        ToolExecutionContext context,
         ToolCallMeta meta,
         IActorRef backgroundJobManager,
         int timeoutSeconds)
     {
         var command = ToolArgumentHelper.GetString(tc.Arguments, "Command");
-        var workingDirectory = ToolArgumentHelper.GetString(tc.Arguments, "WorkingDirectory");
+        var workingDirectory = context.ResolveShellCwd(
+            ToolArgumentHelper.GetString(tc.Arguments, "WorkingDirectory"));
 
         if (string.IsNullOrWhiteSpace(command))
         {

@@ -285,6 +285,52 @@ public sealed class McpOAuthFlowBrokerTests
         Assert.Equal(403, broker.GetStatusByState("old-state").Error?.Status);
     }
 
+    [Fact]
+    public async Task TerminalFlowCallbackHandler_ReturnsNullInsteadOfAlreadyInProgress()
+    {
+        using var broker = CreateBroker();
+        var flow = broker.StartOrJoin(ServerName).Flow;
+        flow.Fail(new McpErrorResponse("expired", "test"));
+
+        // A client published by this flow keeps its delegate for the connection's whole
+        // life. When the access token expires hours later the SDK re-invokes it; the
+        // consumed flow must answer null (a clean failure the manager classifies) rather
+        // than throw "already in progress" on every retry forever.
+        var handler = McpClientManager.CreateAuthorizationCallbackHandler(flow);
+        var result = await handler(
+            new AuthorizationCallbackContext
+            {
+                AuthorizationUri = AuthorizationUrl("state-terminal"),
+                RedirectUri = RedirectUri,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task PendingFlowCallbackHandler_ForwardsToTheFlow()
+    {
+        using var broker = CreateBroker();
+        var flow = broker.StartOrJoin(ServerName).Flow;
+        var handler = McpClientManager.CreateAuthorizationCallbackHandler(flow);
+
+        var pending = handler(
+            new AuthorizationCallbackContext
+            {
+                AuthorizationUri = AuthorizationUrl("state-fwd"),
+                RedirectUri = RedirectUri,
+            },
+            TestContext.Current.CancellationToken);
+
+        await flow.WaitForAuthorizationRequestAsync(TestContext.Current.CancellationToken);
+        flow.DeliverAuthorizationResponse("code-1", "state-fwd", null);
+
+        var result = await pending;
+        Assert.NotNull(result);
+        Assert.Equal("code-1", result!.Code);
+    }
+
     private static Uri AuthorizationUrl(string state)
         => new($"https://auth.example/authorize?client_id=one&state={state}");
 

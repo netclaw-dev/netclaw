@@ -22,6 +22,7 @@ using ModelContextProtocol.Protocol;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -257,8 +258,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return false;
             }
 
-            return await RefreshCatalogCoreAsync(
+            var result = await RefreshCatalogCoreAsync(
                 lifecycle, entry, snapshot, previousRefreshMs, candidateCancellation.Token);
+            return result is McpCatalogRefreshResult.Changed;
         }
         finally
         {
@@ -266,7 +268,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    private async Task<bool> RefreshCatalogCoreAsync(
+    private async Task<McpCatalogRefreshResult> RefreshCatalogCoreAsync(
         McpServerLifecycle lifecycle,
         McpServerEntry entry,
         McpServerSnapshot current,
@@ -293,12 +295,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     "MCP server '{Name}' catalog refresh returned no tools; keeping {ToolCount} existing tool(s)",
                     current.Name.Value,
                     current.ToolFunctions.Count);
-                return false;
+                return McpCatalogRefreshResult.Failed;
             }
 
             var fingerprint = ComputeCatalogFingerprint(functions.Values, promptDescriptors.Values);
             if (string.Equals(fingerprint, current.CatalogFingerprint, StringComparison.Ordinal))
-                return false;
+                return McpCatalogRefreshResult.Unchanged;
 
             var publishedTools = ToolRegistrationExtensions.PrepareMcpTools(
                 current.Name.Value,
@@ -314,7 +316,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             lock (_shutdownSync)
             {
                 if (_stopping)
-                    return false;
+                {
+                    lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+                    return McpCatalogRefreshResult.Failed;
+                }
 
                 replacement = current with
                 {
@@ -338,22 +343,82 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 replacement.Generation,
                 functions.Count,
                 promptDescriptors.Count);
-            return true;
+            return McpCatalogRefreshResult.Changed;
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
-            return false;
+            lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+            return McpCatalogRefreshResult.Failed;
         }
         catch (Exception ex)
         {
             // Invariant: a failed refresh must never empty the catalog. Roll back the
             // throttle claim so the next 30s tick retries instead of waiting 5 minutes.
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+            if (IsAuthFailure(ex))
+            {
+                MarkAwaitingAuthorization(lifecycle, current, ex);
+                return McpCatalogRefreshResult.Failed;
+            }
+
             _logger.LogWarning(ex,
                 "MCP server '{Name}' catalog refresh failed; keeping generation {Generation} unchanged",
                 current.Name.Value,
                 current.Generation);
-            return false;
+            return McpCatalogRefreshResult.Failed;
+        }
+    }
+
+    private async Task RefreshCatalogFromNotificationAsync(
+        McpCatalogNotificationLease lease,
+        CancellationToken cancellationToken)
+    {
+        if (IsStopping
+            || !_serverEntries.TryGetValue(lease.ServerName.Value, out var entry)
+            || !entry.Enabled
+            || !_servers.TryGetValue(lease.ServerName, out var lifecycle))
+        {
+            return;
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(CatalogRefreshTimeout, _timeProvider);
+        using var refreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetimeCancellation.Token,
+            timeoutCancellation.Token);
+        try
+        {
+            await lifecycle.Gate.WaitAsync(refreshCancellation.Token);
+        }
+        catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            var snapshot = lifecycle.Snapshot;
+            if (IsStopping
+                || snapshot is not { IsConnected: true }
+                || !ReferenceEquals(snapshot.NotificationLease, lease)
+                || _flowBroker.TryGetActive(snapshot.Name, out _))
+            {
+                return;
+            }
+
+            lifecycle.ClaimCatalogRefresh(
+                _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                out var previousRefreshMs);
+            await RefreshCatalogCoreAsync(
+                lifecycle,
+                entry,
+                snapshot,
+                previousRefreshMs,
+                refreshCancellation.Token);
+        }
+        finally
+        {
+            lifecycle.Gate.Release();
         }
     }
 
@@ -653,14 +718,26 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpOAuthFlow? authorizationFlow)
     {
         McpClient? candidate = null;
+        McpCatalogNotificationLease? candidateLease = null;
         McpOAuthTokenCache? oauthCache = null;
         Exception? candidateFailure = null;
         try
         {
-            var created = await CreateClientAsync(current.Name, entry, authorizationFlow, ct);
+            candidateLease = new McpCatalogNotificationLease(
+                current.Name,
+                _timeProvider,
+                _logger,
+                RefreshCatalogFromNotificationAsync);
+            var created = await CreateClientAsync(
+                current.Name,
+                entry,
+                authorizationFlow,
+                candidateLease,
+                ct);
             candidate = created.Client;
             oauthCache = created.OAuthCache;
 
+            await candidateLease.EstablishAsync(candidate, _clientRuntime, ct);
             var initialization = await _clientRuntime.InitializeAsync(candidate, ct);
             var tools = initialization.Tools;
             var functions = CreateFunctionMap(tools);
@@ -703,9 +780,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 if (oauthCache is not null)
                     _credentialStore.Publish(oauthCache, CancellationToken.None);
 
+                current.NotificationLease?.Deactivate();
                 replacement = new McpServerSnapshot(
                     current.Name,
                     candidate,
+                    candidateLease,
                     functions,
                     promptDescriptors,
                     checked(current.Generation + 1),
@@ -714,12 +793,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 PublishConnectedCatalog(lifecycle, replacement, publishedTools);
                 // The connect path just listed the catalog; skip the next poll window.
                 lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+                candidateLease.Activate();
                 candidate = null;
+                candidateLease = null;
                 oauthCache = null;
             }
 
             if (current.Client is not null)
-                await DisposeReplacedAsync(current.Name, current.Client);
+                await DisposeReplacedAsync(current);
             _logger.LogInformation(
                 "MCP server '{Name}' connected as generation {Generation} ({ToolCount} tools, {PromptCount} prompts)",
                 current.Name.Value,
@@ -796,11 +877,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             if (oauthCache is not null)
                 _credentialStore.Discard(oauthCache);
-            if (candidate is not null)
+            if (candidateLease is not null || candidate is not null)
             {
                 try
                 {
-                    await DisposeCandidateAsync(current.Name, candidate);
+                    await DisposeClientStateAsync(candidateLease, candidate);
+                    _logger.LogDebug("Unpublished MCP client '{Name}' disposed", current.Name.Value);
                 }
                 catch (Exception disposalFailure)
                 {
@@ -888,18 +970,19 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         await lifecycle.Gate.WaitAsync(CancellationToken.None);
         try
         {
-            var client = lifecycle.Snapshot?.Client;
+            var snapshot = lifecycle.Snapshot;
+            snapshot?.NotificationLease?.Deactivate();
             // Remove model-visible surfaces before dispatch loses the connection snapshot.
             RemovePublishedMcpSurface(serverName.Value);
             _skillIndexPublisher.Publish();
             lifecycle.Publish(null);
 
-            if (client is null)
+            if (snapshot?.Client is null)
                 return;
 
             // An invocation still in flight is cancelled by the client going away rather
             // than drained. Draining lives in the separate client-lifecycle work.
-            await _clientRuntime.DisposeAsync(client);
+            await DisposeClientStateAsync(snapshot.NotificationLease, snapshot.Client);
             _logger.LogInformation("MCP client '{Name}' shut down", serverName.Value);
         }
         finally
@@ -908,24 +991,53 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    private async Task DisposeCandidateAsync(McpServerName name, McpClient candidate)
-    {
-        await _clientRuntime.DisposeAsync(candidate);
-        _logger.LogDebug("Unpublished MCP client '{Name}' disposed", name.Value);
-    }
-
-    private async Task DisposeReplacedAsync(McpServerName name, McpClient replaced)
+    private async Task DisposeReplacedAsync(McpServerSnapshot replaced)
     {
         try
         {
-            await _clientRuntime.DisposeAsync(replaced);
+            await DisposeClientStateAsync(replaced.NotificationLease, replaced.Client);
         }
         catch (Exception ex)
         {
             // The replacement is already published and serving; a failed disposal of the
             // old client leaks a connection but must not fail the reconnect.
-            _logger.LogError(ex, "Error disposing replaced MCP client '{Name}'", name.Value);
+            _logger.LogError(ex, "Error disposing replaced MCP client '{Name}'", replaced.Name.Value);
         }
+    }
+
+    private async Task DisposeClientStateAsync(
+        McpCatalogNotificationLease? notificationLease,
+        McpClient? client)
+    {
+        List<Exception>? failures = null;
+        if (notificationLease is not null)
+        {
+            try
+            {
+                await notificationLease.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                failures = [ex];
+            }
+        }
+
+        if (client is not null)
+        {
+            try
+            {
+                await _clientRuntime.DisposeAsync(client);
+            }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex);
+            }
+        }
+
+        if (failures is { Count: 1 })
+            ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures is { Count: > 1 })
+            throw new AggregateException("The MCP notification lease and client both failed during disposal.", failures);
     }
 
     private async Task<string> InvokeFunctionAsync(
@@ -1024,6 +1136,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerName name,
         McpServerEntry entry,
         McpOAuthFlow? authorizationFlow,
+        McpCatalogNotificationLease notificationLease,
         CancellationToken ct)
     {
         McpOAuthTokenCache? oauthCache = null;
@@ -1056,7 +1169,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             }
 
             var transport = CreateTransport(name, entry, oauthCache, authorizationFlow);
-            var client = await _clientRuntime.CreateAsync(transport, BuildClientOptions(authorizationFlow), ct);
+            var client = await _clientRuntime.CreateAsync(
+                transport,
+                BuildClientOptions(authorizationFlow, notificationLease),
+                ct);
             return new McpClientCandidate(client, oauthCache);
         }
         catch
@@ -1082,7 +1198,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// immediately and nothing waits.
     /// </para>
     /// </summary>
-    private static McpClientOptions BuildClientOptions(McpOAuthFlow? authorizationFlow)
+    private static McpClientOptions BuildClientOptions(
+        McpOAuthFlow? authorizationFlow,
+        McpCatalogNotificationLease notificationLease)
     {
         var options = new McpClientOptions
         {
@@ -1093,6 +1211,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 Version = BuildInfo.Version,
                 WebsiteUrl = "https://netclaw.dev",
                 Description = "Open-source autonomous operations agent built on Akka.NET",
+            },
+            Handlers = new McpClientHandlers
+            {
+                NotificationHandlers = notificationLease.Handlers,
             },
         };
 
@@ -1160,12 +1282,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             Scopes = ParseScopes(entry.OAuthScope),
             TokenCache = cache,
 
-            // A background reconnect has no flow and therefore no operator at a browser.
-            // Returning null makes the SDK fail the connection instead of blocking on a
-            // redirect nobody will complete.
-            AuthorizationCallbackHandler = authorizationFlow is null
-                ? static (_, _) => Task.FromResult<AuthorizationResult?>(null)
-                : authorizationFlow.HandleAuthorizationCallbackAsync,
+            AuthorizationCallbackHandler = CreateAuthorizationCallbackHandler(authorizationFlow),
 
             // DynamicClientRegistration is deliberately left unset. McpOAuthClientRegistrar
             // owns registration because the SDK hard-codes client_secret_post and cannot
@@ -1173,6 +1290,23 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // ClientId here short-circuits the SDK's registration path entirely.
         };
     }
+
+    /// <summary>
+    /// Builds the SDK authorization callback delegate for a client. A background reconnect
+    /// has no flow and therefore no operator at a browser: returning null makes the SDK fail
+    /// the connection instead of blocking on a redirect nobody will complete. A flow-built
+    /// client gets a handler that forwards only while its flow is still pending: hours later,
+    /// when the access token expires and the SDK re-invokes the delegate, the consumed flow
+    /// must answer null (a loud "null authorization result" failure) instead of throwing
+    /// "authorization already in progress" on every retry forever.
+    /// </summary>
+    internal static Func<AuthorizationCallbackContext, CancellationToken, Task<AuthorizationResult?>> CreateAuthorizationCallbackHandler(
+        McpOAuthFlow? authorizationFlow)
+        => authorizationFlow is null
+            ? static (_, _) => Task.FromResult<AuthorizationResult?>(null)
+            : (context, ct) => authorizationFlow.IsTerminal
+                ? Task.FromResult<AuthorizationResult?>(null)
+                : authorizationFlow.HandleAuthorizationCallbackAsync(context, ct);
 
     private Uri BuildRedirectUri()
         => new($"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
@@ -1334,9 +1468,35 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return scopeString.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
+    /// <summary>
+    /// A Connected server whose catalog refresh fails on authentication cannot repair itself:
+    /// the SDK's recovery path needs an operator at a browser. Demote the status so health
+    /// reporting stops claiming a working connection and the 30s refresh loop stops retrying
+    /// a dead token, but keep the catalog visible — wiping it would hide which server needs
+    /// reauthorization.
+    /// </summary>
+    private void MarkAwaitingAuthorization(
+        McpServerLifecycle lifecycle,
+        McpServerSnapshot current,
+        Exception ex)
+    {
+        var status = CreateAwaitingAuthStatus(current.Name, _timeProvider.GetUtcNow())
+            with { ToolCount = current.ToolFunctions.Count };
+        lifecycle.Publish(current with { Status = status });
+        _logger.LogWarning(ex,
+            "MCP server '{Name}' lost OAuth authorization during catalog refresh; marked AwaitingAuth",
+            current.Name.Value);
+        EmitAuthAlert(current.Name,
+            $"MCP server '{current.Name.Value}' lost OAuth authorization. Run: netclaw mcp auth {current.Name.Value}",
+            "authorization_expired");
+    }
+
     private static bool IsAuthFailure(Exception ex)
     {
         if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
+            return true;
+
+        if (ex is McpOAuthAuthorizationInProgressException)
             return true;
 
         if (IsAuthFailureMessage(ex.Message))
@@ -1365,7 +1525,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// so an operator-pinned OAuthClientId is never discarded behind their back.
     /// </summary>
     private static bool IsInvalidClientFailure(Exception ex)
-        => ex.Message.Contains("invalid_client", StringComparison.OrdinalIgnoreCase)
+        // SDK 2.1's discover probe swallows the token endpoint's 400 invalid_client as a
+        // protocol-fallback signal, so OAuthClientRejectionHandler re-throws it as this type
+        // before the SDK can hide it. The message check below still covers a raw SDK failure.
+        => ex is McpOAuthClientRejectedException
+           || ex.Message.Contains("invalid_client", StringComparison.OrdinalIgnoreCase)
            // A registration is bound to the issuer that granted it. When the resource server
            // moves to a new issuer, SDK 2.0 refuses to reuse the old one and offers no remedy
            // of its own, so the stale identity has to go or every retry repeats the failure.
@@ -1725,6 +1889,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             foreach (var (serverName, lifecycle) in _servers)
             {
                 RemovePublishedMcpSurface(serverName.Value);
+                lifecycle.Snapshot?.NotificationLease?.Deactivate();
                 lifecycle.Publish(null);
             }
 
@@ -1753,6 +1918,25 @@ internal interface IMcpClientRuntime
         McpClient client,
         CancellationToken cancellationToken);
 
+    McpCatalogNotificationProfile GetCatalogNotificationProfile(McpClient client)
+        => new(
+            client.NegotiatedProtocolVersion,
+            client.ServerCapabilities.Tools?.ListChanged is true,
+            client.ServerCapabilities.Prompts?.ListChanged is true);
+
+    async Task ListenForCatalogChangesAsync(
+        McpClient client,
+        RequestId requestId,
+        SubscriptionsListenNotifications notifications,
+        CancellationToken cancellationToken)
+    {
+        await client.SendRequestAsync<SubscriptionsListenRequestParams, EmptyResult>(
+            RequestMethods.SubscriptionsListen,
+            new SubscriptionsListenRequestParams { Notifications = notifications },
+            requestId: requestId,
+            cancellationToken: cancellationToken);
+    }
+
     /// <summary>Re-lists a connected client's tools from the server (no reconnect).</summary>
     ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
         McpClient client,
@@ -1778,6 +1962,9 @@ internal interface IMcpClientRuntime
 
 internal sealed class McpClientRuntime : IMcpClientRuntime
 {
+    public IClientTransport CreateHttpTransport(HttpClientTransportOptions options)
+        => new HttpClientTransport(options, McpHttpClientFactory.Shared);
+
     public Task<McpClient> CreateAsync(
         IClientTransport transport,
         McpClientOptions options,
@@ -1872,6 +2059,12 @@ internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
         return true;
     }
 
+    public void ClaimCatalogRefresh(long nowMs, out long previousMs)
+    {
+        previousMs = _lastCatalogRefreshMs;
+        _lastCatalogRefreshMs = nowMs;
+    }
+
     /// <summary>Restores the claim timestamp after a failed refresh so the next tick retries.</summary>
     public void RollbackCatalogRefreshClaim(long previousMs) => _lastCatalogRefreshMs = previousMs;
 
@@ -1882,6 +2075,7 @@ internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
 internal sealed record McpServerSnapshot(
     McpServerName Name,
     McpClient? Client,
+    McpCatalogNotificationLease? NotificationLease,
     IReadOnlyDictionary<string, AIFunction> ToolFunctions,
     IReadOnlyDictionary<string, McpPromptDescriptor> PromptDescriptors,
     long Generation,
@@ -1897,7 +2091,14 @@ internal sealed record McpServerSnapshot(
         => Client is not null && Status.State is McpConnectionState.Connected;
 
     public static McpServerSnapshot WithoutConnection(McpServerStatus status, long generation = 0)
-        => new(status.Name, null, EmptyFunctions, EmptyPrompts, generation, status);
+        => new(status.Name, null, null, EmptyFunctions, EmptyPrompts, generation, status);
+}
+
+internal enum McpCatalogRefreshResult
+{
+    Failed,
+    Unchanged,
+    Changed,
 }
 
 internal sealed record McpPromptDescriptor(

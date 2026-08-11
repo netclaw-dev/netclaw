@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WorkingContextSnapshotTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -7,11 +7,106 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Security;
+using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
 public class WorkingContextSnapshotTests
 {
+    [Fact]
+    public async Task Personal_power_shell_context_renders_without_a_project_directory()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var provider = new WorkingContextSnapshotProvider(
+            new RecordingGitInspector(),
+            NullLogger<WorkingContextSnapshotProvider>.Instance,
+            environment);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        Assert.Same(environment, snapshot.ShellEnvironment);
+        Assert.False(snapshot.IsEmpty);
+        var block = snapshot.ToContextBlock();
+        Assert.Contains("platform: Windows", block);
+        Assert.Contains("executable: C:\\Program Files\\PowerShell\\7\\pwsh.exe", block);
+        Assert.Contains("grammar: PowerShell", block);
+        Assert.Contains("dialect: PowerShell7", block);
+    }
+
+    [Fact]
+    public async Task Personal_windows_power_shell_fallback_names_its_dialect()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            PwshDialect.WindowsPowerShell51);
+        var provider = new WorkingContextSnapshotProvider(
+            new RecordingGitInspector(),
+            NullLogger<WorkingContextSnapshotProvider>.Instance,
+            environment);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        var block = snapshot.ToContextBlock();
+        Assert.Contains("powershell.exe", block);
+        Assert.Contains("dialect: WindowsPowerShell51", block);
+        Assert.DoesNotContain("PowerShell7", block);
+    }
+
+    [Theory]
+    [InlineData(ShellPlatform.Linux)]
+    [InlineData(ShellPlatform.MacOS)]
+    public async Task Personal_unix_context_names_bash_without_a_power_shell_dialect(
+        ShellPlatform platform)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(platform);
+        var provider = new WorkingContextSnapshotProvider(
+            new RecordingGitInspector(),
+            NullLogger<WorkingContextSnapshotProvider>.Instance,
+            environment);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            TrustAudience.Personal,
+            TestContext.Current.CancellationToken);
+
+        var block = snapshot.ToContextBlock();
+        Assert.Contains($"platform: {platform}", block);
+        Assert.Contains("executable: /bin/bash", block);
+        Assert.Contains("grammar: Bash", block);
+        Assert.DoesNotContain("dialect:", block);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    public async Task Non_personal_context_omits_shell_identity(TrustAudience audience)
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var provider = new WorkingContextSnapshotProvider(
+            new RecordingGitInspector(),
+            NullLogger<WorkingContextSnapshotProvider>.Instance,
+            environment);
+
+        var snapshot = await provider.CreateAsync(
+            WorkingContext.Empty,
+            audience,
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(snapshot.ShellEnvironment);
+        Assert.DoesNotContain("shell:", snapshot.ToContextBlock());
+    }
+
     [Fact]
     public void ParseStatus_reads_branch_divergence_and_dirty_counts()
     {

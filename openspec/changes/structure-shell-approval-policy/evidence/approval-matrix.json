@@ -1,0 +1,175 @@
+{
+  "cutoffUtc": "2026-08-11T15:13:55Z",
+  "sourceRelease": "Netclaw 0.26.0-beta.3",
+  "sanitization": {
+    "user": "user",
+    "workingRepository": "/work",
+    "remoteRepository": "example/project",
+    "numericIdentifier": "123456",
+    "commit": "deadbeef"
+  },
+  "cases": [
+    {
+      "id": "D01",
+      "command": "which netclaw netclawd 2>/dev/null; netclaw --version 2>/dev/null || netclawd --version 2>/dev/null || echo \"no CLI version flag found\"",
+      "observed": "Session",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Complete static command identities and redirects; no relaxation required.",
+      "netclawExpectation": "Prompt because at least one fallback executable has no grant coverage."
+    },
+    {
+      "id": "D02",
+      "command": "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 | head -200; echo \"---EXIT $?---\"",
+      "observed": "Once",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTree",
+      "sstExpectation": "The echo argument is Concatenation(Exact, IntegerRange(0,255), Exact); the status is not a path or identity.",
+      "netclawExpectation": "Allow when gh run view has global grant coverage and head plus echo have reviewed safe coverage."
+    },
+    {
+      "id": "D03",
+      "command": "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log",
+      "observed": "Once",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the leading success-gated directory transition, file redirect, relative paths, and four command occurrences.",
+      "netclawExpectation": "Allow after cd and gh api grants plus wc and head safe coverage compose per candidate; hard-deny and real path checks still pass."
+    },
+    {
+      "id": "D04",
+      "command": "cd /work && /home/user/.dotnet/dotnet build src/App/App.csproj -v minimal --nologo 2>&1 | tail -25",
+      "observed": "Once",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the explicit executable path, build arguments, redirect duplication, pipeline, and cwd transition.",
+      "netclawExpectation": "Prompt because the explicit /home/user/.dotnet/dotnet executable has no matching grant."
+    },
+    {
+      "id": "D05",
+      "command": "cd /work && /home/user/.dotnet/dotnet list src/App/App.csproj package --include-transitive 2>/dev/null | grep -i \"ProtocolPackage\" | head -5",
+      "observed": "Once",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish all static identities, paths, redirects, and pipeline stages.",
+      "netclawExpectation": "Prompt because the explicit dotnet executable has no matching grant; agent alignment may remove the mismatch later."
+    },
+    {
+      "id": "D06",
+      "command": "cd /work && /home/user/.dotnet/dotnet list src/Service/Service.csproj package 2>&1 | grep -i \"ProtocolPackage\"; echo \"===TESTS===\"; /home/user/.dotnet/dotnet list tests/Service.Tests/Service.Tests.csproj package 2>&1 | grep -i \"ProtocolPackage\"; echo \"===ASSETS===\"; grep -o '\"ProtocolPackage[^\"]*\"' src/App/obj/project.assets.json | sort -u | head",
+      "observed": "Once",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the static command list, redirects, pipelines, and authored paths.",
+      "netclawExpectation": "Prompt because both explicit dotnet invocations lack grant coverage."
+    },
+    {
+      "id": "D07",
+      "command": "cd /work && git push upstream feature/update:automation/update 2>&1 | tail -5",
+      "observed": "Session",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish git push as a static token sequence with later argument tokens.",
+      "netclawExpectation": "Allow when a migrated git push grant covers the candidate at shell-token boundaries and tail is safely covered."
+    },
+    {
+      "id": "D08",
+      "command": "cd /work && git ls-remote upstream feature/update; echo \"---LOCAL---\"; git rev-parse HEAD; git log --oneline -3",
+      "observed": "Once",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the cwd transition and static git plus echo occurrences.",
+      "netclawExpectation": "Allow when existing global grants and safe coverage compose under the intended cwd."
+    },
+    {
+      "id": "D09",
+      "command": "cd /work && gh api repos/example/project/commits/deadbeef --jq '{sha: .sha, message: .commit.message}' 2>&1; echo \"===RUN 123456===\"; gh run view 123456 --repo example/project --json status,conclusion 2>&1 | head -40",
+      "observed": "Once",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish static gh, echo, and head occurrences with the cwd transition.",
+      "netclawExpectation": "Allow when global gh grants and reviewed safe coverage compose."
+    },
+    {
+      "id": "D10",
+      "command": "cd /work && git fetch upstream feature/update 2>&1 | tail -2 && echo \"===REMOTE TIP===\" && git rev-parse FETCH_HEAD && git log --oneline -3 FETCH_HEAD && echo \"===HAS FIX?===\" && git show FETCH_HEAD:src/App/App.csproj | grep -n \"ProtocolPackage\"; echo \"exit: $?\"",
+      "observed": "Once",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTreeAndNetclaw",
+      "sstExpectation": "The final echo argument is Concatenation(Exact, IntegerRange(0,255)); all command identities and control operators remain explicit.",
+      "netclawExpectation": "Allow after bounded status plus global grants and safe coverage compose under causal intent."
+    },
+    {
+      "id": "D11",
+      "command": "cd /work && echo \"===PARENT===\" && gh api repos/example/project/commits/deadbeef --jq '.parents[] | {sha: .sha}' 2>&1; echo \"===CURRENT PR HEAD===\" && gh pr view 123 --repo example/project --json headRefOid,updatedAt",
+      "observed": "Once",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the cwd transition and static echo plus gh occurrences.",
+      "netclawExpectation": "Allow when global gh grants and echo safe coverage compose."
+    },
+    {
+      "id": "D12",
+      "command": "mv /home/user/repos/source-project /home/user/repos/group/target-project && git -C /home/user/repos/group/target-project status --short --branch && ls -d /home/user/repos/group/target-project",
+      "observed": "Denied",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the move source and target paths and later inspection commands.",
+      "netclawExpectation": "Prompt or deny because a cross-scope filesystem mutation is not covered by read-only policy."
+    },
+    {
+      "id": "D13",
+      "command": "for f in $(find /work/src /work/tests -name \"*.csproj\" | sort); do echo \"=== $f ===\"; grep -E \"TargetFramework|PackageReference|ProjectReference\" \"$f\"; done",
+      "observed": "Once",
+      "classification": "IrreduciblyDynamic",
+      "owner": "ShellSyntaxTree",
+      "sstExpectation": "Discover find and sort but keep the runtime-generated iterator and dependent values unknown.",
+      "netclawExpectation": "Prompt once; do not execute find during policy analysis."
+    },
+    {
+      "id": "D14",
+      "command": "for f in src/App/App.csproj src/Hosting/Hosting.csproj src/Discovery/Discovery.csproj tests/Hosting.Tests/Hosting.Tests.csproj; do echo \"=== $f ===\"; cat /work/$f; done",
+      "observed": "Once",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTree",
+      "sstExpectation": "With PublishAuthoredSourceFacts enabled, effective cat value is Unknown; AuthoredValue is the four pre-field-splitting /work words and AuthoredPathShape is Posix.",
+      "netclawExpectation": "Allow only if product policy accepts pre-field-splitting authored words, applies path checks conservatively, and covers cat plus echo."
+    },
+    {
+      "id": "D15",
+      "command": "for pkg in Package.One Package.Two Package.Three; do code=$(curl -s -o /dev/null -w \"%{http_code}\" \"https://packages.example.invalid/v3/$pkg/index.json\"); echo \"$pkg -> HTTP $code\"; if [ \"$code\" = \"200\" ]; then curl -s \"https://packages.example.invalid/v3/$pkg/index.json\" | jq -r '.versions[-3:][]'; fi; done",
+      "observed": "Pending",
+      "classification": "IrreduciblyDynamic",
+      "owner": "ShellSyntaxTree",
+      "sstExpectation": "Keep command substitution and unsupported Bash if control flow strict.",
+      "netclawExpectation": "Prompt once; do not infer network results."
+    },
+    {
+      "id": "D16",
+      "command": "gh search repos example topic --limit 10 2>/dev/null; echo \"---REPO CHECK---\"; for r in project-one project-two project-three; do echo \"example/$r:\"; gh repo view example/$r --json name,visibility 2>&1 | head -2; done",
+      "observed": "Pending",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the static search and finite loop structure.",
+      "netclawExpectation": "Prompt because the ungranted network search remains visible even if later reads have coverage."
+    },
+    {
+      "id": "D17",
+      "command": "cd /work && echo \"===API BRANCH===\" && gh api repos/example/project/branches/feature%2Fupdate --jq '.commit.sha' 2>&1; echo \"===GIT REMOTE===\" && git ls-remote upstream 'refs/heads/feature/update'; echo \"===COMMIT===\" && gh api repos/example/project/commits/deadbeef --jq '{sha: .sha, message: .commit.message}' 2>&1",
+      "observed": "Once",
+      "classification": "NetclawPolicyDefect",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the cwd transition and static gh, git, and echo occurrences.",
+      "netclawExpectation": "Allow when existing global grants and safe coverage compose."
+    },
+    {
+      "id": "D18",
+      "command": "gh pr close 123 --repo example/project --comment \"Closing this automated update because it is being replaced by a coordinated change.\" 2>&1",
+      "observed": "Pending",
+      "classification": "CorrectPrompt",
+      "owner": "Netclaw",
+      "sstExpectation": "Publish the static remote-mutation command and redirect duplication.",
+      "netclawExpectation": "Prompt because closing a pull request is a remote mutation without an explicit matching grant."
+    }
+  ]
+}

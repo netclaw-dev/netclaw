@@ -157,7 +157,15 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            var result = await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
+            var result = tool is ShellTool shellTool
+                         && _policy.TryTakeAuthorizedShellAnalysis(context, out var shellAnalysis)
+                         && shellAnalysis is not null
+                ? await shellTool.ExecuteAuthorizedAsync(
+                    toolCall.Arguments,
+                    context.Invocation,
+                    shellAnalysis,
+                    ct)
+                : await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
 
             var redacted = SecretOutputRedactor.Redact(result);
 
@@ -232,8 +240,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         // before the first item is produced; the tool-execution pipeline handles
         // those exactly as it does for the non-streaming path.
         var tool = await GetAuthorizedToolAsync(toolCall, context, ct);
+        var updates = tool is ShellTool shellTool
+                      && _policy.TryTakeAuthorizedShellAnalysis(context, out var shellAnalysis)
+                      && shellAnalysis is not null
+            ? shellTool.ExecuteAuthorizedStreamAsync(
+                toolCall.Arguments,
+                context.Invocation,
+                shellAnalysis,
+                ct)
+            : tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct);
         var sw = Stopwatch.StartNew();
-        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct))
+        await foreach (var update in updates)
         {
             switch (update)
             {

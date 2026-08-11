@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -110,6 +110,42 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Keep MCP HTTP Protocol Fallback Deterministic
+
+**PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/netclaw-mcp/spec.md`
+**Surface area:** MCP HTTP transport, daemon connections, CLI probes
+**Verification:** L1 plus the existing HTTP MCP smoke tests
+
+The MCP SDK can retain its discovery protocol version when probe cancellation
+selects the initialize fallback. Netclaw must not send that stale version in an
+initialize request.
+
+Done when:
+
+- [x] Daemon connections and CLI probes remove a retained protocol-version
+  header only from the initialize request.
+- [x] Discovery and established-session requests keep their protocol-version
+  header.
+- [x] Tests prove the header correction and preserve unrelated headers.
+
+### Priority: Preserve The Daemon Working Directory
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Surface area:** daemon lifecycle, path normalization, shell authorization
+**Verification:** L1 plus a live daemon restart
+
+The daemon process directory must survive routine system temporary-directory
+cleanup. Absolute path validation must not depend on that process directory.
+
+Done when:
+
+- [x] The daemon uses a durable runtime directory below the Netclaw home.
+- [x] Absolute path normalization does not read the process working directory.
+- [x] Focused tests and the full repository quality gates pass.
+- [ ] An installed daemon restart confirms the live process uses the durable directory.
+
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
@@ -122,6 +158,26 @@ without allowing an incomplete or unknown shell form.
 
 Done when:
 
+- [x] The sanitized v0.26.0-beta.3 approval window has 18 classified cases in
+  the linked ShellSyntaxTree and Netclaw OpenSpec changes.
+- [x] `openspec/changes/structure-shell-approval-policy/` defines the typed
+  coordinator and actor protocol, per-candidate coverage, real and intent
+  scopes, token-boundary grants, reviewed policy catalog, bounded trace,
+  migration, and validation tasks.
+- [ ] The maintainer approves the ShellSyntaxTree 0.3.1 API names and the
+  use of separate authored-source facts for approval matching before
+  implementation.
+- [ ] The maintainer approves whether simple v2 grants gain token-prefix
+  authority during schema-3 migration or remain exact until re-approved.
+- [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
+  and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
+  authorize, create candidates, or widen scope.
+- [ ] The bundled safe catalog removes every executable whose accepted
+  arguments can write, delete, execute code, or mutate a remote service through
+  executable argv interpretation. Redirect, parser-owned path/provider, and
+  unknown shell-expansion checks remain separate.
+- [ ] The `git ls-tree` production special case is removed. Token-boundary
+  policy match handles longer parser phrases without private command grammar.
 - [x] A synthetic workload corpus covers ordinary search, read, pipeline,
   redirect, and file-change commands without production command text.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
@@ -134,31 +190,120 @@ Done when:
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
   keep their strict behavior.
+- [x] Directory operands preserve dotted directory names without weakening the
+  external-path or symlink checks.
+- [x] The policy normalizes a variable `git ls-tree` tree operand to the
+  reviewed read-only verb. Other Git subcommands keep exact parser output.
+- [x] Tool schemas and always-loaded guidance distinguish a persistent project
+  root from one-command `WorkingDirectory` scope, prevent redundant project
+  switches, and preserve `cd` when directory mutation is the requested shell
+  behavior.
+- [x] Sanitized behavioral eval cases cover early project declaration,
+  one-command typed scope, failed-path recovery, and deliberate inline `cd`.
+- [ ] Run the new behavioral eval cases against a configured model provider.
+  The local eval provider type, endpoint, and model ID were unset for this
+  slice; syntax and ShellCheck validation passed.
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
 - [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
   explicit Bash redirect facts for the existing grammar.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0` through its corrected
+  closed analysis API. The consumer uses joined arguments, value-domain type
+  patterns, redirect alternatives, and redirect-source alternatives. The
+  unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
+  matrix passes locally.
+- [x] The expanded 247-test matrix covers command-substitution and PowerShell
+  execution-region behavior. Known command-owned regions reuse independently
+  matched host and body grants after Netclaw accounts for the parsed body.
+  Unknown receivers and incomplete region facts remain prompt-only.
 - [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
   Static descriptor redirects no longer appear dynamic.
+- [x] The resolved POSIX `/dev/null` device does not create an approval
+  directory after host symlink checks. Other device paths and dynamic redirect
+  targets stay strict.
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
   command-resolution mutation and reserved execution forms into the strict
   181-case review matrix.
-- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.2` for one exact POSIX
-  `pwsh -NoProfile -NonInteractive -Command '<static payload>'` wrapper. It
-  keeps the outer host and every complete PowerShell child as independent
-  approval occurrences.
-- [x] The 204-case shell approval review table proves PowerShell host and child
-  grant composition, intrinsic direct-call script blocks, nested hard deny,
-  decoded protected paths, and strict handling for dynamic values, named
-  script-block receivers, command-resolution changes, host-option near misses,
-  Windows wrappers, `BASH_ENV`, and exported-function risk.
+- [x] ShellSyntaxTree `0.3.0-alpha.2` introduced one temporary POSIX PowerShell
+  child wrapper. Native-host activation removed that transitional consumer
+  behavior: Bash treats `pwsh` as an external command, and only a native
+  PowerShell host uses `PwshParser`.
+- [x] The shell approval review table separates Bash, PowerShell 7, and Windows
+  PowerShell 5.1 rows. Cross-language payloads remain ordinary external-command
+  arguments; same-language static children use parser-returned occurrences.
 - [x] A constrained stdin grammar allows a complete literal heredoc or bounded
   here string only for argument-free `cat`. Unknown data, expanding heredocs,
   arguments, wrappers, interpreters, and stored grants stay strict.
-- [ ] Netclaw interprets bounded loop arguments only after the executor can
-  prove the Bash initial variable state. The inherited shell state remains
-  fail closed because an ambient nameref can change assignment semantics.
+- [ ] Netclaw interprets bounded loop arguments only after the maintainer
+  accepts ShellSyntaxTree 0.3.1's separate authored-source projection for
+  approval matching. Effective runtime values remain unknown when hidden
+  ambient Bash attributes can transform them.
+  - [x] The approval matrix pins inherited and same-language child loops as
+    complex under the canonical unknown-state contract for Bash, PowerShell 7,
+    and Windows PowerShell 5.1. It also proves that a stored command grant
+    cannot cover an unproved loop-dependent argument.
+  - [ ] Netclaw adopts `AuthoredValue`, positive authored path evidence,
+    bounded status concatenation, and the typed consumer boundary after the
+    paired package release.
+
+### Priority: Use Native PowerShell on Windows
+
+**PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Specs:** `openspec/changes/archive/2026-08-10-native-windows-powershell-host/`
+**Surface area:** shell execution, parsing, approval policy, model context
+**Verification:** L2 plus native Windows L3
+
+This work replaces `cmd.exe` with a native PowerShell host on Windows. Netclaw
+prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
+5.1. It keeps Bash and PowerShell as separate host languages.
+
+The additive foundation pins ShellSyntaxTree `0.3.0-alpha.5` and defines the
+immutable environment, strict host probe, and process arguments. Runtime
+activation now routes execution, policy, approval, background jobs, and model
+context through the same resolved environment. PR #1848 auto-merged after
+adversarial review and green native Windows CI. The canonical specifications
+now contain the delivered contract. The OpenSpec change is archived.
+
+Local validation on 2026-08-10 passed restore, the zero-warning Release build,
+the full solution test suite, changed-file format verification, headers,
+Slopwatch, `git diff --check`, and strict OpenSpec validation. The shell-platform
+behavioral evaluation was unavailable because the required
+`NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, and
+`NETCLAW_EVAL_MODEL_ID` settings were absent. This result is blocked evidence,
+not an evaluation pass.
+
+Native Windows workflow run `31381580072` passed the zero-warning Release build,
+the complete security, actor, and daemon test suites, package staging, and CLI
+smoke tests. The production resolver and deterministic dialect matrix cover
+PowerShell 7.6 and Windows PowerShell 5.1. The Windows suite also executed the
+explicit Windows PowerShell 5.1 host test.
+
+The final OpenSpec verification mapped all 7 requirements and 24 scenarios to
+runtime code and named tests. The focused verification passed 320 security
+tests, 29 daemon tests, and 315 actor tests. One Windows-only actor test skipped
+locally and passed in native Windows workflow run `31381580072`. Strict
+validation passed all 78 OpenSpec items with no failures.
+
+Done when:
+
+- [x] One immutable shell environment selects the absolute executable path,
+  grammar, path style, process arguments, and PowerShell dialect for the daemon
+  lifetime.
+- [x] Windows selects `pwsh.exe` only for versions from 7.6.4 through 7.6.x. It
+  falls back to `powershell.exe` 5.1 and fails clearly if neither host matches.
+- [x] Execution, parsing, hard deny, approval matching, prompt display, and
+  model context use the same selected environment.
+- [x] Bash treats `pwsh` as an external command. PowerShell treats `bash` as an
+  external command. Only same-language child hosts can recurse.
+- [x] Unknown or incomplete facts cannot produce a stored approval candidate
+  or a safe-verb pass. Stored approval cannot bypass hard deny.
+- [x] Personal sessions state the platform, executable, grammar, and dialect,
+  including sessions that have no project directory.
+- [x] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
+  The security review table covers direct, child, retry, and background paths.
+- [x] Consumer guidance and canonical specs match the delivered behavior. The
+  OpenSpec change passes verification, is synchronized, and is archived.
 
 ### Priority: Simplify Tool Execution Context Architecture
 

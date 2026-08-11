@@ -30,6 +30,7 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 internal sealed class ScopedShellSafeVerbPolicy
 {
+    private const string GitLsTreeVerb = "git ls-tree";
     private readonly SafeVerbList _safeVerbs;
 
     public ScopedShellSafeVerbPolicy(SafeVerbList safeVerbs)
@@ -45,6 +46,21 @@ internal sealed class ScopedShellSafeVerbPolicy
     /// </summary>
     public bool ShortCircuitsApproval(string candidateVerb, string? cwd, ToolInvocationContext context)
         => AllShortCircuit([new ApprovalCandidate(candidateVerb, Directory: null)], cwd, context);
+
+    /// <summary>
+    /// Removes the variable tree operand from a read-only <c>git ls-tree</c>
+    /// candidate. Other Git commands keep exact parser output because a
+    /// trailing token can name a mutating subcommand.
+    /// </summary>
+    public ApprovalCandidate NormalizeCandidate(ApprovalCandidate candidate)
+    {
+        if (_safeVerbs.IsOperandBearingMatch(candidate.Verb, GitLsTreeVerb))
+        {
+            return candidate with { Verb = GitLsTreeVerb };
+        }
+
+        return candidate;
+    }
 
     /// <summary>
     /// Returns true when each candidate has a safe verb and a safe effective

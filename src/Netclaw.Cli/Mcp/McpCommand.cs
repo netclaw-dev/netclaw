@@ -14,6 +14,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
 
@@ -920,14 +921,15 @@ internal static class McpCommand
             if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
                 headers[NetclawUserAgent.ComponentHeader] = "mcp-probe";
 
-            transport = new HttpClientTransport(new HttpClientTransportOptions
+            var options = new HttpClientTransportOptions
             {
                 Endpoint = new Uri(entry.Url!),
                 Name = serverName.Value,
                 AdditionalHeaders = headers,
                 TransportMode = entry.Transport is "sse"
                     ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
-            });
+            };
+            transport = new HttpClientTransport(options, McpHttpClientFactory.Shared);
         }
 
         return await McpClient.CreateAsync(transport, new McpClientOptions

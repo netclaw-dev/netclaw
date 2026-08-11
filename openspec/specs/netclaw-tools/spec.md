@@ -333,30 +333,6 @@ references needed to recreate the handoff nudge during recovery.
 PDF extraction, OCR, audio transcription, and video keyframe extraction SHALL NOT
 be built into `file_read`.
 
-### Requirement: Attachment tool reach
-
-The system SHALL provide an `attach_file` first-party tool that sends a file to
-the user. Non-interactive, Team, and Public sessions SHALL only attach files
-inside the current session directory or a sibling Netclaw session directory.
-Interactive Personal-audience sessions get shell-equivalent reach: any path that
-resolves through the read-access policy SHALL be attachable, and the file SHALL
-be copied into the current session's attachments directory before delivery.
-
-All audiences SHALL apply the `ToolPathPolicy` read-deny surface to attached
-files: a path that `IsReadDenied` (credentials, keys, secrets, control-plane
-state, or the shell indicator list) SHALL NOT be attachable, even when the
-proximity restriction is lifted.
-
-### Requirement: Working directory declaration stays scoped
-
-The system SHALL provide a `set_working_directory` first-party tool that sets
-the session's project root. Its target SHALL be resolved through the read-access
-policy WITHOUT interactive Personal shell-equivalent reach: the working
-directory widens the shell safe-verb auto-approve zone and loads project
-identity files into the system prompt, so it SHALL be clamped to the autonomous
-zone (session directory, project directory, and global read roots) in every
-audience and mode.
-
 #### Scenario: Text file read preserves existing behavior
 
 - **GIVEN** a readable text file using UTF-8, UTF-16/UTF-32 Unicode, or Windows-1252
@@ -404,6 +380,54 @@ audience and mode.
 - **WHEN** the agent invokes `file_read`
 - **THEN** the tool returns metadata and explicit unsupported-format guidance
 - **AND** no raw bytes are returned
+
+### Requirement: Attachment tool reach
+
+The system SHALL provide an `attach_file` first-party tool that sends a file to
+the user. Non-interactive, Team, and Public sessions SHALL only attach files
+inside the current session directory or a sibling Netclaw session directory.
+Interactive Personal-audience sessions get shell-equivalent reach: any path that
+resolves through the read-access policy SHALL be attachable, and the file SHALL
+be copied into the current session's attachments directory before delivery.
+
+All audiences SHALL apply the `ToolPathPolicy` read-deny surface to attached
+files: a path that `IsReadDenied` (credentials, keys, secrets, control-plane
+state, or the shell indicator list) SHALL NOT be attachable, even when the
+proximity restriction is lifted.
+
+#### Scenario: Interactive Personal session attaches an external file
+
+- **GIVEN** an interactive Personal session can read a file outside its session
+  directory
+- **WHEN** the agent invokes `attach_file` for that file
+- **THEN** the tool copies the file into the current session attachments directory
+- **AND** the tool sends the copied file to the user
+
+#### Scenario: Protected control-plane file cannot be attached
+
+- **GIVEN** an interactive Personal session requests a file that
+  `ToolPathPolicy.IsReadDenied` protects
+- **WHEN** the agent invokes `attach_file`
+- **THEN** the tool denies the request
+- **AND** the shell-equivalent read reach does not bypass the denial
+
+### Requirement: Working directory declaration stays scoped
+
+The system SHALL provide a `set_working_directory` first-party tool that sets
+the session's project root. Its target SHALL be resolved through the read-access
+policy WITHOUT interactive Personal shell-equivalent reach: the working
+directory widens the shell safe-verb auto-approve zone and loads project
+identity files into the system prompt, so it SHALL be clamped to the autonomous
+zone (session directory, project directory, and global read roots) in every
+audience and mode.
+
+#### Scenario: Interactive Personal session cannot widen the working directory
+
+- **GIVEN** an interactive Personal session requests a directory outside the
+  autonomous zone
+- **WHEN** the agent invokes `set_working_directory`
+- **THEN** the project directory remains unchanged
+- **AND** the tool reports that the directory is outside the allowed roots
 
 ### Requirement: File read tool bounds its read for memory safety
 
@@ -483,3 +507,44 @@ A tool-enabled session SHALL have authorization, approval, logging, and dispatch
 - **WHEN** the session publishes its tool-call and tool-result outputs
 - **THEN** the existing session transcript path receives those outputs
 - **AND** execution does not also depend on an always-discarded audit logger
+
+### Requirement: Shell execution uses the canonical native host
+
+The `shell_execute` tool SHALL start the executable from the canonical shell
+environment. It SHALL pass the submitted command as one process argument after
+the environment's fixed non-interactive arguments. It SHALL close stdin and
+preserve the existing timeout, output, working-directory, and process-tree
+termination behavior. Buffered and streaming execution SHALL use one shared
+process-start builder. The tool schema SHALL remain unchanged.
+
+#### Scenario: Bash command process arguments
+
+- **GIVEN** the canonical environment uses `/bin/bash`
+- **WHEN** `shell_execute` starts `git status`
+- **THEN** the process arguments are `-c` and `git status`
+- **AND** the tool does not invoke PowerShell or `cmd.exe`
+
+#### Scenario: PowerShell command process arguments
+
+- **GIVEN** the canonical environment uses a PowerShell executable
+- **WHEN** `shell_execute` starts `Get-ChildItem`
+- **THEN** the fixed arguments include `-NoLogo`, `-NoProfile`, and
+  `-NonInteractive`
+- **AND** `-Command` precedes one `Get-ChildItem` argument
+- **AND** the tool does not invoke `cmd.exe`
+
+#### Scenario: Missing selected executable fails visibly
+
+- **GIVEN** the environment selected a PowerShell executable
+- **AND** the process cannot start that executable
+- **WHEN** `shell_execute` runs
+- **THEN** the result identifies the required executable
+- **AND** the tool does not run the command through another shell
+
+#### Scenario: Buffered and streaming execution use the same host
+
+- **GIVEN** one canonical environment and one submitted command
+- **WHEN** buffered and streaming execution build their process start data
+- **THEN** both use the same absolute executable path
+- **AND** both use the same fixed arguments in the same order
+- **AND** both append the submitted command as one argument

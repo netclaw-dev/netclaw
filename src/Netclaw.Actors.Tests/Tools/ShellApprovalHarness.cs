@@ -76,6 +76,18 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
 
+        var environment = testCase.Invocation.CreateEnvironment();
+        var approvalProjectDirectory = projectDirectory;
+        var approvalSessionDirectory = sessionDirectory;
+        var approvalExternalDirectory = externalDirectory;
+        if (environment.PathStyle == ShellPathStyle.Windows)
+        {
+            var windowsRoot = $"C:/netclaw-approval-matrix/{Guid.NewGuid():N}";
+            approvalProjectDirectory = $"{windowsRoot}/project";
+            approvalSessionDirectory = $"{windowsRoot}/session";
+            approvalExternalDirectory = $"{windowsRoot}/external";
+        }
+
         var store = new ToolApprovalStore(Path.Combine(rootDirectory, "tool-approvals.json"));
         var approvalActor = CreateApprovalActor(actorSystem, store);
         var approvalService = CreateApprovalService(approvalActor);
@@ -91,7 +103,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 new ToolName(ShellTool.ToolName),
                 [seed.Pattern],
                 persistent: true,
-                ResolveDirectory(seed.Directory, projectDirectory, sessionDirectory, externalDirectory),
+                ResolveDirectory(
+                    seed.Directory,
+                    approvalProjectDirectory,
+                    approvalSessionDirectory,
+                    approvalExternalDirectory),
                 ct);
         }
 
@@ -116,12 +132,17 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         var countingApprovalService = new CountingApprovalService(approvalService);
         var config = CreateConfig();
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var deniedPaths = environment.Platform == ShellPlatform.Windows
+            ? new[] { @"C:\protected\config" }
+            : [];
+        var pathPolicy = new ToolPathPolicy(environment, deniedPaths);
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
             new NetclawPaths(),
-            new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            pathPolicy,
+            commandPolicy);
 
         var policy = new ToolAccessPolicy(
             config,
@@ -130,19 +151,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            shellCommandPolicy: new ShellCommandPolicy(),
-            toolPathPolicy: new ToolPathPolicy([]),
+            shellCommandPolicy: commandPolicy,
+            toolPathPolicy: pathPolicy,
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
-            safeVerbs: SafeVerbLoader.Load());
+            safeVerbs: SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 
         var workingDirectory = ResolveDirectory(
             testCase.Invocation.WorkingDirectory,
-            projectDirectory,
-            sessionDirectory,
-            externalDirectory);
+            approvalProjectDirectory,
+            approvalSessionDirectory,
+            approvalExternalDirectory);
         var arguments = workingDirectory is null
             ? ToolInput.Create("Command", testCase.Invocation.Command)
             : ToolInput.Create(
@@ -151,11 +172,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var toolCall = new FunctionCallContent(testCase.Id, ShellTool.ToolName, arguments);
         var context = TestToolExecutionContext.CreateBound(
             InvocationSessionId,
-            sessionDirectory,
+            approvalSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = testCase.Invocation.Audience,
-                ProjectDirectory = projectDirectory,
+                ProjectDirectory = approvalProjectDirectory,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(testCase.Invocation.Interactive)
             });
 

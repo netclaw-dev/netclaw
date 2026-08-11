@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ShellCommandPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -23,12 +23,22 @@ public sealed record ShellCommandDecision(bool Allowed, string? DenyReason = nul
 /// </summary>
 public sealed class ShellCommandPolicy
 {
-    private static readonly ShellCommandAnalyzer Analyzer = ShellCommandAnalyzer.Bash;
+    private readonly ShellCommandAnalyzer _analyzer;
     private readonly IReadOnlyList<DenyPattern> _denyPatterns;
     private readonly IReadOnlyList<RawStringPattern> _rawStringPatterns;
 
     public ShellCommandPolicy(IEnumerable<string>? additionalDenyPatterns = null)
-        : this(additionalDenyPatterns, overrideRules: null)
+        : this(
+            ShellExecutionEnvironmentDefaults.Bash,
+            additionalDenyPatterns,
+            overrideRules: null)
+    {
+    }
+
+    public ShellCommandPolicy(
+        ShellExecutionEnvironment environment,
+        IEnumerable<string>? additionalDenyPatterns = null)
+        : this(environment, additionalDenyPatterns, overrideRules: null)
     {
     }
 
@@ -43,7 +53,20 @@ public sealed class ShellCommandPolicy
     public ShellCommandPolicy(
         IEnumerable<string>? additionalDenyPatterns,
         IEnumerable<HardDenyRule>? overrideRules)
+        : this(
+            ShellExecutionEnvironmentDefaults.Bash,
+            additionalDenyPatterns,
+            overrideRules)
     {
+    }
+
+    public ShellCommandPolicy(
+        ShellExecutionEnvironment environment,
+        IEnumerable<string>? additionalDenyPatterns,
+        IEnumerable<HardDenyRule>? overrideRules)
+    {
+        Environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _analyzer = new ShellCommandAnalyzer(environment);
         var structured = new List<DenyPattern>(DefaultDenyPatterns);
         var raw = new List<RawStringPattern>(DefaultRawStringPatterns);
 
@@ -68,6 +91,16 @@ public sealed class ShellCommandPolicy
 
         _denyPatterns = structured;
         _rawStringPatterns = raw;
+    }
+
+    public ShellExecutionEnvironment Environment { get; }
+
+    public ShellCommandAnalysis Analyze(
+        string command,
+        string? workingDirectory = null)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return _analyzer.Analyze(command, workingDirectory);
     }
 
     private static void TranslateRule(
@@ -113,20 +146,33 @@ public sealed class ShellCommandPolicy
     /// Recursively scans bash -c / sh -c inner commands.
     /// </summary>
     public ShellCommandDecision Evaluate(string command)
+        => Evaluate(command, workingDirectory: null);
+
+    public ShellCommandDecision Evaluate(
+        string command,
+        string? workingDirectory)
     {
         if (string.IsNullOrWhiteSpace(command))
             return ShellCommandDecision.Allow();
 
+        return Evaluate(Analyze(command, workingDirectory));
+    }
+
+    public ShellCommandDecision Evaluate(ShellCommandAnalysis analysis)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+        if (!ReferenceEquals(analysis.Environment, Environment))
+            throw new ArgumentException(
+                "The command analysis belongs to another shell environment.",
+                nameof(analysis));
+
         // Check raw-string patterns first (fork bombs, etc.) before splitting,
         // since compound-command splitting destroys the original formatting.
-        var rawDecision = EvaluateRawString(command);
+        var rawDecision = EvaluateRawString(analysis.Source);
         if (!rawDecision.Allowed)
             return rawDecision;
 
-        if (OperatingSystem.IsWindows())
-            return EvaluateLegacySegments(command);
-
-        return EvaluateBashAnalysis(command);
+        return EvaluateStructuralAnalysis(analysis);
     }
 
     /// <summary>
@@ -138,15 +184,14 @@ public sealed class ShellCommandPolicy
         if (string.IsNullOrWhiteSpace(command))
             return ShellCommandDecision.Allow();
 
-        var rawDecision = EvaluateRawString(command);
-        return rawDecision.Allowed ? EvaluateBashAnalysis(command) : rawDecision;
+        return Evaluate(command);
     }
 
-    private ShellCommandDecision EvaluateBashAnalysis(string command)
+    private ShellCommandDecision EvaluateStructuralAnalysis(
+        ShellCommandAnalysis analysis)
     {
-        var analysis = Analyzer.Analyze(command);
         if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Commands.Count == 0)
-            return EvaluateLegacySegments(command);
+            return EvaluateLegacySegments(analysis.Source);
 
         foreach (var occurrence in analysis.Commands)
         {
@@ -202,10 +247,32 @@ public sealed class ShellCommandPolicy
     {
         var tokens = new List<string>(
             clause.Verb.Tokens.Count + clause.Args.Count + clause.Redirects.Count);
-        tokens.AddRange(clause.Verb.Tokens);
-        tokens.AddRange(clause.Args
-            .Where(static arg => !arg.IsCwdAttribution)
-            .Select(static arg => arg.Raw));
+        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+        {
+            tokens.Add(canonicalVerb);
+            tokens.AddRange(clause.Verb.Tokens.Skip(1));
+        }
+        else
+        {
+            tokens.AddRange(clause.Verb.Tokens);
+        }
+        if (Environment.Grammar == ShellGrammar.PowerShell
+            && clause.Elements.Count > 0)
+        {
+            // PowerShell can bind a parameter and its value from one source
+            // element, such as -Recurse:$false. The projected Args split that
+            // element and lose the binding. Hard-deny rules need the authored
+            // element so they do not reinterpret an explicit false switch.
+            tokens.AddRange(clause.Elements
+                .Where(static element => element.Role == ShellSyntaxTree.ClauseElementRole.Argument)
+                .Select(static element => element.Raw));
+        }
+        else
+        {
+            tokens.AddRange(clause.Args
+                .Where(static arg => !arg.IsCwdAttribution)
+                .Select(static arg => arg.Raw));
+        }
         tokens.AddRange(clause.Redirects
             .Where(static redirect => !string.IsNullOrEmpty(redirect.Target))
             .Select(static redirect => redirect.Target));
@@ -326,7 +393,7 @@ public sealed class ShellCommandPolicy
     {
         private static readonly HashSet<string> KillVerbs = new(StringComparer.OrdinalIgnoreCase)
         {
-            "kill", "killall", "pkill"
+            "kill", "killall", "pkill", "Stop-Process"
         };
 
         public override bool Matches(IReadOnlyList<string> tokens)
@@ -358,8 +425,40 @@ public sealed class ShellCommandPolicy
                 return false;
 
             var verb = ShellTokenizer.TrimShellPunctuation(tokens[0]);
-            return EscalationVerbs.Contains(verb);
+            if (EscalationVerbs.Contains(verb))
+                return true;
+
+            if (!string.Equals(verb, "Start-Process", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            for (var i = 1; i < tokens.Count; i++)
+            {
+                var token = ShellTokenizer.TrimShellPunctuation(tokens[i]);
+                if (!TryReadParameter(token, out var parameterName, out var inlineValue)
+                    || !IsParameterAbbreviation(parameterName, "Verb"))
+                {
+                    continue;
+                }
+
+                if (inlineValue is not null && IsRunAsValue(inlineValue))
+                    return true;
+
+                if (inlineValue is null
+                    && i + 1 < tokens.Count
+                    && IsRunAsValue(tokens[i + 1]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
+
+        private static bool IsRunAsValue(string token)
+            => string.Equals(
+                TrimStaticQuotes(ShellTokenizer.TrimShellPunctuation(token)),
+                "RunAs",
+                StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -374,7 +473,12 @@ public sealed class ShellCommandPolicy
                 return false;
 
             var verb = ShellTokenizer.TrimShellPunctuation(tokens[0]);
-            if (!string.Equals(verb, "rm", StringComparison.OrdinalIgnoreCase))
+            var isBashRemove = string.Equals(verb, "rm", StringComparison.OrdinalIgnoreCase);
+            var isPowerShellRemove = string.Equals(
+                verb,
+                "Remove-Item",
+                StringComparison.OrdinalIgnoreCase);
+            if (!isBashRemove && !isPowerShellRemove)
                 return false;
 
             var hasRecursive = false;
@@ -385,43 +489,159 @@ public sealed class ShellCommandPolicy
             {
                 var token = tokens[i];
 
-                // Check for -rf, -fr, --recursive + --force, etc.
-                if (token.StartsWith('-') && !token.StartsWith("--", StringComparison.Ordinal))
+                if (isPowerShellRemove)
                 {
-                    if (token.Contains('r', StringComparison.Ordinal) || token.Contains('R', StringComparison.Ordinal))
+                    if (TryReadParameter(token, out var parameterName, out var inlineValue)
+                        && IsParameterAbbreviation(parameterName, "Recurse")
+                        && !IsExplicitFalse(inlineValue))
+                    {
                         hasRecursive = true;
+                    }
+
+                    if (TryReadParameter(token, out parameterName, out inlineValue)
+                        && IsParameterAbbreviation(parameterName, "Force")
+                        && !IsExplicitFalse(inlineValue))
+                    {
+                        hasForce = true;
+                    }
+                }
+                else if (token.StartsWith('-') && !token.StartsWith("--", StringComparison.Ordinal))
+                {
+                    if (token.Contains('r', StringComparison.Ordinal)
+                        || token.Contains('R', StringComparison.Ordinal))
+                    {
+                        hasRecursive = true;
+                    }
 
                     if (token.Contains('f', StringComparison.Ordinal))
                         hasForce = true;
                 }
-                else if (token == "--recursive")
+                else if (token.Equals("--recursive", StringComparison.Ordinal))
                 {
                     hasRecursive = true;
                 }
-                else if (token == "--force")
+                else if (token.Equals("--force", StringComparison.Ordinal))
                 {
                     hasForce = true;
                 }
 
                 // Check for dangerous targets
-                if (IsDangerousRmTarget(token))
+                if (IsDangerousRemoveTarget(token))
                     hasDangerousTarget = true;
             }
 
-            return hasRecursive && hasForce && hasDangerousTarget;
+            return hasRecursive
+                   && hasDangerousTarget
+                   && (isPowerShellRemove || hasForce);
         }
 
-        private static bool IsDangerousRmTarget(string token)
+        private static bool IsDangerousRemoveTarget(string token)
         {
+            token = TrimStaticQuotes(ShellTokenizer.TrimShellPunctuation(token));
+            if (TryReadParameter(token, out _, out var inlineValue))
+            {
+                if (inlineValue is null)
+                    return false;
+
+                token = TrimStaticQuotes(inlineValue);
+            }
+
+            const string fileSystemProvider = "FileSystem::";
+            const string qualifiedFileSystemProvider = "Microsoft.PowerShell.Core\\FileSystem::";
+            if (token.StartsWith(qualifiedFileSystemProvider, StringComparison.OrdinalIgnoreCase))
+                token = token[qualifiedFileSystemProvider.Length..];
+            if (token.StartsWith(fileSystemProvider, StringComparison.OrdinalIgnoreCase))
+                token = token[fileSystemProvider.Length..];
+
             // "/" trimmed becomes "" but the original is clearly root
-            if (token is "/" or "//")
+            if (token is "/" or "//" or "\\" or "\\\\")
                 return true;
 
             var trimmed = token.TrimEnd('/', '\\');
             return trimmed is "~" or "$HOME" or "${HOME}"
-                || string.Equals(trimmed, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                or "$env:USERPROFILE" or "${env:USERPROFILE}"
+                || IsWindowsDriveRoot(token)
+                || IsUncShareRoot(token)
+                || string.Equals(trimmed, System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile),
                     StringComparison.OrdinalIgnoreCase);
         }
+
+        private static bool IsExplicitFalse(string? value)
+        {
+            if (value is null)
+                return false;
+
+            var normalized = TrimStaticQuotes(value);
+            return normalized.Equals("$false", StringComparison.OrdinalIgnoreCase)
+                   || normalized.Equals("${false}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsWindowsDriveRoot(string token)
+        {
+            if (token.Length < 3
+                || !char.IsAsciiLetter(token[0])
+                || token[1] != ':'
+                || token[2] is not ('\\' or '/'))
+            {
+                return false;
+            }
+
+            return token.AsSpan(2).IndexOfAnyExcept('\\', '/') < 0;
+        }
+
+        private static bool IsUncShareRoot(string token)
+        {
+            if (token.Length < 5
+                || token[0] is not ('\\' or '/')
+                || token[1] is not ('\\' or '/'))
+            {
+                return false;
+            }
+
+            var segments = token[2..]
+                .Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+            return segments.Length == 2;
+        }
+    }
+
+    private static bool TryReadParameter(
+        string token,
+        out string parameterName,
+        out string? inlineValue)
+    {
+        parameterName = string.Empty;
+        inlineValue = null;
+        if (token.Length < 2 || token[0] != '-')
+            return false;
+
+        var body = token.AsSpan(1);
+        var separator = body.IndexOfAny(':', '=');
+        var name = separator < 0 ? body : body[..separator];
+        if (name.IsEmpty)
+            return false;
+
+        parameterName = name.ToString();
+        if (separator >= 0 && separator < body.Length - 1)
+            inlineValue = body[(separator + 1)..].ToString();
+
+        return true;
+    }
+
+    private static bool IsParameterAbbreviation(string candidate, string parameterName)
+        => candidate.Length > 0
+           && parameterName.StartsWith(candidate, StringComparison.OrdinalIgnoreCase);
+
+    private static string TrimStaticQuotes(string token)
+    {
+        var trimmed = token.Trim();
+        if (trimmed.Length >= 2
+            && trimmed[0] is '\'' or '"'
+            && trimmed[^1] == trimmed[0])
+        {
+            return trimmed[1..^1];
+        }
+
+        return trimmed;
     }
 
     /// <summary>
