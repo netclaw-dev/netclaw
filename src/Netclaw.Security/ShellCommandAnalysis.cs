@@ -427,24 +427,20 @@ public sealed record ShellCommandAnalysis
             _ => true
         };
 
-    private bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
+    private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
         => argument.Value switch
         {
             // A raw authored glob has no one runtime value. Netclaw applies
             // its fixed covering-scope checks to the source Arg below.
-            // Bash parameter expansion happens after parsing. In a non-path
-            // argument it can change argv values or cardinality, but it cannot
-            // introduce shell operators, redirects, or command occurrences.
-            // Path slots, dynamic identities, and execution regions are
-            // classified separately and remain strict.
-            ShellValueDomain.Unknown =>
-                argument.Argument.Kind != ArgKind.Glob
-                && (Environment.Grammar != ShellGrammar.Bash
-                    || argument.Argument.Kind != ArgKind.EnvVar),
+            ShellValueDomain.Unknown => argument.Argument.Kind != ArgKind.Glob,
             ShellValueDomain.Exact => false,
             ShellValueDomain.FiniteSet finite => finite.Values.Count is < 2 or > 32
                 || finite.Values.Any(static value => value is null)
                 || finite.Values.Distinct(StringComparer.Ordinal).Count() != finite.Values.Count,
+            // ShellSyntaxTree proves these domains are bounded. They remain
+            // data only and cannot establish path or execution authority.
+            ShellValueDomain.IntegerRange => argument.Argument.IsPath,
+            ShellValueDomain.Concatenation => argument.Argument.IsPath,
             ShellValueDomain.PathPattern pattern =>
                 string.IsNullOrWhiteSpace(pattern.Pattern)
                 || string.IsNullOrWhiteSpace(pattern.CoveringDirectory),

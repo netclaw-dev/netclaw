@@ -223,8 +223,7 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("echo \"---EXIT $?---\"")]
     [InlineData("printf '%s' \"$?\"")]
     [InlineData("status-report \"$?\"")]
-    [InlineData("status-report \"$@\"")]
-    public void Bash_unknown_non_path_data_keeps_static_structure(string command)
+    public void Bash_bounded_non_path_data_keeps_static_structure(string command)
     {
         var analyzer = new ShellCommandAnalyzer(BashEnvironment);
         var analysis = analyzer.Analyze(command, "/work");
@@ -234,11 +233,14 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
+    [InlineData("status-report \"$1\"")]
     [InlineData("rm \"$1\"")]
     [InlineData("echo ok > \"$1\"")]
+    [InlineData("echo ok > \"result-$?.log\"")]
     [InlineData("\"$1\" --version")]
     [InlineData("sh -c \"$1\"")]
-    public void Bash_unknown_authority_or_identity_stays_dynamic(string command)
+    [InlineData("sh -c \"$?\"")]
+    public void Bash_unknown_or_authority_bearing_data_stays_dynamic(string command)
     {
         var analyzer = new ShellCommandAnalyzer(BashEnvironment);
         var analysis = analyzer.Analyze(command, "/work");

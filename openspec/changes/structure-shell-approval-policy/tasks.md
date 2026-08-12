@@ -101,11 +101,11 @@
 - [x] 7.1 Upgrade the central package after 0.3.1 is published.
 - [ ] 7.2 Consume effective `Value` for runtime checks and approved
   `AuthoredValue` only for the documented approval perspective.
-- [ ] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.
+- [x] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.
 - [ ] 7.4 Check every effective or authored finite value whose existing
   `Argument.IsPath` is true through `ToolPathPolicy`; treat
   `AuthoredPathShape` as lexical-only and keep unknown path values strict.
-- [ ] 7.5 Delete the broad Bash environment-variable relaxation and its
+- [x] 7.5 Delete the broad Bash environment-variable relaxation and its
   superseded tests.
 - [ ] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.
 
