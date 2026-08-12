@@ -146,7 +146,8 @@ public sealed class DaemonApi
     /// <summary>
     /// Fetches the daemon's live skill inventory — file skills plus dynamic MCP
     /// prompt skills a disk scan cannot see. Throws <see cref="HttpRequestException"/>
-    /// (or a timeout) when the daemon is unreachable, so callers can fall back.
+    /// (or a timeout) when the daemon is unreachable; callers report the daemon as
+    /// unavailable rather than degrading to a disk scan.
     /// </summary>
     public async Task<SkillInventory.Response?> GetSkillsAsync(CancellationToken ct = default)
     {

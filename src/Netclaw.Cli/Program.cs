@@ -864,18 +864,32 @@ static async Task RunAsync(string[] args)
         var skillSubcommand = args.Length > 1 ? args[1] : "list";
         if (skillSubcommand is "list")
         {
-            // `skill list` is served by the daemon's live registry so it includes
-            // dynamic MCP prompt skills; SkillCommand falls back to a disk scan when
-            // the daemon is unreachable.
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
-            using var skillHost = builder.Build();
-            var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
-            skillPaths.EnsureDirectoriesExist();
-            var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
-            Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+            // `skill list` is served by the daemon's live registry — the only view
+            // that includes dynamic MCP prompt skills. It requires the daemon; when
+            // the daemon is unavailable, SkillCommand reports that and exits non-zero
+            // (no disk fallback). Building the DI host parses local config
+            // (netclaw.json, secrets.json); a corrupt file must produce a readable
+            // error, not a stack trace — the old disk-scan list never read those
+            // files, so this path must not make them a new way to crash.
+            try
+            {
+                var builder = Host.CreateApplicationBuilder(args);
+                ConfigureConfigServices(builder.Services, builder.Configuration);
+                builder.Logging.ClearProviders();
+                builder.Logging.SetMinimumLevel(LogLevel.Warning);
+                using var skillHost = builder.Build();
+                var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
+                skillPaths.EnsureDirectoriesExist();
+                var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
+                Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+            {
+                Console.Error.WriteLine($"skill list: could not load local configuration: {ex.Message}");
+                Console.Error.WriteLine("Fix the file it names (under ~/.netclaw/config) and retry.");
+                Environment.ExitCode = 1;
+            }
+
             return;
         }
 

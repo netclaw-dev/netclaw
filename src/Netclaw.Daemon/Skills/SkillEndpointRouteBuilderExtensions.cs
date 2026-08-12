@@ -15,8 +15,8 @@ namespace Netclaw.Daemon.Skills;
 /// Read endpoint over the daemon's live <see cref="SkillRegistry"/>. This is the
 /// authoritative source of what an agent can actually load — file skills PLUS the
 /// dynamic MCP prompt skills a filesystem scan can never see. The CLI's
-/// <c>skill list</c> calls this and only falls back to a disk scan when the daemon
-/// is unreachable.
+/// <c>skill list</c> is served by this endpoint and requires the daemon; there is
+/// no disk fallback.
 /// </summary>
 public static class SkillEndpointRouteBuilderExtensions
 {
