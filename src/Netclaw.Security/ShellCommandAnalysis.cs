@@ -339,10 +339,6 @@ public sealed record ShellCommandAnalysis
                     arg,
                     accountedRegionArguments))
             || command.Clause.Args.Any(static arg =>
-                arg.Kind == ArgKind.EnvVar
-                && !arg.IsCwdAttribution
-                && string.IsNullOrWhiteSpace(arg.Resolved))
-            || command.Clause.Args.Any(static arg =>
                 arg.IsPath
                 && arg.Kind != ArgKind.Glob
                 && string.IsNullOrWhiteSpace(arg.Resolved))
@@ -431,12 +427,20 @@ public sealed record ShellCommandAnalysis
             _ => true
         };
 
-    private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
+    private bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
         => argument.Value switch
         {
             // A raw authored glob has no one runtime value. Netclaw applies
             // its fixed covering-scope checks to the source Arg below.
-            ShellValueDomain.Unknown => argument.Argument.Kind != ArgKind.Glob,
+            // Bash parameter expansion happens after parsing. In a non-path
+            // argument it can change argv values or cardinality, but it cannot
+            // introduce shell operators, redirects, or command occurrences.
+            // Path slots, dynamic identities, and execution regions are
+            // classified separately and remain strict.
+            ShellValueDomain.Unknown =>
+                argument.Argument.Kind != ArgKind.Glob
+                && (Environment.Grammar != ShellGrammar.Bash
+                    || argument.Argument.Kind != ArgKind.EnvVar),
             ShellValueDomain.Exact => false,
             ShellValueDomain.FiniteSet finite => finite.Values.Count is < 2 or > 32
                 || finite.Values.Any(static value => value is null)

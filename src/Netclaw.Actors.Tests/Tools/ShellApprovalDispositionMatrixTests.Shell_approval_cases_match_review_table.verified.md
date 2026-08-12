@@ -32,6 +32,7 @@
 | mixed-safe-unsafe-compound-prompts | Bash | Personal | Project | Interactive | git status && git push | none | RequiresApproval | approval required | git push | No |
 | safe-pipe-unsafe-tail-prompts | Bash | Personal | Project | Interactive | git status \| git push | none | RequiresApproval | approval required | git push | No |
 | safe-pipeline-allows | Bash | Personal | Project | Interactive | git log \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-gh-run-diagnostic-exit-status-allows | Bash | Personal | Project | Interactive | gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \| head -200; echo "---EXIT $?---" | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | native-project-path-operand-allows-safe-verb | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | native-external-path-operand-prompts | Bash | Personal | Project | Interactive | git diff /etc/passwd | none | RequiresApproval | approval required | git diff | No |
 | native-project-path-operand-reuses-grant | Bash | Personal | Project | Interactive | kubectl apply deployment.yaml | persistent[project]:kubectl apply | Allowed | StoredApproval | none | Not applicable |

@@ -219,6 +219,35 @@ public sealed class ShellCommandAnalysisTests
         Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
+    [Theory]
+    [InlineData("echo \"---EXIT $?---\"")]
+    [InlineData("printf '%s' \"$?\"")]
+    [InlineData("status-report \"$?\"")]
+    [InlineData("status-report \"$@\"")]
+    public void Bash_unknown_non_path_data_keeps_static_structure(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("rm \"$1\"")]
+    [InlineData("echo ok > \"$1\"")]
+    [InlineData("\"$1\" --version")]
+    [InlineData("sh -c \"$1\"")]
+    public void Bash_unknown_authority_or_identity_stays_dynamic(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze(command, "/work");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
     [Fact]
     public void Power_shell_empty_command_argument_region_stays_dynamic()
     {

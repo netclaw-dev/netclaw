@@ -198,6 +198,8 @@ Done when:
   root from one-command `WorkingDirectory` scope, prevent redundant project
   switches, and preserve `cd` when directory mutation is the requested shell
   behavior.
+- [x] Unknown non-path argument data does not make a structurally complete
+  shell command complex. Dynamic identities, paths, and redirects stay strict.
 - [x] Sanitized behavioral eval cases cover early project declaration,
   one-command typed scope, failed-path recovery, and deliberate inline `cd`.
 - [ ] Run the new behavioral eval cases against a configured model provider.

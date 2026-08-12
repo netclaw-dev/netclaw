@@ -1039,6 +1039,15 @@ assert_skill_scheduling_knowledge() {
         && stdout_no_skill_file_read_called
 }
 
+# CRON_TZ local-timezone discovery: for a local-time schedule the model must
+# surface the CRON_TZ prefix. That detail lives in references/scheduling.md, so
+# the model has to load netclaw-operations and recover it — not silently assume UTC.
+assert_skill_cron_tz_timezone() {
+    stdout_contains 'CRON_TZ' \
+        && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_no_skill_file_read_called
+}
+
 # Two-hop progressive disclosure: the model must (1) load netclaw-operations, then
 # (2) call skill_read_resource on references/scheduling.md to recover a detail that
 # lives ONLY in the reference file (the auto-disable threshold + alert name), never
@@ -1275,6 +1284,14 @@ assert_grounding_admit_unknown() {
 
 assert_grounding_action_verification() {
     stdout_contains '\[tool:call\] set_reminder'
+}
+
+# Local-timezone scheduling end-to-end: the model must call set_reminder AND
+# carry the CRON_TZ prefix into the schedule, rather than silently converting to
+# UTC. Proves the CRON_TZ capability is actually used, not just known.
+assert_grounding_cron_tz_schedule() {
+    stdout_tool_called 'set_reminder' \
+        && stdout_contains 'CRON_TZ'
 }
 
 assert_grounding_attachment_path() {
@@ -1775,6 +1792,11 @@ run_all() {
         "What scheduling formats do Netclaw reminders support?" \
         "Explain the different schedule types I can use with reminders"
 
+    run_case skill_cron_tz_timezone "uses CRON_TZ for local-timezone schedules" \
+        "How do I schedule a reminder at 9am every weekday in a specific local time zone instead of UTC?" \
+        "I want a cron reminder anchored to Brussels wall-clock time, not UTC. How?" \
+        "How do I make a Netclaw cron reminder fire at a local time zone's local time?"
+
     run_case skill_progressive_disclosure "reads reference via skill_read_resource (2nd hop)" \
         "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
 
@@ -1934,6 +1956,11 @@ run_all() {
 
     run_case grounding_action_verification "set_reminder called" \
         "Schedule a reminder to check email in 10 minutes"
+
+    run_case grounding_cron_tz_schedule "set_reminder called with CRON_TZ" \
+        "Schedule a daily reminder for 9am Brussels local time to review the deploy queue." \
+        "Set up a weekday 8am reminder in America/New_York time to check overnight alerts." \
+        "Remind me every morning at 07:30 Tokyo time to post standup."
 
     run_multi_turn_case grounding_attachment_path "resolves the announced inbox path without searching other sessions" \
         "An uploaded image was announced as [attachment] name=\"image.png\" path=\"inbox/image_1.png\". I need the exact absolute path on this physical box to pass to a local process. Reply with only that path."

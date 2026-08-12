@@ -76,13 +76,21 @@ netclaw reminder cancel <id>     # disable, keep definition
 netclaw reminder delete <id>     # permanent delete + history
 ```
 
-Reminders that hit 5 consecutive execution failures are auto-disabled with a
+Reminders that hit 5 consecutive failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
-operator can diagnose and re-enable after fixing the root cause.
+operator can diagnose and re-enable after fixing the root cause. Both execution
+failures and scheduling failures count toward the same threshold.
+
+A **scheduling failure** is a failure to compute the next fire time. A cron with
+no future occurrence, or an unresolvable `CRON_TZ` time zone, is a scheduling
+failure. Netclaw raises a `ReminderScheduleFailed` alert, increments the failure
+count, and never falls back to a different time — a wrong-time fire is worse than
+a missed one. A scheduling failure at startup does not disable the reminder on
+its own; the count must reach the threshold across restarts or fires.
 
 A known execution or delivery failure starts the Akka.Reminders retry policy.
 The retry uses bounded backoff and the same durable occurrence identity. A
-successful attempt resets the consecutive failure count.
+successful execution resets the consecutive failure count.
 
 A one-shot reminder stays enabled while an occurrence can retry. After a
 successful acknowledgement, Netclaw deletes its definition and history. A poison
