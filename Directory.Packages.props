@@ -93,6 +93,14 @@
     <PackageVersion Include="CsCheck" Version="4.8.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="Testcontainers" Version="4.13.0" />
+    <!-- Transitive security pin: Testcontainers 4.13.0 pulls SSH.NET 2025.1.0,
+         which trips NU1903 (CVE-2026-48798 / GHSA-q939-rpr3-3284, path traversal
+         in ScpClient.Download recursive downloads, affected <= 2025.1.0).
+         2026.0.0 is the patched line and still satisfies Testcontainers'
+         >= 2025.1.0 constraint. SSH.NET is a test-only transitive dependency with
+         no runtime exposure; remove this pin once Testcontainers ships a
+         non-vulnerable transitive dependency on its own. -->
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
   <!-- .NET Aspire (samples/Netclaw.Demo.AppHost only) -->
   <ItemGroup>
