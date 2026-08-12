@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Netclaw.Configuration;
 
@@ -14,13 +13,6 @@ internal static class ApprovalStoreCodec
     private static readonly HashSet<string> RootMembers = ["version", "audiences"];
     private static readonly HashSet<string> Version2EntryMembers =
         ["verb", "directory", "createdAt"];
-
-    private static readonly JsonSerializerOptions WriteOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     internal static int ReadVersion(JsonElement root)
     {
@@ -52,7 +44,7 @@ internal static class ApprovalStoreCodec
         string toolName,
         string shellToolName)
     {
-        var entry = ApprovalEntryValidation.ReadVersion3(element);
+        var entry = ApprovalEntryWireCodec.ReadVersion3(element);
         var isShellTool = string.Equals(toolName, shellToolName, StringComparison.Ordinal);
         if (isShellTool != (entry.Shell is not null))
         {
@@ -86,7 +78,26 @@ internal static class ApprovalStoreCodec
     internal static string Serialize(ToolApprovalData data)
     {
         data.Version = ToolApprovalStore.CurrentSchemaVersion;
-        return JsonSerializer.Serialize(data, WriteOptions);
+        var audiences = new Dictionary<string, Dictionary<string, List<ApprovalEntryWire>>>(StringComparer.Ordinal);
+        foreach (var (audienceName, tools) in data.Audiences)
+        {
+            var wireTools = new Dictionary<string, List<ApprovalEntryWire>>(StringComparer.Ordinal);
+            foreach (var (toolName, entries) in tools)
+            {
+                wireTools.Add(
+                    toolName,
+                    entries.Select(ApprovalEntryWireCodec.WriteVersion3).ToList());
+            }
+
+            audiences.Add(audienceName, wireTools);
+        }
+
+        var wire = new ApprovalStoreWire
+        {
+            Version = ToolApprovalStore.CurrentSchemaVersion,
+            Audiences = audiences,
+        };
+        return JsonSerializer.Serialize(wire, ApprovalStoreJsonContext.Default.ApprovalStoreWire);
     }
 
     private static Dictionary<string, JsonElement> ReadRoot(JsonElement root)

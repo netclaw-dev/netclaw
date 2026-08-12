@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -82,7 +81,9 @@ internal static class ApprovalsCommand
 
         if (opts.EmitJson)
         {
-            writer.WriteLine(JsonSerializer.Serialize(view, JsonDefaults.IndentedOmitNull));
+            writer.WriteLine(JsonSerializer.Serialize(
+                view.ToWire(),
+                ApprovalsListJsonContext.Default.ApprovalsListWire));
             return 0;
         }
 

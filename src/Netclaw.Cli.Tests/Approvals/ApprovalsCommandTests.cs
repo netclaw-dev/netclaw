@@ -645,10 +645,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             ApprovalShell.Bash,
             "tool in mode",
             "/work/repo");
-        File.WriteAllText(
-            _paths.ToolApprovalsPath,
-            "{\"version\":3,\"audiences\":{\"personal\":{\"shell_execute\":[" +
-            JsonSerializer.Serialize(entry) + "]}}}");
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
 
         var exit = await ApprovalsCommand.RunAsync(
             ["approvals", "revoke", "tool in mode in /work/repo"],

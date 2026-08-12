@@ -33,8 +33,7 @@ namespace Netclaw.Configuration;
 /// <c>shell_execute</c> this is the prefix of non-flag tokens extracted
 /// from a command; for other tools it is the tool name.
 /// </param>
-[JsonConverter(typeof(ApprovalEntryJsonConverter))]
-public sealed record ApprovalEntry(string Verb)
+public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string Verb)
 {
     /// <summary>
     /// Creates an exact non-shell approval entry.
@@ -56,16 +55,19 @@ public sealed record ApprovalEntry(string Verb)
     /// The canonical shell for a typed shell phrase, or <c>null</c> for a
     /// non-shell approval.
     /// </summary>
+    [JsonIgnore]
     public ApprovalShell? Shell { get; init; }
 
     /// <summary>
     /// The typed shell match rule, or <c>null</c> for a non-shell approval.
     /// </summary>
+    [JsonIgnore]
     public ApprovalMatchKind? Match { get; init; }
 
     /// <summary>
     /// The immutable token sequence for a token-prefix shell phrase.
     /// </summary>
+    [JsonIgnore]
     public IReadOnlyList<string>? VerbTokens { get; private init; }
 
     /// <summary>

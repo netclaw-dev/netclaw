@@ -36,15 +36,19 @@ change the file directly.
 ### 1. Use one closed entry model
 
 The store uses a closed entry model. Shell phrase fields and `match` identify
-the form. A strict JSON converter reads and writes the forms from the
-specification. It rejects mixed forms and unknown members.
+the form. Source-generated wire DTOs write the three forms from the
+specification. A small strict reader checks the raw JSON before it maps a wire
+DTO to the domain value. It rejects duplicate or unknown members and mixed
+forms.
 
 One record with many optional fields can accept impossible combinations. It
-can also omit a significant null. The converter writes `directory: null`
-for each global shell grant.
+can also omit a significant null. The generated wire DTO writes
+`directory: null` for each global shell grant.
 
-The shared type can use a record hierarchy or a closed value object. The JSON
-converter owns wire compatibility.
+`ApprovalEntry` does not control version-3 store JSON. It keeps its prior
+non-shell JSON property names for compatibility. Internal wire DTOs own the
+version-3 forms, and the source-generated serializer keeps the store compatible
+with trimming and native AOT.
 
 ### 2. Keep version-2 shell grants exact
 

@@ -16,7 +16,41 @@ namespace Netclaw.Cli.Approvals;
 /// </summary>
 internal sealed class ApprovalsListView
 {
-    [JsonPropertyName("audiences")]
     public SortedDictionary<string, SortedDictionary<string, List<ApprovalEntry>>> Audiences { get; }
         = new(StringComparer.Ordinal);
+
+    internal ApprovalsListWire ToWire()
+    {
+        var audiences = new SortedDictionary<
+            string,
+            SortedDictionary<string, List<ApprovalEntryWire>>>(StringComparer.Ordinal);
+        foreach (var (audienceName, tools) in Audiences)
+        {
+            var wireTools = new SortedDictionary<string, List<ApprovalEntryWire>>(StringComparer.Ordinal);
+            foreach (var (toolName, entries) in tools)
+            {
+                wireTools.Add(
+                    toolName,
+                    entries.Select(ApprovalEntryWireCodec.WriteVersion3).ToList());
+            }
+
+            audiences.Add(audienceName, wireTools);
+        }
+
+        return new ApprovalsListWire { Audiences = audiences };
+    }
 }
+
+internal sealed class ApprovalsListWire
+{
+    public required SortedDictionary<
+        string,
+        SortedDictionary<string, List<ApprovalEntryWire>>> Audiences
+    { get; init; }
+}
+
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(ApprovalsListWire))]
+internal sealed partial class ApprovalsListJsonContext : JsonSerializerContext;

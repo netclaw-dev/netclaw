@@ -1,8 +1,8 @@
 ## 1. Typed wire model
 
 - [x] 1.1 Add closed token-prefix, legacy-exact, and non-shell entry forms.
-- [x] 1.2 Add a strict JSON converter and exact serialization snapshots,
-  including empty-token-array rejection.
+- [x] 1.2 Add source-generated wire DTOs, a strict raw JSON reader, and exact
+  serialization snapshots, including empty-token-array rejection.
 - [x] 1.3 Add whole-file checks for duplicates, maps, members, enums, tokens,
   paths, and timestamps.
 

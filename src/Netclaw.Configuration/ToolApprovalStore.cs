@@ -3,9 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text;
 
 namespace Netclaw.Configuration;
 
@@ -691,7 +691,8 @@ public sealed class ToolApprovalStore
 }
 
 /// <summary>
-/// Serialization model for <c>tool-approvals.json</c>.
+/// Serialization model for <c>tool-approvals.json</c> version 2 and an
+/// in-memory model for the version-3 codec.
 /// </summary>
 public sealed class ToolApprovalData
 {
