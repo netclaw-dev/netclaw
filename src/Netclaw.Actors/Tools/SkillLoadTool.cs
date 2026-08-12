@@ -79,16 +79,26 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
         if (skill is null)
         {
-            // Remote prompt visibility depends on the session audience. The model
-            // already receives the filtered prompt index, so this fallback lists
-            // only file skills and cannot reveal a denied MCP server or prompt.
-            var available = _skillRegistry.GetAll()
+            // The fallback still lists only FILE skills by name: MCP prompt visibility
+            // is audience-filtered, and enumerating names here could reveal an MCP server
+            // or prompt the session is denied. But it must NOT imply MCP prompts are
+            // unavailable — the model receives the audience-filtered prompt index and can
+            // load those by name, so a lookup miss on a file skill is not "no such
+            // capability". Point the model back at that index instead.
+            var all = _skillRegistry.GetAll();
+            var fileSkills = all
                 .Where(static candidate => candidate.Source is FileSkillSource)
                 .Select(static candidate => candidate.Name)
                 .ToList();
-            return available.Count > 0
-                ? $"Skill '{name}' not found. Available skills: {string.Join(", ", available)}"
-                : $"Skill '{name}' not found. No skills are currently registered.";
+            var hasMcpPromptSkills = all.Any(static candidate => candidate.Source is McpPromptSkillSource);
+
+            var message = fileSkills.Count > 0
+                ? $"Skill '{name}' not found. Available file skills: {string.Join(", ", fileSkills)}."
+                : $"Skill '{name}' not found. No file skills are currently registered.";
+            if (hasMcpPromptSkills)
+                message += " MCP prompt skills (named mcp__<server>__<prompt>) are also loadable — "
+                    + "use the exact name from the [skills] index.";
+            return message;
         }
 
         if (skill.Source is McpPromptSkillSource promptSource)

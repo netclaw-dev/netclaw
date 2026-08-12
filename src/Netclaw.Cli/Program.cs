@@ -861,9 +861,27 @@ static async Task RunAsync(string[] args)
     // ── Skill management ──
     if (mode is "skill")
     {
+        var skillSubcommand = args.Length > 1 ? args[1] : "list";
+        if (skillSubcommand is "list")
+        {
+            // `skill list` is served by the daemon's live registry so it includes
+            // dynamic MCP prompt skills; SkillCommand falls back to a disk scan when
+            // the daemon is unreachable.
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            using var skillHost = builder.Build();
+            var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
+            skillPaths.EnsureDirectoriesExist();
+            var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
+            Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+            return;
+        }
+
+        // All other skill subcommands are offline filesystem operations — no daemon needed.
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        // All skill subcommands are offline — no daemon needed
         Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
         return;
     }

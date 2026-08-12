@@ -45,6 +45,7 @@ using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
 using Netclaw.Daemon.Lifecycle;
 using Netclaw.Daemon.Reminders;
+using Netclaw.Daemon.Skills;
 using Netclaw.Daemon.Webhooks;
 using Netclaw.Search;
 using Netclaw.Tools;
@@ -320,6 +321,8 @@ static async Task RunDaemonAsync(
     app.MapPairingEndpoints();
 
     app.MapMcpEndpoints();
+
+    app.MapSkillEndpoints();
 
     app.MapProviderOAuthEndpoints();
 

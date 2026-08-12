@@ -141,6 +141,23 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<SkillUsageStats.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
+    // ── Skills ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches the daemon's live skill inventory — file skills plus dynamic MCP
+    /// prompt skills a disk scan cannot see. Throws <see cref="HttpRequestException"/>
+    /// (or a timeout) when the daemon is unreachable, so callers can fall back.
+    /// </summary>
+    public async Task<SkillInventory.Response?> GetSkillsAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.GetAsync($"{_endpoint}/api/skills", cts.Token);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<SkillInventory.Response>(stream, JsonDefaults.Api, cts.Token);
+    }
+
     // ── Reminders ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)

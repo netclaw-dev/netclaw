@@ -7,18 +7,22 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Skills;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Skills;
 
 /// <summary>
-/// Handles <c>netclaw skill &lt;subcommand&gt;</c> CLI subcommands.
-/// All commands are offline — no daemon required.
+/// Handles <c>netclaw skill &lt;subcommand&gt;</c> CLI subcommands. Most are offline
+/// filesystem operations; <c>list</c> prefers the running daemon (so it can show
+/// dynamic MCP prompt skills that never exist on disk) and falls back to a disk
+/// scan when the daemon is unreachable.
 /// </summary>
 internal static class SkillCommand
 {
-    public static Task<int> RunAsync(string[] args, NetclawPaths paths)
+    public static Task<int> RunAsync(
+        string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
     {
         var subcommand = args.Length > 1 ? args[1] : "list";
 
@@ -42,9 +46,15 @@ internal static class SkillCommand
             });
         }
 
+        // `list` is served by the daemon's live registry — the only view that includes
+        // dynamic MCP prompt skills. It needs the daemon; there is no on-disk fallback,
+        // because a disk scan would silently drop the MCP prompts (AGENTS.md: no silent
+        // fallbacks).
+        if (subcommand is "list")
+            return RunListAsync(daemonApi, output ?? Console.Out);
+
         return Task.FromResult(subcommand switch
         {
-            "list" => RunList(paths),
             "show" => RunShow(args, paths),
             "validate" => RunValidate(args),
             "remove" => RunRemove(args, paths),
@@ -54,49 +64,84 @@ internal static class SkillCommand
         });
     }
 
-    // ── Subcommand implementations ──
-
-    private static int RunList(NetclawPaths paths)
+    /// <summary>
+    /// Lists skills from the daemon's live registry — the only view that includes
+    /// dynamic MCP prompt skills. The daemon is required: when it is unreachable or
+    /// returns an unusable response, this reports the failure and exits non-zero
+    /// rather than falling back to a disk scan that would silently omit the MCP
+    /// prompts (AGENTS.md: no silent fallbacks).
+    /// </summary>
+    private static async Task<int> RunListAsync(DaemonApi? daemonApi, TextWriter output)
     {
-        var result = ScanAll(paths);
+        string? unavailable;
+        SkillInventory.Response? inventory = null;
 
-        if (result.AcceptedSkills.Count == 0 && result.Issues.Count == 0)
+        if (daemonApi is null)
         {
-            Console.WriteLine("No skills found.");
+            unavailable = "the daemon API is not configured";
+        }
+        else
+        {
+            try
+            {
+                inventory = await daemonApi.GetSkillsAsync();
+                unavailable = inventory?.Skills is null
+                    ? $"the daemon at {daemonApi.Endpoint} returned an unreadable skill list"
+                    : null;
+            }
+            catch (HttpRequestException ex)
+            {
+                unavailable = $"could not reach the daemon at {daemonApi.Endpoint} ({ex.Message})";
+            }
+            catch (OperationCanceledException)
+            {
+                unavailable = $"the daemon at {daemonApi.Endpoint} timed out";
+            }
+            catch (JsonException)
+            {
+                unavailable = $"the daemon at {daemonApi.Endpoint} returned an unreadable skill list";
+            }
+        }
+
+        if (unavailable is not null)
+        {
+            output.WriteLine($"Daemon unavailable: {unavailable}.");
+            output.WriteLine("Start it with `netclaw daemon start` or `netclaw run`.");
+            return 1;
+        }
+
+        return RenderInventory(inventory!.Skills, output);
+    }
+
+    private static int RenderInventory(IReadOnlyList<SkillInventory.SkillRow> skills, TextWriter output)
+    {
+        if (skills.Count == 0)
+        {
+            output.WriteLine("No skills found.");
             return 0;
         }
 
-        const int colName = 24;
+        const int colName = 40;
         const int colSource = 10;
         const int colVersion = 10;
 
-        Console.WriteLine(
+        output.WriteLine(
             $"{"NAME",-colName}  {"SOURCE",-colSource}  {"VERSION",-colVersion}  STATUS");
-        Console.WriteLine(new string('-', colName + colSource + colVersion + 12));
+        output.WriteLine(new string('-', colName + colSource + colVersion + 12));
 
-        foreach (var skill in result.AcceptedSkills)
+        foreach (var skill in skills)
         {
-            var source = ClassifySource(skill, paths);
             var version = skill.Version ?? "-";
-
-            Console.WriteLine(
-                $"{skill.Name,-colName}  {source,-colSource}  {version,-colVersion}  ok");
+            output.WriteLine(
+                $"{skill.Name,-colName}  {skill.Source,-colSource}  {version,-colVersion}  ok");
         }
 
-        // Also show issues inline
-        foreach (var issue in result.Issues)
-        {
-            var name = issue.SkillName ?? Path.GetFileNameWithoutExtension(issue.Path);
-            Console.WriteLine(
-                $"{name,-colName}  {"?",-colSource}  {"-",-colVersion}  {issue.Kind}");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine(
-            $"{result.AcceptedSkills.Count} skill(s), {result.Issues.Count} issue(s)");
-
+        output.WriteLine();
+        output.WriteLine($"{skills.Count} skill(s)");
         return 0;
     }
+
+    // ── Subcommand implementations ──
 
     private static int RunShow(string[] args, NetclawPaths paths)
     {
