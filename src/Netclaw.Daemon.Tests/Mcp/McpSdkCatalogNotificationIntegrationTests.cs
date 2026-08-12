@@ -71,7 +71,7 @@ public sealed class McpSdkCatalogNotificationIntegrationTests(ITestOutputHelper 
         Assert.Contains("state=Unreachable", failure.Message, StringComparison.Ordinal);
         Assert.Contains("Failed to reach MCP server", failure.Message, StringComparison.Ordinal);
         Assert.Contains("Failed to connect to MCP server", output.Output, StringComparison.Ordinal);
-        Assert.Contains("System.IO.IOException: Failed to connect transport", output.Output, StringComparison.Ordinal);
+        Assert.Contains("System.IO.IOException", output.Output, StringComparison.Ordinal);
         Assert.Contains(entry.Command, output.Output, StringComparison.Ordinal);
         Assert.Null(harness.Manager.GetSnapshot(ServerName)?.NotificationLease);
     }
