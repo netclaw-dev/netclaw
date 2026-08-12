@@ -16,7 +16,7 @@
          once the AI packages move to a patch release. -->
     <MicrosoftExtensionsTimeProviderTestingVersion>10.8.0</MicrosoftExtensionsTimeProviderTestingVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.10</MicrosoftAspNetCoreVersion>
+    <MicrosoftAspNetCoreVersion>10.0.11</MicrosoftAspNetCoreVersion>
     <SkiaSharpVersion>4.151.1</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
