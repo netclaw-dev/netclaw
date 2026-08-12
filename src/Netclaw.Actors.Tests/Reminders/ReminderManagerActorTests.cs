@@ -17,6 +17,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
@@ -550,9 +551,10 @@ public class ReminderManagerActorTests : TestKit
     [Fact]
     public async Task Startup_emits_alert_for_legacy_reminder_missing_trust_fields()
     {
+        using var directory = new DisposableTempDir();
         const string reminderId = "legacy-reminder-alert";
         var now = TimeProvider.System.GetUtcNow();
-        var paths = new NetclawPaths(_basePath);
+        var paths = new NetclawPaths(directory.Path);
         paths.EnsureDirectoriesExist();
         var filePath = Path.Combine(paths.RemindersDirectory, $"{Uri.EscapeDataString(reminderId)}.json");
         File.WriteAllText(filePath, $$"""
@@ -574,7 +576,7 @@ public class ReminderManagerActorTests : TestKit
         var pipeline = new SessionPipeline(
             Sys,
             new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(Sys)),
-            new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}")));
+            paths);
         var defaults = new EffectivePolicyDefaults(
             DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
 
@@ -590,32 +592,14 @@ public class ReminderManagerActorTests : TestKit
                 NullReminderChannelNotifier.Instance)),
             "legacy-reminder-alert-manager");
 
-        // The legacy-schema alert is emitted synchronously inside PreStart, and
-        // an actor processes mailbox messages only AFTER PreStart completes — so
-        // a successful health reply is a deterministic signal that PreStart (and
-        // the emit) has run. Awaiting that signal replaces a wall-clock
-        // AwaitAssertAsync(5s) poll that flaked under heavy parallel CI load: when
-        // the shared ThreadPool is saturated, PreStart can be scheduled later than
-        // a fixed 5s budget, leaving the sink empty when the poll gives up. The
-        // generous Ask timeout absorbs that scheduling latency without polling —
-        // it returns as soon as the actor is ready.
         await manager.Ask<ReminderHealthResponse>(
             GetReminderHealthQuery.Instance,
             TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
 
-        // Keep the Ask as the startup barrier (it absorbs dispatcher
-        // scheduling latency under parallel CI load), but poll the sink
-        // instead of trusting a one-shot post-Ask read: the health reply
-        // proves PreStart completed, not that the alert reached the sink.
-        // This test has flaked on CI twice (#1405, #1844) with an empty
-        // sink immediately after a successful Ask reply.
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Contains(sink.Alerts, alert =>
-                alert.Category == AlertType.ReminderSchemaDropped
-                && alert.Summary.Contains(reminderId, StringComparison.Ordinal));
-        }, duration: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(sink.Alerts, alert =>
+            alert.Category == AlertType.ReminderSchemaDropped
+            && alert.Summary.Contains(reminderId, StringComparison.Ordinal));
     }
 
     /// <summary>
