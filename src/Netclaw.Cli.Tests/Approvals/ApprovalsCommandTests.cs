@@ -467,6 +467,36 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Equal(["Get-Content"], entry.VerbTokens);
     }
 
+    [Fact]
+    public async Task TrustVerb_abstract_PowerShell_prefers_PowerShell7_canonical_tokens()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "curl", "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(ApprovalShell.PowerShell, entry.Shell);
+        Assert.Equal(["curl"], entry.VerbTokens);
+    }
+
+    [Fact]
+    public async Task TrustVerb_abstract_PowerShell_uses_legacy_fallback_when_preferred_parse_fails()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "gerr", "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(ApprovalShell.PowerShell, entry.Shell);
+        Assert.Equal(["gerr"], entry.VerbTokens);
+    }
+
     [Theory]
     [InlineData("tool in mode", "tool|in|mode")]
     [InlineData("status anywhere", "status|anywhere")]

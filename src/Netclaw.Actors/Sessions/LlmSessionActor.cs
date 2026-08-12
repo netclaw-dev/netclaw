@@ -4552,15 +4552,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // through here just feeds the filter that drops standalone verbs
         // with no path arg (curl, gh, git status).
         var sessionDirectory = GetSessionDirectory();
+        var grantContext = ApprovalGrantContext.FromDecision(
+            decision,
+            pending.Cwd,
+            sessionDirectory);
 
         if (_approvalService is IStructuredToolApprovalService structuredApprovalService)
         {
             var grants = ApprovalBucketBuilder.BuildGrants(
                 pending.Candidates,
-                persistent,
-                globalWildcard,
-                pending.Cwd,
-                sessionDirectory);
+                grantContext);
             if (grants.Count > 0)
             {
                 await structuredApprovalService.RecordApprovalCandidatesAsync(
@@ -4577,10 +4578,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         var grouping = ApprovalBucketBuilder.Build(
             pending.Candidates,
-            persistent,
-            globalWildcard,
-            pending.Cwd,
-            sessionDirectory);
+            grantContext);
 
         foreach (var (key, verbs) in grouping)
         {

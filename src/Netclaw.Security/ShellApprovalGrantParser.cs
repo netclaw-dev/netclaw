@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ShellApprovalPhraseParser.cs" company="Petabridge, LLC">
+// <copyright file="ShellApprovalGrantParser.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -11,13 +11,16 @@ using System.Diagnostics.CodeAnalysis;
 namespace Netclaw.Security;
 
 /// <summary>
-/// Creates one persistent shell phrase from ShellSyntaxTree facts.
+/// Converts one static phrase into one reusable shell approval grant. The CLI
+/// supplies operator-authored phrases. A compatibility API can supply one
+/// legacy pattern. This type does not analyze runtime command strings.
 /// </summary>
-public static class ShellApprovalPhraseParser
+public static class ShellApprovalGrantParser
 {
     /// <summary>
-    /// Parses one exact static phrase. Extra source text fails instead of
-    /// broadening the stored token prefix.
+    /// Parses one exact static grant phrase. This method does not accept all
+    /// legal shell spellings or analyze a runtime command string. Extra source
+    /// text fails instead of broadening the stored token prefix.
     /// </summary>
     public static bool TryCreateTokenPrefix(
         ApprovalShell shell,
@@ -34,27 +37,32 @@ public static class ShellApprovalPhraseParser
             {
                 var powerShell7 = ParsePowerShell(source, PwshDialect.PowerShell7);
                 var windowsPowerShell = ParsePowerShell(source, PwshDialect.WindowsPowerShell51);
-                if (!TryCreateTokenPrefix(
-                        ApprovalShell.PowerShell,
-                        source,
-                        powerShell7,
-                        out var preferredEntry,
-                        out error)
-                    || !TryCreateTokenPrefix(
-                        ApprovalShell.PowerShell,
-                        source,
-                        windowsPowerShell,
-                        out var fallbackEntry,
-                        out _)
-                    || !ToolApprovalEntryComparer.Equals(preferredEntry, fallbackEntry))
+                var hasPreferredEntry = TryCreateTokenPrefixCore(
+                    ApprovalShell.PowerShell,
+                    source,
+                    powerShell7,
+                    out var preferredEntry,
+                    out _);
+                var hasFallbackEntry = TryCreateTokenPrefixCore(
+                    ApprovalShell.PowerShell,
+                    source,
+                    windowsPowerShell,
+                    out var fallbackEntry,
+                    out _);
+                if (hasPreferredEntry && preferredEntry is not null)
                 {
-                    entry = null;
-                    error = "The PowerShell phrase must have one canonical form in both supported dialects.";
-                    return false;
+                    entry = preferredEntry;
+                    return true;
                 }
 
-                entry = preferredEntry;
-                return true;
+                if (hasFallbackEntry && fallbackEntry is not null)
+                {
+                    entry = fallbackEntry;
+                    return true;
+                }
+
+                error = "The PowerShell phrase must have one canonical form in a supported dialect.";
+                return false;
             }
 
             if (shell != ApprovalShell.Bash)
@@ -63,7 +71,7 @@ public static class ShellApprovalPhraseParser
                 return false;
             }
 
-            return TryCreateTokenPrefix(
+            return TryCreateTokenPrefixCore(
                 ApprovalShell.Bash,
                 source,
                 ParseBash(source),
@@ -78,7 +86,8 @@ public static class ShellApprovalPhraseParser
     }
 
     /// <summary>
-    /// Parses with the daemon's resolved native grammar and PowerShell dialect.
+    /// Parses one grant phrase with the daemon's resolved native grammar and
+    /// PowerShell dialect.
     /// </summary>
     public static bool TryCreateTokenPrefix(
         ShellExecutionEnvironment environment,
@@ -98,33 +107,12 @@ public static class ShellApprovalPhraseParser
                 ShellGrammar.PowerShell => ApprovalShell.PowerShell,
                 _ => throw new InvalidOperationException("The shell grammar is not supported."),
             };
-            return TryCreateTokenPrefix(
+            return TryCreateTokenPrefixCore(
                 shell,
                 source,
                 environment.Parse(source),
                 out entry,
                 out error);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-        {
-            error = "The shell phrase could not be parsed.";
-            return false;
-        }
-    }
-
-    private static bool TryCreateTokenPrefix(
-        ApprovalShell shell,
-        string source,
-        ParsedCommand parsed,
-        [NotNullWhen(true)] out ApprovalEntry? entry,
-        out string error)
-    {
-        entry = null;
-        error = string.Empty;
-
-        try
-        {
-            return TryCreateTokenPrefixCore(shell, source, parsed, out entry, out error);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {

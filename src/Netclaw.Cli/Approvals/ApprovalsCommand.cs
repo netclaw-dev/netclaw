@@ -242,7 +242,7 @@ internal static class ApprovalsCommand
         if (string.Equals(canonicalTool, DefaultTrustVerbTool, StringComparison.Ordinal))
         {
             var shell = opts.Shell ?? NativeShell;
-            if (!ShellApprovalPhraseParser.TryCreateTokenPrefix(
+            if (!ShellApprovalGrantParser.TryCreateTokenPrefix(
                     shell,
                     opts.Verb,
                     out var shellEntry,

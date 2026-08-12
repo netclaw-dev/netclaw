@@ -165,7 +165,7 @@ public sealed class AkkaToolApprovalService : IToolApprovalService, IStructuredT
     private ApprovalCandidate CreateCompatibilityCandidate(string pattern)
     {
         if (_compatibilityEnvironment is not null &&
-            ShellApprovalPhraseParser.TryCreateTokenPrefix(
+            ShellApprovalGrantParser.TryCreateTokenPrefix(
                 _compatibilityEnvironment,
                 pattern,
                 out var entry,

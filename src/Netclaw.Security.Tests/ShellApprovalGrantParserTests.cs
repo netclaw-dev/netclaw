@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ShellApprovalPhraseParserTests.cs" company="Petabridge, LLC">
+// <copyright file="ShellApprovalGrantParserTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -9,19 +9,21 @@ using Xunit;
 
 namespace Netclaw.Security.Tests;
 
-public sealed class ShellApprovalPhraseParserTests
+public sealed class ShellApprovalGrantParserTests
 {
     [Theory]
     [InlineData(ApprovalShell.Bash, "git push", "git", "push")]
     [InlineData(ApprovalShell.Bash, "git push origin", "git", "push", "origin")]
     [InlineData(ApprovalShell.Bash, "status-report", "status-report")]
     [InlineData(ApprovalShell.PowerShell, "Get-Content", "Get-Content")]
+    [InlineData(ApprovalShell.PowerShell, "curl", "curl")]
+    [InlineData(ApprovalShell.PowerShell, "gerr", "gerr")]
     public void Exact_static_phrase_creates_token_prefix(
         ApprovalShell shell,
         string source,
         params string[] expectedTokens)
     {
-        var parsed = ShellApprovalPhraseParser.TryCreateTokenPrefix(
+        var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
             shell,
             source,
             out var entry,
@@ -51,7 +53,7 @@ public sealed class ShellApprovalPhraseParserTests
         ApprovalShell shell,
         string source)
     {
-        var parsed = ShellApprovalPhraseParser.TryCreateTokenPrefix(
+        var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
             shell,
             source,
             out var entry,
@@ -65,7 +67,7 @@ public sealed class ShellApprovalPhraseParserTests
     [Fact]
     public void Unknown_shell_identity_fails_without_a_fallback()
     {
-        var parsed = ShellApprovalPhraseParser.TryCreateTokenPrefix(
+        var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
             (ApprovalShell)99,
             "git push",
             out var entry,
@@ -74,5 +76,23 @@ public sealed class ShellApprovalPhraseParserTests
         Assert.False(parsed);
         Assert.Null(entry);
         Assert.NotEmpty(error);
+    }
+
+    [Fact]
+    public void Resolved_windows_powershell_environment_requires_its_legacy_canonical_form()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            ShellSyntaxTree.PwshDialect.WindowsPowerShell51);
+
+        var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
+            environment,
+            "curl",
+            out var entry,
+            out var error);
+
+        Assert.False(parsed);
+        Assert.Null(entry);
+        Assert.Contains("Invoke-WebRequest", error, StringComparison.Ordinal);
     }
 }

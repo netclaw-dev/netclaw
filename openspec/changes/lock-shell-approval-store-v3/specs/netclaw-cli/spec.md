@@ -37,11 +37,12 @@ SHALL exit with code 1 and a clear message.
 default audience SHALL be `personal`. The default tool SHALL be
 `shell_execute`. For `shell_execute`, the default shell SHALL be Bash on POSIX
 and PowerShell on Windows. `--shell bash|powershell` SHALL select the canonical
-ShellSyntaxTree parser. The standalone CLI SHALL accept a PowerShell phrase
-only when PowerShell 7 and Windows PowerShell 5.1 return the same canonical
-tokens. The daemon SHALL continue to use its resolved native dialect for
-execution-time command facts. `--shell` with another tool SHALL be a user
-error.
+ShellSyntaxTree parser. The standalone CLI SHALL try the PowerShell 7 and
+Windows PowerShell 5.1 parsers. It SHALL use a valid PowerShell 7 result first.
+It SHALL use a valid Windows PowerShell 5.1 result only when the preferred
+parser rejects the phrase. The daemon SHALL continue to use its resolved
+native dialect for execution-time command facts. `--shell` with another tool
+SHALL be a user error.
 
 For `shell_execute`, `trust-verb` SHALL accept one complete static command
 phrase. It SHALL use ShellSyntaxTree canonical verb tokens and write a global
@@ -126,11 +127,12 @@ Exit code 0 SHALL mean success. Exit code 1 SHALL mean a user or store error.
 - **THEN** the store adds Bash tokens `git`, `push`
 - **AND** the entry has global scope
 
-#### Scenario: Native Windows default selects conservative PowerShell
+#### Scenario: Native Windows default prefers PowerShell 7 grammar
 
 - **GIVEN** Netclaw runs natively on Windows
 - **WHEN** the operator omits `--shell` for `shell_execute`
-- **THEN** the CLI requires one canonical phrase across both PowerShell dialects
+- **THEN** the CLI uses a valid PowerShell 7 grant result first
+- **AND** it uses the Windows PowerShell 5.1 result only when the first result is invalid
 - **AND** it stores shell `PowerShell`
 
 #### Scenario: Compound shell phrase fails

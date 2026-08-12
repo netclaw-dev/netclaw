@@ -225,10 +225,28 @@ For any other tool, `trust-verb` SHALL keep the compatible non-shell exact
 entry. It SHALL support the current arbitrary `--tool` value. It SHALL not add
 shell members to that entry.
 
+For an abstract PowerShell request, the parser SHALL try PowerShell 7 and
+Windows PowerShell 5.1. It SHALL use a valid PowerShell 7 result first. It SHALL
+use a valid Windows PowerShell 5.1 result only when the preferred result is
+invalid. A resolved runtime environment SHALL use only its selected dialect.
+
 #### Scenario: Static shell phrase creates tokens
 
 - **WHEN** an operator trusts `git push` for `shell_execute` under Bash
 - **THEN** the new entry has Bash token prefix `git`, `push`
+
+#### Scenario: PowerShell 7 valid result has preference
+
+- **GIVEN** PowerShell 7 accepts the exact canonical phrase
+- **WHEN** an operator trusts the phrase under abstract PowerShell
+- **THEN** the new entry uses the PowerShell 7 canonical tokens
+
+#### Scenario: Windows PowerShell result provides a fallback
+
+- **GIVEN** PowerShell 7 rejects the exact phrase
+- **AND** Windows PowerShell 5.1 accepts the exact canonical phrase
+- **WHEN** an operator trusts the phrase under abstract PowerShell
+- **THEN** the new entry uses the Windows PowerShell 5.1 canonical tokens
 
 #### Scenario: Compound shell phrase is rejected
 

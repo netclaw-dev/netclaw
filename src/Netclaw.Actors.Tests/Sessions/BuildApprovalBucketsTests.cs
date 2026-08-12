@@ -43,10 +43,7 @@ public sealed class BuildApprovalBucketsTests
 
         var buckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: false,
-            globalWildcard: false,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedSession));
 
         var bucket = Assert.Single(buckets);
         Assert.Equal(string.Empty, bucket.Key);  // null-directory bucket
@@ -68,10 +65,7 @@ public sealed class BuildApprovalBucketsTests
 
         var buckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: false,
-            globalWildcard: false,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedSession));
 
         var bucket = Assert.Single(buckets);
         Assert.Equal(ProjectDir, bucket.Key);
@@ -93,10 +87,7 @@ public sealed class BuildApprovalBucketsTests
 
         var buckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: true,
-            globalWildcard: false,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedAlways));
 
         Assert.Empty(buckets);
     }
@@ -111,10 +102,7 @@ public sealed class BuildApprovalBucketsTests
 
         var buckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: true,
-            globalWildcard: false,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedAlways));
 
         var bucket = Assert.Single(buckets);
         Assert.Equal(ProjectDir, bucket.Key);
@@ -134,10 +122,7 @@ public sealed class BuildApprovalBucketsTests
 
         var buckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: true,
-            globalWildcard: true,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedEverywhere));
 
         var bucket = Assert.Single(buckets);
         Assert.Equal(string.Empty, bucket.Key);
@@ -159,10 +144,7 @@ public sealed class BuildApprovalBucketsTests
 
         var sessionBuckets = ApprovalBucketBuilder.Build(
             candidates,
-            persistent: false,
-            globalWildcard: false,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedSession));
 
         var bucket = Assert.Single(sessionBuckets);
         Assert.DoesNotContain("echo", bucket.Value);
@@ -188,14 +170,23 @@ public sealed class BuildApprovalBucketsTests
 
         var grants = ApprovalBucketBuilder.BuildGrants(
             candidates,
-            persistent: true,
-            globalWildcard: true,
-            cwd: SessionDir,
-            sessionDirectory: SessionDir);
+            Context(ApprovalDecision.ApprovedEverywhere));
 
         Assert.Collection(
             grants,
             first => Assert.Equal(["whoami", "user"], first.Candidate.VerbTokens),
             second => Assert.Equal(["whoami", "admin"], second.Candidate.VerbTokens));
     }
+
+    [Theory]
+    [InlineData(ApprovalDecision.ApprovedOnce)]
+    [InlineData(ApprovalDecision.Denied)]
+    [InlineData(ApprovalDecision.TimedOut)]
+    public void Non_reusable_decision_cannot_create_grant_context(ApprovalDecision decision)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => Context(decision));
+    }
+
+    private static ApprovalGrantContext Context(ApprovalDecision decision) =>
+        ApprovalGrantContext.FromDecision(decision, SessionDir, SessionDir);
 }

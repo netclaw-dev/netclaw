@@ -7,14 +7,52 @@ using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
 
+internal sealed record ApprovalGrantContext
+{
+    private ApprovalGrantContext(
+        ApprovalDecision decision,
+        string? workingDirectory,
+        string sessionDirectory)
+    {
+        Decision = decision;
+        WorkingDirectory = workingDirectory;
+        SessionDirectory = sessionDirectory;
+    }
+
+    public ApprovalDecision Decision { get; }
+
+    public string? WorkingDirectory { get; }
+
+    public string SessionDirectory { get; }
+
+    public bool IsPersistent => Decision is not ApprovalDecision.ApprovedSession;
+
+    public static ApprovalGrantContext FromDecision(
+        ApprovalDecision decision,
+        string? workingDirectory,
+        string sessionDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionDirectory);
+        if (decision is not (
+                ApprovalDecision.ApprovedSession
+                or ApprovalDecision.ApprovedAlways
+                or ApprovalDecision.ApprovedEverywhere))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(decision),
+                decision,
+                "The approval decision cannot create a reusable grant.");
+        }
+
+        return new ApprovalGrantContext(decision, workingDirectory, sessionDirectory);
+    }
+}
+
 internal static class ApprovalBucketBuilder
 {
     public static IReadOnlyList<ToolApprovalGrant> BuildGrants(
         IReadOnlyList<ApprovalCandidate> candidates,
-        bool persistent,
-        bool globalWildcard,
-        string? cwd,
-        string? sessionDirectory)
+        ApprovalGrantContext context)
     {
         var grants = new List<ToolApprovalGrant>(candidates.Count);
         foreach (var candidate in candidates)
@@ -26,12 +64,9 @@ internal static class ApprovalBucketBuilder
 
             var effectiveDirectory = ResolveDirectory(
                 candidate,
-                persistent,
-                globalWildcard,
-                cwd);
-            if (persistent && effectiveDirectory is not null
-                && sessionDirectory is not null
-                && PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory))
+                context);
+            if (context.IsPersistent && effectiveDirectory is not null
+                && PathUtility.AreEquivalentPaths(effectiveDirectory, context.SessionDirectory))
             {
                 continue;
             }
@@ -48,20 +83,17 @@ internal static class ApprovalBucketBuilder
     /// </summary>
     /// <remarks>
     /// Session-scope entries use <c>candidate.Directory</c> directly without
-    /// falling back to <paramref name="cwd"/>. The session approval dictionary
+    /// a working-directory fallback. The session approval dictionary
     /// matches verb-only, so threading cwd through here creates buckets that the
     /// session-scratch guard can drop for standalone verbs such as curl or git status.
     ///
-    /// Persistent scope still falls back to <paramref name="cwd"/> and applies
+    /// Persistent scope still falls back to the working directory and applies
     /// the session-scratch guard so folder-scoped grants pointing at the session
     /// scratch directory are not saved as dead-on-arrival approvals.
     /// </remarks>
     public static Dictionary<string, List<string>> Build(
         IReadOnlyList<ApprovalCandidate> candidates,
-        bool persistent,
-        bool globalWildcard,
-        string? cwd,
-        string? sessionDirectory)
+        ApprovalGrantContext context)
     {
         var grouping = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
@@ -72,12 +104,9 @@ internal static class ApprovalBucketBuilder
 
             var effectiveDirectory = ResolveDirectory(
                 candidate,
-                persistent,
-                globalWildcard,
-                cwd);
-            if (persistent && effectiveDirectory is not null
-                && sessionDirectory is not null
-                && PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory))
+                context);
+            if (context.IsPersistent && effectiveDirectory is not null
+                && PathUtility.AreEquivalentPaths(effectiveDirectory, context.SessionDirectory))
             {
                 continue;
             }
@@ -98,17 +127,15 @@ internal static class ApprovalBucketBuilder
 
     private static string? ResolveDirectory(
         ApprovalCandidate candidate,
-        bool persistent,
-        bool globalWildcard,
-        string? cwd)
-    {
-        if (globalWildcard)
+        ApprovalGrantContext context)
+        => context.Decision switch
         {
-            return null;
-        }
-
-        return persistent
-            ? candidate.Directory ?? cwd
-            : candidate.Directory;
-    }
+            ApprovalDecision.ApprovedSession => candidate.Directory,
+            ApprovalDecision.ApprovedAlways => candidate.Directory ?? context.WorkingDirectory,
+            ApprovalDecision.ApprovedEverywhere => null,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(context),
+                context.Decision,
+                "The grant decision is invalid."),
+        };
 }

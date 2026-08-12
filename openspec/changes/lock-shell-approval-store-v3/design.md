@@ -80,10 +80,10 @@ grammar. It accepts `git push origin` only when ShellSyntaxTree returns all
 three tokens as the canonical phrase, and it stores all three tokens.
 
 The standalone CLI does not repeat the daemon's PowerShell host probe. For an
-explicit or native Windows PowerShell choice, it accepts a phrase only when
-PowerShell 7 and Windows PowerShell 5.1 return the same canonical tokens. This
-is a conservative subset of either native dialect. The daemon still uses its
-resolved native dialect for execution-time command facts.
+explicit or native Windows PowerShell choice, it tries both parser dialects.
+It uses a valid PowerShell 7 result first. It uses the Windows PowerShell 5.1
+result only when the preferred parser rejects the phrase. The daemon still
+uses its resolved native dialect for execution-time command facts.
 
 For another tool, `trust-verb` keeps the current exact non-shell entry. It does
 not add shell fields. The CLI keeps support for an arbitrary `--tool` value.
