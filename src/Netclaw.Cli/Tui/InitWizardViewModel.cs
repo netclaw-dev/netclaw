@@ -8,8 +8,6 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Discord;
-using Netclaw.Cli.Mattermost;
-using Netclaw.Cli.Telegram;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
@@ -58,8 +56,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ProviderDescriptorRegistry registry,
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
-        IMattermostProbe mattermostProbe,
-        ITelegramProbe telegramProbe,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
@@ -67,7 +63,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IClipboardService? clipboardService = null,
         TimeProvider? timeProvider = null,
         SectionEditorRegistry? sectionEditors = null)
-        : this(paths, registry, registry, slackProbe, discordProbe, mattermostProbe, telegramProbe,
+        : this(paths, registry, registry, slackProbe, discordProbe,
             navigationState: navigationState,
             oauthFactory: oauthFactory, daemonManager: daemonManager, daemonApi: daemonApi,
             clipboardService: clipboardService, timeProvider: timeProvider, sectionEditors: sectionEditors)
@@ -83,8 +79,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IProviderProbe probe,
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
-        IMattermostProbe mattermostProbe,
-        ITelegramProbe telegramProbe,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
@@ -105,13 +99,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
         };
 
         // Create step VMs in the canonical bootstrap order (simplify-netclaw-init):
-        // provider -> identity -> security-posture -> feature-selection -> channels -> health-check.
+        // provider -> identity -> security-posture -> feature-selection -> health-check.
+        // Channels, Search, Browser Automation, and Skill Sources are no longer part of
+        // first-run bootstrap; they moved to `netclaw config` (the post-install surface).
         ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory, daemonApi);
         var identityStep = new IdentityStepViewModel();
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
-        var channelPickerStep = new ChannelPickerStepViewModel(
-            slackProbe, discordProbe, mattermostProbe, telegramProbe);
         _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState, timeProvider);
 
         var steps = new List<IWizardStepViewModel>
@@ -120,7 +114,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
             identityStep,
             securityPostureStep,
             featureSelectionStep,
-            channelPickerStep,
             _healthCheckStep
         };
 
@@ -143,7 +136,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
             [WizardStepIds.Identity] = new IdentityStepView(),
             [WizardStepIds.SecurityPosture] = new SecurityPostureStepView(),
             [WizardStepIds.FeatureSelection] = new FeatureSelectionStepView(),
-            [WizardStepIds.ChannelPicker] = new ChannelPickerStepView(),
             [WizardStepIds.HealthCheck] = new HealthCheckStepView()
         };
     }
