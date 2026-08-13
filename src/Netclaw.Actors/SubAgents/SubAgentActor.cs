@@ -46,7 +46,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         + "If tools are available and you still need those operations, call the tools using structured tool calls now. "
         + "Otherwise provide a final answer based only on executed tool results. "
         + "Do not include <function=...>, <parameter=...>, or </tool_call> markup in final text.";
-    private const string HeadlessExecutionContract = """
+    private const string HeadlessExecutionContractPrefix = """
         [Subagent Execution Contract]
         You are a headless, non-interactive worker running on behalf of a parent Netclaw session.
         Your subagent role guidance and assigned task are more specific than inherited deployment or project guidance. If they conflict, follow your subagent guidance and assigned task.
@@ -56,8 +56,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         If the task is ambiguous, make reasonable assumptions and state them in your final output.
         If you are blocked, return a final result that explains what you found, what remains, and what decision the parent session needs.
         Parent-mediated tool approval may occur only for concrete tool calls; it is a security gate, not a dialogue channel.
-        Always end by emitting a final output for the parent session.
         """;
+    private const string ProjectScopeDeclarationContract =
+        "Before repeated shell work in another task-named project, call set_working_directory once, even with absolute paths.";
+    private const string HeadlessExecutionContractSuffix =
+        "Always end by emitting a final output for the parent session.";
     private static readonly TimeSpan StreamPingInterval = TimeSpan.FromSeconds(2);
 
     private readonly SubAgentDefinition _definition;
@@ -362,7 +365,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // system prompt stays reproducible across invocations.
             _history.Add(new AiChatMessage(
                 Microsoft.Extensions.AI.ChatRole.System,
-                BuildSystemPrompt(_definition, _projectInstructions)));
+                BuildSystemPrompt(
+                    _definition,
+                    _projectInstructions,
+                    CanDeclareProjectScope())));
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User,
                 BuildUserMessage(
                     msg.RuntimeContext,
@@ -828,6 +834,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             .ToList();
     }
 
+    private bool CanDeclareProjectScope() =>
+        _aiTools.Any(tool => string.Equals(
+            tool.Name,
+            SetWorkingDirectoryTool.ToolName,
+            StringComparison.Ordinal));
+
     private bool _completed;
 
     private void Complete(
@@ -1062,7 +1074,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             nextScope.Audience,
             projectDirectory);
 
-        var prompt = BuildSystemPrompt(_definition, _projectInstructions);
+        var prompt = BuildSystemPrompt(
+            _definition,
+            _projectInstructions,
+            CanDeclareProjectScope());
         var systemMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt);
         if (_history.Count > 0 && _history[0].Role == Microsoft.Extensions.AI.ChatRole.System)
             _history[0] = systemMessage;
@@ -1530,7 +1545,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private static string BuildSystemPrompt(
         SubAgentDefinition definition,
-        string? projectInstructions)
+        string? projectInstructions,
+        bool canDeclareProjectScope)
     {
         // Assemble the identity stack that sub-agents inherit from the parent session:
         // 1. Embedded operating core + deployment AGENTS.md mission playbook
@@ -1546,7 +1562,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         // Append the headless execution and precedence contract — always at the bottom,
         // after the specialized role prompt it protects from inherited mission conflicts.
-        return string.Concat(rolePrompt.TrimEnd(), "\n\n", HeadlessExecutionContract);
+        var projectScopeContract = canDeclareProjectScope
+            ? string.Concat(ProjectScopeDeclarationContract, "\n")
+            : string.Empty;
+        return string.Concat(
+            rolePrompt.TrimEnd(),
+            "\n\n",
+            HeadlessExecutionContractPrefix,
+            projectScopeContract,
+            HeadlessExecutionContractSuffix);
     }
 
     private sealed class ChildFileActivityTracker

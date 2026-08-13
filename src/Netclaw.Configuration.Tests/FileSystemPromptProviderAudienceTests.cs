@@ -77,8 +77,12 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
 
         Assert.Contains("`WorkingDirectory` argument", prompt);
         Assert.Contains("Do not prefix the command with an inline `cd`", prompt);
+        Assert.Contains("Path arguments give the approval gate an exact candidate scope", prompt);
+        Assert.Contains("safe-space root", prompt);
+        Assert.DoesNotContain("path argument IS the declaration", prompt);
         Assert.Contains("before the first shell", prompt);
-        Assert.Contains("Do not repeat it when", prompt);
+        Assert.Contains("Do not repeat", prompt);
+        Assert.Contains("`project_dir` already names the correct project", prompt);
         Assert.Contains("changing directory is itself behavior", prompt);
         Assert.Contains("correct the path and retry the tool", prompt);
         Assert.Contains("Do not continue with a stale directory", prompt);

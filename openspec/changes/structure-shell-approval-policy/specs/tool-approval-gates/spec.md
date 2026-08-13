@@ -575,6 +575,18 @@ paths SHALL retain existing strict checks.
 - **WHEN** every earlier stage passes
 - **THEN** safe policy covers that candidate
 
+#### Scenario: Exact path scope does not declare a safe root
+
+- **GIVEN** an agent has no declared project root for a user-named project
+- **WHEN** a shell candidate contains an absolute path beneath that project
+- **THEN** the path can provide the candidate's exact policy scope
+- **AND** it does not add that project as a safe-space root
+- **AND** model guidance tells the agent to call `set_working_directory` before
+  several shell calls in that project
+- **AND** the same rule applies when a subagent's exposed tools include
+  `set_working_directory` and its inherited project differs
+- **AND** the rule is absent when that tool is unavailable
+
 #### Scenario: Undeclared project scope returns an agent correction
 
 - **GIVEN** every shell candidate has a reviewed-safe phrase

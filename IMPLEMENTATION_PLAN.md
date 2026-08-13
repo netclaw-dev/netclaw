@@ -240,6 +240,13 @@ Done when:
   redirects stay strict.
 - [x] Sanitized behavioral eval cases cover early project declaration,
   one-command typed scope, failed-path recovery, and deliberate inline `cd`.
+- [x] A sanitized subagent eval proves that a different user-named project is
+  declared before the child's first multi-command shell inspection. Absolute
+  path operands remain exact scopes, but do not create a safe-space root. The
+  configured `deepseek-v4-flash-dspark` endpoint passed 4/5 runs. The assertion
+  orders declaration before two exact successful shell calls and verifies the
+  reported layout and build file. One run used one-shot scope without declaring
+  the project and failed as intended.
 - [x] The session-scratch model-guidance eval passed 4/5 against the configured
   `deepseek-v4-flash-dspark` endpoint. This measures headless path preference;
   deterministic actor tests own interactive correction and approval proof.

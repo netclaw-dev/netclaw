@@ -227,11 +227,13 @@ archive_eval_run() {
 
     # Copy all container logs (crash logs, session logs)
     if [[ -d "$EVAL_HOME/data/logs" ]]; then
-        cp -r "$EVAL_HOME/data/logs" "$archive_dir/container-logs" 2>/dev/null || true
+        mkdir -p "$archive_dir/container-logs"
+        cp -r "$EVAL_HOME/data/logs/." "$archive_dir/container-logs/" 2>/dev/null || true
     fi
     # Also check the direct logs dir (bind-mount layout varies)
-    if [[ -d "$EVAL_HOME/logs" && ! -d "$archive_dir/container-logs" ]]; then
-        cp -r "$EVAL_HOME/logs" "$archive_dir/container-logs" 2>/dev/null || true
+    if [[ -d "$EVAL_HOME/logs" ]]; then
+        mkdir -p "$archive_dir/container-logs"
+        cp -r "$EVAL_HOME/logs/." "$archive_dir/container-logs/" 2>/dev/null || true
     fi
 
     # Copy results DB
@@ -1370,6 +1372,69 @@ assert_subagent_specialization_precedence() {
         stdout_response_contains 'Would Tuesday or Wednesday work for a 15-minute call?'
 }
 
+setup_subagent_project_scope_declaration() {
+    local run="$1"
+    PROJECT_SCOPE_LOG_MARKER="$TMPDIR_EVAL/project-scope-$run.marker"
+    touch "$PROJECT_SCOPE_LOG_MARKER"
+
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" \
+        mkdir -p /home/netclaw/.netclaw/workspaces/project-scope-target/src
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" \
+        sh -c 'printf "%s\n" "# Sample project" > /home/netclaw/.netclaw/workspaces/project-scope-target/README.md
+printf "%s\n" "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>" > /home/netclaw/.netclaw/workspaces/project-scope-target/Project.csproj
+printf "%s\n" "Console.WriteLine(\"sample\");" > /home/netclaw/.netclaw/workspaces/project-scope-target/src/Program.cs'
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" \
+        git -C /home/netclaw/.netclaw/workspaces/project-scope-target init -q
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" \
+        git -C /home/netclaw/.netclaw/workspaces/project-scope-target add README.md Project.csproj src/Program.cs
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" \
+        sh -c 'printf "%s\n" "<!-- changed -->" >> /home/netclaw/.netclaw/workspaces/project-scope-target/Project.csproj
+printf "%s\n" "// changed" >> /home/netclaw/.netclaw/workspaces/project-scope-target/src/Program.cs'
+}
+
+assert_subagent_project_scope_declaration() {
+    stdout_tool_called 'spawn_agent' || return 1
+    stdout_contains '\[subagent:done\] project-scope-analyst (completed' || return 1
+    stdout_response_contains 'Project.csproj' || return 1
+    stdout_response_contains 'src' || return 1
+
+    local child_log
+    child_log=$(find "$EVAL_HOME/logs/sessions" -type f \
+        -path '*_subagent_project-scope-analyst_*/session.log' \
+        -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null | head -1)
+    [[ -n "$child_log" ]] || return 1
+
+    local declared_line shell_line shell_result_line shell_count shell_result_count
+    local status_command_count diff_command_count
+    declared_line=$(grep -an \
+        'SubAgent \[project-scope-analyst\] project directory set to /home/netclaw/.netclaw/workspaces/project-scope-target' \
+        "$child_log" | head -1 | cut -d: -f1)
+    shell_line=$(grep -an \
+        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        "$child_log" | head -1 | cut -d: -f1)
+    shell_result_line=$(grep -an \
+        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
+        "$child_log" | head -1 | cut -d: -f1)
+    shell_count=$(grep -ac \
+        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        "$child_log")
+    shell_result_count=$(grep -ac \
+        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
+        "$child_log")
+    status_command_count=$(grep -aEo \
+        'shell_execute#[[:alnum:]-]+\(Command=git status --short, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        "$child_log" | wc -l | tr -d ' ')
+    diff_command_count=$(grep -aEo \
+        'shell_execute#[[:alnum:]-]+\(Command=git diff --stat, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        "$child_log" | wc -l | tr -d ' ')
+
+    [[ -n "$declared_line" && -n "$shell_line" && -n "$shell_result_line" \
+        && "$shell_count" -eq 2 && "$shell_result_count" -eq 2 \
+        && "$status_command_count" -eq 1 && "$diff_command_count" -eq 1 \
+        && "$declared_line" -lt "$shell_line" \
+        && "$shell_line" -lt "$shell_result_line" ]]
+}
+
 setup_coding_context_worktree_handoff() {
     local run="$1"
     if (( run % 2 == 1 )); then
@@ -2040,6 +2105,9 @@ run_all() {
     run_case subagent_specialization_precedence "specialized subagent guidance overrides a conflicting deployment playbook" \
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
+
+    run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
+        "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
 
     PROMPT_TIMEOUT="$previous_timeout"
 

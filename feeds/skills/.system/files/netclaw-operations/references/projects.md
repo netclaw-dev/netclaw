@@ -16,6 +16,10 @@ Use `set_working_directory` to set or change the project directory:
 set_working_directory(path: "/workspace/service")
 ```
 
+An absolute shell path gives approval policy an exact candidate scope. It does
+not add that directory as a safe-space root. When the declaration tool is
+available, declare a different user-named project before several shell calls.
+
 Rules:
 
 - The path must be an absolute path to an existing directory

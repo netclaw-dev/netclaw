@@ -135,9 +135,12 @@
 - [x] 8.3 Keep trace data out of model prompts and session journals.
 - [x] 8.4 Update consumer and operator guides with complete input, facts,
   coverage, trace, and output examples.
-- [ ] 8.5 Update the `netclaw-operations` skill and deterministic approval evals
-  for schema 3 and the authored-source boundary.
-- [ ] 8.6 Update `IMPLEMENTATION_PLAN.md` and canonical OpenSpec requirements.
+- [x] 8.5 Update the always-loaded rules, the `netclaw-operations` skill, and
+  deterministic approval evals for schema 3 and the authored-source boundary.
+  Remove the false claim that an absolute path declares a safe root. Add a
+  subagent eval that proves a different user-named project is declared before
+  the child's first shell inspection.
+- [x] 8.6 Update `IMPLEMENTATION_PLAN.md` and canonical OpenSpec requirements.
 
 ## 9. Validation and staged delivery
 

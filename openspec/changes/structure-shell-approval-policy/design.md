@@ -285,6 +285,17 @@ model call. Later child tool calls use the new scope. The child reports the
 local scope in its result, but the parent merge keeps its existing rule: child
 project selection does not replace the parent project directory.
 
+Model guidance distinguishes an exact candidate scope from a declared safe
+root. An absolute path operand lets policy bind a candidate to that path. It
+does not add a safe-space root or make an otherwise uncovered phrase safe. If
+a task needs several shell calls in a user-named project that differs from the
+current project, the agent declares that project before the first shell call.
+This rule also applies to subagents whose exposed tools include the declaration
+tool, and to commands with absolute operands. One shell call can use the typed
+`WorkingDirectory` argument without changing the persistent project root. The
+final headless subagent contract conditionally repeats the multi-command rule
+after role guidance so the execution boundary stays clear.
+
 The shared `set_working_directory` validation rejects NUL, CR, and LF before
 filesystem resolution. This rule applies to both execution and the eligibility
 probe. An invalid path returns a bounded error and cannot enter model history,

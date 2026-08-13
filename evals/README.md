@@ -75,7 +75,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
-| Subagents | 2 | Delegates through `spawn_agent`, completes ambiguous work, and gives specialized subagent guidance precedence over a conflicting deployment playbook |
+| Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Complex Task Execution | 5 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |

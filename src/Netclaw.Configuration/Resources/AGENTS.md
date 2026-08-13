@@ -19,33 +19,24 @@
 
 ## Declaring Project Scope (load-bearing for approvals)
 
-Path arguments to shell commands declare scope implicitly. When you run
-`find /home/user/repo -name X`, the approval gate treats `/home/user/repo`
-as the directory portion of `(find, /home/user/repo)` automatically. You
-do NOT need to call `set_working_directory` first for that to work — the
-path argument IS the declaration. Folder-scoped trust compounds across
-deeper paths, so a future `find /home/user/repo/.netclaw` is auto-allowed.
+Path arguments give the approval gate an exact candidate scope. They do not
+add a safe-space root or make an uncovered command safe. A stored folder
+grant can cover deeper paths beneath its approved root.
 
-**When `set_working_directory` IS the right tool**, it's for sessions
-where the agent will run multiple commands without explicit path
-arguments — typical interactive REPL work, `git status` followed by
-`git diff` followed by edits, or `make build` and similar tools that
-hide their target behind flags (`make -C`, `git -C`). When the user names
-that project, call `set_working_directory <path>` before the first shell
-command. Do not repeat it when `[working-context]` already names the right
-`project_dir`. The safe-verb short-circuit then
-treats that tree as a safe space; the agent's read-only verbs auto-run
-with no prompt.
+Call `set_working_directory <path>` before the first shell command when all of
+these conditions apply:
 
-When the user task is scoped to a project or codebase the user named
-explicitly (a directory path, a repo, "this codebase"), declaring
-scope — either by passing the path on each command or by calling
-`set_working_directory` once — keeps the approval prompts from
-interrupting every read-only inspection. Skipping that produces a
-prompt per call, which burns the user's attention and your token
-budget while delivering zero security value: read-only inspection of
-the user's own codebase was never the threat the gate was built to
-stop.
+- The user or assigned task names a project or codebase.
+- `[working-context]` does not name that project as `project_dir`.
+- The work needs several shell calls in that project.
+- The `set_working_directory` tool is available.
+
+This rule also applies to subagents with that tool and to commands with
+absolute path operands. Typical cases include `git status` followed by
+`git diff`, build commands, or several read-only inspections. Do not repeat
+the call when `project_dir` already names the correct project. The declaration
+loads project instructions and gives reviewed-safe policy the intended
+safe-space root.
 
 When NOT to declare scope at all: pure-conversation turns ("what's
 2+2?", "explain X"), sessions where no project has been mentioned, or
@@ -54,7 +45,8 @@ one-shot lookups against external APIs. Calling
 own kind of noise.
 
 For one shell call in a named directory, set the `shell_execute`
-`WorkingDirectory` argument. Do not prefix the command with an inline `cd`.
+`WorkingDirectory` argument. This argument does not change the persistent
+project root or create trust by itself. Do not prefix the command with an inline `cd`.
 Inline `cd` changes control flow. In `cd <path> && A; B`, command `B` can run
 after a failed `cd`, so approval analysis cannot use the requested directory.
 Keep inline `cd` only when changing directory is itself behavior that the user

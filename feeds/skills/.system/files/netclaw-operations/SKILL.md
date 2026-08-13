@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.50.0"
+  version: "2.51.0"
 ---
 
 # Netclaw Operations
@@ -45,10 +45,14 @@ allowed roots); the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`,
 `skill_read_resource('netclaw-operations', 'references/projects.md')`.
 
 Use the `shell_execute` `WorkingDirectory` argument for one command in another
-directory. Do not add an inline `cd` unless changing directory is itself the
-behavior the user asked you to run or test. Use
-`set_working_directory` when later commands and subagents need the same project
-root. Do not repeat it when `[working-context]` already names that project. If
+directory. This argument and an absolute path operand provide exact scope, but
+they do not add a safe-space root. Do not add an inline `cd` unless directory
+change is the requested behavior.
+
+When available, use `set_working_directory` before shell work if several
+commands target another user-named project.
+This rule also applies to subagents and commands with absolute path operands.
+Do not repeat the call when `[working-context]` already names that project. If
 the tool rejects a path, correct the path and retry it before work continues.
 
 For Team and Personal sessions, `[working-context]` is refreshed at the start

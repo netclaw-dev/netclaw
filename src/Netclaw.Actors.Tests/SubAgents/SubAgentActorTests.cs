@@ -178,7 +178,8 @@ public class SubAgentActorTests : TestKit
     public async Task System_prompt_includes_headless_subagent_contract()
     {
         var fakeClient = new FakeChatClient();
-        var definition = CreateDefinition();
+        var scopeTool = new FakeNetclawTool(SetWorkingDirectoryTool.ToolName, "ok");
+        var definition = CreateDefinition([scopeTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, PermissivePolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
@@ -193,6 +194,58 @@ public class SubAgentActorTests : TestKit
         Assert.Contains("safety, security, trust-boundary, approval, and tool-policy rules remain mandatory", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Do not ask the user clarifying questions", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Parent-mediated tool approval", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("call set_working_directory once, even with absolute paths", fakeClient.LastReceivedMessages[0].Text);
+    }
+
+    [Fact]
+    public async Task System_prompt_omits_project_declaration_when_scope_tool_is_unavailable()
+    {
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition(),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(),
+                Task = "Say hello",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.DoesNotContain(
+            "call set_working_directory once",
+            fakeClient.LastReceivedMessages[0].Text);
+    }
+
+    [Fact]
+    public async Task Public_system_prompt_omits_project_declaration_even_when_definition_contains_scope_tool()
+    {
+        var fakeClient = new FakeChatClient();
+        var scopeTool = new FakeNetclawTool(SetWorkingDirectoryTool.ToolName, "ok");
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([scopeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(audience: TrustAudience.Public),
+                Task = "Say hello",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.DoesNotContain(
+            "call set_working_directory once",
+            fakeClient.LastReceivedMessages[0].Text);
     }
 
     [Fact]
