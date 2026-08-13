@@ -16,17 +16,17 @@
 
 ## 2. Typed coordinator and actor protocol
 
-- [ ] 2.1 Snapshot immutable preflight facts from existing
+- [x] 2.1 Snapshot immutable preflight facts from existing
   `ToolExecutionContext`, `ToolRunScope`, `ToolApprovalAttempt`, and
   `ShellExecutionEnvironment`; preserve `OneTimeApprovalKeys` exact-set
   semantics and do not add a parallel context or scalar retry key.
-- [ ] 2.2 Add one coordinator that runs synchronous preflight, sends one actor
+- [x] 2.2 Add one coordinator that runs synchronous preflight, sends one actor
   batch request, and completes policy without a second grant scan.
-- [ ] 2.3 Add `ShellApprovalMatchRequest` and `ShellApprovalMatchResult` to
+- [x] 2.3 Add `ShellApprovalMatchRequest` and `ShellApprovalMatchResult` to
   `ToolApprovalActor`; match inherited session and persistent snapshots
   atomically, return typed persistent-store status, and leave one-time state in
   `ToolApprovalAttempt`.
-- [ ] 2.4 Route `DispatchingToolExecutor` through the coordinator without
+- [x] 2.4 Route `DispatchingToolExecutor` through the coordinator without
   changing the original source, argument object, or tool history.
 - [ ] 2.5 Preserve session-pipeline pending-request persistence,
   stale/duplicate response rejection and recovery; preserve exact-set one-time
@@ -34,15 +34,15 @@
 
 ## 3. Ordered security stages and coverage
 
-- [ ] 3.1 Implement parse validation, hard deny, protected path, approval mode,
+- [x] 3.1 Implement parse validation, hard deny, protected path, approval mode,
   candidate construction, noninteractive trust-zone enforcement, actor match,
   safe policy, exact-set one-time matching, and prompt completion in the
   specified order.
-- [ ] 3.2 Track coverage per candidate; allow only when all candidates are
+- [x] 3.2 Track coverage per candidate; allow only when all candidates are
   covered and call-level invariants pass.
-- [ ] 3.3 Make internal exceptions, invalid enums, duplicate candidate IDs,
+- [x] 3.3 Make internal exceptions, invalid enums, duplicate candidate IDs,
   mismatched actor results, and impossible transitions terminal deny.
-- [ ] 3.4 Allow fully one-time/session/safe-covered calls when persistent state
+- [x] 3.4 Allow fully one-time/session/safe-covered calls when persistent state
   is unavailable; deny with `ApprovalStoreUnavailable` instead of prompting
   when any candidate still depends on that state.
 - [ ] 3.5 Let expected unresolved shell input offer only one-time approval and
