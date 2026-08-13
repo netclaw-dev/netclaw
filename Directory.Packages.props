@@ -53,6 +53,7 @@
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="$(ModelContextProtocolVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="$(MicrosoftAspNetCoreVersion)" />
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="$(MicrosoftAspNetCoreVersion)" />
