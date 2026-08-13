@@ -20,4 +20,10 @@
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="../../openspec/changes/structure-shell-approval-policy/evidence/*.json"
+          Link="ApprovalEvidence/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

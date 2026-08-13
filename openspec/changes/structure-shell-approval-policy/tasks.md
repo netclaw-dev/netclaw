@@ -4,15 +4,15 @@
   approval fact. Effective facts retain runtime semantics.
 - [x] 1.2 Keep all v2 grants exact until the user approves a new token-prefix
   grant.
-- [ ] 1.3 Keep `evidence/approval-matrix.json` byte-identical to the paired
+- [x] 1.3 Keep `evidence/approval-matrix.json` byte-identical to the paired
   ShellSyntaxTree artifact.
-- [ ] 1.4 Add `evidence/netclaw-policy-fixtures.json` with exact structured
+- [x] 1.4 Add `evidence/netclaw-policy-fixtures.json` with exact structured
   candidates, phrases, scopes, grant and safe inputs, coverage, ordered trace,
   and outcome for D02, D03, D07, D08, D09, D10, D11, D14, D17, and D18; tests
   must load explicit authority defaults and fields, not branch on IDs.
 - [ ] 1.5 Add adversarial dynamic identity, redirect, protected path, prefix
   collision, runtime loop, wrapper, provider, and unsafe-catalog cases.
-- [ ] 1.6 Run the PII audit and manually inspect every command and fixture.
+- [x] 1.6 Run the PII audit and manually inspect every command and fixture.
 
 ## 2. Typed coordinator and actor protocol
 
@@ -107,9 +107,11 @@
 - [x] 7.2 Consume effective `Value` for runtime checks and approved
   `AuthoredValue` only for the documented approval perspective.
 - [x] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.
-- [ ] 7.4 Check every effective or authored finite value whose existing
-  `Argument.IsPath` is true through `ToolPathPolicy`; treat
-  `AuthoredPathShape` as lexical-only and keep unknown path values strict.
+- [ ] 7.4 Check every finite effective value whose `Argument.IsPath` is true
+  through `ToolPathPolicy`. Keep D14 strict until ShellSyntaxTree supplies a
+  general parser-owned authored operand-role fact; after adoption, check every
+  finite authored path through the same policy. Treat `AuthoredPathShape` as
+  lexical-only and keep unknown path values strict.
 - [x] 7.5 Delete the broad Bash environment-variable relaxation and its
   superseded tests.
 - [ ] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.

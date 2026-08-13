@@ -601,15 +601,29 @@ Authorization SHALL use canonical ShellSyntaxTree completeness rather than a
 second control-flow tokenizer. Supported static loops SHALL expose candidates.
 Unsupported branches and runtime-generated loops SHALL remain strict.
 
+An effective finite argument SHALL enter path policy when the parser-owned
+`Argument.IsPath` role is true. An authored finite argument whose effective
+role is false SHALL remain strict until ShellSyntaxTree supplies a separate,
+general parser-owned authored operand-role fact. `AuthoredPathShape` SHALL NOT
+substitute for that fact or create file authority.
+
 A legacy scanner MAY add a denial when canonical analysis is incomplete. It
 SHALL NOT allow, create candidates, create persistent options, or widen scope.
 
-#### Scenario: Static loop exposes authored candidates
+#### Scenario: ShellSyntaxTree 0.3.2 keeps D14 path coverage strict
 
-- **GIVEN** ShellSyntaxTree 0.3.2 reports D14 authored values and the existing
-  parser-owned `Argument.IsPath` role
+- **GIVEN** ShellSyntaxTree 0.3.2 reports D14 finite authored values
+- **AND** its effective argument has `Argument.IsPath` false
 - **WHEN** the maintainer-approved authored-source policy evaluates it
-- **THEN** finite `cat` paths are checked individually
+- **THEN** the authored values do not create file authority
+- **AND** lexical `AuthoredPathShape` does not cover the candidate
+
+#### Scenario: General authored operand role unlocks finite path checks
+
+- **GIVEN** a later ShellSyntaxTree version reports D14 finite authored values
+- **AND** it supplies a parser-owned authored filesystem-operand role
+- **WHEN** the maintainer-approved authored-source policy evaluates it
+- **THEN** each finite `cat` path passes `ToolPathPolicy`
 - **AND** the presence of `for` alone does not force a prompt
 
 #### Scenario: Runtime iterator stays one-time

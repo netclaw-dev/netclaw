@@ -16,6 +16,7 @@
   "cases": [
     {
       "evidenceId": "D02",
+      "command": "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 | head -200; echo \"---EXIT $?---\"",
       "environment": {
         "platform": "Linux",
         "executablePath": "/bin/bash",
@@ -54,6 +55,7 @@
     },
     {
       "evidenceId": "D03",
+      "command": "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log",
       "environment": {
         "platform": "Linux",
         "executablePath": "/bin/bash",
@@ -97,6 +99,7 @@
     },
     {
       "evidenceId": "D07",
+      "command": "cd /work && git push upstream feature/update:automation/update 2>&1 | tail -5",
       "environment": {
         "platform": "Linux",
         "executablePath": "/bin/bash",
@@ -132,6 +135,7 @@
     },
     {
       "evidenceId": "D08",
+      "command": "cd /work && git ls-remote upstream feature/update; echo \"---LOCAL---\"; git rev-parse HEAD; git log --oneline -3",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
       "available": {
@@ -164,6 +168,7 @@
     },
     {
       "evidenceId": "D09",
+      "command": "cd /work && gh api repos/example/project/commits/deadbeef --jq '{sha: .sha, message: .commit.message}' 2>&1; echo \"===RUN 123456===\"; gh run view 123456 --repo example/project --json status,conclusion 2>&1 | head -40",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
       "available": {
@@ -198,6 +203,7 @@
     },
     {
       "evidenceId": "D10",
+      "command": "cd /work && git fetch upstream feature/update 2>&1 | tail -2 && echo \"===REMOTE TIP===\" && git rev-parse FETCH_HEAD && git log --oneline -3 FETCH_HEAD && echo \"===HAS FIX?===\" && git show FETCH_HEAD:src/App/App.csproj | grep -n \"ProtocolPackage\"; echo \"exit: $?\"",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
       "available": {
@@ -248,6 +254,7 @@
     },
     {
       "evidenceId": "D11",
+      "command": "cd /work && echo \"===PARENT===\" && gh api repos/example/project/commits/deadbeef --jq '.parents[] | {sha: .sha}' 2>&1; echo \"===CURRENT PR HEAD===\" && gh pr view 123 --repo example/project --json headRefOid,updatedAt",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
       "available": {
@@ -279,6 +286,7 @@
     },
     {
       "evidenceId": "D17",
+      "command": "cd /work && echo \"===API BRANCH===\" && gh api repos/example/project/branches/feature%2Fupdate --jq '.commit.sha' 2>&1; echo \"===GIT REMOTE===\" && git ls-remote upstream 'refs/heads/feature/update'; echo \"===COMMIT===\" && gh api repos/example/project/commits/deadbeef --jq '{sha: .sha, message: .commit.message}' 2>&1",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
       "available": {
@@ -314,6 +322,7 @@
     },
     {
       "evidenceId": "D14",
+      "command": "for f in src/App/App.csproj src/Hosting/Hosting.csproj src/Discovery/Discovery.csproj tests/Hosting.Tests/Hosting.Tests.csproj; do echo \"=== $f ===\"; cat /work/$f; done",
       "environment": {
         "platform": "Linux",
         "executablePath": "/bin/bash",
@@ -336,12 +345,12 @@
       },
       "candidates": [
         { "id": 0, "tokens": ["echo"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "ReviewedSafePolicy" },
-        { "id": 1, "tokens": ["cat"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "PersistentGlobal" }
+        { "id": 1, "tokens": ["cat"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "Uncovered" }
       ],
       "authoredPathFacts": [
         {
           "candidateId": 1,
-          "argumentIsPath": true,
+          "argumentIsPath": false,
           "effectiveValue": "Unknown",
           "authoredValues": [
             "/work/src/App/App.csproj",
@@ -350,18 +359,19 @@
             "/work/tests/Hosting.Tests/Hosting.Tests.csproj"
           ],
           "authoredPathShape": "Posix",
-          "expectedPathPolicy": "Allow"
+          "expectedPathPolicy": "RequiresApproval"
         }
       ],
       "expectedTrace": [
-        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "cat", "outcome": "Covered", "reason": "GlobalPhraseMatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": null },
+        { "stage": "CanonicalFacts", "candidateId": 1, "executableBasename": "cat", "outcome": "Uncovered", "reason": "MissingAuthoredOperandRole", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 0, "executableBasename": "echo", "outcome": "Covered", "reason": "ReadOnlyUnderRealRoot", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": null, "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UnresolvedPathFacts", "coverage": null, "scopeRelation": null, "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
+      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UnresolvedPathFacts" }
     },
     {
       "evidenceId": "D18",
+      "command": "gh pr close 123 --repo example/project --comment \"Closing this automated update because it is being replaced by a coordinated change.\" 2>&1",
       "environment": {
         "platform": "Linux",
         "executablePath": "/bin/bash",
