@@ -323,10 +323,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
-            "safe-verb-null-device-redirect-allows",
+            "safe-verb-null-device-redirect-prompts",
             Bash("ls -la 2>/dev/null"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["ls"])),
         Case(
             "mutating-verb-project-prompts",
             Bash("git push"),
@@ -802,10 +802,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
-            "powershell7-local-redirect-keeps-safe-command",
+            "powershell7-local-redirect-prompts-for-writer",
             PowerShell7(@"Get-Content .\input.txt > .\output.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["Get-Content"])),
         Case(
             "powershell7-protected-path-denies-before-approval",
             PowerShell7(@"Get-Content C:\protected\config\secret.txt"),
@@ -992,20 +992,20 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
         Case(
-            "combined-output-project-redirect-safe-verb-allows",
+            "combined-output-project-redirect-safe-verb-prompts",
             Bash("git status &> result.log"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["git status"])),
         Case(
-            "combined-output-append-project-redirect-safe-verb-allows",
+            "combined-output-append-project-redirect-safe-verb-prompts",
             Bash("git status &>> result.log"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["git status"])),
         Case(
-            "numeric-source-project-redirect-safe-verb-allows",
+            "numeric-source-project-redirect-safe-verb-prompts",
             Bash("git status 3> result.log"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["git status"])),
         Case(
             "fd-dup-redirect-mutating-no-grant-prompts-not-messy",
             Bash("git push origin dev 2>&1 | tail -2"),
@@ -1299,10 +1299,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "printf"),
             ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "persistent:printf")),
         Case(
-            "workload-edit-search-pipeline-redirect-in-project-allows",
+            "workload-edit-search-pipeline-redirect-in-project-prompts-for-writer",
             Bash("grep -R \"error\" logs | head -20 > reports/errors.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Require(["head"])),
         Case(
             "workload-edit-search-pipeline-redirect-external-prompts",
             Bash(

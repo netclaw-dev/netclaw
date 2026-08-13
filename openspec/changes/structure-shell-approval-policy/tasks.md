@@ -10,7 +10,7 @@
   candidates, phrases, scopes, grant and safe inputs, coverage, ordered trace,
   and outcome for D02, D03, D07, D08, D09, D10, D11, D14, D17, and D18; tests
   must load explicit authority defaults and fields, not branch on IDs.
-- [ ] 1.5 Add adversarial dynamic identity, redirect, protected path, prefix
+- [x] 1.5 Add adversarial dynamic identity, redirect, protected path, prefix
   collision, runtime loop, wrapper, provider, and unsafe-catalog cases.
 - [x] 1.6 Run the PII audit and manually inspect every command and fixture.
 
@@ -28,7 +28,7 @@
   `ToolApprovalAttempt`.
 - [x] 2.4 Route `DispatchingToolExecutor` through the coordinator without
   changing the original source, argument object, or tool history.
-- [ ] 2.5 Preserve session-pipeline pending-request persistence,
+- [x] 2.5 Preserve session-pipeline pending-request persistence,
   stale/duplicate response rejection and recovery; preserve exact-set one-time
   retry in `ToolApprovalAttempt` and actor-owned subagent scope inheritance.
 
@@ -47,9 +47,9 @@
   reviewed-safe phrase coverage for an interactive run. Deny with
   `ApprovalStoreUnavailable` rather than open a prompt when any candidate still
   depends on persistent state.
-- [ ] 3.5 Let expected unresolved shell input offer only one-time approval and
+- [x] 3.5 Let expected unresolved shell input offer only one-time approval and
   deny; never create a reusable candidate.
-- [ ] 3.6 Keep legacy token scans deny-only and prove they cannot authorize,
+- [x] 3.6 Keep legacy token scans deny-only and prove they cannot authorize,
   create persistence choices, or widen scope.
 - [x] 3.7 Apply reviewed-safe phrase coverage only when interactive approval is
   available. Prove that unattended calls need explicit one-time or stored-grant
@@ -66,9 +66,9 @@
   internal store failures deny and never salvage partial authority.
 - [x] 4.4 Use the same typed phrase comparison for one-time, session,
   persistent, global, and folder coverage.
-- [ ] 4.5 Require real exact scope, normalization, containment, and symlink
+- [x] 4.5 Require real exact scope, normalization, containment, and symlink
   checks for folder grants; global grants do not require cwd.
-- [ ] 4.6 Preserve prompt display/spoof protections and store one clean entry per
+- [x] 4.6 Preserve prompt display/spoof protections and store one clean entry per
   persistable candidate.
 - [x] 4.7 Update CLI list/add/revoke behavior and operator docs for schema 3,
   including manual rollback by restoring the preserved `.v2.bak` while the

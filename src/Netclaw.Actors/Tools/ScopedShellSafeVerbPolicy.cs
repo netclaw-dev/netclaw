@@ -136,6 +136,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                 VerbTokens: { }
             }
             || sourceOccurrence is null
+            || ShellRedirectPolicyFacts.HasFileWritingRedirect(sourceOccurrence)
             || !_safeVerbs.TryMatchReviewedDiagnostic(
                 shell,
                 candidate.VerbTokens,
@@ -171,7 +172,6 @@ internal sealed class ScopedShellSafeVerbPolicy
             }
             || sourceOccurrence is null
             || string.IsNullOrWhiteSpace(intentDirectory)
-            || ShellRedirectPolicyFacts.HasFileWritingRedirect(sourceOccurrence)
             || !IsSafePath(intentDirectory, intentDirectory)
             || !IsReviewedDiagnostic(
                 candidate,

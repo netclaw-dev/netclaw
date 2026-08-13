@@ -52,7 +52,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
         var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
         var commands = matrix.Cases.ToDictionary(item => item.Id, item => item.Command);
 
-        Assert.Equal(1, fixtures.SchemaVersion);
+        Assert.Equal(2, fixtures.SchemaVersion);
         Assert.Equal("shell_execute", fixtures.FixtureDefaults.ToolName);
         Assert.Equal("Personal", fixtures.FixtureDefaults.Audience);
         Assert.Equal("Approval", fixtures.FixtureDefaults.ApprovalMode);
@@ -64,6 +64,18 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Equal("/work", fixtures.FixtureDefaults.ProjectDirectory);
         Assert.Null(fixtures.FixtureDefaults.InheritedWorkingDirectory);
         Assert.Equal(10, fixtures.Cases.Count);
+        Assert.Equal(
+            Enumerable.Range(1, 11).Select(number => $"A{number:00}"),
+            fixtures.AdversarialCases.Select(item => item.Id));
+        Assert.Equal(
+            11,
+            fixtures.AdversarialCases.Select(item => item.Category).Distinct().Count());
+        Assert.All(fixtures.AdversarialCases, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.Command));
+            Assert.False(string.IsNullOrWhiteSpace(item.Expected.Outcome));
+            Assert.True(item.Expected.ActorCheckCount >= 0);
+        });
 
         foreach (var fixture in fixtures.Cases)
         {
@@ -100,8 +112,8 @@ public sealed partial class ShellApprovalEvidenceContractTests
     {
         var json = File.ReadAllText(EvidencePath(PolicyFixturesFile));
         var malformed = json.Replace(
-            "\"schemaVersion\": 1,",
-            "\"schemaVersion\": 1, \"unexpected\": true,",
+            "\"schemaVersion\": 2,",
+            "\"schemaVersion\": 2, \"unexpected\": true,",
             StringComparison.Ordinal);
 
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(

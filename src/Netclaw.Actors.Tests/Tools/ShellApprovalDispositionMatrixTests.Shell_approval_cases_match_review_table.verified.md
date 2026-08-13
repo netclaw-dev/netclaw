@@ -25,7 +25,7 @@
 | safe-verb-traversal-external-path-prompts | Bash | Personal | Project | Interactive | cat safe/../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
 | safe-verb-bash-provider-looking-relative-path-allows | Bash | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-verb-external-redirect-prompts | Bash | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
-| safe-verb-null-device-redirect-allows | Bash | Personal | Project | Interactive | ls -la 2>/dev/null | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-verb-null-device-redirect-prompts | Bash | Personal | Project | Interactive | ls -la 2>/dev/null | none | RequiresApproval | approval required | ls | No |
 | mutating-verb-project-prompts | Bash | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
 | all-safe-compound-allows | Bash | Personal | Project | Interactive | git status && git ls-tree HEAD | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | four-safe-mixed-operator-clauses-allow | Bash | Personal | Project | Interactive | git status && git ls-tree HEAD \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -113,7 +113,7 @@
 | powershell7-callback-region-body-grant-does-not-cover-host | PowerShell7 | Personal | Project | Interactive | Get-ChildItem \| ForEach-Object { Remove-Item .\victim.txt } | persistent[project]:Remove-Item | RequiresApproval | approval required | ForEach-Object | No |
 | powershell7-unknown-region-grants-do-not-cover-incomplete-receiver | PowerShell7 | Personal | Project | Interactive | Invoke-Custom { Remove-Item .\victim.txt } | persistent[project]:Invoke-Custom, persistent[project]:Remove-Item | RequiresApproval | approval required | none | Yes |
 | powershell7-alias-resolves-before-safe-verb-check | PowerShell7 | Personal | Project | Interactive | gci | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| powershell7-local-redirect-keeps-safe-command | PowerShell7 | Personal | Project | Interactive | Get-Content .\input.txt > .\output.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| powershell7-local-redirect-prompts-for-writer | PowerShell7 | Personal | Project | Interactive | Get-Content .\input.txt > .\output.txt | none | RequiresApproval | approval required | Get-Content | No |
 | powershell7-protected-path-denies-before-approval | PowerShell7 | Personal | Project | Interactive | Get-Content C:\protected\config\secret.txt | persistent[anywhere]:Get-Content | Denied | shell_references_protected_path | none | Not applicable |
 | powershell7-provider-drive-is-reviewed | PowerShell7 | Personal | Project | Interactive | Get-Content Env:\Path | none | RequiresApproval | approval required | none | Yes |
 | powershell7-environment-provider-value-stays-strict | PowerShell7 | Personal | Project | Interactive | Get-Content Env:SECRET | none | RequiresApproval | approval required | none | Yes |
@@ -151,9 +151,9 @@
 | fd-dup-redirect-safe-pipeline-allows | Bash | Personal | Project | Interactive | git ls-tree HEAD 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-close-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-move-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| combined-output-project-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status &> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| combined-output-append-project-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status &>> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| numeric-source-project-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 3> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| combined-output-project-redirect-safe-verb-prompts | Bash | Personal | Project | Interactive | git status &> result.log | none | RequiresApproval | approval required | git status | No |
+| combined-output-append-project-redirect-safe-verb-prompts | Bash | Personal | Project | Interactive | git status &>> result.log | none | RequiresApproval | approval required | git status | No |
+| numeric-source-project-redirect-safe-verb-prompts | Bash | Personal | Project | Interactive | git status 3> result.log | none | RequiresApproval | approval required | git status | No |
 | fd-dup-redirect-mutating-no-grant-prompts-not-messy | Bash | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev | No |
 | dynamic-fd-redirect-fails-closed | Bash | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
 | background-list-prompts-for-mutating-tail | Bash | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
@@ -210,7 +210,7 @@
 | workload-edit-remove-grant-allows | Bash | Personal | Project | Interactive | rm -- src/obsolete.txt | persistent[project]:rm | Allowed | StoredApproval | none | Not applicable |
 | workload-edit-printf-redirect-prompts | Bash | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | none | RequiresApproval | approval required | printf | No |
 | workload-edit-printf-redirect-grant-allows | Bash | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | persistent[project]:printf | Allowed | StoredApproval | none | Not applicable |
-| workload-edit-search-pipeline-redirect-in-project-allows | Bash | Personal | Project | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-edit-search-pipeline-redirect-in-project-prompts-for-writer | Bash | Personal | Project | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | head | No |
 | workload-edit-search-pipeline-redirect-external-prompts | Bash | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | grep, head | No |
 | workload-edit-search-pipeline-redirect-external-grant-allows | Bash | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | persistent[external]:grep, persistent[external]:head | Allowed | StoredApproval | none | Not applicable |
 | workload-search-loop-inherited-state-prompts | Bash | Personal | Project | Interactive | for f in src/*.cs; do grep -n "TODO" "$f"; done | persistent[project]:grep | RequiresApproval | approval required | none | Yes |

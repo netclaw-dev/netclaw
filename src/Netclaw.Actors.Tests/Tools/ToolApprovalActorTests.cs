@@ -727,6 +727,93 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
+    public async Task Persistent_structured_batch_stores_each_clean_candidate_atomically()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = CreateStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var first = NativeCandidate("git status");
+            var second = NativeCandidate("head");
+
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [
+                    new ToolApprovalGrant(first, Directory: null),
+                    new ToolApprovalGrant(second, Directory: null)
+                ],
+                persistent: true,
+                ct);
+
+            var entries = store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
+            Assert.Equal(2, entries.Count);
+            Assert.Equal(
+                ["git status", "head"],
+                entries.Select(static entry => entry.Verb));
+
+            var result = await ((IShellApprovalMatchService)service).MatchShellCandidatesAsync(
+                new ShellApprovalMatchRequest(
+                    SessionId: null,
+                    TrustAudience.Personal,
+                    new ToolName("shell_execute"),
+                    TestShellEnvironment.Current,
+                    [
+                        new ShellGrantCandidate(new ShellPolicyCandidateId(0), first, RealDirectory: null),
+                        new ShellGrantCandidate(new ShellPolicyCandidateId(1), second, RealDirectory: null)
+                    ]),
+                ct);
+
+            Assert.All(result.CandidateMatches, match =>
+                Assert.Equal(ShellCoverageKind.PersistentGlobal, match.GrantCoverage));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Malformed_structured_batch_stores_no_partial_authority()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = CreateStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var malformed = new ApprovalCandidate("head", Directory: null)
+            {
+                Shell = NativeShell,
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.RecordApprovalCandidatesAsync(
+                    (ToolApprovalSessionId)"session-a",
+                    TrustAudience.Personal,
+                    new ToolName("shell_execute"),
+                    [
+                        new ToolApprovalGrant(NativeCandidate("git status"), Directory: null),
+                        new ToolApprovalGrant(malformed, Directory: null)
+                    ],
+                    persistent: true,
+                    ct));
+
+            Assert.Contains("InvalidData", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public async Task Typed_shell_batch_preserves_ids_and_store_status()
     {
         var ct = TestContext.Current.CancellationToken;

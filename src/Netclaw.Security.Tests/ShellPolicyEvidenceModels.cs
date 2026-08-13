@@ -14,6 +14,8 @@ internal sealed record PolicyFixtureCatalog
     public required PolicyFixtureDefaults FixtureDefaults { get; init; }
 
     public required List<PolicyFixtureCase> Cases { get; init; }
+
+    public required List<PolicyAdversarialCase> AdversarialCases { get; init; }
 }
 
 internal sealed record PolicyFixtureDefaults
@@ -67,6 +69,40 @@ internal sealed record PolicyFixtureCase
     public required List<PolicyTraceRow> ExpectedTrace { get; init; }
 
     public required PolicyExpectedFinal ExpectedFinal { get; init; }
+}
+
+internal sealed record PolicyAdversarialCase
+{
+    public required string Id { get; init; }
+
+    public required string Category { get; init; }
+
+    public required string Command { get; init; }
+
+    public required PolicyFixtureEnvironment Environment { get; init; }
+
+    public required string InitialWorkingDirectory { get; init; }
+
+    public required PolicyFixtureAuthority Available { get; init; }
+
+    public bool UseBundledSafeCatalog { get; init; }
+
+    public required PolicyAdversarialExpected Expected { get; init; }
+}
+
+internal sealed record PolicyAdversarialExpected
+{
+    public required string Outcome { get; init; }
+
+    public string? DenyReason { get; init; }
+
+    public List<string>? ApprovalCandidates { get; init; }
+
+    public bool? IsMessy { get; init; }
+
+    public List<string>? OptionKeys { get; init; }
+
+    public required int ActorCheckCount { get; init; }
 }
 
 internal sealed record PolicyFixtureEnvironment

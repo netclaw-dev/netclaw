@@ -49,7 +49,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                     catalog.FixtureDefaults.ProjectDirectory,
                     catalog.FixtureDefaults.Session.SessionDirectory,
                     catalog.FixtureDefaults.Session.SessionId),
-                CreateSafeVerbs(policyCase));
+                CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
             var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
             TestContext.Current.TestOutputHelper?.WriteLine(
                 $"{policyCase.EvidenceId}: outcome={decision.Outcome}; "
@@ -74,6 +74,60 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
         Assert.Equal(expectedOutcomes, actualOutcomes);
         Assert.Equal(expectedRows, actualRows);
+    }
+
+    [Fact]
+    public async Task Adversarial_policy_fixtures_fail_closed_through_the_coordinator()
+    {
+        var catalog = JsonSerializer.Deserialize(
+                          File.ReadAllBytes(EvidencePath()),
+                          ShellPolicyFixtureJsonContext.Default.PolicyFixtureCatalog)
+                      ?? throw new InvalidDataException("The policy fixture catalog has no root object.");
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse(
+            catalog.FixtureDefaults.ClockUtc,
+            CultureInfo.InvariantCulture));
+
+        foreach (var policyCase in catalog.AdversarialCases)
+        {
+            var invocation = CreateInvocation(catalog.FixtureDefaults, policyCase);
+            var approvals = CreateApprovals(policyCase.Available);
+            await using var harness = await ShellApprovalHarness.CreateAsync(
+                policyCase.Id,
+                invocation,
+                approvals,
+                fixture.ActorSystem,
+                TestContext.Current.CancellationToken,
+                timeProvider,
+                new ShellApprovalHarnessScope(
+                    catalog.FixtureDefaults.ProjectDirectory,
+                    catalog.FixtureDefaults.Session.SessionDirectory,
+                    catalog.FixtureDefaults.Session.SessionId),
+                policyCase.UseBundledSafeCatalog
+                    ? null
+                    : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
+
+            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            TestContext.Current.TestOutputHelper?.WriteLine(
+                $"{policyCase.Id} ({policyCase.Category}): outcome={decision.Outcome}; "
+                + $"deny={decision.DenyReason}; "
+                + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
+                + $"messy={decision.ApprovalContext?.IsMessy}; "
+                + $"checks={harness.ApprovalService.CheckCount}; "
+                + $"allow={decision.AllowReason}; "
+                + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
+                + $"trace={string.Join(", ", decision.ShellPolicyTrace.Rows.Select(row => $"{row.Stage}/{row.Reason}"))}");
+
+            Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
+            Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
+            Assert.Equal(
+                policyCase.Expected.ApprovalCandidates,
+                decision.ApprovalContext?.CandidateVerbs);
+            Assert.Equal(policyCase.Expected.IsMessy, decision.ApprovalContext?.IsMessy);
+            Assert.Equal(
+                policyCase.Expected.OptionKeys,
+                decision.ApprovalContext?.Options.Select(option => option.Key.Value).ToList());
+            Assert.Equal(policyCase.Expected.ActorCheckCount, harness.ApprovalService.CheckCount);
+        }
     }
 
     private static void AssertProjectedCandidates(
@@ -190,23 +244,75 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             defaults.InteractiveApprovalCapability == "Available");
     }
 
+    private static ShellApprovalInvocation CreateInvocation(
+        PolicyFixtureDefaults defaults,
+        PolicyAdversarialCase policyCase)
+    {
+        if (defaults.ToolName != "shell_execute"
+            || defaults.ApprovalMode != "Approval"
+            || defaults.PersistentStoreStatus != "Ready"
+            || defaults.InheritedWorkingDirectory is not null)
+        {
+            throw new InvalidDataException($"Unsupported fixture defaults: {policyCase.Id}.");
+        }
+
+        var host = policyCase.Environment switch
+        {
+            {
+                Grammar: "Bash",
+                Platform: "Linux",
+                PathStyle: "Posix",
+                ExecutablePath: "/bin/bash",
+                PowerShellDialect: null
+            } when policyCase.Environment.CommandArguments.SequenceEqual(["-c"])
+                => ShellApprovalHost.Bash,
+            {
+                Grammar: "PowerShell",
+                Platform: "Windows",
+                PathStyle: "Windows",
+                PowerShellDialect: "PowerShell7"
+            } => ShellApprovalHost.PowerShell7,
+            {
+                Grammar: "PowerShell",
+                Platform: "Windows",
+                PathStyle: "Windows",
+                PowerShellDialect: "WindowsPowerShell51"
+            } => ShellApprovalHost.WindowsPowerShell51,
+            _ => throw new InvalidDataException($"Unsupported fixture environment: {policyCase.Id}.")
+        };
+
+        return new ShellApprovalInvocation(
+            policyCase.Command,
+            ApprovalDirectoryShape.Project,
+            Enum.Parse<TrustAudience>(defaults.Audience),
+            defaults.InteractiveApprovalCapability == "Available",
+            host);
+    }
+
     private static ApprovalState CreateApprovals(PolicyFixtureCase policyCase)
-        => new(policyCase.Available.PersistentGrants
+        => CreateApprovals(policyCase.Available);
+
+    private static ApprovalState CreateApprovals(PolicyFixtureAuthority available)
+        => new(available.PersistentGrants
             .Select(CreatePersistentSeed)
-            .Concat(policyCase.Available.SessionGrants.Select(CreateSessionSeed))
+            .Concat(available.SessionGrants.Select(CreateSessionSeed))
             .ToList());
 
-    private static SafeVerbList CreateSafeVerbs(PolicyFixtureCase policyCase)
+    private static SafeVerbList CreateSafeVerbs(
+        PolicyFixtureAuthority available,
+        ShellExecutionEnvironment environment)
     {
-        if (policyCase.Available.SafePhrases.Any(phrase =>
+        if (available.SafePhrases.Any(phrase =>
                 phrase.Proof != "ReviewedDiagnostic"))
         {
             throw new InvalidDataException("The fixture has an unsupported safe-phrase proof.");
         }
 
         return SafeVerbList.FromVerbs(
-            ApprovalShell.Bash,
-            policyCase.Available.SafePhrases.Select(phrase =>
+            environment.Grammar == ShellGrammar.Bash
+                ? ApprovalShell.Bash
+                : ApprovalShell.PowerShell,
+            available.SafePhrases.Select(phrase =>
                 string.Join(' ', phrase.Tokens)));
     }
 
