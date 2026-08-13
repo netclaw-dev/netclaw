@@ -282,10 +282,32 @@ internal sealed class HostPlatformTemporaryPathInspector : IPlatformTemporaryPat
 
         try
         {
-            var directory = new DirectoryInfo(normalized);
-            var target = directory.ResolveLinkTarget(returnFinalTarget: true);
-            var resolved = target?.FullName ?? directory.FullName;
-            return ShellPathRules.TryNormalize(resolved, pathStyle, out resolvedRoot);
+            var fullPath = Path.GetFullPath(normalized);
+            var root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrEmpty(root))
+                return false;
+
+            var current = root;
+            var remainder = fullPath.Length > root.Length
+                ? fullPath[root.Length..]
+                : string.Empty;
+            var segments = remainder.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var segment in segments)
+            {
+                current = Path.Combine(current, segment);
+                if (!Directory.Exists(current))
+                    return false;
+
+                var target = new DirectoryInfo(current)
+                    .ResolveLinkTarget(returnFinalTarget: true);
+                if (target is not null)
+                    current = target.FullName;
+            }
+
+            return ShellPathRules.TryNormalize(current, pathStyle, out resolvedRoot);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

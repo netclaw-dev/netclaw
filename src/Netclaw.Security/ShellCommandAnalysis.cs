@@ -52,7 +52,7 @@ internal sealed class ShellCommandAnalyzer
         ParsedCommand parsed;
         try
         {
-            parsed = _environment.Parse(
+            parsed = _environment.ParseForApproval(
                 command,
                 workingDirectory,
                 publishAuthoredSourceFacts: depth == 0);

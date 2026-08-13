@@ -286,6 +286,34 @@ public sealed class PlatformTemporaryScopePolicyTests
         }
     }
 
+    [Fact]
+    public void Host_inspector_resolves_symlink_in_temporary_root_parent()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-temp-root-{Guid.NewGuid():N}");
+        var realParent = Path.Combine(testRoot, "real-parent");
+        var realTemp = Path.Combine(realParent, "temp");
+        var aliasParent = Path.Combine(testRoot, "alias-parent");
+        Directory.CreateDirectory(realTemp);
+        Directory.CreateSymbolicLink(aliasParent, realParent);
+
+        try
+        {
+            Assert.True(HostPlatformTemporaryPathInspector.Instance.TryResolveRoot(
+                Path.Combine(aliasParent, "temp"),
+                ShellPathStyle.Posix,
+                out var resolved));
+            Assert.Equal(realTemp, resolved);
+        }
+        finally
+        {
+            Directory.Delete(aliasParent);
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
     private static ToolAccessDecision Evaluate(
         ShellExecutionEnvironment environment,
         string tempRoot,
