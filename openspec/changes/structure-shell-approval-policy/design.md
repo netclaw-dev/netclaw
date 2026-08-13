@@ -3,6 +3,8 @@
 The exact sanitized harvest is `evidence/approval-matrix.json`. The approval
 store contained 435 Personal shell grants and no new persistent grant during
 the window. The observed responses were one-time, session, denied, or pending.
+Complex prompts can expose only `Once` and `Deny`. An observed `Once` response
+does not prove that the operator preferred one-time authority.
 
 Current ownership is split. `ToolAccessPolicy` performs synchronous policy,
 `DispatchingToolExecutor` coordinates asynchronous approval,
@@ -252,6 +254,12 @@ file. This avoids silently changing the authority set.
 
 Only a new version-3 grant can use `TokenPrefix`. The user sees that phrase in
 the approval surface before Netclaw stores the grant.
+
+A `LegacyExact` entry compares with the projected legacy candidate phrase. It
+does not compare with the full command line. A global `gh api` entry therefore
+covers both read and mutation calls whose projected phrase is `gh api`. This
+behavior preserves version-2 authority and reduces prompts. An operator can
+revoke that entry without a reset of unrelated approvals.
 
 ### 6. Use a reviewed immutable safe-policy catalog
 
