@@ -201,9 +201,13 @@ public sealed class SessionLogActorTests : TestKit
         {
             var dispatcher = SpawnDispatcher(Sys, basePath, timeProvider);
 
-            dispatcher.Tell(new TextOutput("audit-line") { SessionId = sessionId }, ActorRefs.NoSender);
+            // Buffered diagnostic first; the durable audit write below drains
+            // it synchronously (SessionLogActor.WriteDurable) — no dependence
+            // on the 1s FlushTick wall-clock timer, which is what made this
+            // test flaky on loaded Windows CI runners.
             timeProvider.Advance(TimeSpan.FromMilliseconds(1));
             dispatcher.Tell(new SessionLogDiagnostic(sessionId, "[2026-05-07T13:30:00.001+00:00] Diagnostic: provider sent request"), ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("audit-line") { SessionId = sessionId }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {
