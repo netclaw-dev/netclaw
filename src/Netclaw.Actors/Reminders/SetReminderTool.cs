@@ -128,10 +128,10 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                     return "Error: current_session delivery requires an active session context.";
 
                 if (!ChannelTypeExtensions.TryFromWireValue(context.ChannelType, out var parsedChannelType))
-                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Mattermost, Telegram, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
 
-                if (parsedChannelType is not (ChannelType.Slack or ChannelType.Discord or ChannelType.Tui or ChannelType.SignalR))
-                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Tui, SignalR). Current channel type: {parsedChannelType}.";
+                if (parsedChannelType is not (ChannelType.Slack or ChannelType.Discord or ChannelType.Mattermost or ChannelType.Telegram or ChannelType.Tui or ChannelType.SignalR))
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Mattermost, Telegram, Tui, SignalR). Current channel type: {parsedChannelType}.";
 
                 delivery = new ReminderDelivery
                 {

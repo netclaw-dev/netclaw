@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Telegram;
 
@@ -32,6 +33,7 @@ internal sealed class TelegramConversationActor : ChannelConversationActor<Teleg
         });
 
         Receive<StartTelegramProactiveChat>(HandleProactiveChat);
+        Receive<DeliverTrustedSessionTurn>(HandleTrustedSessionTurn);
     }
 
     public static Props CreateProps(TelegramChatId chatId, TelegramGatewayDependencies dependencies) =>
@@ -113,6 +115,27 @@ internal sealed class TelegramConversationActor : ChannelConversationActor<Teleg
         {
             Sender.Tell(new Status.Failure(new InvalidOperationException(
                 $"Telegram chat {message.ChatId.Value} is not allowed.")));
+            return;
+        }
+
+        var binding = GetOrCreateSessionBinding(
+            _chatId.Value.ToString(),
+            "chat",
+            () => TelegramSessionBindingActor.CreateProps(message.SessionId, _chatId, _dependencies));
+        binding.Forward(message);
+    }
+
+    private void HandleTrustedSessionTurn(DeliverTrustedSessionTurn message)
+    {
+        if (!TelegramGatewayActor.TryParseTelegramSessionId(message.SessionId, out var parsedChatId))
+        {
+            NackUnparseableSessionId(message);
+            return;
+        }
+
+        if (parsedChatId != _chatId)
+        {
+            NackConversationMismatch(message);
             return;
         }
 

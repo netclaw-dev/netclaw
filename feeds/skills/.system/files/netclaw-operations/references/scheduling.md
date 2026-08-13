@@ -30,7 +30,7 @@ Rules:
 - Always choose `delivery_kind` explicitly.
 - Do not try to route via `delivery_instructions`.
 - `current_session` is the session check-back path and should be preferred for
-  conversational follow-ups in Slack/TUI/SignalR sessions.
+  conversational follow-ups in Slack, Discord, Mattermost, Telegram, TUI, and SignalR sessions.
 - `channel` requires both transport + address and resolves names/handles to
   canonical IDs at set time; unresolved targets fail loud.
 - Discord reminder targets must be explicit because channel IDs and user IDs are

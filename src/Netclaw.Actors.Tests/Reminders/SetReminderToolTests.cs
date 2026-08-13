@@ -296,6 +296,44 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Current_session_telegram_persists_session_and_origin_channel_type()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
+        var context = TestToolExecutionContext.CreateBound("8962863491/chat", null, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.TrustedInstance,
+            ChannelType = "telegram"
+        });
+
+        var execution = Task.Run(() => tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "telegram-current-session",
+            ["Name"] = "telegram-current-session",
+            ["Prompt"] = "Check Telegram delivery",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "5m",
+            ["DeliveryKind"] = "current_session"
+        }, context));
+
+        var command = await probe.ExpectMsgAsync<SaveReminderCommand>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryKind.CurrentSession, command.Definition.Delivery.Kind);
+        Assert.Equal("8962863491/chat", command.Definition.Delivery.SessionId);
+        Assert.Equal(ChannelType.Telegram, command.Definition.Delivery.OriginChannelType);
+
+        probe.Reply(new ReminderSavedResponse(
+            command.Definition.Id,
+            command.Definition.Title,
+            true,
+            _timeProvider.GetUtcNow().AddMinutes(5)));
+
+        await execution;
+    }
+
+    [Fact]
     public async Task Mode_B_rejected_for_unsupported_origin_channel_type()
     {
         var probe = CreateTestProbe();

@@ -9,10 +9,12 @@ using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Channels.Telegram;
 
@@ -28,7 +30,9 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
     private readonly Dictionary<string, PendingApproval> _pendingApprovals = new(StringComparer.Ordinal);
+    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private volatile bool _processingIndicatorActive;
+    private bool _deliveredThisTurn;
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -47,6 +51,7 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         ReceiveAsync<OutputReceived>(HandleOutputAsync);
         ReceiveAsync<TelegramCallbackQuery>(HandleCallbackAsync);
         ReceiveAsync<StartTelegramProactiveChat>(HandleProactiveChatAsync);
+        ReceiveAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         Receive<OutputTerminated>(message =>
         {
             if (message.Generation == _handle.Generation)
@@ -101,6 +106,66 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     {
         await EnsureInitializedAsync();
         Sender.Tell(new TelegramProactiveChatAck(message.SessionId));
+    }
+
+    private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
+    {
+        var ackTarget = Sender;
+        if (message.SessionId != _sessionId)
+        {
+            ackTarget.Tell(CommandNack.For(_sessionId, "Session id mismatch"));
+            return;
+        }
+
+        if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
+        {
+            ackTarget.Tell(CommandNack.For(_sessionId, closedReason));
+            return;
+        }
+
+        await EnsureInitializedAsync();
+        var writer = _handle.InputQueue;
+        if (writer is null)
+        {
+            ackTarget.Tell(CommandNack.For(_sessionId, "Telegram session pipeline not initialized"));
+            return;
+        }
+
+        var input = new ChannelInput
+        {
+            SenderId = message.Source.SenderId,
+            ChannelId = _chatId.Value.ToString(),
+            MessageId = message.Source.MessageId,
+            Audience = message.Source.Audience,
+            Boundary = message.Source.Boundary,
+            Principal = message.Source.Principal,
+            Provenance = message.Source.Provenance,
+            Contents = [new TextContent(message.Content)],
+            ReceivedAt = message.Source.ReceivedAt,
+            DefaultDeliveryTarget = BuildDefaultDeliveryTarget(),
+            RequestedDeliveryTarget = message.Source.RequestedDeliveryTarget,
+            ReminderId = message.Source.ReminderId,
+            AckTarget = ackTarget
+        };
+
+        if (message.Source.DeliveryObserver is { } observer
+            && message.Source.ReminderId is { } reminderKey
+            && !string.IsNullOrWhiteSpace(reminderKey.Value))
+            _reminderDeliveryObservers[reminderKey] = observer;
+
+        try
+        {
+            using var writeCts = new CancellationTokenSource(OperationTimeout);
+            await writer.WriteAsync(input, writeCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline enqueue timeout"));
+        }
+        catch (ChannelClosedException)
+        {
+            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
+        }
     }
 
     private async Task EnsureInitializedAsync()
@@ -189,7 +254,10 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             {
                 var text = output.Text;
                 if (!string.IsNullOrWhiteSpace(text))
+                {
                     await _dependencies.Transport.SendTextAsync(_chatId.Value, text);
+                    _deliveredThisTurn = true;
+                }
                 break;
             }
 
@@ -197,10 +265,27 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 await _dependencies.Transport.SendTextAsync(
                     _chatId.Value,
                     $"Sorry, NetClaw had a problem: {output.Message}");
+                _deliveredThisTurn = true;
                 break;
 
             case FileOutput output:
-                await SendFileOutputAsync(output);
+                if (await SendFileOutputAsync(output))
+                    _deliveredThisTurn = true;
+                break;
+
+            case TurnCompleted completed:
+                if (completed.SourceReminderId is { } reminderKey
+                    && _reminderDeliveryObservers.Remove(reminderKey, out var observer))
+                {
+                    observer.Tell(new ReminderDeliveryResult(
+                        reminderKey,
+                        ChannelType.Telegram,
+                        _deliveredThisTurn,
+                        _deliveredThisTurn ? null : "Telegram post did not succeed",
+                        completed.TimestampMs));
+                }
+
+                _deliveredThisTurn = false;
                 break;
 
             case ToolInteractionRequest request
@@ -353,12 +438,12 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             _pendingApprovals.Remove(token);
     }
 
-    private async Task SendFileOutputAsync(FileOutput output)
+    private async Task<bool> SendFileOutputAsync(FileOutput output)
     {
         if (!File.Exists(output.FilePath))
         {
             _log.Warning("File not found for Telegram upload: {Path}", output.FilePath);
-            return;
+            return false;
         }
 
         try
@@ -370,14 +455,17 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 output.FileName,
                 cts.Token);
             _log.Info("Uploaded file to Telegram chat: {FileName}", output.FileName);
+            return true;
         }
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out uploading file {FileName} to Telegram chat", output.FileName);
+            return false;
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to upload file {FileName} to Telegram chat", output.FileName);
+            return false;
         }
     }
 
@@ -448,8 +536,17 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             null);
     }
 
+    private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget() => new(
+        "telegram",
+        _chatId.Value > 0 ? "direct_message" : "destination",
+        _chatId.Value.ToString(),
+        _chatId.Value.ToString());
+
     protected override void PostStop()
     {
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Telegram, false, "Telegram session stopped before delivery"));
+        _reminderDeliveryObservers.Clear();
         Timers.Cancel(TypingTimerKey);
         _handle.Dispose();
         base.PostStop();
