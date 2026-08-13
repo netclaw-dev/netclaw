@@ -267,24 +267,25 @@ internal static class UpdateCommand
                 var targetPath = Path.Combine(installDir, binaryName);
                 var backupPath = targetPath + ".backup";
 
-                // Backup existing binary, then move the new one into place.
-                // A stale backup may be transiently locked (AV scan); fail
-                // loudly instead of crashing the process mid-swap.
                 try
                 {
-                    if (File.Exists(targetPath))
-                    {
-                        if (File.Exists(backupPath))
-                            File.Delete(backupPath);
-                        File.Move(targetPath, backupPath);
-                    }
-
-                    File.Move(sourcePath, targetPath);
+                    // Swap with automatic rollback: a failed swap restores the
+                    // previous binary so the install directory is never left
+                    // without an executable (which would brick the CLI).
+                    SwapBinaryIntoPlace(sourcePath, targetPath, backupPath);
                 }
                 catch (Exception ex)
                 {
+                    var targetRestored = File.Exists(targetPath);
                     Console.WriteLine($"\n  Failed to replace {binaryName}: {ex.Message}");
-                    Console.WriteLine("  If the install directory is left without a binary, re-run 'netclaw update' to complete the swap.");
+                    if (targetRestored)
+                    {
+                        Console.WriteLine("  The previous binary was restored. The daemon is stopped; start it with 'netclaw daemon start'.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  The install directory is missing {binaryName}. Restore it from {binaryName}.backup, then start the daemon with 'netclaw daemon start'.");
+                    }
                     return 1;
                 }
 
@@ -510,6 +511,49 @@ internal static class UpdateCommand
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Replaces <paramref name="targetPath"/> with
+    /// <paramref name="sourcePath"/>, preserving the previous binary at
+    /// <paramref name="backupPath"/>. On failure the previous binary is
+    /// restored to <paramref name="targetPath"/> so a failed swap never
+    /// leaves the install directory without an executable.
+    /// </summary>
+    /// <param name="sourcePath">The new binary to install.</param>
+    /// <param name="targetPath">The installed binary to replace.</param>
+    /// <param name="backupPath">Where the previous binary is preserved.</param>
+    internal static void SwapBinaryIntoPlace(string sourcePath, string targetPath, string backupPath)
+    {
+        var movedOldToBackup = false;
+        try
+        {
+            if (File.Exists(targetPath))
+            {
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+                File.Move(targetPath, backupPath);
+                movedOldToBackup = true;
+            }
+
+            File.Move(sourcePath, targetPath);
+        }
+        catch
+        {
+            // Roll the previous binary back so a failed swap leaves a
+            // working binary in place instead of a missing executable.
+            if (movedOldToBackup && !File.Exists(targetPath) && File.Exists(backupPath))
+            {
+                try { File.Move(backupPath, targetPath); }
+                catch (Exception rollbackEx)
+                {
+                    // Best-effort rollback; the original swap failure is
+                    // rethrown below and reported to the user.
+                    Console.Error.WriteLine($"warn: failed to restore {targetPath} from {backupPath}: {rollbackEx.Message}");
+                }
+            }
+            throw;
+        }
     }
 
     /// <summary>

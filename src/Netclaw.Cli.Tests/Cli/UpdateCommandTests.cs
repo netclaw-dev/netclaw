@@ -311,9 +311,82 @@ public sealed class UpdateCommandTests : IDisposable
 
         // The running process's backup is the very image this process executes
         // from; on Windows DeleteFile fails with UnauthorizedAccessException.
-        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: backupPath, isWindows: true);
+        // NTFS path comparison is case-insensitive, so pin that here — a
+        // regression to Ordinal would leave the backup deleted.
+        var runningBackupPath = Path.Combine(_dir.Path, "NETCLAW.EXE.BACKUP");
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath, isWindows: true);
 
         Assert.True(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void SwapBinaryIntoPlace_ReplacesTarget_AndBacksUpOldBinary()
+    {
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+
+        UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath);
+
+        Assert.Equal("new image", File.ReadAllText(targetPath));
+        Assert.Equal("old image", File.ReadAllText(backupPath));
+    }
+
+    [Fact]
+    public void SwapBinaryIntoPlace_RestoresOldBinary_WhenNewBinaryMoveFails()
+    {
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+
+        // Make the final move fail after the old binary was backed up: the
+        // install directory must never be left without an executable.
+        File.Delete(sourcePath);
+
+        Assert.ThrowsAny<Exception>(() => UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath));
+        // The old binary is rolled back into place; the backup is consumed by
+        // the restore, so the install directory is left with a working binary.
+        Assert.Equal("old image", File.ReadAllText(targetPath));
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void SwapBinaryIntoPlace_LeavesTargetIntact_WhenStaleBackupDeleteFails()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return; // permission simulation below is Unix-only and ineffective for root
+
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+        File.WriteAllText(backupPath, "stale image");
+        var dir = Path.GetDirectoryName(targetPath)!;
+        var originalMode = File.GetUnixFileMode(dir);
+
+        try
+        {
+            // Remove write permission on the directory so the stale-backup
+            // delete fails with UnauthorizedAccessException — the same failure
+            // class as an AV-locked file on Windows. The target must be left
+            // untouched (no half-swap).
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            Assert.ThrowsAny<Exception>(() => UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath));
+            Assert.Equal("old image", File.ReadAllText(targetPath));
+            Assert.Equal("stale image", File.ReadAllText(backupPath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, originalMode);
+        }
     }
 
     [Fact]
