@@ -602,10 +602,10 @@ second control-flow tokenizer. Supported static loops SHALL expose candidates.
 Unsupported branches and runtime-generated loops SHALL remain strict.
 
 An effective finite argument SHALL enter path policy when the parser-owned
-`Argument.IsPath` role is true. An authored finite argument whose effective
-role is false SHALL remain strict until ShellSyntaxTree supplies a separate,
-general parser-owned authored operand-role fact. `AuthoredPathShape` SHALL NOT
-substitute for that fact or create file authority.
+`Argument.IsPath` role is true. ShellSyntaxTree 0.3.3 `Exact` and `FiniteSet`
+`AuthoredFileSystemValue` facts SHALL also enter path policy. Unknown and all
+other alternatives SHALL stay strict. `AuthoredPathShape` SHALL NOT substitute
+for the stronger fact or create file authority.
 
 A legacy scanner MAY add a denial when canonical analysis is incomplete. It
 SHALL NOT allow, create candidates, create persistent options, or widen scope.
@@ -618,10 +618,10 @@ SHALL NOT allow, create candidates, create persistent options, or widen scope.
 - **THEN** the authored values do not create file authority
 - **AND** lexical `AuthoredPathShape` does not cover the candidate
 
-#### Scenario: General authored operand role unlocks finite path checks
+#### Scenario: ShellSyntaxTree 0.3.3 unlocks finite D14 path checks
 
-- **GIVEN** a later ShellSyntaxTree version reports D14 finite authored values
-- **AND** it supplies a parser-owned authored filesystem-operand role
+- **GIVEN** ShellSyntaxTree 0.3.3 reports a finite D14
+  `AuthoredFileSystemValue`
 - **WHEN** the maintainer-approved authored-source policy evaluates it
 - **THEN** each finite `cat` path passes `ToolPathPolicy`
 - **AND** the presence of `for` alone does not force a prompt
@@ -686,9 +686,9 @@ ShellSyntaxTree analysis.
 
 PowerShell SHALL use the selected dialect and `PwshInitialStateMode.Unknown`.
 Netclaw SHALL use effective values for runtime and deny policy. It MAY use
-ShellSyntaxTree 0.3.2 authored values only for the explicitly approved approval
-perspective. Unknown policy-relevant values SHALL not create reusable or safe
-coverage.
+authored values only for the approved approval perspective. It SHALL route
+ShellSyntaxTree 0.3.3 authored filesystem values through path policy. Unknown
+policy-relevant values SHALL not create reusable or safe coverage.
 
 Deny-only defensive scans MAY deny incomplete input but SHALL never authorize
 it.

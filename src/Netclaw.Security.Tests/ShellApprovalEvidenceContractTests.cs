@@ -7,6 +7,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Netclaw.Configuration;
+using Netclaw.Tools;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -18,7 +20,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string PolicyFixturesFile = "netclaw-policy-fixtures.json";
     private const string PostMergeHarvestFile = "post-1890-approval-harvest.json";
     private const string ApprovalMatrixSha256 =
-        "d2a6e64421af337d1c54f1f955934057398176b456e585bfce015ef7ffa24e7d";
+        "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
 
     [Fact]
     public void Approval_matrix_matches_the_locked_cross_repository_artifact()
@@ -139,13 +141,16 @@ public sealed partial class ShellApprovalEvidenceContractTests
                 Assert.Equal("Unknown", fact.EffectiveValue);
                 var authored = Assert.IsType<ShellValueDomain.FiniteSet>(argument.AuthoredValue);
                 Assert.Equal(fact.AuthoredValues, authored.Values);
+                var authoredFileSystem = Assert.IsType<ShellValueDomain.FiniteSet>(
+                    argument.AuthoredFileSystemValue);
+                Assert.Equal(fact.AuthoredFileSystemValues, authoredFileSystem.Values);
                 Assert.Equal(fact.AuthoredPathShape, argument.AuthoredPathShape.ToString());
             }
         }
     }
 
     [Fact]
-    public void Authored_path_fixture_keeps_missing_operand_role_strict()
+    public void Authored_path_fixture_uses_the_strong_filesystem_domain()
     {
         var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
         var fixture = Assert.Single(fixtures.Cases, item => item.AuthoredPathFacts is { Count: > 0 });
@@ -159,8 +164,45 @@ public sealed partial class ShellApprovalEvidenceContractTests
 
         Assert.False(fact.ArgumentIsPath);
         Assert.Equal(fact.ArgumentIsPath, argument.Argument.IsPath);
-        Assert.Equal("RequiresApproval", fact.ExpectedPathPolicy);
-        Assert.Equal("RequiresApproval", fixture.ExpectedFinal.Outcome);
+        var authoredFileSystem = Assert.IsType<ShellValueDomain.FiniteSet>(
+            argument.AuthoredFileSystemValue);
+        Assert.Equal(fact.AuthoredFileSystemValues, authoredFileSystem.Values);
+        Assert.Equal("Allow", fact.ExpectedPathPolicy);
+        Assert.Equal("Allow", fixture.ExpectedFinal.Outcome);
+    }
+
+    [Fact]
+    public void D14_fixture_is_covered_by_its_typed_grant_and_safe_paths()
+    {
+        var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
+        var fixture = Assert.Single(fixtures.Cases, item => item.EvidenceId == "D14");
+        var environment = CreateEnvironment(fixture.Environment);
+        var matcher = new ShellApprovalMatcher(environment);
+        var arguments = new Dictionary<string, object?>
+        {
+            ["Command"] = fixture.Command,
+            ["WorkingDirectory"] = fixture.InitialWorkingDirectory,
+        };
+        var grants = fixture.Available.PersistentGrants.Select(grant =>
+            ApprovalEntry.CreateTokenPrefix(
+                Enum.Parse<ApprovalShell>(grant.Shell),
+                grant.Tokens,
+                grant.Directory)).ToList();
+
+        var invocation = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            arguments);
+
+        Assert.False(invocation.IsMessy);
+        Assert.True(matcher.IsApproved(
+            new ToolName("shell_execute"),
+            arguments,
+            grants,
+            fixture.InitialWorkingDirectory));
+        Assert.False(new ToolPathPolicy(environment, ["/protected"])
+            .CommandReferencesDeniedPath(
+                fixture.Command,
+                fixture.InitialWorkingDirectory));
     }
 
     [Fact]
@@ -514,6 +556,8 @@ internal sealed record PolicyAuthoredPathFact
     public required string EffectiveValue { get; init; }
 
     public required List<string> AuthoredValues { get; init; }
+
+    public required List<string> AuthoredFileSystemValues { get; init; }
 
     public required string AuthoredPathShape { get; init; }
 

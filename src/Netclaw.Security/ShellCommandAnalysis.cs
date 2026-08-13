@@ -340,7 +340,8 @@ public sealed record ShellCommandAnalysis
                 && !IsAccountedExecutionRegionArgument(
                     command,
                     arg,
-                    accountedRegionArguments))
+                    accountedRegionArguments)
+                && !HasBoundedAuthoredFileSystemValue(command, arg))
             || command.Clause.Args.Any(static arg =>
                 arg.IsPath
                 && arg.Kind != ArgKind.Glob
@@ -412,6 +413,14 @@ public sealed record ShellCommandAnalysis
         => argument.Argument.Kind == ArgKind.DynamicSkip
             && accountedRegionArguments.Contains(argument.Element);
 
+    private static bool HasBoundedAuthoredFileSystemValue(
+        CommandOccurrence command,
+        Arg argument)
+        => command.Arguments.Any(analyzed =>
+            ReferenceEquals(analyzed.Argument, argument)
+            && analyzed.AuthoredFileSystemValue is ShellValueDomain.Exact
+                or ShellValueDomain.FiniteSet);
+
     private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
         => ancestor is ShellBlockSyntax
             or SimpleCommandSyntax
@@ -432,12 +441,25 @@ public sealed record ShellCommandAnalysis
 
     private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
     {
-        var value = argument.Value;
-        if (value is ShellValueDomain.Unknown
-            && !argument.Argument.IsPath
-            && argument.AuthoredValue is not ShellValueDomain.Unknown)
+        if (argument.AuthoredFileSystemValue is not ShellValueDomain.Unknown
+            and not ShellValueDomain.Exact
+            and not ShellValueDomain.FiniteSet)
         {
-            value = argument.AuthoredValue;
+            return true;
+        }
+
+        var value = argument.Value;
+        if (value is ShellValueDomain.Unknown)
+        {
+            if (argument.AuthoredFileSystemValue is not ShellValueDomain.Unknown)
+            {
+                value = argument.AuthoredFileSystemValue;
+            }
+            else if (!argument.Argument.IsPath
+                     && argument.AuthoredValue is not ShellValueDomain.Unknown)
+            {
+                value = argument.AuthoredValue;
+            }
         }
 
         return value switch

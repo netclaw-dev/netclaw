@@ -245,6 +245,12 @@ Done when:
   and path-shape facts introduced in 0.3.1. This store-v3 slice preserves those parser token facts
   without executable-private command rules; later parent tasks consume the new
   value-domain facts in the coordinator.
+- [ ] Netclaw consumes public ShellSyntaxTree `0.3.3` for the parser-owned
+  authored filesystem domain. Local code accepts only `Exact` and `FiniteSet`.
+  It checks each value through path policy and keeps unsafe transforms strict.
+  The Release build and all 7,138 runnable tests pass. The suite reports 15
+  expected platform or opt-in skips. Adversarial review and CI remain before
+  completion.
 - [x] The expanded 247-test matrix covers command-substitution and PowerShell
   execution-region behavior. Known command-owned regions reuse independently
   matched host and body grants after Netclaw accounts for the parsed body.

@@ -132,8 +132,8 @@
       "observed": "Once",
       "classification": "ShellSyntaxTreeFactGap",
       "owner": "ShellSyntaxTree",
-      "sstExpectation": "With PublishAuthoredSourceFacts enabled, effective cat value is Unknown; AuthoredValue is the four pre-field-splitting /work words and AuthoredPathShape is Posix.",
-      "netclawExpectation": "Allow only if product policy accepts pre-field-splitting authored words, applies path checks conservatively, and covers cat plus echo."
+      "sstExpectation": "With ShellSyntaxTree 0.3.3 and PublishAuthoredSourceFacts enabled, effective cat Value is Unknown; AuthoredValue is the four pre-field-splitting /work words; AuthoredFileSystemValue is the same normalized finite set.",
+      "netclawExpectation": "Accept only Exact or FiniteSet AuthoredFileSystemValue alternatives, check every path through product policy, and independently cover cat plus echo."
     },
     {
       "id": "D15",

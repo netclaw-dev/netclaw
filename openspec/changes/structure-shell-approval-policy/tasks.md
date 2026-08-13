@@ -100,18 +100,17 @@
 - [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
   expected results.
 
-## 7. ShellSyntaxTree 0.3.1 facts through 0.3.2
+## 7. ShellSyntaxTree 0.3.1 facts through 0.3.3
 
 - [x] 7.1 Upgrade the central package to public 0.3.2, which includes the
   0.3.1 authored-source facts and keeps same-language child shells strict.
 - [x] 7.2 Consume effective `Value` for runtime checks and approved
   `AuthoredValue` only for the documented approval perspective.
 - [x] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.
-- [ ] 7.4 Check every finite effective value whose `Argument.IsPath` is true
-  through `ToolPathPolicy`. Keep D14 strict until ShellSyntaxTree supplies a
-  general parser-owned authored operand-role fact; after adoption, check every
-  finite authored path through the same policy. Treat `AuthoredPathShape` as
-  lexical-only and keep unknown path values strict.
+- [x] 7.4 Check every finite effective value whose `Argument.IsPath` is true
+  through `ToolPathPolicy`. Check each ShellSyntaxTree 0.3.3 `Exact` or
+  `FiniteSet` `AuthoredFileSystemValue` through the same policy. Treat
+  `AuthoredPathShape` as lexical-only. Keep unknown path values strict.
 - [x] 7.5 Delete the broad Bash environment-variable relaxation and its
   superseded tests.
 - [ ] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.

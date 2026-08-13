@@ -345,7 +345,7 @@
       },
       "candidates": [
         { "id": 0, "tokens": ["echo"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "ReviewedSafePolicy" },
-        { "id": 1, "tokens": ["cat"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "Uncovered" }
+        { "id": 1, "tokens": ["cat"], "realDirectory": "/work", "intentDirectory": null, "expectedCoverage": "PersistentGlobal" }
       ],
       "authoredPathFacts": [
         {
@@ -358,16 +358,22 @@
             "/work/src/Discovery/Discovery.csproj",
             "/work/tests/Hosting.Tests/Hosting.Tests.csproj"
           ],
+          "authoredFileSystemValues": [
+            "/work/src/App/App.csproj",
+            "/work/src/Hosting/Hosting.csproj",
+            "/work/src/Discovery/Discovery.csproj",
+            "/work/tests/Hosting.Tests/Hosting.Tests.csproj"
+          ],
           "authoredPathShape": "Posix",
-          "expectedPathPolicy": "RequiresApproval"
+          "expectedPathPolicy": "Allow"
         }
       ],
       "expectedTrace": [
-        { "stage": "CanonicalFacts", "candidateId": 1, "executableBasename": "cat", "outcome": "Uncovered", "reason": "MissingAuthoredOperandRole", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
+        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "cat", "outcome": "Covered", "reason": "GlobalPhraseMatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 0, "executableBasename": "echo", "outcome": "Covered", "reason": "ReadOnlyUnderRealRoot", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UnresolvedPathFacts", "coverage": null, "scopeRelation": null, "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": null, "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UnresolvedPathFacts" }
+      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
     },
     {
       "evidenceId": "D18",

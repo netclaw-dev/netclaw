@@ -306,13 +306,16 @@ public sealed class ToolPathPolicy
 
             foreach (var effective in occurrence.Arguments)
             {
-                if (!effective.Element.IsPath)
+                if (effective.Element.IsPath
+                    && DomainReferencesDeniedPath(effective.Value))
                 {
-                    continue;
+                    return true;
                 }
 
-                if (DomainReferencesDeniedPath(effective.Value))
+                if (DomainReferencesDeniedPath(effective.AuthoredFileSystemValue))
+                {
                     return true;
+                }
             }
 
             foreach (var redirect in occurrence.Redirects)

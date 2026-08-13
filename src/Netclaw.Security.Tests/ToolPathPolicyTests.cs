@@ -68,6 +68,16 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
+    public void CommandReferencesDeniedPath_checks_finite_authored_filesystem_values()
+    {
+        var policy = new ToolPathPolicy(["/work/src/B.cs"]);
+        const string command =
+            "for f in src/A.cs src/B.cs; do cat /work/$f; done";
+
+        Assert.True(policy.CommandReferencesDeniedPath(command, "/work"));
+    }
+
+    [Fact]
     public void CommandReferencesDeniedPath_checks_native_power_shell_path()
     {
         var environment = ShellExecutionEnvironment.CreatePowerShell(

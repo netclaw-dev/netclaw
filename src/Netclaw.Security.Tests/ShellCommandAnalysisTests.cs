@@ -247,6 +247,22 @@ public sealed class ShellCommandAnalysisTests
         Assert.Equal(["first", "second"], authored.Values);
     }
 
+    [Fact]
+    public void Bash_finite_filesystem_loop_uses_the_strong_authored_domain()
+    {
+        var analysis = _analyzer.Analyze(
+            "for f in src/A.cs src/B.cs; do cat /work/$f; done",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
+        var authored = Assert.IsType<ShellValueDomain.FiniteSet>(
+            argument.AuthoredFileSystemValue);
+        Assert.Equal(["/work/src/A.cs", "/work/src/B.cs"], authored.Values);
+    }
+
     [Theory]
     [InlineData("status-report \"$1\"")]
     [InlineData("rm \"$1\"")]
@@ -256,6 +272,8 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("sh -c \"$1\"")]
     [InlineData("sh -c \"$?\"")]
     [InlineData("for value in first second; do rm \"$value\"; done")]
+    [InlineData("for f in 'src/A.cs /etc/passwd'; do cat /work/$f; done")]
+    [InlineData("for f in '*.cs'; do cat /work/$f; done")]
     public void Bash_unknown_or_authority_bearing_data_stays_dynamic(string command)
     {
         var analyzer = new ShellCommandAnalyzer(BashEnvironment);

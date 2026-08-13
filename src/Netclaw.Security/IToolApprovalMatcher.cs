@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
@@ -348,6 +349,21 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
                 directories.Add(ResolveAuthorizationScope(verb, arg, resolved, pathStyle));
             }
+
+            foreach (var argument in occurrence.Arguments)
+            {
+                if (argument.Argument.IsPath)
+                    continue;
+
+                var authoredDirectories = ResolveAuthoredFileSystemDirectories(
+                    argument.AuthoredFileSystemValue,
+                    clauseWorkingDirectory,
+                    pathStyle);
+                if (authoredDirectories is null)
+                    return null;
+
+                directories.AddRange(authoredDirectories);
+            }
         }
 
         foreach (var redirect in occurrence.Redirects)
@@ -390,6 +406,80 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static IReadOnlyList<string>? ResolveAuthoredFileSystemDirectories(
+        ShellValueDomain domain,
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
+    {
+        if (domain is ShellValueDomain.Unknown)
+            return [];
+
+        IReadOnlyList<string> paths;
+        switch (domain)
+        {
+            case ShellValueDomain.Exact exact:
+                paths = [exact.Value];
+                break;
+            case ShellValueDomain.FiniteSet finite:
+                paths = finite.Values;
+                break;
+            default:
+                return null;
+        }
+
+        var directories = new List<string>(paths.Count);
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || !IsRootedForPathStyle(path, pathStyle)
+                || UsesHostPathStyle(pathStyle) && HasUnsafeHostPath(path))
+            {
+                return null;
+            }
+
+            directories.Add(path);
+        }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory)
+            && IsRootedForPathStyle(workingDirectory, pathStyle)
+            && directories.All(path => IsWithinRootForPathStyle(
+                path,
+                workingDirectory,
+                pathStyle)))
+        {
+            return [workingDirectory];
+        }
+
+        return directories;
+    }
+
+    private static bool IsWithinRootForPathStyle(
+        string path,
+        string root,
+        ShellPathStyle pathStyle)
+    {
+        // Parser values can describe Windows paths on a POSIX test host.
+        // Host Path APIs cannot make this grammar-specific comparison.
+        var comparison = pathStyle == ShellPathStyle.Windows
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(path, root, comparison))
+            return true;
+        if (!path.StartsWith(root, comparison))
+            return false;
+        if (root.EndsWith("/", StringComparison.Ordinal)
+            || pathStyle == ShellPathStyle.Windows
+            && root.EndsWith("\\", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return path.Length > root.Length
+               && (path[root.Length] == '/'
+                   || pathStyle == ShellPathStyle.Windows
+                   && path[root.Length] == '\\');
     }
 
     private static string? ResolveAuthorizationScope(

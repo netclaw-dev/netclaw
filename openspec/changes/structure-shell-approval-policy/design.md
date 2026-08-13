@@ -265,7 +265,7 @@ authority outside code review. At minimum `find`, `awk`, `rg`, and `sort` are
 not eligible. Production code has no flag-specific exceptions. The existing
 `git ls-tree` special case is deleted.
 
-### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.2 explicitly
+### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.3 explicitly
 
 Netclaw uses effective `AnalyzedArgument.Value` for runtime-sensitive checks.
 It may use `AuthoredValue` for approval matching only after the maintainer
@@ -275,13 +275,10 @@ contract decides whether an effective value is path-relevant. Every finite
 effective value for an `IsPath` argument still passes `ToolPathPolicy`; an
 unknown path-relevant value stays strict.
 
-ShellSyntaxTree 0.3.2 publishes D14's finite `AuthoredValue`, but its effective
-argument has `Argument.IsPath == false`. Netclaw cannot infer file authority
-from that contradiction. An authored finite value may enter `ToolPathPolicy`
-only after ShellSyntaxTree supplies a separate general parser-owned authored
-operand-role fact. Until that additive fact exists and Netclaw adopts it, D14
-remains strict. The change does not invent the public member name or infer the
-role from an executable's private grammar.
+ShellSyntaxTree 0.3.3 publishes D14's finite `AuthoredFileSystemValue`. Netclaw
+accepts only `Exact` and `FiniteSet`. Each value enters `ToolPathPolicy` and the
+approval scope check. Unknown and all other alternatives stay strict. Netclaw
+does not infer the role from an executable's private grammar.
 
 `AuthoredPathShape` is lexical shape only. It may make review stricter, but it
 never establishes that an executable treats an argument as a filesystem
