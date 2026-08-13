@@ -102,6 +102,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 environment,
                 analysis,
                 new ShellApprovalMatcher(environment),
+                PlatformTemporaryScopePolicy.Create(environment).IsSafePlatformTemporaryPath,
                 out var causalCandidates));
             Assert.Equal(policyCase.Candidates.Count, causalCandidates.Count);
             for (var index = 0; index < policyCase.Candidates.Count; index++)

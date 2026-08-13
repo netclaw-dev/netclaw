@@ -91,6 +91,52 @@ public sealed class BashCausalApprovalIntentTests
             out _));
     }
 
+    [Fact]
+    public void Captured_temporary_alias_allows_redirect_projection_without_allowing_other_aliases()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"netclaw-causal-alias-{Guid.NewGuid():N}");
+        var canonicalTemp = Path.Combine(testRoot, "canonical-temp");
+        var authoredTemp = Path.Combine(testRoot, "authored-temp");
+        var otherTarget = Path.Combine(testRoot, "other-target");
+        var otherAlias = Path.Combine(testRoot, "other-alias");
+        Directory.CreateDirectory(canonicalTemp);
+        Directory.CreateDirectory(otherTarget);
+        Directory.CreateSymbolicLink(authoredTemp, canonicalTemp);
+        Directory.CreateSymbolicLink(otherAlias, otherTarget);
+
+        try
+        {
+            var policy = new PlatformTemporaryScopePolicy(
+                BashEnvironment,
+                authoredTemp,
+                HostPlatformTemporaryPathInspector.Instance);
+            var allowedCommand =
+                $"cd {authoredTemp} && inspect > result.log 2>&1; head result.log";
+            var otherCommand =
+                $"cd {otherAlias} && inspect > result.log 2>&1; head result.log";
+
+            Assert.True(TryProject(
+                BashEnvironment,
+                allowedCommand,
+                policy.IsSafePlatformTemporaryPath,
+                out _));
+            Assert.False(TryProject(
+                BashEnvironment,
+                otherCommand,
+                policy.IsSafePlatformTemporaryPath,
+                out _));
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<BashCausalApprovalCandidate> Project(string command)
     {
         Assert.True(TryProject(BashEnvironment, command, out var projected));
@@ -101,12 +147,24 @@ public sealed class BashCausalApprovalIntentTests
         ShellExecutionEnvironment environment,
         string command,
         out IReadOnlyList<BashCausalApprovalCandidate> projected)
+        => TryProject(
+            environment,
+            command,
+            PlatformTemporaryScopePolicy.Create(environment).IsSafePlatformTemporaryPath,
+            out projected);
+
+    private static bool TryProject(
+        ShellExecutionEnvironment environment,
+        string command,
+        Func<string, bool> isAllowedHostPath,
+        out IReadOnlyList<BashCausalApprovalCandidate> projected)
     {
         var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
         return BashCausalApprovalIntent.TryProject(
             environment,
             analysis,
             new ShellApprovalMatcher(environment),
+            isAllowedHostPath,
             out projected);
     }
 

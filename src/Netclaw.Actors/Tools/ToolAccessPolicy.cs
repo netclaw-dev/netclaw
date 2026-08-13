@@ -45,6 +45,9 @@ public sealed class ToolAccessPolicy
 
     internal ShellExecutionEnvironment ShellEnvironment => _shellCommandPolicy.Environment;
 
+    internal bool IsSafePlatformTemporaryPath(string path)
+        => _platformTemporaryScopePolicy.IsSafePlatformTemporaryPath(path);
+
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,

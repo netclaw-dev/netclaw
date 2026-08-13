@@ -140,12 +140,14 @@ internal sealed record ShellPolicyProjection
         ShellCommandAnalysis? execution,
         ToolApprovalContext approvalContext,
         ToolExecutionContext context,
+        Func<string, bool> isAllowedHostPath,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(matcher);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(isAllowedHostPath);
 
         projection = null;
         if (approvalContext.Candidates is null)
@@ -158,6 +160,7 @@ internal sealed record ShellPolicyProjection
                 environment,
                 execution,
                 matcher,
+                isAllowedHostPath,
                 out var causalCandidates))
         {
             return TryCreateCausal(

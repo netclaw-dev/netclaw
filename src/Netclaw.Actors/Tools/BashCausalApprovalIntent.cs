@@ -22,8 +22,10 @@ internal static class BashCausalApprovalIntent
         ShellExecutionEnvironment environment,
         ShellCommandAnalysis execution,
         ShellApprovalMatcher matcher,
+        Func<string, bool> isAllowedHostPath,
         out IReadOnlyList<BashCausalApprovalCandidate> candidates)
     {
+        ArgumentNullException.ThrowIfNull(isAllowedHostPath);
         candidates = [];
         if (environment.Grammar != ShellGrammar.Bash
             || !execution.IsResolved
@@ -63,6 +65,7 @@ internal static class BashCausalApprovalIntent
                         matcher,
                         occurrence,
                         execution.WorkingDirectory,
+                        isAllowedHostPath,
                         out var transitionCandidates))
                 {
                     return false;
@@ -75,6 +78,7 @@ internal static class BashCausalApprovalIntent
                         matcher,
                         firstAction,
                         execution.WorkingDirectory,
+                        isAllowedHostPath,
                         out var actionCandidates))
                 {
                     return false;
@@ -106,7 +110,8 @@ internal static class BashCausalApprovalIntent
             var intentCandidates = matcher.ExtractCandidatesForOccurrence(
                 occurrence,
                 intentDirectory,
-                resolveUnknownPathsFromEffectiveValues: true);
+                resolveUnknownPathsFromEffectiveValues: true,
+                isAllowedHostPath);
             if (intentCandidates is not { Count: > 0 }
                 || intentCandidates.Any(candidate =>
                     candidate.Directory is { } directory
@@ -188,12 +193,14 @@ internal static class BashCausalApprovalIntent
         ShellApprovalMatcher matcher,
         CommandOccurrence occurrence,
         string? executionWorkingDirectory,
+        Func<string, bool> isAllowedHostPath,
         out IReadOnlyList<ApprovalCandidate> candidates)
     {
         candidates = matcher.ExtractCandidatesForOccurrence(
             occurrence,
             executionWorkingDirectory,
-            resolveUnknownPathsFromEffectiveValues: false) ?? [];
+            resolveUnknownPathsFromEffectiveValues: false,
+            isAllowedHostPath) ?? [];
         return candidates.Count > 0
                && !candidates.Any(ApprovalPatternMatching.IsPureSideEffect);
     }

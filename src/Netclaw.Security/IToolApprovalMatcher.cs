@@ -258,7 +258,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     internal IReadOnlyList<ApprovalCandidate>? ExtractCandidatesForOccurrence(
         CommandOccurrence occurrence,
         string? workingDirectory,
-        bool resolveUnknownPathsFromEffectiveValues)
+        bool resolveUnknownPathsFromEffectiveValues,
+        Func<string, bool>? isAllowedHostPath = null)
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
@@ -285,7 +286,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             isSideEffectVerb,
             workingDirectory,
             Environment.PathStyle,
-            resolveUnknownPathsFromEffectiveValues);
+            resolveUnknownPathsFromEffectiveValues,
+            isAllowedHostPath);
         if (directories is null)
             return null;
 
@@ -325,7 +327,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         bool isSideEffectVerb,
         string? workingDirectory,
         ShellPathStyle pathStyle,
-        bool resolveUnknownPathsFromEffectiveValues)
+        bool resolveUnknownPathsFromEffectiveValues,
+        Func<string, bool>? isAllowedHostPath)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -383,7 +386,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 var authoredDirectories = ResolveAuthoredFileSystemDirectories(
                     argument.AuthoredFileSystemValue,
                     clauseWorkingDirectory,
-                    pathStyle);
+                    pathStyle,
+                    isAllowedHostPath);
                 if (authoredDirectories is null)
                     return null;
 
@@ -393,7 +397,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         foreach (var redirect in occurrence.Redirects)
         {
-            var redirectDirectories = ResolveRedirectDirectories(redirect, pathStyle);
+            var redirectDirectories = ResolveRedirectDirectories(
+                redirect,
+                pathStyle,
+                isAllowedHostPath);
             if (redirectDirectories is null)
                 return null;
 
@@ -475,7 +482,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     private static IReadOnlyList<string>? ResolveAuthoredFileSystemDirectories(
         ShellValueDomain domain,
         string? workingDirectory,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        Func<string, bool>? isAllowedHostPath)
     {
         if (domain is ShellValueDomain.Unknown)
             return [];
@@ -498,7 +506,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             if (string.IsNullOrWhiteSpace(path)
                 || !IsRootedForPathStyle(path, pathStyle)
-                || UsesHostPathStyle(pathStyle) && HasUnsafeHostPath(path))
+                || UsesHostPathStyle(pathStyle)
+                && HasUnsafeHostPath(path)
+                && isAllowedHostPath?.Invoke(path) != true)
             {
                 return null;
             }
@@ -771,7 +781,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static IReadOnlyList<string>? ResolveRedirectDirectories(
         ShellSyntaxTree.RedirectAnalysis redirect,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        Func<string, bool>? isAllowedHostPath)
     {
         if (!redirect.IsComplete)
             return null;
@@ -816,7 +827,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrWhiteSpace(target))
                 return null;
 
-            if (UsesHostPathStyle(pathStyle) && HasUnsafeHostPath(target))
+            if (UsesHostPathStyle(pathStyle)
+                && HasUnsafeHostPath(target)
+                && isAllowedHostPath?.Invoke(target) != true)
                 return null;
 
             // The resolved POSIX null device creates no reusable filesystem
@@ -1228,7 +1241,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     IsSideEffectCommand(command),
                     workingDirectory,
                     Environment.PathStyle,
-                    resolveUnknownPathsFromEffectiveValues: false) is null))
+                    resolveUnknownPathsFromEffectiveValues: false,
+                    isAllowedHostPath: null) is null))
         {
             return true;
         }
