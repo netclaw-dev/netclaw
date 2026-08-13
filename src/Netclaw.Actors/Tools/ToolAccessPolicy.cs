@@ -593,7 +593,7 @@ public sealed class ToolAccessPolicy
                 isMessy,
                 hasReusablePhraseForEveryCandidate: !isShell ||
                     approvalCandidates.All(HasReusableShellPhrase),
-                isCwdShallow: IsCwdTooShallow(context.Approval.Cwd),
+                isCwdShallow: IsCwdTooShallow(context.Approval.Cwd, ShellEnvironment.PathStyle),
                 allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
                     approvalCandidates, context.Approval.Cwd, context.SessionDirectory),
                 supportsDirectoryScope: matcher is ShellApprovalMatcher,
@@ -622,7 +622,8 @@ public sealed class ToolAccessPolicy
     internal static ToolApprovalContext NarrowShellApprovalContext(
         ToolApprovalContext context,
         IReadOnlyList<ApprovalCandidate> unapprovedCandidates,
-        string? sessionDirectory)
+        string? sessionDirectory,
+        ShellPathStyle pathStyle)
     {
         var candidateVerbs = unapprovedCandidates
             .Select(static candidate => candidate.Verb)
@@ -634,7 +635,7 @@ public sealed class ToolAccessPolicy
                 isMessy: false,
                 hasReusablePhraseForEveryCandidate:
                     unapprovedCandidates.All(HasReusableShellPhrase),
-                isCwdShallow: IsCwdTooShallow(context.Cwd),
+                isCwdShallow: IsCwdTooShallow(context.Cwd, pathStyle),
                 allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
                     unapprovedCandidates, context.Cwd, sessionDirectory),
                 supportsDirectoryScope: true,
@@ -752,30 +753,13 @@ public sealed class ToolAccessPolicy
     /// than two non-empty segments under its root (e.g. <c>/</c>, <c>/etc/</c>,
     /// <c>C:\</c>) cannot be safely persisted as an ApprovalEntry directory.
     /// </summary>
-    private static bool IsCwdTooShallow(string? cwd)
+    private static bool IsCwdTooShallow(string? cwd, ShellPathStyle pathStyle)
     {
         if (string.IsNullOrWhiteSpace(cwd))
             return false;
 
-        try
-        {
-            var segments = PathUtility.Normalize(cwd).Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-
-            // POSIX root → 0 segments after trim. /etc → 1 segment. /home/user → 2 segments.
-            // Windows: C:\ → ["C:"] → 1 segment but conventionally a root, so still shallow.
-            //          C:\Users\foo → 3 segments.
-            // Require at least 2 distinct path segments for folder-scoped persistence.
-            return segments.Length < 2;
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            // Treat unparseable cwds as shallow — fail closed on the
-            // persistent button rather than offering a grant whose target we
-            // could not normalize.
-            return true;
-        }
+        return !ShellPathRules.TryGetRootRelativeDepth(cwd, pathStyle, out var depth)
+               || depth < 2;
     }
 
     private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(

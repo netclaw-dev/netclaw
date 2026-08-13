@@ -256,7 +256,8 @@ internal sealed class ShellPolicyCoordinator(
                 : ToolAccessPolicy.NarrowShellApprovalContext(
                     projection.ApprovalContext,
                     uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                    context.SessionDirectory);
+                    context.SessionDirectory,
+                    projection.Environment.PathStyle);
             if (projection.HasExactOneTimeApproval(toolCall.Name, remainingContext))
             {
                 foreach (var candidate in uncovered)
@@ -293,7 +294,8 @@ internal sealed class ShellPolicyCoordinator(
                 : ToolAccessPolicy.NarrowShellApprovalContext(
                     projection.ApprovalContext,
                     uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                    context.SessionDirectory);
+                    context.SessionDirectory,
+                    projection.Environment.PathStyle);
             return CompleteWithTrace(
                 ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches),
                 trace);

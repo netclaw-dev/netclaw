@@ -483,6 +483,89 @@ internal static class ShellPathRules
                 : StringComparison.Ordinal);
     }
 
+    internal static bool TryGetRootRelativeDepth(
+        string? path,
+        ShellPathStyle pathStyle,
+        out int depth)
+    {
+        depth = 0;
+        if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsControl))
+            return false;
+
+        return pathStyle switch
+        {
+            ShellPathStyle.Posix => TryGetPosixDepth(path, out depth),
+            ShellPathStyle.Windows => TryGetWindowsDepth(path, out depth),
+            _ => false
+        };
+    }
+
+    private static bool TryGetPosixDepth(string path, out int depth)
+    {
+        if (path == "/")
+        {
+            depth = 0;
+            return true;
+        }
+
+        if (path[0] != '/'
+            || path.EndsWith('/')
+            || path.Contains("//", StringComparison.Ordinal))
+        {
+            depth = 0;
+            return false;
+        }
+
+        return TryCountCanonicalSegments(path[1..], '/', out depth);
+    }
+
+    private static bool TryGetWindowsDepth(string path, out int depth)
+    {
+        depth = 0;
+        if (path.Contains('/', StringComparison.Ordinal))
+            return false;
+
+        if (path.Length >= 3
+            && char.IsAsciiLetter(path[0])
+            && path[1] == ':'
+            && path[2] == '\\')
+        {
+            if (path.Length == 3)
+                return true;
+
+            return TryCountCanonicalSegments(path[3..], '\\', out depth);
+        }
+
+        if (!path.StartsWith("\\\\", StringComparison.Ordinal))
+            return false;
+
+        var components = path[2..].Split('\\', StringSplitOptions.None);
+        if (components.Length < 2
+            || components[0] is "." or "?"
+            || components.Any(static component =>
+                component.Length == 0 || component is "." or ".."))
+        {
+            return false;
+        }
+
+        depth = components.Length - 2;
+        return true;
+    }
+
+    private static bool TryCountCanonicalSegments(string path, char separator, out int depth)
+    {
+        var segments = path.Split(separator, StringSplitOptions.None);
+        if (segments.Any(static segment =>
+                segment.Length == 0 || segment is "." or ".."))
+        {
+            depth = 0;
+            return false;
+        }
+
+        depth = segments.Length;
+        return true;
+    }
+
     private static string NormalizeSegments(string path, char separator, string root)
     {
         var segments = new List<string>();

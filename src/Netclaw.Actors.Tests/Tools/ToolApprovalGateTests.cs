@@ -1087,10 +1087,63 @@ public sealed class ToolApprovalGateTests
         var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
             original,
             [candidate],
-            sessionDirectory: null);
+            sessionDirectory: null,
+            ShellPathStyle.Posix);
 
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             narrowed.Options.Select(static option => option.Key.Value));
+    }
+
+    [Theory]
+    [InlineData("/", ShellPathStyle.Posix, false)]
+    [InlineData("/etc", ShellPathStyle.Posix, false)]
+    [InlineData("/home/user", ShellPathStyle.Posix, true)]
+    [InlineData("/home//user", ShellPathStyle.Posix, false)]
+    [InlineData("/etc/..", ShellPathStyle.Posix, false)]
+    [InlineData("relative/repo", ShellPathStyle.Posix, false)]
+    [InlineData(@"C:\", ShellPathStyle.Windows, false)]
+    [InlineData(@"C:\Windows", ShellPathStyle.Windows, false)]
+    [InlineData(@"C:\Users\user", ShellPathStyle.Windows, true)]
+    [InlineData(@"C:\Users\\user", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\server\share", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\server\share\folder", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\server\share\folder\repo", ShellPathStyle.Windows, true)]
+    [InlineData("\\\\ser\nver\\share\\folder\\repo", ShellPathStyle.Windows, false)]
+    [InlineData("\\\\server\\sha\nre\\folder\\repo", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\server\\share\folder\repo", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\server\..\folder\repo", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\.\share\folder\repo", ShellPathStyle.Windows, false)]
+    [InlineData(@"\\?\C:\folder\repo", ShellPathStyle.Windows, false)]
+    [InlineData("\\\\server\\share\\folder\\repo\\", ShellPathStyle.Windows, false)]
+    [InlineData(@"C:\work", (ShellPathStyle)999, false)]
+    public void Narrow_shell_context_uses_root_relative_scope_depth(
+        string cwd,
+        ShellPathStyle pathStyle,
+        bool offersAlwaysHere)
+    {
+        var candidate = new ApprovalCandidate("git status", cwd)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["git", "status"]
+        };
+        var original = new ToolApprovalContext(
+            "shell_execute",
+            "git status",
+            ["git status"],
+            ["git status"],
+            [],
+            Cwd: cwd,
+            Candidates: [candidate]);
+
+        var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
+            original,
+            [candidate],
+            sessionDirectory: null,
+            pathStyle);
+
+        Assert.Equal(
+            offersAlwaysHere,
+            narrowed.Options.Any(option => option.Key.Value == ApprovalOptionKeys.ApproveAlways));
     }
 }
