@@ -104,4 +104,7 @@ internal sealed record ShellGrantCandidateMatch(
     ShellPolicyCandidateId CandidateId,
     ToolApprovalMatch? Match,
     ShellCoverageKind? GrantCoverage,
-    IReadOnlyList<ApprovalNearMiss> NearMisses);
+    IReadOnlyList<ShellApprovalNearMiss> NearMisses)
+{
+    internal DateTimeOffset? GrantCreatedAt { get; init; }
+}

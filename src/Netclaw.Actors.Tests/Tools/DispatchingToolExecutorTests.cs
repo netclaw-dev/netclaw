@@ -724,11 +724,277 @@ public class DispatchingToolExecutorTests
                 request.Candidates.Select(candidate => candidate.CandidateId.Value));
             Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "git status");
             Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "head");
+            Assert.Collection(
+                decision.ShellPolicyTrace.Rows,
+                row =>
+                {
+                    Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage);
+                    Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
+                    Assert.Equal(ShellPolicyTraceReason.SessionGrant, row.Reason);
+                    Assert.Equal("git", row.ExecutableBasename);
+                    Assert.Equal(ShellCoverageKind.Session, row.Coverage);
+                    Assert.Equal(ShellScopeRelation.ThisChat, row.ScopeRelation);
+                },
+                row =>
+                {
+                    Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage);
+                    Assert.Equal(ShellPolicyTraceOutcome.Uncovered, row.Outcome);
+                    Assert.Equal(ShellPolicyTraceReason.NoGrant, row.Reason);
+                    Assert.Equal("head", row.ExecutableBasename);
+                    Assert.Equal(ShellCoverageKind.Uncovered, row.Coverage);
+                    Assert.Equal(ShellScopeRelation.None, row.ScopeRelation);
+                },
+                row =>
+                {
+                    Assert.Equal(ShellPolicyTraceStage.ReviewedSafePolicy, row.Stage);
+                    Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
+                    Assert.Equal(ShellPolicyTraceReason.ReviewedSafePhrase, row.Reason);
+                    Assert.Equal("head", row.ExecutableBasename);
+                    Assert.Equal(ShellCoverageKind.ReviewedSafePolicy, row.Coverage);
+                    Assert.Equal(ShellScopeRelation.UnderRealRoot, row.ScopeRelation);
+                },
+                row =>
+                {
+                    Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+                    Assert.Equal(ShellPolicyTraceOutcome.Allow, row.Outcome);
+                    Assert.Equal(ShellPolicyTraceReason.AllCandidatesCovered, row.Reason);
+                });
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Authorization_trace_carries_persistent_grant_timestamp()
+    {
+        var grantTimestamp = new DateTimeOffset(2026, 8, 13, 7, 0, 0, TimeSpan.Zero);
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var matches = request.Candidates.Select(candidate =>
+            {
+                var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
+                var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens);
+                var entry = ApprovalEntry.CreateTokenPrefix(
+                    shell,
+                    tokens,
+                    directory: null,
+                    grantTimestamp);
+                return new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    new ToolApprovalMatch(candidate.Candidate.Verb, "persistent", entry.FormatScope()),
+                    ShellCoverageKind.PersistentGlobal,
+                    NearMisses: [])
+                {
+                    GrantCreatedAt = grantTimestamp
+                };
+            }).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(matches));
+        });
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
+        var call = new FunctionCallContent(
+            "call-trace-persistent-grant",
+            "shell_execute",
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/trace-persistent-grant"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        var grantRow = Assert.Single(
+            decision.ShellPolicyTrace.Rows,
+            row => row.Stage == ShellPolicyTraceStage.StoredGrantMatch);
+        Assert.Equal(ShellPolicyTraceReason.PersistentGlobalGrant, grantRow.Reason);
+        Assert.Equal(grantTimestamp, grantRow.GrantTimestamp);
+        Assert.Contains(logger.Entries, entry =>
+            Equals(entry.GetValueOrDefault("GrantTimestamp"), grantTimestamp));
+    }
+
+    [Fact]
+    public async Task Authorization_trace_projects_redacted_near_miss_without_raw_evidence()
+    {
+        const string rawGrantPath = "/private/ghp_12345678901234567890/path";
+        var grantTimestamp = new DateTimeOffset(2026, 8, 13, 7, 30, 0, TimeSpan.Zero);
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                {
+                    var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
+                    var grant = ApprovalEntry.CreateTokenPrefix(
+                        shell,
+                        ["git", "push"],
+                        rawGrantPath,
+                        grantTimestamp);
+                    return new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses:
+                        [
+                            new ShellApprovalNearMiss(
+                                grant,
+                                ShellApprovalNearMissReason.OutsideDirectory)
+                        ]);
+                }).ToArray())));
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
+        var call = new FunctionCallContent(
+            "call-trace-near-miss",
+            "shell_execute",
+            ToolInput.Create("Command", "git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/trace-near-miss"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        var nearMissRow = Assert.Single(
+            decision.ShellPolicyTrace.Rows,
+            row => row.Stage == ShellPolicyTraceStage.StoredGrantMatch);
+        Assert.Equal(ShellPolicyTraceOutcome.Uncovered, nearMissRow.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.OutsideDirectory, nearMissRow.Reason);
+        Assert.Equal(ShellCoverageKind.PersistentFolder, nearMissRow.Coverage);
+        Assert.Equal(ShellScopeRelation.OutsideGrantRoot, nearMissRow.ScopeRelation);
+        Assert.Equal(grantTimestamp, nearMissRow.GrantTimestamp);
+        Assert.NotNull(decision.ApprovalContext);
+        Assert.DoesNotContain(
+            typeof(ToolApprovalContext).GetProperties(),
+            property => property.Name.Contains("Trace", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            typeof(Netclaw.Actors.Sessions.SessionProtocol.ToolApprovalRequested).GetProperties(),
+            property => property.Name.Contains("Trace", StringComparison.Ordinal));
+
+        var logValues = string.Join(
+            '\n',
+            logger.Entries.SelectMany(static entry => entry.Values)
+                .Select(static value => value?.ToString() ?? string.Empty));
+        Assert.DoesNotContain(rawGrantPath, logValues, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shell_policy_trace_caps_rows_without_authority_change()
+    {
+        var builder = new ShellPolicyDecisionTraceBuilder();
+        for (var index = 0; index < 300; index++)
+        {
+            builder.AddCoverage(
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                new ShellPolicyCandidate(
+                    new ShellPolicyCandidateId(index),
+                    BashCandidate($"/usr/bin/tool-{index}")),
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderRealRoot);
+        }
+
+        var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
+        var trace = builder.Complete(decision);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ShellPolicyDecisionTraceBuilder.MaximumRows, trace.Rows.Count);
+        Assert.Single(trace.Rows, row => row.Outcome == ShellPolicyTraceOutcome.TraceTruncated);
+        var finalRow = trace.Rows[^1];
+        Assert.Equal(ShellPolicyTraceStage.Completion, finalRow.Stage);
+        Assert.Equal(ShellPolicyTraceOutcome.Allow, finalRow.Outcome);
+    }
+
+    [Fact]
+    public void Shell_policy_trace_sanitizes_controls_secrets_and_invalid_unicode()
+    {
+        const string secret = "ghp_12345678901234567890";
+        var input = $"{secret}\r\n\u202Ebad\uD800{new string('x', 200)}";
+
+        var sanitized = ShellPolicyDecisionTraceBuilder.SanitizeText(input);
+
+        Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
+        Assert.Contains("***REDACTED***", sanitized, StringComparison.Ordinal);
+        Assert.Contains("\\u000D\\u000A", sanitized, StringComparison.Ordinal);
+        Assert.Contains("\\u202E", sanitized, StringComparison.Ordinal);
+        Assert.Contains("\\uD800", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', sanitized);
+        Assert.DoesNotContain('\n', sanitized);
+        Assert.True(sanitized.Length <= ShellPolicyDecisionTraceBuilder.MaximumTextCodeUnits);
+    }
+
+    [Fact]
+    public void Shell_policy_trace_fails_closed_before_a_long_private_key_can_be_truncated()
+    {
+        var privateKey = $"-----BEGIN PRIVATE KEY-----\n{new string('A', 600)}\n-----END PRIVATE KEY-----";
+
+        var sanitized = ShellPolicyDecisionTraceBuilder.SanitizeText(privateKey);
+
+        Assert.Equal("***REDACTED***", sanitized);
+        Assert.DoesNotContain("PRIVATE KEY", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("AAAAAAAA", sanitized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shell_policy_trace_logs_one_row_for_malicious_executable_text()
+    {
+        const string secret = "ghp_12345678901234567890";
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var executor = CreateApprovalGatedShellExecutor(logger: logger);
+        var builder = new ShellPolicyDecisionTraceBuilder();
+        builder.AddCoverage(
+            ShellPolicyTraceStage.ReviewedSafePolicy,
+            new ShellPolicyCandidate(
+                new ShellPolicyCandidateId(0),
+                BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof")),
+            ShellCoverageKind.ReviewedSafePolicy,
+            ShellPolicyReason.ReviewedSafePhrase,
+            ShellScopeRelation.UnderRealRoot);
+        var trace = builder.Complete(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope));
+
+        executor.LogShellPolicyTrace(trace);
+
+        Assert.Equal(trace.Rows.Count, logger.Entries.Count);
+        var candidateLog = logger.Entries[0];
+        var executable = Assert.IsType<string>(candidateLog["ExecutableBasename"]);
+        Assert.DoesNotContain(secret, executable, StringComparison.Ordinal);
+        Assert.Contains("***REDACTED***", executable, StringComparison.Ordinal);
+        Assert.Contains("\\u000D\\u000A", executable, StringComparison.Ordinal);
+        Assert.Contains("\\u202E", executable, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', executable);
+        Assert.DoesNotContain('\n', executable);
+    }
+
+    [Theory]
+    [InlineData(nameof(ShellApprovalNearMissReason.TokenMismatch), nameof(ShellPolicyTraceReason.TokenMismatch))]
+    [InlineData(nameof(ShellApprovalNearMissReason.ShellMismatch), nameof(ShellPolicyTraceReason.ShellMismatch))]
+    public void Shell_policy_trace_maps_typed_phrase_near_misses(
+        string nearMissReasonName,
+        string traceReasonName)
+    {
+        var nearMissReason = Enum.Parse<ShellApprovalNearMissReason>(nearMissReasonName);
+        var traceReason = Enum.Parse<ShellPolicyTraceReason>(traceReasonName);
+        var candidate = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate("git push"));
+        var grant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["git", "status"]);
+        var actorMatch = new ShellGrantCandidateMatch(
+            candidate.Id,
+            Match: null,
+            GrantCoverage: null,
+            NearMisses: [new ShellApprovalNearMiss(grant, nearMissReason)]);
+        var builder = new ShellPolicyDecisionTraceBuilder();
+
+        builder.AddActorEvidence(candidate, actorMatch);
+        var trace = builder.Complete(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope));
+
+        Assert.Equal(traceReason, trace.Rows[0].Reason);
+        Assert.Equal(ShellPolicyTraceOutcome.Uncovered, trace.Rows[0].Outcome);
     }
 
     [Fact]
@@ -2056,7 +2322,8 @@ public class DispatchingToolExecutorTests
     }
 
     private static DispatchingToolExecutor CreateApprovalGatedShellExecutor(
-        IToolApprovalService? approvalService = null)
+        IToolApprovalService? approvalService = null,
+        ILogger<DispatchingToolExecutor>? logger = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -2083,7 +2350,8 @@ public class DispatchingToolExecutorTests
                     UsedStrictFallback: false),
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
-            approvalService ?? new UnexpectedApprovalService());
+            approvalService ?? new UnexpectedApprovalService(),
+            logger: logger);
     }
 
     private static ToolExecutionContext CreateInteractivePersonalContext(string sessionId)

@@ -148,13 +148,15 @@ internal sealed record ToolAuthorizationDecision
         ToolAllowReason? allowReason,
         string? denyReason,
         ToolApprovalContext? approvalContext,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ShellPolicyDecisionTrace? shellPolicyTrace = null)
     {
         Outcome = outcome;
         AllowReason = allowReason;
         DenyReason = denyReason;
         ApprovalContext = approvalContext;
         ApprovalMatches = approvalMatches;
+        ShellPolicyTrace = shellPolicyTrace ?? ShellPolicyDecisionTrace.Empty;
     }
 
     /// <summary>
@@ -187,6 +189,8 @@ internal sealed record ToolAuthorizationDecision
     /// Policy, safe-rule, approval-exempt, and deny decisions contain an empty list.
     /// </remarks>
     public IReadOnlyList<ToolApprovalMatch> ApprovalMatches { get; }
+
+    internal ShellPolicyDecisionTrace ShellPolicyTrace { get; init; }
 
     /// <summary>
     /// Creates an allowed result without stored approval matches.
@@ -247,6 +251,12 @@ internal sealed record ToolAuthorizationDecision
             null,
             context,
             [.. approvalMatches]);
+    }
+
+    internal ToolAuthorizationDecision WithShellPolicyTrace(ShellPolicyDecisionTrace trace)
+    {
+        ArgumentNullException.ThrowIfNull(trace);
+        return this with { ShellPolicyTrace = trace };
     }
 
     private static void ValidateAllowReason(ToolAllowReason reason)

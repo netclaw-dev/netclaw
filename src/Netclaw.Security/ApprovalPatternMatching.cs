@@ -67,52 +67,62 @@ public static class ApprovalPatternMatching
 
         foreach (var entry in approvedEntries)
         {
-            // Global wildcard: matches any candidate by definition.
-            if (entry.Directory is null)
-                return true;
-
-            // Folder-scoped entry requires a concrete effective directory.
-            if (string.IsNullOrEmpty(effectiveDirectory))
-                continue;
-
-            try
+            if (EvaluateApprovalScope(
+                    effectiveDirectory,
+                    entry,
+                    shell,
+                    ref normalizedCandidate) == ShellApprovalScopeResult.Match)
             {
-                if (shell == ApprovalShell.PowerShell)
-                {
-                    normalizedCandidate ??= NormalizeWindowsPath(effectiveDirectory, baseDirectory: null);
-                    var normalizedRoot = NormalizeWindowsPath(entry.Directory, baseDirectory: null);
-                    if (normalizedCandidate is null || normalizedRoot is null ||
-                        !IsWithinWindowsRoot(normalizedCandidate, normalizedRoot))
-                    {
-                        continue;
-                    }
-
-                    if (OperatingSystem.IsWindows() &&
-                        PathUtility.ContainsSymlinkSegment(normalizedRoot, normalizedCandidate))
-                    {
-                        continue;
-                    }
-
-                    return true;
-                }
-
-                normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
-
-                if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
-                    continue;
-
-                if (PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory))
-                    continue;
-
                 return true;
-            }
-            catch (Exception ex) when (ex is ArgumentException or IOException)
-            {
-                continue;
             }
         }
 
         return false;
+    }
+
+    private static ShellApprovalScopeResult EvaluateApprovalScope(
+        string? effectiveDirectory,
+        ApprovalEntry entry,
+        ApprovalShell? shell,
+        ref string? normalizedCandidate)
+    {
+        if (entry.Directory is null)
+            return ShellApprovalScopeResult.Match;
+
+        if (string.IsNullOrEmpty(effectiveDirectory))
+            return ShellApprovalScopeResult.MissingDirectory;
+
+        try
+        {
+            if (shell == ApprovalShell.PowerShell)
+            {
+                normalizedCandidate ??= NormalizeWindowsPath(effectiveDirectory, baseDirectory: null);
+                var normalizedRoot = NormalizeWindowsPath(entry.Directory, baseDirectory: null);
+                if (normalizedCandidate is null || normalizedRoot is null ||
+                    !IsWithinWindowsRoot(normalizedCandidate, normalizedRoot))
+                {
+                    return ShellApprovalScopeResult.OutsideDirectory;
+                }
+
+                return OperatingSystem.IsWindows() &&
+                       PathUtility.ContainsSymlinkSegment(normalizedRoot, normalizedCandidate)
+                    ? ShellApprovalScopeResult.Symlink
+                    : ShellApprovalScopeResult.Match;
+            }
+
+            normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
+
+            if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
+                return ShellApprovalScopeResult.OutsideDirectory;
+
+            return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)
+                ? ShellApprovalScopeResult.Symlink
+                : ShellApprovalScopeResult.Match;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException)
+        {
+            return ShellApprovalScopeResult.OutsideDirectory;
+        }
     }
 
     /// <summary>
@@ -130,6 +140,95 @@ public static class ApprovalPatternMatching
             phraseMatches,
             candidate.Shell);
     }
+
+    internal static ShellApprovalEvaluation EvaluateShellApproval(
+        ApprovalCandidate candidate,
+        string? cwd,
+        IEnumerable<ApprovalEntry> approvedEntries,
+        int maximumNearMisses)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumNearMisses);
+        var effectiveDirectory = ResolveEffectiveDirectory(
+            candidate.Directory,
+            cwd,
+            candidate.Shell);
+        string? normalizedCandidate = null;
+        List<ShellApprovalNearMiss>? nearMisses = null;
+
+        foreach (var entry in approvedEntries)
+        {
+            if (PhraseMatches(candidate, entry))
+            {
+                var scopeResult = EvaluateApprovalScope(
+                    effectiveDirectory,
+                    entry,
+                    candidate.Shell,
+                    ref normalizedCandidate);
+                if (scopeResult == ShellApprovalScopeResult.Match)
+                    return new ShellApprovalEvaluation(entry, []);
+
+                if ((nearMisses?.Count ?? 0) < maximumNearMisses)
+                {
+                    (nearMisses ??= []).Add(new ShellApprovalNearMiss(
+                        entry,
+                        ToNearMissReason(scopeResult)));
+                }
+
+                continue;
+            }
+
+            if ((nearMisses?.Count ?? 0) >= maximumNearMisses
+                || !TryGetPhraseNearMissReason(candidate, entry, out var reason))
+            {
+                continue;
+            }
+
+            (nearMisses ??= []).Add(new ShellApprovalNearMiss(entry, reason));
+        }
+
+        return new ShellApprovalEvaluation(
+            MatchedEntry: null,
+            nearMisses ?? (IReadOnlyList<ShellApprovalNearMiss>)[]);
+    }
+
+    private static bool TryGetPhraseNearMissReason(
+        ApprovalCandidate candidate,
+        ApprovalEntry entry,
+        out ShellApprovalNearMissReason reason)
+    {
+        reason = default;
+        if (candidate.VerbTokens is not { Count: > 0 }
+            || entry.VerbTokens is not { Count: > 0 }
+            || entry.Shell is null)
+        {
+            return false;
+        }
+
+        var sameExecutable = string.Equals(
+            candidate.VerbTokens[0],
+            entry.VerbTokens[0],
+            StringComparison.OrdinalIgnoreCase);
+        if (!sameExecutable)
+            return false;
+
+        if (candidate.Shell != entry.Shell)
+        {
+            reason = ShellApprovalNearMissReason.ShellMismatch;
+            return true;
+        }
+
+        reason = ShellApprovalNearMissReason.TokenMismatch;
+        return true;
+    }
+
+    private static ShellApprovalNearMissReason ToNearMissReason(ShellApprovalScopeResult result)
+        => result switch
+        {
+            ShellApprovalScopeResult.OutsideDirectory => ShellApprovalNearMissReason.OutsideDirectory,
+            ShellApprovalScopeResult.Symlink => ShellApprovalNearMissReason.Symlink,
+            ShellApprovalScopeResult.MissingDirectory => ShellApprovalNearMissReason.MissingDirectory,
+            _ => throw new ArgumentOutOfRangeException(nameof(result), result, "The scope result is not a near miss."),
+        };
 
     private static bool PhraseMatches(ApprovalCandidate candidate, ApprovalEntry entry)
     {
@@ -488,3 +587,28 @@ public sealed record ApprovalNearMiss(
         _ => "unrecognized near-miss reason",
     };
 }
+
+internal enum ShellApprovalScopeResult
+{
+    Match = 0,
+    OutsideDirectory = 1,
+    Symlink = 2,
+    MissingDirectory = 3,
+}
+
+internal enum ShellApprovalNearMissReason
+{
+    OutsideDirectory = 0,
+    Symlink = 1,
+    MissingDirectory = 2,
+    TokenMismatch = 3,
+    ShellMismatch = 4,
+}
+
+internal sealed record ShellApprovalNearMiss(
+    ApprovalEntry Grant,
+    ShellApprovalNearMissReason Reason);
+
+internal sealed record ShellApprovalEvaluation(
+    ApprovalEntry? MatchedEntry,
+    IReadOnlyList<ShellApprovalNearMiss> NearMisses);

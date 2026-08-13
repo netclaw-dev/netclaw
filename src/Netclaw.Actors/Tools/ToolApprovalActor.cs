@@ -47,7 +47,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 if (match is null)
                 {
                     unapproved.Add(candidate.Verb);
-                    LogApprovalNearMisses(msg.ToolName, candidate, msg.Cwd, snapshot.Approvals);
                     continue;
                 }
 
@@ -68,25 +67,21 @@ internal sealed class ToolApprovalActor : ReceiveActor
             var candidateMatches = new List<ShellGrantCandidateMatch>(msg.Candidates.Count);
             foreach (var candidate in msg.Candidates)
             {
-                var grantMatch = MatchShellApproval(
+                var grantEvaluation = EvaluateShellApproval(
                     msg.SessionId,
                     msg.Audience,
                     msg.ToolName,
                     candidate.Candidate,
                     candidate.RealDirectory,
                     snapshot.Approvals);
-                var nearMisses = grantMatch is null
-                    ? ApprovalPatternMatching.ExplainShellNearMisses(
-                        candidate.Candidate.Verb,
-                        candidate.Candidate.Directory,
-                        candidate.RealDirectory,
-                        snapshot.Approvals)
-                    : [];
                 candidateMatches.Add(new ShellGrantCandidateMatch(
                     candidate.CandidateId,
-                    grantMatch?.Match,
-                    grantMatch?.Coverage,
-                    nearMisses));
+                    grantEvaluation.Match,
+                    grantEvaluation.Coverage,
+                    grantEvaluation.NearMisses)
+                {
+                    GrantCreatedAt = grantEvaluation.GrantCreatedAt
+                });
             }
 
             var storeStatus = snapshot.Failure is { } failure
@@ -237,7 +232,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
     }
 
-    private ShellActorGrantMatch? MatchShellApproval(
+    private ShellActorGrantEvaluation EvaluateShellApproval(
         SessionId? sessionId,
         TrustAudience audience,
         ToolName toolName,
@@ -248,24 +243,34 @@ internal sealed class ToolApprovalActor : ReceiveActor
         if (sessionId.HasValue
             && IsSessionApproved(sessionId.Value, audience, toolName, candidate))
         {
-            return new ShellActorGrantMatch(
+            return new ShellActorGrantEvaluation(
                 new ToolApprovalMatch(candidate.Verb, "session", "this chat"),
-                ShellCoverageKind.Session);
+                ShellCoverageKind.Session,
+                GrantCreatedAt: null,
+                NearMisses: []);
         }
 
-        foreach (var entry in persistedApprovals)
+        var evaluation = ApprovalPatternMatching.EvaluateShellApproval(
+            candidate,
+            cwd,
+            persistedApprovals,
+            maximumNearMisses: 1);
+        if (evaluation.MatchedEntry is { } entry)
         {
-            if (!ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, [entry]))
-                continue;
-
-            return new ShellActorGrantMatch(
+            return new ShellActorGrantEvaluation(
                 new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope()),
                 entry.Directory is null
                     ? ShellCoverageKind.PersistentGlobal
-                    : ShellCoverageKind.PersistentFolder);
+                    : ShellCoverageKind.PersistentFolder,
+                entry.CreatedAt,
+                NearMisses: []);
         }
 
-        return null;
+        return new ShellActorGrantEvaluation(
+            Match: null,
+            Coverage: null,
+            GrantCreatedAt: null,
+            evaluation.NearMisses);
     }
 
     private bool IsSessionApproved(
@@ -425,37 +430,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
         return null;
     }
 
-    /// <summary>
-    /// Emits a diagnostic when a shell pattern is prompted for despite a
-    /// persisted grant existing for the same verb — the operator's
-    /// "I already approved this" case. Read-only: it does not affect the
-    /// gate decision. Non-shell tools authorize on a verb match alone, so a
-    /// same-verb persisted entry would have approved them; nothing to explain.
-    /// </summary>
-    private void LogApprovalNearMisses(ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> approved)
-    {
-        if (!string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
-            return;
-
-        var nearMisses = ApprovalPatternMatching.ExplainShellNearMisses(
-            candidate.Verb, candidate.Directory, cwd, approved);
-
-        foreach (var miss in nearMisses)
-        {
-            _log.Info(
-                "approval_near_miss tool={ToolName} verb={CandidateVerb} candidate_dir={CandidateDirectory} cwd={Cwd}",
-                toolName.Value,
-                candidate.Verb,
-                candidate.Directory ?? "(none)",
-                cwd ?? "(none)");
-            _log.Info(
-                "approval_near_miss grant={GrantScope} grant_created_at={GrantCreatedAt} reason={Reason}",
-                miss.Grant.FormatScope(),
-                miss.Grant.CreatedAt?.ToString("u") ?? "unknown",
-                miss.Describe());
-        }
-    }
-
     private static string BuildSessionKey(SessionId sessionId, TrustAudience audience)
         => $"{sessionId.Value}|{audience.ToWireValue()}";
 
@@ -463,9 +437,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
         IReadOnlyList<ApprovalEntry> Approvals,
         ApprovalStoreFailure? Failure);
 
-    private sealed record ShellActorGrantMatch(
-        ToolApprovalMatch Match,
-        ShellCoverageKind Coverage);
+    private sealed record ShellActorGrantEvaluation(
+        ToolApprovalMatch? Match,
+        ShellCoverageKind? Coverage,
+        DateTimeOffset? GrantCreatedAt,
+        IReadOnlyList<ShellApprovalNearMiss> NearMisses);
 }
 
 internal sealed record ToolApprovalRecorded(ApprovalStoreFailure? Failure)

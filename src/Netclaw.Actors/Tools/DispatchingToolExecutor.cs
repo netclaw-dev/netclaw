@@ -516,6 +516,27 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             default:
                 throw new ArgumentOutOfRangeException(nameof(decision), decision.Outcome, "Unknown authorization outcome.");
         }
+
+        LogShellPolicyTrace(decision.ShellPolicyTrace);
+    }
+
+    internal void LogShellPolicyTrace(ShellPolicyDecisionTrace trace)
+    {
+        foreach (var row in trace.Rows)
+        {
+            _logger.LogInformation(
+                "Shell policy trace: stage={PolicyStage} outcome={PolicyOutcome} reason={PolicyReason} " +
+                "candidate_id={CandidateId} executable={ExecutableBasename} " +
+                "coverage={CoverageKind} scope_relation={ScopeRelation} grant_timestamp={GrantTimestamp}",
+                row.Stage.ToString(),
+                row.Outcome.ToString(),
+                row.Reason.ToString(),
+                row.CandidateId?.Value,
+                row.ExecutableBasename,
+                row.Coverage.ToString(),
+                row.ScopeRelation.ToString(),
+                row.GrantTimestamp);
+        }
     }
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)

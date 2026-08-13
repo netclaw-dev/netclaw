@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -435,7 +436,7 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
-    public async Task Directory_near_miss_is_logged_without_changing_the_decision()
+    public async Task Legacy_shell_check_does_not_log_raw_near_miss_data()
     {
         var ct = TestContext.Current.CancellationToken;
         var tempFile = Path.GetTempFileName();
@@ -452,16 +453,13 @@ public sealed class ToolApprovalActorTests : TestKit
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            IReadOnlyList<string> unapproved = [];
-            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(2, async () =>
+            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(0, async () =>
             {
-                unapproved = await service.GetUnapprovedPatternsAsync(
+                var unapproved = await service.GetUnapprovedPatternsAsync(
                     "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
                     ["git push"], cwd: otherDir, ct);
+                Assert.Equal(["git push"], unapproved);
             }, cancellationToken: ct);
-
-            // The diagnostic is read-only: the candidate is still unapproved.
-            Assert.Equal(["git push"], unapproved);
         }
         finally
         {
@@ -778,6 +776,110 @@ public sealed class ToolApprovalActorTests : TestKit
             Assert.NotNull(result.CandidateMatches[0].Match);
             Assert.Null(result.CandidateMatches[1].GrantCoverage);
             Assert.Null(result.CandidateMatches[1].Match);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Typed_shell_batch_returns_persistent_grant_timestamp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var grantTimestamp = new DateTimeOffset(2026, 8, 13, 8, 0, 0, TimeSpan.Zero);
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.Delete(tempFile);
+            var store = new ToolApprovalStore(
+                tempFile,
+                new FakeTimeProvider(grantTimestamp),
+                new ApprovalStoreMigrationContext(NativeShell),
+                TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var candidate = NativeCandidate("git status");
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(candidate, Directory: null)],
+                persistent: true,
+                ct);
+
+            var result = await ((IShellApprovalMatchService)service).MatchShellCandidatesAsync(
+                new ShellApprovalMatchRequest(
+                    SessionId: null,
+                    TrustAudience.Personal,
+                    new ToolName("shell_execute"),
+                    TestShellEnvironment.Current,
+                    [
+                        new ShellGrantCandidate(
+                            new ShellPolicyCandidateId(0),
+                            candidate,
+                            RealDirectory: null)
+                    ]),
+                ct);
+
+            var match = Assert.Single(result.CandidateMatches);
+            Assert.Equal(ShellCoverageKind.PersistentGlobal, match.GrantCoverage);
+            Assert.Equal(grantTimestamp, match.GrantCreatedAt);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Typed_shell_batch_returns_bounded_folder_near_miss_from_one_snapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var grantTimestamp = new DateTimeOffset(2026, 8, 13, 8, 15, 0, TimeSpan.Zero);
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.Delete(tempFile);
+            var grantDirectory = Path.Combine(Path.GetTempPath(), "netclaw-trace", "grant");
+            var otherDirectory = Path.Combine(Path.GetTempPath(), "netclaw-trace", "other");
+            var store = new ToolApprovalStore(
+                tempFile,
+                new FakeTimeProvider(grantTimestamp),
+                new ApprovalStoreMigrationContext(NativeShell),
+                TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var candidate = NativeCandidate("git status");
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(candidate, grantDirectory)],
+                persistent: true,
+                ct);
+
+            var result = await ((IShellApprovalMatchService)service).MatchShellCandidatesAsync(
+                new ShellApprovalMatchRequest(
+                    SessionId: null,
+                    TrustAudience.Personal,
+                    new ToolName("shell_execute"),
+                    TestShellEnvironment.Current,
+                    [
+                        new ShellGrantCandidate(
+                            new ShellPolicyCandidateId(0),
+                            candidate,
+                            otherDirectory)
+                    ]),
+                ct);
+
+            var match = Assert.Single(result.CandidateMatches);
+            Assert.Null(match.Match);
+            Assert.Null(match.GrantCoverage);
+            Assert.Null(match.GrantCreatedAt);
+            var nearMiss = Assert.Single(match.NearMisses);
+            Assert.Equal(ShellApprovalNearMissReason.OutsideDirectory, nearMiss.Reason);
+            Assert.Equal(grantTimestamp, nearMiss.Grant.CreatedAt);
         }
         finally
         {

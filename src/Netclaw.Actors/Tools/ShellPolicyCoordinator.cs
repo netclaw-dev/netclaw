@@ -23,9 +23,10 @@ internal sealed class ShellPolicyCoordinator(
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var trace = new ShellPolicyDecisionTraceBuilder();
         try
         {
-            return await EvaluateCoreAsync(tool, toolCall, context, cancellationToken);
+            return await EvaluateCoreAsync(tool, toolCall, context, trace, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -33,7 +34,9 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
-            return ToolAuthorizationDecision.Deny("internal_policy_failure");
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace);
         }
     }
 
@@ -41,11 +44,12 @@ internal sealed class ShellPolicyCoordinator(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
+        ShellPolicyDecisionTraceBuilder trace,
         CancellationToken cancellationToken)
     {
         var preflight = policy.AuthorizeShellPreflight(tool, context, toolCall.Arguments);
         if (!preflight.NeedsApproval)
-            return Complete(preflight, []);
+            return Complete(preflight, [], trace);
 
         var approvalContext = preflight.ApprovalContext;
         policy.TryGetAuthorizedShellAnalysis(context, out var execution);
@@ -58,7 +62,9 @@ internal sealed class ShellPolicyCoordinator(
                 out var projection)
             || projection is null)
         {
-            return ToolAuthorizationDecision.Deny("internal_policy_failure");
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace);
         }
 
         return await CompleteAsync(
@@ -66,6 +72,7 @@ internal sealed class ShellPolicyCoordinator(
             toolCall,
             context,
             projection,
+            trace,
             cancellationToken);
     }
 
@@ -74,13 +81,14 @@ internal sealed class ShellPolicyCoordinator(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyProjection projection,
+        ShellPolicyDecisionTraceBuilder trace,
         CancellationToken cancellationToken)
     {
         if (projection.ApprovalContext.IsMessy)
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, []);
+            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
 
         if (projection.Candidates.Count == 0)
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, []);
+            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
 
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
@@ -88,7 +96,7 @@ internal sealed class ShellPolicyCoordinator(
         if (projection.Candidates.Any(candidate => candidate.Candidate.Shell is null
                                                     || candidate.Candidate.VerbTokens is null))
         {
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, []);
+            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
         }
 
         if (projection.Candidates.Any(candidate =>
@@ -97,7 +105,9 @@ internal sealed class ShellPolicyCoordinator(
                 || candidate.Candidate.VerbTokens!.Any(static token =>
                     token.Length == 0 || token.Any(char.IsWhiteSpace))))
         {
-            return ToolAuthorizationDecision.Deny("internal_policy_failure");
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace);
         }
 
         var coverage = new ShellCoverageSet(projection.Candidates);
@@ -124,7 +134,29 @@ internal sealed class ShellPolicyCoordinator(
                 projection.ApprovalContext.Cwd,
                 coverage,
                 out var approvalMatches))
-            return ToolAuthorizationDecision.Deny("internal_policy_failure");
+        {
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace);
+        }
+
+        foreach (var actorMatch in actorResult.CandidateMatches)
+        {
+            var candidate = grantCandidates.First(item => item.Id == actorMatch.CandidateId);
+            trace.AddActorEvidence(candidate, actorMatch);
+        }
+
+        foreach (var candidate in projection.Candidates.Where(item =>
+                     approvalService is not null
+                     && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
+        {
+            trace.AddCoverage(
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                candidate,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ApprovalExemptSideEffect,
+                ShellScopeRelation.None);
+        }
 
         foreach (var candidate in grantCandidates.Where(candidate =>
                      coverage.UncoveredIds.Contains(candidate.Id)))
@@ -138,6 +170,12 @@ internal sealed class ShellPolicyCoordinator(
                     candidate.Id,
                     ShellCoverageKind.ReviewedSafePolicy,
                     ShellPolicyReason.ReviewedSafePhrase);
+                trace.AddCoverage(
+                    ShellPolicyTraceStage.ReviewedSafePolicy,
+                    candidate,
+                    ShellCoverageKind.ReviewedSafePolicy,
+                    ShellPolicyReason.ReviewedSafePhrase,
+                    ShellScopeRelation.UnderRealRoot);
             }
         }
 
@@ -157,6 +195,12 @@ internal sealed class ShellPolicyCoordinator(
                         candidate.Id,
                         ShellCoverageKind.OneTime,
                         ShellPolicyReason.OneTimeGrant);
+                    trace.AddCoverage(
+                        ShellPolicyTraceStage.OneTimeApproval,
+                        candidate,
+                        ShellCoverageKind.OneTime,
+                        ShellPolicyReason.OneTimeGrant,
+                        ShellScopeRelation.None);
                 }
 
                 uncovered = [];
@@ -167,7 +211,9 @@ internal sealed class ShellPolicyCoordinator(
         if (uncovered.Count > 0
             && actorResult.PersistentStore is PersistentGrantStoreStatus.Unavailable)
         {
-            return ToolAuthorizationDecision.Deny("approval_store_unavailable");
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("approval_store_unavailable"),
+                trace);
         }
 
         if (uncovered.Count > 0)
@@ -176,17 +222,25 @@ internal sealed class ShellPolicyCoordinator(
                 projection.ApprovalContext,
                 uncovered.Select(static candidate => candidate.Candidate).ToArray(),
                 context.SessionDirectory);
-            return ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches);
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches),
+                trace);
         }
 
         if (!coverage.AllCovered)
-            return ToolAuthorizationDecision.Deny("internal_policy_failure");
+        {
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace);
+        }
 
         if (oneTimeApplied)
         {
-            return ToolAuthorizationDecision.Allow(
-                ToolAllowReason.OneTimeApproval,
-                approvalMatches);
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Allow(
+                    ToolAllowReason.OneTimeApproval,
+                    approvalMatches),
+                trace);
         }
 
         if (approvalMatches.Count > 0)
@@ -198,15 +252,19 @@ internal sealed class ShellPolicyCoordinator(
                     FormatApprovalMatches(approvalMatches));
             }
 
-            return ToolAuthorizationDecision.Allow(
-                ToolAllowReason.StoredApproval,
-                approvalMatches);
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Allow(
+                    ToolAllowReason.StoredApproval,
+                    approvalMatches),
+                trace);
         }
 
-        return ToolAuthorizationDecision.Allow(
-            grantCandidates.Count == 0
-                ? ToolAllowReason.ApprovalExemptShellCandidates
-                : ToolAllowReason.SafeVerbInTrustedScope);
+        return CompleteWithTrace(
+            ToolAuthorizationDecision.Allow(
+                grantCandidates.Count == 0
+                    ? ToolAllowReason.ApprovalExemptShellCandidates
+                    : ToolAllowReason.SafeVerbInTrustedScope),
+            trace);
     }
 
     private async Task<ShellApprovalMatchResult> MatchCandidatesAsync(
@@ -359,8 +417,14 @@ internal sealed class ShellPolicyCoordinator(
 
             if (candidateMatch.Match is null)
             {
-                if (candidateMatch.GrantCoverage is not null)
+                if (candidateMatch.GrantCoverage is not null
+                    || candidateMatch.GrantCreatedAt is not null
+                    || candidateMatch.NearMisses.Count > 1
+                    || candidateMatch.NearMisses.Any(static nearMiss =>
+                        !Enum.IsDefined(nearMiss.Reason)))
+                {
                     return false;
+                }
 
                 continue;
             }
@@ -368,7 +432,10 @@ internal sealed class ShellPolicyCoordinator(
             if (candidateMatch.GrantCoverage is not
                 (ShellCoverageKind.Session
                 or ShellCoverageKind.PersistentGlobal
-                or ShellCoverageKind.PersistentFolder))
+                or ShellCoverageKind.PersistentFolder)
+                || candidateMatch.NearMisses.Count > 0
+                || (candidateMatch.GrantCoverage == ShellCoverageKind.Session
+                    && candidateMatch.GrantCreatedAt is not null))
             {
                 return false;
             }
@@ -464,10 +531,14 @@ internal sealed class ShellPolicyCoordinator(
         string toolName,
         ShellPolicyProjection projection,
         ToolApprovalContext approvalContext,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
-        => projection.HasExactOneTimeApproval(toolName, approvalContext)
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ShellPolicyDecisionTraceBuilder trace)
+    {
+        var decision = projection.HasExactOneTimeApproval(toolName, approvalContext)
             ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval, approvalMatches)
             : ToolAuthorizationDecision.RequiresApproval(approvalContext, approvalMatches);
+        return CompleteWithTrace(decision, trace);
+    }
 
     private static bool HasSameCandidateFacts(
         ApprovalCandidate first,
@@ -482,28 +553,40 @@ internal sealed class ShellPolicyCoordinator(
 
     private static ToolAuthorizationDecision Complete(
         ToolAccessDecision decision,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ShellPolicyDecisionTraceBuilder trace)
     {
         if (decision.NeedsApproval)
         {
-            return ToolAuthorizationDecision.RequiresApproval(
-                decision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context."),
-                approvalMatches);
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.RequiresApproval(
+                    decision.ApprovalContext
+                    ?? throw new InvalidOperationException("Approval decision missing approval context."),
+                    approvalMatches),
+                trace);
         }
 
         if (!decision.Allowed)
         {
-            return ToolAuthorizationDecision.Deny(
-                decision.DenyReason
-                ?? throw new InvalidOperationException("Denied decision missing a deny reason."));
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny(
+                    decision.DenyReason
+                    ?? throw new InvalidOperationException("Denied decision missing a deny reason.")),
+                trace);
         }
 
-        return ToolAuthorizationDecision.Allow(
-            decision.AllowReason
-            ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
-            approvalMatches);
+        return CompleteWithTrace(
+            ToolAuthorizationDecision.Allow(
+                decision.AllowReason
+                ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
+                approvalMatches),
+            trace);
     }
+
+    private static ToolAuthorizationDecision CompleteWithTrace(
+        ToolAuthorizationDecision decision,
+        ShellPolicyDecisionTraceBuilder trace)
+        => decision.WithShellPolicyTrace(trace.Complete(decision));
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
         => string.Join(", ", matches.Select(match =>

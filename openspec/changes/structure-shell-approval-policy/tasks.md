@@ -117,11 +117,11 @@
 
 ## 8. Trace, guides, and behavioral evals
 
-- [ ] 8.1 Emit the capped trace schema and enforce control/bidi escaping,
+- [x] 8.1 Emit the capped trace schema and enforce control/bidi escaping,
   secret redaction, and truncation.
-- [ ] 8.2 Append actor grant rows without a second scan; project near-miss logs
+- [x] 8.2 Append actor grant rows without a second scan; project near-miss logs
   from the same trace.
-- [ ] 8.3 Keep trace data out of model prompts and session journals.
+- [x] 8.3 Keep trace data out of model prompts and session journals.
 - [ ] 8.4 Update consumer and operator guides with complete input, facts,
   coverage, trace, and output examples.
 - [ ] 8.5 Update the `netclaw-operations` skill and deterministic approval evals

@@ -188,6 +188,11 @@ Done when:
 - [x] The actor response preserves stable candidate IDs and typed persistent
   store status. Duplicate IDs, mismatched facts, impossible grant states, and
   internal stage faults deny without a prompt.
+- [x] The shell coordinator returns a typed operator trace with at most 256
+  rows. Each row uses enum facts, a call-local candidate ID, a redacted
+  executable basename, grant scope, and grant time. The actor derives a match
+  or one near miss from one store snapshot pass. Raw paths, command text,
+  arguments, secrets, prompts, and session events never receive trace data.
 - [ ] The bundled safe catalog removes every executable whose accepted
   arguments can write, delete, execute code, or mutate a remote service through
   executable argv interpretation. Redirect, parser-owned path/provider, and
