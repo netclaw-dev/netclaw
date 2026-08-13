@@ -1268,6 +1268,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     var reason = decision == ParentApprovalDecision.TimedOut
                         ? "Tool access denied: approval_timed_out"
                         : "Tool access denied: approval_denied_by_user";
+                    if (decision == ParentApprovalDecision.Denied
+                        && consumedScratchKey is { } deniedScratchRetry)
+                    {
+                        reason = $"{reason}\n{SessionToolExecutionPipeline.BuildSessionScratchDenialHint(deniedScratchRetry.SessionDirectory)}";
+                    }
+
                     return BuildToolResult(
                         tc,
                         reason,

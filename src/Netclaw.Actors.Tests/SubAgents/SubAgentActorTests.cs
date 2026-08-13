@@ -704,6 +704,10 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             approvalBridge.RequestedOptions.Select(option => option.Key));
+        var denial = GetLastToolResult(fakeClient.LastReceivedMessages, "call-scratch-retry");
+        Assert.Contains("approval_denied_by_user", denial, StringComparison.Ordinal);
+        Assert.Contains("/home/user/.netclaw/sessions/example", denial, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", denial, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1081,7 +1085,15 @@ public class SubAgentActorTests : TestKit
     private static string? GetLastToolResult(FakeChatClient fakeClient, string callId)
     {
         Assert.NotNull(fakeClient.LastReceivedMessages);
-        return fakeClient.LastReceivedMessages!
+        return GetLastToolResult(fakeClient.LastReceivedMessages, callId);
+    }
+
+    private static string? GetLastToolResult(
+        IReadOnlyList<ChatMessage>? messages,
+        string callId)
+    {
+        Assert.NotNull(messages);
+        return messages
             .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
             .Single(r => r.CallId == callId)
             .Result?.ToString();
@@ -1734,6 +1746,8 @@ internal sealed class SequencedToolCallChatClient(IReadOnlyList<FunctionCallCont
 {
     private int _callCount;
 
+    public IReadOnlyList<ChatMessage>? LastReceivedMessages { get; private set; }
+
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -1746,7 +1760,10 @@ internal sealed class SequencedToolCallChatClient(IReadOnlyList<FunctionCallCont
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
-        => CreateStreamingUpdatesAsync(cancellationToken);
+    {
+        LastReceivedMessages = messages.ToList();
+        return CreateStreamingUpdatesAsync(cancellationToken);
+    }
 
     private async IAsyncEnumerable<ChatResponseUpdate> CreateStreamingUpdatesAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
