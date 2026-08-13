@@ -267,15 +267,26 @@ internal static class UpdateCommand
                 var targetPath = Path.Combine(installDir, binaryName);
                 var backupPath = targetPath + ".backup";
 
-                // Backup existing binary
-                if (File.Exists(targetPath))
+                // Backup existing binary, then move the new one into place.
+                // A stale backup may be transiently locked (AV scan); fail
+                // loudly instead of crashing the process mid-swap.
+                try
                 {
-                    if (File.Exists(backupPath))
-                        File.Delete(backupPath);
-                    File.Move(targetPath, backupPath);
-                }
+                    if (File.Exists(targetPath))
+                    {
+                        if (File.Exists(backupPath))
+                            File.Delete(backupPath);
+                        File.Move(targetPath, backupPath);
+                    }
 
-                File.Move(sourcePath, targetPath);
+                    File.Move(sourcePath, targetPath);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"\n  Failed to replace {binaryName}: {ex.Message}");
+                    Console.WriteLine("  If the install directory is left without a binary, re-run 'netclaw update' to complete the swap.");
+                    return 1;
+                }
 
                 // Set executable permission on Unix
                 if (!OperatingSystem.IsWindows())
@@ -299,15 +310,23 @@ internal static class UpdateCommand
                 Console.WriteLine(" done.");
             }
 
-            // Clean up backup files
+            // Clean up backup files. The backup of the currently running CLI
+            // binary is the image this process still executes from; on Windows
+            // DeleteFile on a running image fails with
+            // UnauthorizedAccessException. Leave it — the install step deletes
+            // stale backups before moving the new binary on the next update.
+            // A leftover backup must never turn a successful update into a
+            // fatal error, so any other delete failure only warns.
+            var runningBackupPath = Environment.ProcessPath is { } processPath
+                ? processPath + ".backup"
+                : null;
             foreach (var (component, _) in extractedPaths)
             {
                 var binaryName = OperatingSystem.IsWindows()
                     ? $"{component}.exe"
                     : component;
                 var backupPath = Path.Combine(installDir, binaryName + ".backup");
-                if (File.Exists(backupPath))
-                    File.Delete(backupPath);
+                CleanupBackupFile(backupPath, runningBackupPath, OperatingSystem.IsWindows());
             }
 
             Console.WriteLine($"\nUpdated to v{result.LatestVersion}.");
@@ -491,6 +510,42 @@ internal static class UpdateCommand
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Deletes a leftover <c>.backup</c> file after a successful update.
+    /// On Windows the backup of the currently running image cannot be
+    /// deleted — the process still executes from that file, so DeleteFile
+    /// fails with <see cref="UnauthorizedAccessException"/>. Such backups are
+    /// removed by the install step on the next update, before it renames the
+    /// new binary. Any other delete failure only warns; a leftover backup must
+    /// never turn a successful update into a fatal error.
+    /// </summary>
+    /// <param name="backupPath">The backup file to delete.</param>
+    /// <param name="runningBackupPath">
+    /// The backup path of the currently running process
+    /// (<c>Environment.ProcessPath + ".backup"</c>), or <c>null</c> if unknown.
+    /// </param>
+    /// <param name="isWindows">True when running on Windows.</param>
+    internal static void CleanupBackupFile(string backupPath, string? runningBackupPath, bool isWindows)
+    {
+        if (isWindows
+            && runningBackupPath is not null
+            && string.Equals(backupPath, runningBackupPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // Running image — cannot be deleted on Windows.
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(backupPath))
+                File.Delete(backupPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"warn: could not remove backup {backupPath}: {ex.Message}");
+        }
     }
 
     private static string GetInstallDirectory()

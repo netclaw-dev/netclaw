@@ -303,6 +303,75 @@ public sealed class UpdateCommandTests : IDisposable
         return doc.RootElement.GetProperty("Daemon").GetProperty("UpdateChannel").GetString();
     }
 
+    [Fact]
+    public void CleanupBackupFile_DoesNotDelete_RunningImageBackup_OnWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclaw.exe.backup");
+        File.WriteAllText(backupPath, "old image");
+
+        // The running process's backup is the very image this process executes
+        // from; on Windows DeleteFile fails with UnauthorizedAccessException.
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: backupPath, isWindows: true);
+
+        Assert.True(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void CleanupBackupFile_Deletes_OtherComponentBackup_OnWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclawd.exe.backup");
+        File.WriteAllText(backupPath, "old image");
+        var runningBackupPath = Path.Combine(_dir.Path, "netclaw.exe") + ".backup";
+
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath, isWindows: true);
+
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void CleanupBackupFile_Deletes_Backup_OnNonWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclaw.backup");
+        File.WriteAllText(backupPath, "old image");
+
+        // POSIX allows unlinking a running image, so even the running
+        // process's own backup is removed.
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: backupPath, isWindows: false);
+
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void CleanupBackupFile_DoesNotThrow_WhenDeleteFails()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return; // permission simulation below is Unix-only and ineffective for root
+
+        var backupPath = Path.Combine(_dir.Path, "netclaw.backup");
+        File.WriteAllText(backupPath, "old image");
+        var dir = Path.GetDirectoryName(backupPath)!;
+        var originalMode = File.GetUnixFileMode(dir);
+
+        try
+        {
+            // Remove write permission on the directory so unlink fails with
+            // UnauthorizedAccessException — the same failure class as deleting
+            // a running image on Windows.
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: null, isWindows: false);
+
+            // Warned, not crashed; the leftover self-heals on the next update.
+            Assert.True(File.Exists(backupPath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, originalMode);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(StartupUpdateSkippedCases))]
     public void ShouldRunStartupUpdateCheck_ReturnsFalse_ForInteractiveOrSelfUpdateFlows(string[] args)
