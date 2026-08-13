@@ -48,7 +48,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 new ShellApprovalHarnessScope(
                     catalog.FixtureDefaults.ProjectDirectory,
                     catalog.FixtureDefaults.Session.SessionDirectory,
-                    catalog.FixtureDefaults.Session.SessionId),
+                    catalog.FixtureDefaults.Session.SessionId,
+                    policyCase.Available.OneTimeApprovalKeys),
                 CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
             var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
             TestContext.Current.TestOutputHelper?.WriteLine(
@@ -99,9 +100,10 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 TestContext.Current.CancellationToken,
                 timeProvider,
                 new ShellApprovalHarnessScope(
-                    catalog.FixtureDefaults.ProjectDirectory,
-                    catalog.FixtureDefaults.Session.SessionDirectory,
-                    catalog.FixtureDefaults.Session.SessionId),
+                    policyCase.InitialWorkingDirectory,
+                    policyCase.InitialWorkingDirectory,
+                    catalog.FixtureDefaults.Session.SessionId,
+                    policyCase.Available.OneTimeApprovalKeys),
                 policyCase.UseBundledSafeCatalog
                     ? null
                     : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
@@ -270,16 +272,33 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 Grammar: "PowerShell",
                 Platform: "Windows",
                 PathStyle: "Windows",
+                ExecutablePath: @"C:\Program Files\PowerShell\7\pwsh.exe",
                 PowerShellDialect: "PowerShell7"
-            } => ShellApprovalHost.PowerShell7,
+            } when policyCase.Environment.CommandArguments.SequenceEqual(
+                ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+                => ShellApprovalHost.PowerShell7,
             {
                 Grammar: "PowerShell",
                 Platform: "Windows",
                 PathStyle: "Windows",
+                ExecutablePath: @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
                 PowerShellDialect: "WindowsPowerShell51"
-            } => ShellApprovalHost.WindowsPowerShell51,
+            } when policyCase.Environment.CommandArguments.SequenceEqual(
+                ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+                => ShellApprovalHost.WindowsPowerShell51,
             _ => throw new InvalidDataException($"Unsupported fixture environment: {policyCase.Id}.")
         };
+
+        var expectedWorkingDirectory = host == ShellApprovalHost.Bash
+            ? "/work"
+            : @"C:\work";
+        if (!string.Equals(
+                policyCase.InitialWorkingDirectory,
+                expectedWorkingDirectory,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Unsupported fixture directory: {policyCase.Id}.");
+        }
 
         return new ShellApprovalInvocation(
             policyCase.Command,
