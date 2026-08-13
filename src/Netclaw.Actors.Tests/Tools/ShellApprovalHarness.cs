@@ -208,7 +208,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 ProjectDirectory = approvalProjectDirectory,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
             });
-        context.SetOneTimeApprovedPatterns(scope?.OneTimeApprovalKeys ?? []);
+        if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+        {
+            context.Approval.SeedOneTimeApproval(
+                ShellTool.ToolName,
+                oneTimeApprovalKeys);
+        }
 
         return new ShellApprovalHarness(
             rootDirectory,

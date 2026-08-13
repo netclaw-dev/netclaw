@@ -83,6 +83,10 @@ internal sealed record PolicyAdversarialCase
 
     public required string InitialWorkingDirectory { get; init; }
 
+    public required string ProjectDirectory { get; init; }
+
+    public required string SessionDirectory { get; init; }
+
     public required PolicyFixtureAuthority Available { get; init; }
 
     public bool UseBundledSafeCatalog { get; init; }

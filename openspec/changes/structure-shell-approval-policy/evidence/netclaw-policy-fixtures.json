@@ -417,6 +417,8 @@
       "command": "\"$tool\" --version",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
     },
@@ -426,6 +428,8 @@
       "command": "bash -c 'rm -rf /'",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "expected": { "outcome": "Deny", "denyReason": "hard_deny_system_destructive", "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 0 }
     },
@@ -435,6 +439,8 @@
       "command": "head README.md > report.txt",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [{ "tokens": ["head"], "proof": "ReviewedDiagnostic" }] },
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["head"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
     },
@@ -444,6 +450,8 @@
       "command": "Get-Content C:\\protected\\config",
       "environment": { "platform": "Windows", "executablePath": "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "commandArguments": ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"], "grammar": "PowerShell", "pathStyle": "Windows", "powerShellDialect": "PowerShell7" },
       "initialWorkingDirectory": "C:\\work",
+      "projectDirectory": "C:\\work",
+      "sessionDirectory": "C:\\work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [{ "tokens": ["Get-Content"], "proof": "ReviewedDiagnostic" }] },
       "expected": { "outcome": "Deny", "denyReason": "shell_references_protected_path", "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 0 }
     },
@@ -453,6 +461,8 @@
       "command": "git statusx",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [{ "kind": "PersistentGlobal", "shell": "Bash", "match": "TokenPrefix", "tokens": ["git", "status"], "directory": null }], "safePhrases": [] },
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["git statusx"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
     },
@@ -462,6 +472,8 @@
       "command": "for f in $(list-files); do cat \"$f\"; done",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": {
         "oneTimeApprovalKeys": [],
         "sessionGrants": [],
@@ -476,6 +488,8 @@
       "command": "Get-Content Env:SECRET",
       "environment": { "platform": "Windows", "executablePath": "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "commandArguments": ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"], "grammar": "PowerShell", "pathStyle": "Windows", "powerShellDialect": "PowerShell7" },
       "initialWorkingDirectory": "C:\\work",
+      "projectDirectory": "C:\\work",
+      "sessionDirectory": "C:\\work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [{ "tokens": ["Get-Content"], "proof": "ReviewedDiagnostic" }] },
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
     },
@@ -485,6 +499,8 @@
       "command": "find . -exec rm {} +",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["find"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
@@ -495,6 +511,8 @@
       "command": "awk 'BEGIN { system(\"touch marker\") }'",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["awk"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
@@ -505,6 +523,8 @@
       "command": "rg --pre helper pattern .",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["rg"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
@@ -515,9 +535,27 @@
       "command": "sort -o output input",
       "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
       "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
       "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+    },
+    {
+      "id": "A12",
+      "category": "ExactOneTimeAuthority",
+      "command": "git push",
+      "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+      "initialWorkingDirectory": "/work",
+      "projectDirectory": "/work",
+      "sessionDirectory": "/work",
+      "available": {
+        "oneTimeApprovalKeys": ["git push", "\u0000candidate-v2:D404315B7AE7E1AB2E5DCDFCBFC1BC8A39770526922A4FCD7AB854C40B06F8BF"],
+        "sessionGrants": [],
+        "persistentGrants": [],
+        "safePhrases": []
+      },
+      "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
     }
   ]
 }

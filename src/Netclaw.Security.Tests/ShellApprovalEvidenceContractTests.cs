@@ -65,10 +65,10 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Null(fixtures.FixtureDefaults.InheritedWorkingDirectory);
         Assert.Equal(10, fixtures.Cases.Count);
         Assert.Equal(
-            Enumerable.Range(1, 11).Select(number => $"A{number:00}"),
+            Enumerable.Range(1, 12).Select(number => $"A{number:00}"),
             fixtures.AdversarialCases.Select(item => item.Id));
         Assert.Equal(
-            11,
+            12,
             fixtures.AdversarialCases.Select(item => item.Category).Distinct().Count());
         Assert.All(fixtures.AdversarialCases, item =>
         {

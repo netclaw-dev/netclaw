@@ -100,8 +100,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 TestContext.Current.CancellationToken,
                 timeProvider,
                 new ShellApprovalHarnessScope(
-                    policyCase.InitialWorkingDirectory,
-                    policyCase.InitialWorkingDirectory,
+                    policyCase.ProjectDirectory,
+                    policyCase.SessionDirectory,
                     catalog.FixtureDefaults.Session.SessionId,
                     policyCase.Available.OneTimeApprovalKeys),
                 policyCase.UseBundledSafeCatalog
@@ -295,9 +295,17 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         if (!string.Equals(
                 policyCase.InitialWorkingDirectory,
                 expectedWorkingDirectory,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                policyCase.ProjectDirectory,
+                expectedWorkingDirectory,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                policyCase.SessionDirectory,
+                expectedWorkingDirectory,
                 StringComparison.Ordinal))
         {
-            throw new InvalidDataException($"Unsupported fixture directory: {policyCase.Id}.");
+            throw new InvalidDataException($"Unsupported fixture scope: {policyCase.Id}.");
         }
 
         return new ShellApprovalInvocation(
