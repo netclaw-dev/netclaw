@@ -1234,6 +1234,52 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
+    public async Task CurrentSession_telegram_delivery_required_fails_on_reported_send_failure()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("telegram-current-session-failed-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-telegram-current-session-failed");
+        ActorRegistry.For(Sys).Register<TelegramGatewayActorKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition(
+            "telegram-current-session-failed",
+            deliveryRequired: true,
+            originChannelType: ChannelType.Telegram,
+            sessionId: "8962863491/chat");
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(delivered.Source.ReminderId);
+        Assert.NotNull(delivered.Source.DeliveryObserver);
+
+        delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+            delivered.Source.ReminderId!.Value,
+            ChannelType.Telegram,
+            Delivered: false,
+            FailureReason: "Telegram post did not succeed"));
+
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance,
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, health.ActiveExecutions);
+            Assert.Contains(_notificationSink.Alerts, alert =>
+                alert.Category == AlertType.ReminderExecutionFailed
+                && alert.Source == definition.Id.Value
+                && alert.Summary.Contains("Telegram post did not succeed", StringComparison.Ordinal));
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Channel_failure_retries_and_fifth_failure_disables_reminder()
     {
         var manager = await GetManagerAsync();
