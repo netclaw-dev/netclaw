@@ -328,7 +328,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
 internal sealed class CountingApprovalService(IToolApprovalService inner) :
     IToolApprovalService,
-    IStructuredToolApprovalService
+    IStructuredToolApprovalService,
+    IShellApprovalMatchService
 {
     private int _checkCount;
 
@@ -344,6 +345,16 @@ internal sealed class CountingApprovalService(IToolApprovalService inner) :
     {
         Interlocked.Increment(ref _checkCount);
         return await inner.CheckApprovalAsync(sessionId, audience, toolName, candidates, cwd, ct);
+    }
+
+    public async Task<ShellApprovalMatchResult> MatchShellCandidatesAsync(
+        ShellApprovalMatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _checkCount);
+        return await ((IShellApprovalMatchService)inner).MatchShellCandidatesAsync(
+            request,
+            cancellationToken);
     }
 
     public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(

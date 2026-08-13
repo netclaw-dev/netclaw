@@ -325,6 +325,12 @@ internal sealed class ShellPolicyCoordinator(
         out IReadOnlyList<ToolApprovalMatch> approvalMatches)
     {
         approvalMatches = [];
+        if (result.PersistentStore is PersistentGrantStoreStatus.Unavailable unavailable
+            && !Enum.IsDefined(unavailable.Failure))
+        {
+            return false;
+        }
+
         if (result.PersistentStore is not PersistentGrantStoreStatus.Ready
             && result.PersistentStore is not PersistentGrantStoreStatus.Unavailable)
         {
@@ -361,6 +367,15 @@ internal sealed class ShellPolicyCoordinator(
                 return false;
             }
 
+            var candidate = candidates.First(item => item.Id == candidateMatch.CandidateId);
+            if (!IsConsistentActorMatch(
+                    candidate.Candidate,
+                    candidateMatch.Match,
+                    candidateMatch.GrantCoverage.Value))
+            {
+                return false;
+            }
+
             if (result.PersistentStore is PersistentGrantStoreStatus.Unavailable
                 && candidateMatch.GrantCoverage is
                     (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder))
@@ -377,6 +392,29 @@ internal sealed class ShellPolicyCoordinator(
 
         approvalMatches = Array.AsReadOnly(matches.ToArray());
         return true;
+    }
+
+    private static bool IsConsistentActorMatch(
+        ApprovalCandidate candidate,
+        ToolApprovalMatch match,
+        ShellCoverageKind coverage)
+    {
+        if (!string.Equals(match.Pattern, candidate.Verb, StringComparison.Ordinal))
+            return false;
+
+        return coverage switch
+        {
+            ShellCoverageKind.Session =>
+                string.Equals(match.Source, "session", StringComparison.Ordinal)
+                && string.Equals(match.Scope, "this chat", StringComparison.Ordinal),
+            ShellCoverageKind.PersistentGlobal =>
+                string.Equals(match.Source, "persistent", StringComparison.Ordinal)
+                && match.Scope.EndsWith(" anywhere", StringComparison.Ordinal),
+            ShellCoverageKind.PersistentFolder =>
+                string.Equals(match.Source, "persistent", StringComparison.Ordinal)
+                && !match.Scope.EndsWith(" anywhere", StringComparison.Ordinal),
+            _ => false,
+        };
     }
 
     private static IReadOnlyList<ShellPolicyCandidate> GetUncoveredCandidates(

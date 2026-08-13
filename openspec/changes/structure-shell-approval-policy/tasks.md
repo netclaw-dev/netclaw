@@ -34,7 +34,7 @@
 
 ## 3. Ordered security stages and coverage
 
-- [x] 3.1 Implement parse validation, hard deny, protected path, approval mode,
+- [ ] 3.1 Implement parse validation, hard deny, protected path, approval mode,
   candidate construction, noninteractive trust-zone enforcement, actor match,
   safe policy, exact-set one-time matching, and prompt completion in the
   specified order.

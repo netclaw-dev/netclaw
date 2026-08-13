@@ -762,6 +762,60 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Authorization_evaluation_denies_mismatched_actor_match()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        new ToolApprovalMatch("unrelated", "persistent", "anywhere"),
+                        ShellCoverageKind.Session,
+                        NearMisses: [])).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-mismatched-actor-match",
+            "shell_execute",
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/mismatched-actor-match"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+    }
+
+    [Fact]
+    public async Task Authorization_evaluation_denies_invalid_store_failure_enum()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Unavailable((ApprovalStoreFailure)999),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
+                        ShellCoverageKind.Session,
+                        NearMisses: [])).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-invalid-store-enum",
+            "shell_execute",
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/invalid-store-enum"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+    }
+
+    [Fact]
     public async Task Authorization_evaluation_denies_uncovered_candidate_when_store_is_unavailable()
     {
         var approvalService = new FixedShellApprovalService(request =>
