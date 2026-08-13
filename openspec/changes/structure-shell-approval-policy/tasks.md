@@ -103,17 +103,21 @@
 
 ## 6. Bash causal approval intent
 
-- [ ] 6.1 Derive intent from canonical Bash directory-transition and control-flow
-  facts without changing execution analysis.
-- [ ] 6.2 Implement replacement and invalidation across later directory changes,
+- [x] 6.1 Derive intent from ShellSyntaxTree 0.3.4 working-directory effects and
+  canonical Bash control flow without changing execution analysis.
+- [x] 6.2 Implement replacement and invalidation across later directory changes,
   `||`, joins, groups/subshells, dynamic flow, and unsupported regions.
-- [ ] 6.3 Apply intent only to reviewed diagnostic candidates without writing
+- [x] 6.3 Apply intent only to reviewed diagnostic candidates without writing
   redirects; keep folder grants and every deny check on real facts.
-- [ ] 6.4 Pin D03's `/tmp` trace and later-directory-mutation counterexamples.
+- [x] 6.4 Pin D03's `/tmp` trace and later-directory-mutation counterexamples.
+- [x] 6.4a Validate each fallback directory, POSIX `/tmp` alias descendants,
+  session prerequisites, and real-scope folder grants. Use parser effects for
+  temporary-scope transitions. Keep protected fallback denial terminal before
+  symlink eligibility.
 - [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
   expected results.
 
-## 7. ShellSyntaxTree 0.3.1 facts through 0.3.3
+## 7. ShellSyntaxTree 0.3.1 facts through 0.3.4
 
 - [x] 7.1 Upgrade the central package to public 0.3.2, which includes the
   0.3.1 authored-source facts and keeps same-language child shells strict.
@@ -127,6 +131,8 @@
 - [x] 7.5 Delete the broad Bash environment-variable relaxation and its
   superseded tests.
 - [x] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.
+- [x] 7.7 Upgrade to public ShellSyntaxTree 0.3.4. Consume its closed
+  working-directory effect without command-name parsing.
 
 ## 8. Trace, guides, and behavioral evals
 

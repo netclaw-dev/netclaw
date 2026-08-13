@@ -311,6 +311,68 @@ public sealed class ToolAccessPolicy
                cwd,
                context);
 
+    internal bool IsReviewedSafeIntentCandidate(
+        ApprovalCandidate candidate,
+        ShellSyntaxTree.CommandOccurrence? sourceOccurrence,
+        string intentDirectory,
+        ToolInvocationContext context)
+        => _safeVerbPolicy is not null
+           && _safeVerbPolicy.ShortCircuitsCausalIntent(
+               candidate,
+               sourceOccurrence,
+               intentDirectory,
+               context);
+
+    internal bool CausalIntentReferencesProtectedPath(
+        ShellSyntaxTree.CommandOccurrence sourceOccurrence,
+        string intentDirectory,
+        IReadOnlyList<string> fallbackDirectories)
+        => _toolPathPolicy.CausalIntentReferencesDeniedPath(
+            sourceOccurrence,
+            intentDirectory,
+            fallbackDirectories);
+
+    internal bool IsCausalIntentDirectoryEligible(string intentDirectory)
+    {
+        if (ShellEnvironment.Grammar != ShellGrammar.Bash
+            || !ShellPathRules.TryNormalize(
+                intentDirectory,
+                ShellEnvironment.PathStyle,
+                out var normalized)
+            || !ShellPathRules.Equals(
+                normalized,
+                intentDirectory,
+                ShellEnvironment.PathStyle))
+        {
+            return false;
+        }
+
+        if (_platformTemporaryScopePolicy.IsSafePlatformTemporaryPath(normalized))
+            return true;
+
+        try
+        {
+            return !PathUtility.ContainsSymlinkSegment("/", normalized);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or UnauthorizedAccessException
+                                      or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    internal bool AreCausalIntentDirectoriesEligible(
+        string intentDirectory,
+        IReadOnlyList<string> fallbackDirectories)
+        => fallbackDirectories.Count > 0
+           && IsCausalIntentDirectoryEligible(intentDirectory)
+           && fallbackDirectories.All(IsCausalIntentDirectoryEligible);
+
+    internal ShellApprovalMatcher ShellApprovalMatcher => _shellApprovalMatcher;
+
     /// <summary>
     /// For non-interactive channels, validates that the working directory and all
     /// path-like arguments in a shell command are write-authorized for the channel's

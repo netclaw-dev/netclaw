@@ -64,6 +64,7 @@ internal enum ShellScopeRelation
     UnderRealRoot = 4,
     OutsideGrantRoot = 5,
     SymlinkBoundary = 6,
+    UnderIntentRoot = 7,
 }
 
 internal sealed record ShellPolicyTraceRow(

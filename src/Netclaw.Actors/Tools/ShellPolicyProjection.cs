@@ -43,10 +43,30 @@ internal readonly record struct ShellPolicyCandidateId
     internal int Value { get; }
 }
 
+internal enum ShellPolicyCandidateRole
+{
+    Ordinary = 0,
+    CausalPrerequisite = 1,
+    CausalIntentConsumer = 2,
+}
+
 internal sealed record ShellPolicyCandidate(
     ShellPolicyCandidateId Id,
     ApprovalCandidate Candidate,
-    ShellSyntaxTree.CommandOccurrence? SourceOccurrence);
+    ShellSyntaxTree.CommandOccurrence? SourceOccurrence)
+{
+    internal ShellPolicyCandidateRole Role { get; init; }
+
+    internal string? IntentDirectory { get; init; }
+
+    internal IReadOnlyList<string> IntentFallbackDirectories { get; init; } = [];
+
+    internal IReadOnlyList<ShellPolicyCandidateId> IntentPrerequisites { get; init; } = [];
+
+    internal bool CanMatchStoredGrant => Role != ShellPolicyCandidateRole.CausalIntentConsumer;
+
+    internal bool CanUseRealReviewedSafePolicy => Role == ShellPolicyCandidateRole.Ordinary;
+}
 
 internal sealed record ShellCandidateCoverage(
     ShellPolicyCandidateId CandidateId,
@@ -93,8 +113,13 @@ internal sealed record ShellPolicyProjection
     internal IReadOnlyList<ShellPolicyCandidate> GrantCandidates =>
         Candidates
             .Where(static candidate =>
+                candidate.CanMatchStoredGrant
+                &&
                 !ApprovalPatternMatching.IsPureSideEffect(candidate.Candidate))
             .ToArray();
+
+    internal bool HasCausalIntent => Candidates.Any(static candidate =>
+        candidate.Role != ShellPolicyCandidateRole.Ordinary);
 
     internal bool HasExactOneTimeApproval(
         string toolName,
@@ -111,18 +136,38 @@ internal sealed record ShellPolicyProjection
 
     internal static bool TryCreate(
         ShellExecutionEnvironment environment,
+        ShellApprovalMatcher matcher,
         ShellCommandAnalysis? execution,
         ToolApprovalContext approvalContext,
         ToolExecutionContext context,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(matcher);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
 
         projection = null;
         if (approvalContext.Candidates is null)
             return false;
+
+        if (approvalContext.IsMessy
+            && approvalContext.Candidates.Count == 0
+            && execution is not null
+            && BashCausalApprovalIntent.TryProject(
+                environment,
+                execution,
+                matcher,
+                out var causalCandidates))
+        {
+            return TryCreateCausal(
+                environment,
+                execution,
+                approvalContext,
+                context,
+                causalCandidates,
+                out projection);
+        }
 
         var candidates = new ShellPolicyCandidate[approvalContext.Candidates.Count];
         var candidateCopies = new ApprovalCandidate[approvalContext.Candidates.Count];
@@ -152,6 +197,68 @@ internal sealed record ShellPolicyProjection
             CandidateVerbs = Array.AsReadOnly(approvalContext.CandidateVerbs.ToArray()),
             Options = Array.AsReadOnly(approvalContext.Options.ToArray()),
             Candidates = Array.AsReadOnly(candidateCopies)
+        };
+        var runScopeCopy = context.RunScope with
+        {
+            RecentFiles = Array.AsReadOnly(context.RunScope.RecentFiles.ToArray())
+        };
+        projection = new ShellPolicyProjection(
+            environment,
+            execution,
+            runScopeCopy,
+            contextCopy,
+            Array.AsReadOnly(candidates),
+            context.Approval.OneTimeApprovedPatterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
+            context.Approval.OneTimeApprovedToolName);
+        return true;
+    }
+
+    private static bool TryCreateCausal(
+        ShellExecutionEnvironment environment,
+        ShellCommandAnalysis execution,
+        ToolApprovalContext approvalContext,
+        ToolExecutionContext context,
+        IReadOnlyList<BashCausalApprovalCandidate> causalCandidates,
+        out ShellPolicyProjection? projection)
+    {
+        projection = null;
+        var candidates = new ShellPolicyCandidate[causalCandidates.Count];
+        for (var index = 0; index < causalCandidates.Count; index++)
+        {
+            var source = causalCandidates[index];
+            if (source.PrerequisiteIndexes.Any(prerequisite =>
+                    prerequisite < 0 || prerequisite >= causalCandidates.Count))
+            {
+                return false;
+            }
+
+            var candidateCopy = source.Candidate with
+            {
+                VerbTokens = source.Candidate.VerbTokens is null
+                    ? null
+                    : Array.AsReadOnly(source.Candidate.VerbTokens.ToArray()),
+                SourceOccurrence = null
+            };
+            candidates[index] = new ShellPolicyCandidate(
+                new ShellPolicyCandidateId(index),
+                candidateCopy,
+                source.SourceOccurrence)
+            {
+                Role = source.Role,
+                IntentDirectory = source.IntentDirectory,
+                IntentFallbackDirectories = Array.AsReadOnly(source.FallbackDirectories.ToArray()),
+                IntentPrerequisites = Array.AsReadOnly(source.PrerequisiteIndexes
+                    .Select(static prerequisite => new ShellPolicyCandidateId(prerequisite))
+                    .ToArray())
+            };
+        }
+
+        var contextCopy = approvalContext with
+        {
+            Patterns = Array.AsReadOnly(approvalContext.Patterns.ToArray()),
+            CandidateVerbs = Array.AsReadOnly(approvalContext.CandidateVerbs.ToArray()),
+            Options = Array.AsReadOnly(approvalContext.Options.ToArray()),
+            Candidates = Array.AsReadOnly(approvalContext.Candidates!.ToArray())
         };
         var runScopeCopy = context.RunScope with
         {
@@ -197,6 +304,10 @@ internal sealed class ShellCoverageSet
 
     internal bool AllCovered => _coverage.Values.All(static item =>
         item.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied);
+
+    internal bool IsCovered(ShellPolicyCandidateId candidateId) =>
+        _coverage.TryGetValue(candidateId, out var coverage)
+        && coverage.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied;
 
     internal void Cover(
         ShellPolicyCandidateId candidateId,

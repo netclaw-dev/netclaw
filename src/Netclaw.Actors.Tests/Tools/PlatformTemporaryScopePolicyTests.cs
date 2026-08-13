@@ -54,18 +54,78 @@ public sealed class PlatformTemporaryScopePolicyTests
         Assert.Equal("/private/tmp", correction.TemporaryRoot);
     }
 
-    [Fact]
-    public void Static_bash_temp_transition_returns_private_scratch_correction()
+    [Theory]
+    [InlineData("cd /tmp && gh api repos/example/project > /tmp/result.log")]
+    [InlineData("command cd /tmp && gh api repos/example/project > /tmp/result.log")]
+    [InlineData("builtin cd /tmp && gh api repos/example/project > /tmp/result.log")]
+    public void Parser_owned_bash_temp_transition_returns_private_scratch_correction(
+        string command)
     {
         var decision = Evaluate(
             BashEnvironment(),
             PosixTemp,
-            "cd /tmp && gh api repos/example/project > /tmp/result.log",
+            command,
             PosixSession);
 
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
         Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
         Assert.Null(context.SuggestedProjectDirectory);
+    }
+
+    [Fact]
+    public void Additional_posix_temp_alias_maps_to_its_own_canonical_root()
+    {
+        const string runtimeTemp = "/var/folders/example/T";
+        var decision = Evaluate(
+            BashEnvironment(),
+            runtimeTemp,
+            "cat /tmp/result.log",
+            PosixSession,
+            explicitWorkingDirectory: PosixTemp,
+            inspector: new MappedPathInspector(
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [runtimeTemp] = runtimeTemp,
+                    [PosixTemp] = "/private/tmp"
+                }),
+            additionalTemporaryRoots: [PosixTemp]);
+
+        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(
+            context.AgentCorrection);
+        Assert.Equal("/private/tmp", correction.TemporaryRoot);
+    }
+
+    [Fact]
+    public void Additional_posix_temp_alias_maps_descendants_to_its_canonical_root()
+    {
+        const string runtimeTemp = "/var/folders/example/T";
+        var inspector = new MappedPathInspector(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [runtimeTemp] = runtimeTemp,
+                [PosixTemp] = "/private/tmp"
+            });
+        var policy = new PlatformTemporaryScopePolicy(
+            BashEnvironment(),
+            runtimeTemp,
+            inspector,
+            [PosixTemp]);
+
+        Assert.True(policy.IsSafePlatformTemporaryPath("/tmp/work/result.log"));
+        Assert.True(policy.IsSafePlatformTemporaryPath("/private/tmp/work/result.log"));
+        Assert.False(policy.IsSafePlatformTemporaryPath("/var/external/result.log"));
+    }
+
+    [Fact]
+    public void MacOS_factory_recognizes_the_conventional_posix_temp_alias()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var policy = PlatformTemporaryScopePolicy.Create(BashEnvironment());
+
+        Assert.True(policy.IsPlatformTemporaryRoot(PosixTemp));
     }
 
     [Fact]
@@ -366,7 +426,8 @@ public sealed class PlatformTemporaryScopePolicyTests
         bool interactive = true,
         TrustAudience audience = TrustAudience.Personal,
         IPlatformTemporaryPathInspector? inspector = null,
-        IReadOnlyList<string>? deniedPaths = null)
+        IReadOnlyList<string>? deniedPaths = null,
+        IReadOnlyList<string>? additionalTemporaryRoots = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         var profile = audience switch
@@ -385,10 +446,14 @@ public sealed class PlatformTemporaryScopePolicyTests
         };
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, deniedPaths ?? []);
-        var tempPolicy = new PlatformTemporaryScopePolicy(
-            environment,
-            tempRoot,
-            inspector ?? new TestPathInspector());
+        var pathInspector = inspector ?? new TestPathInspector();
+        var tempPolicy = additionalTemporaryRoots is null
+            ? new PlatformTemporaryScopePolicy(environment, tempRoot, pathInspector)
+            : new PlatformTemporaryScopePolicy(
+                environment,
+                tempRoot,
+                pathInspector,
+                additionalTemporaryRoots);
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(
@@ -455,6 +520,26 @@ public sealed class PlatformTemporaryScopePolicyTests
 
         public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
             => !_failDescendantInspection;
+
+        public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
+            => false;
+    }
+
+    private sealed class MappedPathInspector(
+        IReadOnlyDictionary<string, string> roots) : IPlatformTemporaryPathInspector
+    {
+        public bool TryResolveRoot(
+            string path,
+            ShellPathStyle pathStyle,
+            out string resolvedRoot)
+        {
+            resolvedRoot = string.Empty;
+            return roots.TryGetValue(path, out var mapped)
+                   && ShellPathRules.TryNormalize(mapped, pathStyle, out resolvedRoot);
+        }
+
+        public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
+            => ShellPathRules.IsWithinRoot(path, root, pathStyle);
 
         public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
             => false;

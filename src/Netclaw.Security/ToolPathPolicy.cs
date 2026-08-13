@@ -157,6 +157,72 @@ public sealed class ToolPathPolicy
     public bool IsReadDenied(string path)
         => IsDeniedAgainst(path, _readDeniedPaths) || IsDeniedAgainst(path, _shellDeniedPaths);
 
+    internal bool CausalIntentReferencesDeniedPath(
+        CommandOccurrence occurrence,
+        string intentDirectory,
+        IReadOnlyList<string> fallbackDirectories)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+        ArgumentNullException.ThrowIfNull(fallbackDirectories);
+        if (string.IsNullOrWhiteSpace(intentDirectory)
+            || IsShellDenied(intentDirectory)
+            || fallbackDirectories.Count == 0
+            || fallbackDirectories.Any(IsShellDenied))
+        {
+            return true;
+        }
+
+        var possibleDirectories = fallbackDirectories
+            .Append(intentDirectory)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var argument in occurrence.Arguments)
+        {
+            if (argument.Argument.IsPath
+                && possibleDirectories.Any(directory =>
+                    DomainReferencesDeniedPath(argument.Value, directory)))
+            {
+                return true;
+            }
+
+            if (argument.AuthoredPathShape != ShellPathShape.Unknown
+                && possibleDirectories.Any(directory =>
+                    DomainReferencesDeniedPath(argument.AuthoredValue, directory)))
+            {
+                return true;
+            }
+        }
+
+        return occurrence.Redirects
+            .OfType<FileRedirectAnalysis>()
+            .Any(redirect => possibleDirectories.Any(directory =>
+                DomainReferencesDeniedPath(redirect.Target, directory)));
+    }
+
+    private bool DomainReferencesDeniedPath(
+        ShellValueDomain domain,
+        string workingDirectory)
+    {
+        IReadOnlyList<string> values = domain switch
+        {
+            ShellValueDomain.Exact exact => [exact.Value],
+            ShellValueDomain.FiniteSet finite => finite.Values,
+            _ => []
+        };
+
+        return values.Any(value =>
+        {
+            var resolved = ShellTokenizer.NormalizePathToken(
+                value,
+                workingDirectory,
+                Environment.PathStyle);
+            return string.IsNullOrWhiteSpace(resolved) || IsShellDenied(resolved);
+        });
+    }
+
+    private bool IsShellDenied(string path)
+        => IsDeniedAgainst(path, _shellDeniedPaths);
+
     private static bool IsDeniedAgainst(string path, HashSet<string> deniedSet)
     {
         if (string.IsNullOrWhiteSpace(path))

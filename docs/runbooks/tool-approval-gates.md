@@ -296,6 +296,50 @@ names a directory that the session can declare, Netclaw can first return a
 candidates require approval. The bare `echo` side effect does not become a
 reusable prompt choice.
 
+#### Example: Bash causal directory intent
+
+Input:
+
+```bash
+cd /tmp && gh api repos/example/project/actions/jobs/123456/logs \
+  > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log
+```
+
+Assume global grants cover `cd` and `gh api`. The reviewed catalog contains
+`wc` and `head`.
+
+| Candidate | Real scope | Approval scope | Coverage |
+|-----------|------------|----------------|----------|
+| `cd` | `/tmp` target | Real scope | Persistent global grant |
+| `gh api` | `/tmp` | Real scope | Persistent global grant |
+| `wc` | Unknown after the sequence boundary | `/tmp` intent | Reviewed-safe policy |
+| `head` | Unknown after the sequence boundary | `/tmp` intent | Reviewed-safe policy |
+
+Netclaw allows the call when all four rows have coverage. It does not change
+the command, its arguments, its execution directory, or model history.
+
+ShellSyntaxTree starts intent only after an exact working-directory change on
+success. The next action must be success-gated with `&&`. Both prerequisites
+need one-time, session, or stored authority.
+
+Netclaw does not inspect names such as `cd`, `command cd`, or `builtin cd`.
+It consumes ShellSyntaxTree's closed working-directory effect. An unchanged
+effect preserves intent. An unknown effect invalidates it.
+
+The intent stops after an unknown directory change, an alternate branch, a
+scope join, a group, a subshell, dynamic flow, or unsupported syntax.
+Netclaw also validates every possible fallback directory. A prior symlink
+target cannot become a later fallback. On POSIX, the policy resolves the
+runtime temp root and the conventional `/tmp` alias independently. Safe alias
+descendants map to their canonical host path.
+
+Session grants can cover prerequisites. Folder grants use each prerequisite's
+real scope. Intent scope cannot convert a folder near miss into coverage.
+
+Only a reviewed diagnostic without a file-output redirect can use the intent.
+Protected paths and folder grants always use real execution facts. Headless
+runs and native PowerShell do not receive this reviewed-safe authority.
+
 #### Example: a finite Bash loop over known files
 
 Input:

@@ -159,20 +159,26 @@ mismatched actor result, or impossible transition SHALL produce terminal deny.
 ### Requirement: Causal approval intent is separate from execution scope
 
 The system SHALL keep canonical execution facts unchanged. For Bash only, it
-MAY derive an approval-intent directory from an exact leading authored
-directory transition on the success edge of `cd TARGET && ...`.
+MAY derive approval intent from a leading ShellSyntaxTree 0.3.4 occurrence.
+That occurrence SHALL publish `ChangesOnSuccess(Exact(target))`. Its next
+top-level action SHALL be success-gated with `&&`.
 
 Intent MAY continue through later top-level diagnostic statements until a
 later directory mutation, differing control-flow join, alternate branch,
 subshell/group boundary, dynamic flow, or unsupported region invalidates it. An
-exact later success-gated directory transition SHALL replace intent on its
-success edge.
+exact later success-gated `ChangesOnSuccess` effect SHALL replace intent.
+`Unchanged` SHALL preserve intent. `Unknown` or a non-exact change target SHALL
+invalidate intent. Causal and temporary-scope policy SHALL NOT identify
+directory-transition verbs.
 
-An intent target SHALL be eligible only when exact, absolute, normalized,
-symlink-free, and allowed by protected-path policy. The directory-transition
-candidate and first non-navigation action on its success edge SHALL already
-have one-time, session, or stored-grant coverage. Safe policy alone SHALL NOT
-manufacture causal intent.
+An intent target SHALL be eligible only when exact, absolute, normalized, and
+allowed by protected-path policy. It SHALL contain no symlink segment. Every
+possible fallback directory SHALL meet the same rule. A captured platform
+temporary alias and its descendants MAY map to its canonical root. POSIX hosts
+MAY also capture the conventional `/tmp` alias. No other symlink target SHALL
+be eligible. The directory-transition candidate and first non-navigation
+action on its success edge SHALL already have one-time, session, or
+stored-grant coverage. Safe policy alone SHALL NOT create causal intent.
 
 Only a reviewed diagnostic candidate without a file-writing
 redirect MAY consume eligible intent. Hard deny, protected paths, folder
@@ -199,6 +205,62 @@ scope from `Set-Location`.
 - **WHEN** a later `cd "$1"` precedes a diagnostic tail
 - **THEN** the tail has unknown intent
 - **AND** safe policy cannot use the earlier `/tmp` intent
+
+#### Scenario: Parser-owned wrappers establish and replace intent
+
+- **WHEN** Bash reports `ChangesOnSuccess(Exact("/tmp"))` for `command cd /tmp`
+- **THEN** the effect can establish causal intent
+- **AND** no Netclaw command-name rule is consulted
+
+#### Scenario: Directory-stack effect invalidates intent
+
+- **GIVEN** intent is `/tmp`
+- **WHEN** a later `pushd` or `popd` occurrence reports `Unknown`
+- **THEN** no later diagnostic receives the earlier intent
+
+#### Scenario: Failure-only transition shape does not create intent
+
+- **WHEN** Bash reports `Unchanged` for `cd /tmp extra`
+- **THEN** no causal intent is created
+- **AND** Netclaw does not reinterpret the command's private arguments
+
+#### Scenario: Arbitrary symlink target cannot create intent
+
+- **GIVEN** `/work/alias` is a symlink to another directory
+- **WHEN** source starts with `cd /work/alias && inspect`
+- **THEN** no causal approval intent is eligible
+- **AND** the captured platform temporary alias remains a separate bounded
+  exception
+
+#### Scenario: Earlier symlink target cannot become a fallback
+
+- **GIVEN** an earlier exact intent target crosses a symlink
+- **WHEN** a later eligible transition replaces intent
+- **THEN** the earlier target fails fallback eligibility
+- **AND** no later diagnostic receives reviewed-safe intent coverage
+
+#### Scenario: Protected fallback denial stays terminal
+
+- **GIVEN** an earlier fallback alias resolves into a protected directory
+- **WHEN** a later intent candidate also fails symlink eligibility
+- **THEN** protected-path policy denies before the eligibility check
+- **AND** the system does not offer a one-time approval prompt
+
+#### Scenario: Conventional macOS tmp alias remains eligible
+
+- **GIVEN** the host runtime temp root differs from `/tmp`
+- **AND** the POSIX `/tmp` alias resolves to `/private/tmp`
+- **WHEN** intent targets `/tmp` or one of its safe descendants
+- **THEN** causal policy validates the canonical `/private/tmp` path
+- **AND** arbitrary POSIX symlink aliases remain strict
+
+#### Scenario: Session and folder grants use real prerequisite scope
+
+- **GIVEN** session or persistent-folder authority covers each prerequisite
+- **WHEN** causal policy checks a diagnostic tail
+- **THEN** prerequisite coverage can establish intent
+- **AND** a folder grant matches only the prerequisite's real scope
+- **AND** intent scope cannot convert a folder near miss into coverage
 
 #### Scenario: Alternate branch does not leak intent
 
@@ -813,6 +875,10 @@ Netclaw SHALL use effective values for runtime and deny policy. It MAY use
 authored values only for the approved approval perspective. It SHALL route
 ShellSyntaxTree 0.3.3 authored filesystem values through path policy. Unknown
 policy-relevant values SHALL not create reusable or safe coverage.
+
+Netclaw SHALL consume ShellSyntaxTree 0.3.4 working-directory effects for the
+bounded Bash causal projection. It SHALL NOT derive equivalent effects from
+command names or executable-private grammar.
 
 Deny-only defensive scans MAY deny incomplete input but SHALL never authorize
 it.

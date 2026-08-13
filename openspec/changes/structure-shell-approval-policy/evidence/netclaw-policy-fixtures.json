@@ -78,16 +78,31 @@
           { "tokens": ["head"], "proof": "ReviewedDiagnostic" }
         ]
       },
-      "candidates": [],
+      "candidates": [
+        { "id": 0, "tokens": ["cd"], "realDirectory": "/tmp", "intentDirectory": null, "role": "CausalPrerequisite", "prerequisiteIds": [], "expectedCoverage": "PersistentGlobal" },
+        { "id": 1, "tokens": ["gh", "api"], "realDirectory": "/tmp", "intentDirectory": null, "role": "CausalPrerequisite", "prerequisiteIds": [], "expectedCoverage": "PersistentGlobal" },
+        { "id": 2, "tokens": ["wc"], "realDirectory": null, "intentDirectory": "/tmp", "role": "CausalIntentConsumer", "prerequisiteIds": [0, 1], "expectedCoverage": "ReviewedSafePolicy" },
+        { "id": 3, "tokens": ["head"], "realDirectory": null, "intentDirectory": "/tmp", "role": "CausalIntentConsumer", "prerequisiteIds": [0, 1], "expectedCoverage": "ReviewedSafePolicy" }
+      ],
       "shellEffects": {
         "redirects": [
           { "commandIndex": 1, "target": "/tmp/slopwatch.log", "mode": "Output", "expectedPathPolicy": "Allow" }
+        ],
+        "workingDirectoryEffects": [
+          { "commandIndex": 0, "kind": "ChangesOnSuccess", "targets": ["/tmp"] },
+          { "commandIndex": 1, "kind": "Unchanged", "targets": [] },
+          { "commandIndex": 2, "kind": "Unchanged", "targets": [] },
+          { "commandIndex": 3, "kind": "Unchanged", "targets": [] }
         ]
       },
       "expectedTrace": [
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
+        { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "cd", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "gh", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "ReviewedSafePolicy", "candidateId": 2, "executableBasename": "wc", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderIntentRoot", "grantTimestamp": null },
+        { "stage": "ReviewedSafePolicy", "candidateId": 3, "executableBasename": "head", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderIntentRoot", "grantTimestamp": null },
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": [], "isMessy": true, "agentCorrection": null }
+      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
     },
     {
       "evidenceId": "D07",

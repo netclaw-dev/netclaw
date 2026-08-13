@@ -90,6 +90,35 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             .AnalyzeInvocation(new ToolName(ShellTool.ToolName), arguments)
             .Candidates;
 
+        var hasCausalMetadata = policyCase.Candidates.Any(candidate => candidate.Role is not null);
+        if (hasCausalMetadata)
+        {
+            Assert.All(policyCase.Candidates, candidate => Assert.NotNull(candidate.Role));
+            var analysis = new ShellCommandAnalyzer(environment).Analyze(
+                policyCase.Command,
+                policyCase.InitialWorkingDirectory);
+            AssertWorkingDirectoryEffects(policyCase, analysis);
+            Assert.True(BashCausalApprovalIntent.TryProject(
+                environment,
+                analysis,
+                new ShellApprovalMatcher(environment),
+                out var causalCandidates));
+            Assert.Equal(policyCase.Candidates.Count, causalCandidates.Count);
+            for (var index = 0; index < policyCase.Candidates.Count; index++)
+            {
+                var expected = policyCase.Candidates[index];
+                var candidate = causalCandidates[index];
+                Assert.Equal(index, expected.Id);
+                Assert.Equal(expected.Tokens, candidate.Candidate.VerbTokens);
+                Assert.Equal(expected.RealDirectory, candidate.Candidate.Directory);
+                Assert.Equal(expected.IntentDirectory, candidate.IntentDirectory);
+                Assert.Equal(expected.Role, candidate.Role.ToString());
+                Assert.Equal(expected.PrerequisiteIds ?? [], candidate.PrerequisiteIndexes);
+            }
+
+            return;
+        }
+
         Assert.Equal(policyCase.Candidates.Count, actual.Count);
         for (var index = 0; index < policyCase.Candidates.Count; index++)
         {
@@ -100,6 +129,36 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             Assert.Equal(
                 expected.IntentDirectory ?? expected.RealDirectory,
                 actual[index].Directory ?? policyCase.InitialWorkingDirectory);
+        }
+    }
+
+    private static void AssertWorkingDirectoryEffects(
+        PolicyFixtureCase policyCase,
+        ShellCommandAnalysis analysis)
+    {
+        var expectedEffects = policyCase.ShellEffects?.WorkingDirectoryEffects ?? [];
+        Assert.NotEmpty(expectedEffects);
+        foreach (var expected in expectedEffects)
+        {
+            var effect = analysis.Commands[expected.CommandIndex].WorkingDirectoryEffect;
+            switch (expected.Kind)
+            {
+                case "Unchanged":
+                    Assert.IsType<ShellSyntaxTree.ShellWorkingDirectoryEffect.Unchanged>(effect);
+                    Assert.Empty(expected.Targets);
+                    break;
+                case "ChangesOnSuccess":
+                    var change = Assert.IsType<
+                        ShellSyntaxTree.ShellWorkingDirectoryEffect.ChangesOnSuccess>(effect);
+                    Assert.Equal(
+                        Assert.Single(expected.Targets),
+                        Assert.IsType<ShellSyntaxTree.ShellValueDomain.Exact>(change.Target)
+                            .Value);
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        $"Unsupported working-directory effect: {expected.Kind}.");
+            }
         }
     }
 

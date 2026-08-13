@@ -56,6 +56,7 @@ internal sealed class ShellPolicyCoordinator(
         if (approvalContext is null
             || !ShellPolicyProjection.TryCreate(
                 policy.ShellEnvironment,
+                policy.ShellApprovalMatcher,
                 execution,
                 approvalContext,
                 context,
@@ -84,7 +85,7 @@ internal sealed class ShellPolicyCoordinator(
         ShellPolicyDecisionTraceBuilder trace,
         CancellationToken cancellationToken)
     {
-        if (projection.ApprovalContext.IsMessy)
+        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
             return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
 
         if (projection.Candidates.Count == 0)
@@ -110,9 +111,39 @@ internal sealed class ShellPolicyCoordinator(
                 trace);
         }
 
+        if (projection.Candidates.Any(candidate =>
+                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                && candidate.IntentDirectory is { } intentDirectory
+                && candidate.SourceOccurrence is { } sourceOccurrence
+                && policy.CausalIntentReferencesProtectedPath(
+                    sourceOccurrence,
+                    intentDirectory,
+                    candidate.IntentFallbackDirectories)))
+        {
+            return CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("shell_references_protected_path"),
+                trace);
+        }
+
+        if (projection.Candidates.Any(candidate =>
+                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                && candidate.IntentDirectory is { } intentDirectory
+                && !policy.AreCausalIntentDirectoriesEligible(
+                    intentDirectory,
+                    candidate.IntentFallbackDirectories)))
+        {
+            return CompleteOneTimeOrPrompt(
+                toolCall.Name,
+                projection,
+                projection.ApprovalContext,
+                [],
+                trace);
+        }
+
         var coverage = new ShellCoverageSet(projection.Candidates);
         foreach (var candidate in projection.Candidates.Where(item =>
                      approvalService is not null
+                     && item.Role == ShellPolicyCandidateRole.Ordinary
                      && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
         {
             coverage.Cover(
@@ -148,6 +179,7 @@ internal sealed class ShellPolicyCoordinator(
 
         foreach (var candidate in projection.Candidates.Where(item =>
                      approvalService is not null
+                     && item.Role == ShellPolicyCandidateRole.Ordinary
                      && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
         {
             trace.AddCoverage(
@@ -162,6 +194,7 @@ internal sealed class ShellPolicyCoordinator(
             projection.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
         foreach (var candidate in grantCandidates.Where(candidate =>
                      canUseReviewedSafePolicy
+                     && candidate.CanUseRealReviewedSafePolicy
                      && coverage.UncoveredIds.Contains(candidate.Id)))
         {
             if (policy.IsReviewedSafeCandidate(
@@ -183,14 +216,46 @@ internal sealed class ShellPolicyCoordinator(
             }
         }
 
+        foreach (var candidate in projection.Candidates.Where(candidate =>
+                     canUseReviewedSafePolicy
+                     && candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                     && coverage.UncoveredIds.Contains(candidate.Id)))
+        {
+            if (candidate.IntentDirectory is null
+                || candidate.IntentPrerequisites.Count == 0
+                || candidate.IntentPrerequisites.Any(prerequisite =>
+                    !coverage.IsCovered(prerequisite))
+                || !policy.IsReviewedSafeIntentCandidate(
+                    candidate.Candidate,
+                    candidate.SourceOccurrence,
+                    candidate.IntentDirectory,
+                    context.Invocation))
+            {
+                continue;
+            }
+
+            coverage.Cover(
+                candidate.Id,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ReviewedSafePhrase);
+            trace.AddCoverage(
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                candidate,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderIntentRoot);
+        }
+
         var uncovered = GetUncoveredCandidates(projection, coverage);
         var oneTimeApplied = false;
         if (uncovered.Count > 0)
         {
-            var remainingContext = ToolAccessPolicy.NarrowShellApprovalContext(
-                projection.ApprovalContext,
-                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                context.SessionDirectory);
+            var remainingContext = projection.HasCausalIntent
+                ? projection.ApprovalContext
+                : ToolAccessPolicy.NarrowShellApprovalContext(
+                    projection.ApprovalContext,
+                    uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+                    context.SessionDirectory);
             if (projection.HasExactOneTimeApproval(toolCall.Name, remainingContext))
             {
                 foreach (var candidate in uncovered)
@@ -222,10 +287,12 @@ internal sealed class ShellPolicyCoordinator(
 
         if (uncovered.Count > 0)
         {
-            var promptContext = ToolAccessPolicy.NarrowShellApprovalContext(
-                projection.ApprovalContext,
-                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                context.SessionDirectory);
+            var promptContext = projection.HasCausalIntent
+                ? projection.ApprovalContext
+                : ToolAccessPolicy.NarrowShellApprovalContext(
+                    projection.ApprovalContext,
+                    uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+                    context.SessionDirectory);
             return CompleteWithTrace(
                 ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches),
                 trace);

@@ -127,7 +127,8 @@ internal sealed class ScopedShellSafeVerbPolicy
     private bool IsReviewedDiagnostic(
         ApprovalCandidate candidate,
         CommandOccurrence? sourceOccurrence,
-        IReadOnlyList<string> safeRoots)
+        IReadOnlyList<string> safeRoots,
+        string? workingDirectoryOverride = null)
     {
         if (candidate is not
             {
@@ -152,7 +153,38 @@ internal sealed class ScopedShellSafeVerbPolicy
         return AllPossibleAuthoredPathsStayWithinRoots(
             sourceOccurrence,
             shell,
-            safeRoots);
+            safeRoots,
+            workingDirectoryOverride);
+    }
+
+    internal bool ShortCircuitsCausalIntent(
+        ApprovalCandidate candidate,
+        CommandOccurrence? sourceOccurrence,
+        string intentDirectory,
+        ToolInvocationContext context)
+    {
+        if (context.Audience != TrustAudience.Personal
+            || candidate is not
+            {
+                Shell: ApprovalShell.Bash,
+                VerbTokens: { }
+            }
+            || sourceOccurrence is null
+            || string.IsNullOrWhiteSpace(intentDirectory)
+            || ShellRedirectPolicyFacts.HasFileWritingRedirect(sourceOccurrence)
+            || !IsSafePath(intentDirectory, intentDirectory)
+            || !IsReviewedDiagnostic(
+                candidate,
+                sourceOccurrence,
+                [intentDirectory],
+                intentDirectory))
+        {
+            return false;
+        }
+
+        return AllEffectivePathsStayWithinIntent(
+            sourceOccurrence,
+            intentDirectory);
     }
 
     internal bool ShortCircuits(
@@ -188,11 +220,13 @@ internal sealed class ScopedShellSafeVerbPolicy
     private static bool AllPossibleAuthoredPathsStayWithinRoots(
         CommandOccurrence occurrence,
         ApprovalShell shell,
-        IReadOnlyList<string> safeRoots)
+        IReadOnlyList<string> safeRoots,
+        string? workingDirectoryOverride)
     {
-        var workingDirectory = occurrence.WorkingDirectory is ShellValueDomain.Exact exact
-            ? exact.Value
-            : null;
+        var workingDirectory = workingDirectoryOverride
+            ?? (occurrence.WorkingDirectory is ShellValueDomain.Exact exact
+                ? exact.Value
+                : null);
         var pathStyle = shell == ApprovalShell.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
@@ -229,6 +263,58 @@ internal sealed class ScopedShellSafeVerbPolicy
                 {
                     return false;
                 }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool AllEffectivePathsStayWithinIntent(
+        CommandOccurrence occurrence,
+        string intentDirectory)
+    {
+        foreach (var argument in occurrence.Arguments.Where(static argument =>
+                     argument.Argument.IsPath))
+        {
+            IReadOnlyList<string> values = argument.Value switch
+            {
+                ShellValueDomain.Exact exact => [exact.Value],
+                ShellValueDomain.FiniteSet finite => finite.Values,
+                _ => []
+            };
+            if (values.Count == 0)
+                return false;
+
+            foreach (var value in values)
+            {
+                var resolved = ShellTokenizer.NormalizePathToken(
+                    value,
+                    intentDirectory,
+                    ShellPathStyle.Posix);
+                if (string.IsNullOrWhiteSpace(resolved)
+                    || !IsSafePath(resolved, intentDirectory))
+                {
+                    return false;
+                }
+            }
+        }
+
+        foreach (var redirect in occurrence.Redirects.OfType<FileRedirectAnalysis>())
+        {
+            if (redirect.Mode != FileRedirectMode.Input
+                || redirect.Target is not ShellValueDomain.Exact exact)
+            {
+                return false;
+            }
+
+            var resolved = ShellTokenizer.NormalizePathToken(
+                exact.Value,
+                intentDirectory,
+                ShellPathStyle.Posix);
+            if (string.IsNullOrWhiteSpace(resolved)
+                || !IsSafePath(resolved, intentDirectory))
+            {
+                return false;
             }
         }
 

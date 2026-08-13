@@ -170,33 +170,37 @@ convert deny or prompt to allow, and its output cannot enter a stored grant.
 directory. Hard deny, protected paths, folder grants, noninteractive authority,
 and process execution use it.
 
-For Bash only, `Intent` can carry the exact target of a leading authored
-directory transition. The transition begins on the success edge of `cd TARGET
-&& ...`. It may remain the user's approval scope for later top-level diagnostic
-occurrences until invalidated, even when a semicolon means runtime failure
-would continue in the original directory. This is an approval-intent fact, not
-a runtime cwd claim.
+For Bash only, `Intent` can carry an exact target from ShellSyntaxTree 0.3.4.
+The leading occurrence must publish `ChangesOnSuccess(Exact(target))`. Its next
+top-level action must be success-gated with `&&`. Intent may remain the user's
+approval scope for later top-level diagnostics. A semicolon can still execute a
+tail in the original directory after failure. Intent is an approval fact, not a
+runtime cwd claim.
 
 Intent is invalidated by:
 
-- a later directory mutation whose exact target is unavailable;
+- a later `Unknown` working-directory effect;
+- a later `ChangesOnSuccess` effect whose target is not exact;
 - `||`, alternate branches, or a join whose incoming intent scopes differ;
 - entry to or exit from a subshell/group boundary unless both sides retain the
   same proved intent;
 - dynamic identity, command substitution controlling flow, or unsupported
   control flow.
 
-An exact later success-gated `cd` replaces intent on its success edge. Relative
-authored paths under intent are rebased only for safe-policy scope; protected
-path evaluation also checks their real execution projection. Folder grants
-never use intent.
+An exact later success-gated `ChangesOnSuccess` effect replaces intent. An
+`Unchanged` effect preserves it. Netclaw does not identify transition verbs.
+Relative authored paths under intent are rebased only for safe-policy scope.
+Protected-path evaluation also checks their real execution projection. Folder
+grants never use intent.
 
-An intent target is eligible only when it is exact, absolute, normalized,
-symlink-free, and allowed by protected-path policy; the `cd` candidate and the
-first non-navigation action on its success edge must already have one-time,
-session, or stored-grant coverage. This existing user authority is what lets a
-later reviewed diagnostic consume intent even when the target is not a normal
-session/project safe root. Safe policy alone cannot manufacture causal intent.
+An intent target is eligible only when it is exact, absolute, normalized, and
+allowed by protected-path policy. It must contain no symlink segment. The
+captured platform temporary alias can map to its canonical root. No other
+symlink target is eligible. The `cd` candidate and the first non-navigation
+action on its success edge must already have one-time, session, or stored-grant
+coverage. This user authority lets a later reviewed diagnostic consume intent
+outside a normal session or project safe root. Safe policy alone cannot create
+causal intent.
 
 Only a reviewed diagnostic entry and an occurrence without a file-writing
 redirect can consume eligible intent. Native
@@ -325,7 +329,7 @@ filesystem resolution. This rule applies to both execution and the eligibility
 probe. An invalid path returns a bounded error and cannot enter model history,
 child scope, or project-instruction lookup as a successful declaration.
 
-### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.3 explicitly
+### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.4 explicitly
 
 Netclaw uses effective `AnalyzedArgument.Value` for runtime-sensitive checks.
 It may use `AuthoredValue` for approval matching only after the maintainer
@@ -339,6 +343,10 @@ ShellSyntaxTree 0.3.3 publishes D14's finite `AuthoredFileSystemValue`. Netclaw
 accepts only `Exact` and `FiniteSet`. Each value enters `ToolPathPolicy` and the
 approval scope check. Unknown and all other alternatives stay strict. Netclaw
 does not infer the role from an executable's private grammar.
+
+ShellSyntaxTree 0.3.4 publishes each occurrence's working-directory effect.
+The causal projection consumes this closed fact directly. It never parses a
+directory command name, alias, option, or operand.
 
 `AuthoredPathShape` is lexical shape only. It may make review stricter, but it
 never establishes that an executable treats an argument as a filesystem
@@ -408,13 +416,22 @@ Complete D03 example:
 
 ```text
 Input: cd /tmp && gh api ... > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log
-Preflight: unresolved approval scope; no reusable candidate rows
-Trace: Completion/RequiresApproval/UncoveredCandidates
-Final: RequiresApproval(IsMessy=true)
+Execution: real scopes remain unchanged
+Prerequisites: cd and gh api use persistent global grants
+Intent: wc and head use the exact protected-path-safe /tmp target
+Trace: two StoredGrantMatch rows, two ReviewedSafePolicy rows, then Completion/Allow
+Final: Allow(AllCandidatesCovered)
 ```
 
-This current result remains explicit evidence debt. The fixture does not claim
-that a future session-scratch correction or stronger parser fact already exists.
+The fixture keeps each causal role and prerequisite ID explicit. It does not
+replace execution scope with approval intent.
+
+The policy validates each runtime fallback before reviewed-safe coverage. A
+prior target cannot become a later fallback through a symlink. POSIX policy
+captures the conventional `/tmp` alias independently of the runtime temp root.
+It maps that alias and its safe descendants to the host-resolved canonical
+root. Parser-published working-directory effects identify each transition.
+Netclaw does not inspect transition command names.
 
 ## Risks / Trade-offs
 

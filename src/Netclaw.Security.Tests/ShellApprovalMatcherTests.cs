@@ -1592,6 +1592,31 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Occurrence_extraction_rebases_unknown_path_only_for_explicit_intent_scope()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            "cd /tmp && inspect; head result.log",
+            "/work");
+        var occurrence = Assert.Single(
+            analysis.Commands,
+            command => command.Clause.Verb.Tokens is ["head"]);
+        var matcher = new ShellApprovalMatcher(environment);
+
+        Assert.Null(matcher.ExtractCandidatesForOccurrence(
+            occurrence,
+            "/tmp",
+            resolveUnknownPathsFromEffectiveValues: false));
+
+        var candidate = Assert.Single(matcher.ExtractCandidatesForOccurrence(
+            occurrence,
+            "/tmp",
+            resolveUnknownPathsFromEffectiveValues: true)!);
+        Assert.Equal("head", candidate.Verb);
+        Assert.Equal("/tmp", candidate.Directory);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_recurses_into_bash_dash_c_with_cd_attribution_intact()
     {
         // bash -c "cd /repo && git push" — the parser flattens the

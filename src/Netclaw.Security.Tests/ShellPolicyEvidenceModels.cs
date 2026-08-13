@@ -125,6 +125,10 @@ internal sealed record PolicyFixtureCandidate
 
     public string? IntentDirectory { get; init; }
 
+    public string? Role { get; init; }
+
+    public List<int>? PrerequisiteIds { get; init; }
+
     public required string ExpectedCoverage { get; init; }
 }
 
@@ -170,6 +174,17 @@ internal sealed record PolicyAuthoredPathFact
 internal sealed record PolicyShellEffects
 {
     public required List<PolicyRedirect> Redirects { get; init; }
+
+    public List<PolicyWorkingDirectoryEffect>? WorkingDirectoryEffects { get; init; }
+}
+
+internal sealed record PolicyWorkingDirectoryEffect
+{
+    public required int CommandIndex { get; init; }
+
+    public required string Kind { get; init; }
+
+    public required List<string> Targets { get; init; }
 }
 
 internal sealed record PolicyRedirect

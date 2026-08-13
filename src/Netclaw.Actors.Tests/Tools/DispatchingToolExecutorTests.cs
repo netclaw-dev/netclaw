@@ -14,6 +14,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -764,6 +765,638 @@ public class DispatchingToolExecutorTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Authorization_evaluation_composes_grants_with_causal_intent_diagnostics()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var matches = request.Candidates.Select(candidate =>
+            {
+                var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
+                var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
+                    candidate.Candidate.VerbTokens);
+                var entry = ApprovalEntry.CreateTokenPrefix(
+                    shell,
+                    tokens,
+                    directory: null,
+                    createdAt: null);
+                return new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    new ToolApprovalMatch(
+                        candidate.Candidate.Verb,
+                        "persistent",
+                        entry.FormatScope()),
+                    ShellCoverageKind.PersistentGlobal,
+                    NearMisses: []);
+            }).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(matches));
+        });
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["wc", "head"]));
+        var command = "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs "
+                      + "> slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log";
+        var call = new FunctionCallContent(
+            "call-causal-intent",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                command,
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
+        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
+        Assert.All(request.Candidates, candidate =>
+            Assert.Contains(candidate.Candidate.Verb, new[] { "cd", "gh api" }));
+        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "cd");
+        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "gh api");
+        var intentRows = decision.ShellPolicyTrace.Rows
+            .Where(row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot)
+            .ToArray();
+        Assert.Equal(2, intentRows.Length);
+        Assert.All(intentRows, row =>
+        {
+            Assert.Equal(ShellPolicyTraceStage.ReviewedSafePolicy, row.Stage);
+            Assert.Equal(ShellPolicyTraceReason.ReviewedSafePhrase, row.Reason);
+        });
+        Assert.Equal(
+            new[] { "head", "wc" },
+            intentRows
+                .Select(row => Assert.IsType<string>(row.ExecutableBasename))
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    [InlineData("Session")]
+    [InlineData("PersistentFolder")]
+    public async Task Causal_intent_accepts_session_or_real_folder_prerequisite_coverage(
+        string prerequisiteCoverageName)
+    {
+        var prerequisiteCoverage = Enum.Parse<ShellCoverageKind>(prerequisiteCoverageName);
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var matches = request.Candidates.Select(candidate =>
+            {
+                var match = prerequisiteCoverage == ShellCoverageKind.Session
+                    ? new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat")
+                    : new ToolApprovalMatch(
+                        candidate.Candidate.Verb,
+                        "persistent",
+                        ApprovalEntry.CreateTokenPrefix(
+                            ApprovalShell.Bash,
+                            Assert.IsAssignableFrom<IReadOnlyList<string>>(
+                                candidate.Candidate.VerbTokens),
+                            "/tmp",
+                            createdAt: null).FormatScope());
+                return new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    match,
+                    prerequisiteCoverage,
+                    NearMisses: []);
+            }).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(matches));
+        });
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-bounded-grant",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "cd /tmp && inspect; head result.log",
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-bounded-grant"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
+        Assert.Equal(["cd", "inspect"], request.Candidates
+            .Select(candidate => candidate.Candidate.Verb).ToArray());
+        Assert.All(request.Candidates, candidate =>
+            Assert.Equal("/tmp", candidate.Candidate.Directory));
+        Assert.Equal(
+            2,
+            decision.ShellPolicyTrace.Rows.Count(row =>
+                row.Stage == ShellPolicyTraceStage.StoredGrantMatch
+                && row.Coverage == prerequisiteCoverage));
+        Assert.Contains(
+            decision.ShellPolicyTrace.Rows,
+            row => row is
+            {
+                Stage: ShellPolicyTraceStage.ReviewedSafePolicy,
+                ScopeRelation: ShellScopeRelation.UnderIntentRoot,
+                ExecutableBasename: "head"
+            });
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Causal_intent_does_not_rebase_a_folder_grant_to_the_intent_scope()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                {
+                    var grant = ApprovalEntry.CreateTokenPrefix(
+                        ApprovalShell.Bash,
+                        Assert.IsAssignableFrom<IReadOnlyList<string>>(
+                            candidate.Candidate.VerbTokens),
+                        "/work",
+                        createdAt: null);
+                    return new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses:
+                        [
+                            new ShellApprovalNearMiss(
+                                grant,
+                                ShellApprovalNearMissReason.OutsideDirectory)
+                        ]);
+                }).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-folder-near-miss",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "cd /tmp && inspect; head result.log",
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-folder-near-miss"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
+        Assert.All(request.Candidates, candidate =>
+            Assert.Equal("/tmp", candidate.Candidate.Directory));
+        Assert.DoesNotContain(
+            decision.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Causal_intent_requires_authority_for_each_prerequisite()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                {
+                    if (candidate.Candidate.Verb != "cd")
+                    {
+                        return new ShellGrantCandidateMatch(
+                            candidate.CandidateId,
+                            Match: null,
+                            GrantCoverage: null,
+                            NearMisses: []);
+                    }
+
+                    var entry = ApprovalEntry.CreateTokenPrefix(
+                        ApprovalShell.Bash,
+                        ["cd"],
+                        directory: null,
+                        createdAt: null);
+                    return new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        new ToolApprovalMatch("cd", "persistent", entry.FormatScope()),
+                        ShellCoverageKind.PersistentGlobal,
+                        NearMisses: []);
+                }).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["gh api", "wc", "head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-missing-prerequisite",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "cd /tmp && gh api repos/example/project > result.log 2>&1; "
+                + "wc -c result.log; head result.log",
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-missing-prerequisite"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.True(approval.IsMessy);
+        Assert.Empty(approval.Candidates!);
+        Assert.Equal(
+            [
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveOnce,
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.Deny
+            ],
+            approval.Options.Select(option => option.Key.Value).ToArray());
+        Assert.Equal(
+            ["cd", "gh api"],
+            Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest)
+                .Candidates.Select(candidate => candidate.Candidate.Verb).ToArray());
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Exact_one_time_retry_covers_the_original_causal_call()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: [])).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-once",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "cd /tmp && inspect; head result.log",
+                "WorkingDirectory",
+                "/work"));
+        var context = CreateInteractivePersonalContext("signalr/causal-intent-once");
+
+        var initial = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+        var approval = Assert.IsType<ToolApprovalContext>(initial.ApprovalContext);
+        context.OneTimeApprovedToolName = call.Name;
+        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(approval));
+
+        var retry = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
+        Assert.DoesNotContain(
+            retry.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    [InlineData("command cd /tmp && inspect; head result.log")]
+    [InlineData("builtin cd /tmp && inspect; head result.log")]
+    public async Task Parser_owned_directory_effect_allows_wrapped_transition(
+        string command)
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-wrapped-transition",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                command,
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-wrapper"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Contains(
+            decision.ShellPolicyTrace.Rows,
+            row => row is
+            {
+                Stage: ShellPolicyTraceStage.ReviewedSafePolicy,
+                ScopeRelation: ShellScopeRelation.UnderIntentRoot,
+                ExecutableBasename: "head"
+            });
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    [InlineData("cd /tmp && inspect; pushd /other; head result.log")]
+    [InlineData("cd /tmp && inspect; popd; head result.log")]
+    [InlineData("cd /tmp && inspect; cd \"$1\"; head result.log")]
+    [InlineData("cd /tmp extra && inspect; head result.log")]
+    [InlineData("cd -z /tmp && inspect; head result.log")]
+    public async Task Unproved_directory_effect_keeps_causal_chain_strict(
+        string command)
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["head"]));
+        var call = new FunctionCallContent(
+            "call-causal-intent-strict-effect",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                command,
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-strict-effect"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
+        Assert.Null(approvalService.LastRequest);
+        Assert.DoesNotContain(
+            decision.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    [InlineData("cd /tmp && inspect; head private.log", "/tmp/private.log", "head")]
+    [InlineData("cd /tmp && inspect; head private.log", "/work/private.log", "head")]
+    [InlineData("cd /tmp && inspect; grep -f /protected/patterns local.txt", "/protected/patterns", "grep")]
+    [InlineData("cd /tmp && inspect; wc -c < private.log", "/tmp/private.log", "wc")]
+    public async Task Causal_intent_cannot_bypass_protected_path_policy(
+        string command,
+        string deniedPath,
+        string safeVerb)
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                [safeVerb]),
+            deniedPaths: [deniedPath]);
+        var call = new FunctionCallContent(
+            "call-causal-intent-protected-path",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                command,
+                "WorkingDirectory",
+                "/work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/causal-intent-protected-path"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
+        Assert.DoesNotContain(
+            decision.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Causal_intent_rejects_a_symbolic_link_transition_target()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-causal-intent-");
+        try
+        {
+            var target = Path.Combine(root.FullName, "target");
+            var alias = Path.Combine(root.FullName, "alias");
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(alias, target);
+            var approvalService = GrantEveryShellCandidate();
+            var executor = CreateApprovalGatedShellExecutor(
+                approvalService,
+                safeVerbs: SafeVerbList.FromVerbs(
+                    ApprovalShell.Bash,
+                    ["head"]));
+            var call = new FunctionCallContent(
+                "call-causal-intent-symlink-target",
+                "shell_execute",
+                ToolInput.Create(
+                    "Command",
+                    $"cd {alias} && inspect; head result.log",
+                    "WorkingDirectory",
+                    "/work"));
+
+            var decision = await executor.EvaluateAuthorizationAsync(
+                call,
+                CreateInteractivePersonalContext("signalr/causal-intent-symlink-target"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
+            Assert.Null(approvalService.LastRequest);
+            Assert.DoesNotContain(
+                decision.ShellPolicyTrace.Rows,
+                row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Causal_intent_rejects_a_symbolic_link_fallback_directory()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-causal-fallback-");
+        try
+        {
+            var target = Path.Combine(root.FullName, "target");
+            var alias = Path.Combine(root.FullName, "alias");
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(alias, target);
+            var approvalService = GrantEveryShellCandidate();
+            var executor = CreateApprovalGatedShellExecutor(
+                approvalService,
+                safeVerbs: SafeVerbList.FromVerbs(
+                    ApprovalShell.Bash,
+                    ["head"]));
+            var call = new FunctionCallContent(
+                "call-causal-intent-symlink-fallback",
+                "shell_execute",
+                ToolInput.Create(
+                    "Command",
+                    $"cd {alias} && inspect; cd /tmp && collect; head result.log",
+                    "WorkingDirectory",
+                    "/work"));
+
+            var decision = await executor.EvaluateAuthorizationAsync(
+                call,
+                CreateInteractivePersonalContext("signalr/causal-intent-symlink-fallback"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
+            Assert.Null(approvalService.LastRequest);
+            Assert.DoesNotContain(
+                decision.ShellPolicyTrace.Rows,
+                row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Protected_path_denial_precedes_symlink_fallback_rejection()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-causal-denied-fallback-");
+        try
+        {
+            var denied = Path.Combine(root.FullName, "denied");
+            var alias = Path.Combine(root.FullName, "alias");
+            Directory.CreateDirectory(denied);
+            Directory.CreateSymbolicLink(alias, denied);
+            var approvalService = GrantEveryShellCandidate();
+            var executor = CreateApprovalGatedShellExecutor(
+                approvalService,
+                safeVerbs: SafeVerbList.FromVerbs(
+                    ApprovalShell.Bash,
+                    ["head"]),
+                deniedPaths: [denied]);
+            var call = new FunctionCallContent(
+                "call-causal-intent-denied-fallback",
+                "shell_execute",
+                ToolInput.Create(
+                    "Command",
+                    "cd /tmp && inspect; head result.log",
+                    "WorkingDirectory",
+                    alias));
+
+            var decision = await executor.EvaluateAuthorizationAsync(
+                call,
+                CreateInteractivePersonalContext("signalr/causal-intent-denied-fallback"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+            Assert.Equal("shell_references_protected_path", decision.DenyReason);
+            Assert.Null(approvalService.LastRequest);
+            Assert.Null(decision.ApprovalContext);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Causal_intent_does_not_grant_reviewed_safe_authority_to_headless_runs()
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["head"]),
+            shellTrustZonePolicy: new AllowAllShellTrustZonePolicy());
+        var call = new FunctionCallContent(
+            "call-causal-intent-headless",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "cd /tmp && inspect; head result.log",
+                "WorkingDirectory",
+                "/work"));
+        var context = TestToolExecutionContext.CreateBound(
+            "webhook/causal-intent-headless",
+            null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
+            });
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_unresolved_trust_zone_input", decision.DenyReason);
+        Assert.Null(approvalService.LastRequest);
+        Assert.DoesNotContain(
+            decision.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+    }
+
+    [Fact]
+    public async Task Native_power_shell_directory_change_does_not_create_causal_approval_scope()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(
+            environment,
+            approvalService,
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.PowerShell,
+                ["Get-Content"]));
+        var call = new FunctionCallContent(
+            "call-native-power-shell-causal-scope",
+            "shell_execute",
+            ToolInput.Create(
+                "Command",
+                "Set-Location C:\\Temp; Get-Content result.log",
+                "WorkingDirectory",
+                "C:\\work"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/native-power-shell-causal-scope"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
+        Assert.Null(approvalService.LastRequest);
+        Assert.DoesNotContain(
+            decision.ShellPolicyTrace.Rows,
+            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
     }
 
     [Fact]
@@ -2326,7 +2959,25 @@ public class DispatchingToolExecutorTests
 
     private static DispatchingToolExecutor CreateApprovalGatedShellExecutor(
         IToolApprovalService? approvalService = null,
-        ILogger<DispatchingToolExecutor>? logger = null)
+        ILogger<DispatchingToolExecutor>? logger = null,
+        SafeVerbList? safeVerbs = null,
+        IEnumerable<string>? deniedPaths = null,
+        IShellTrustZonePolicy? shellTrustZonePolicy = null)
+        => CreateApprovalGatedShellExecutor(
+            ShellExecutionEnvironmentDefaults.Bash,
+            approvalService,
+            logger,
+            safeVerbs,
+            deniedPaths,
+            shellTrustZonePolicy);
+
+    private static DispatchingToolExecutor CreateApprovalGatedShellExecutor(
+        ShellExecutionEnvironment environment,
+        IToolApprovalService? approvalService = null,
+        ILogger<DispatchingToolExecutor>? logger = null,
+        SafeVerbList? safeVerbs = null,
+        IEnumerable<string>? deniedPaths = null,
+        IShellTrustZonePolicy? shellTrustZonePolicy = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -2336,12 +2987,14 @@ public class DispatchingToolExecutorTests
                 ["shell_execute"] = ToolApprovalMode.Approval
             }
         };
+        var pathPolicy = new ToolPathPolicy(environment, deniedPaths ?? []);
+        var commandPolicy = new ShellCommandPolicy(environment);
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
             new NetclawPaths(),
-            new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            pathPolicy,
+            commandPolicy);
         return new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -2351,11 +3004,40 @@ public class DispatchingToolExecutorTests
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
+                commandPolicy,
+                pathPolicy,
+                shellTrustZonePolicy: shellTrustZonePolicy,
+                safeVerbs: safeVerbs),
             approvalService ?? new UnexpectedApprovalService(),
             logger: logger);
     }
+
+    private static FixedShellApprovalService GrantEveryShellCandidate()
+        => new(request =>
+        {
+            var matches = request.Candidates.Select(candidate =>
+            {
+                var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
+                var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
+                    candidate.Candidate.VerbTokens);
+                var entry = ApprovalEntry.CreateTokenPrefix(
+                    shell,
+                    tokens,
+                    directory: null,
+                    createdAt: null);
+                return new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    new ToolApprovalMatch(
+                        candidate.Candidate.Verb,
+                        "persistent",
+                        entry.FormatScope()),
+                    ShellCoverageKind.PersistentGlobal,
+                    NearMisses: []);
+            }).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(matches));
+        });
 
     private static ToolExecutionContext CreateInteractivePersonalContext(string sessionId)
         => TestToolExecutionContext.CreateBound(
@@ -2366,6 +3048,12 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
+
+    private sealed class AllowAllShellTrustZonePolicy : IShellTrustZonePolicy
+    {
+        public bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context)
+            => true;
+    }
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
 

@@ -218,6 +218,12 @@ Done when:
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
   keep their strict behavior.
+- [ ] Bash causal approval intent composes exact stored grants for an initial
+  exact ShellSyntaxTree 0.3.4 directory change with reviewed diagnostic tails.
+  Execution facts, folder grants, protected paths, headless authority, and
+  PowerShell remain strict. Each possible fallback passes the same symlink
+  check. POSIX `/tmp` aliases map through host path facts. The exact D03 fixture
+  must pass on Linux, macOS, and native Windows CI.
 - [x] Directory operands preserve dotted directory names without weakening the
   external-path or symlink checks.
 - [x] Reviewed-safe policy matches canonical ShellSyntaxTree token prefixes.
@@ -280,6 +286,9 @@ Done when:
   The Release build and all 7,138 runnable tests pass. The suite reports 15
   expected platform or opt-in skips. Adversarial review and all required CI
   checks passed before merge.
+- [ ] Netclaw consumes public ShellSyntaxTree `0.3.4` for parser-owned
+  working-directory effects. The causal policy does not recognize command
+  names or private executable grammar. Native platform CI remains required.
 - [x] The expanded 247-test matrix covers command-substitution and PowerShell
   execution-region behavior. Known command-owned regions reuse independently
   matched host and body grants after Netclaw accounts for the parsed body.

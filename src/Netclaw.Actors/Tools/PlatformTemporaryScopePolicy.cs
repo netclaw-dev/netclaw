@@ -43,38 +43,46 @@ internal sealed class PlatformTemporaryScopePolicy
 {
     private readonly ShellExecutionEnvironment _environment;
     private readonly IPlatformTemporaryPathInspector _pathInspector;
-    private readonly string? _authoredTemporaryRoot;
+    private readonly IReadOnlyList<PlatformTemporaryRoot> _temporaryRoots;
 
     internal PlatformTemporaryScopePolicy(
         ShellExecutionEnvironment environment,
         string platformTemporaryRoot,
         IPlatformTemporaryPathInspector pathInspector)
+        : this(environment, platformTemporaryRoot, pathInspector, [])
+    {
+    }
+
+    internal PlatformTemporaryScopePolicy(
+        ShellExecutionEnvironment environment,
+        string platformTemporaryRoot,
+        IPlatformTemporaryPathInspector pathInspector,
+        IReadOnlyList<string> additionalTemporaryRoots)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentException.ThrowIfNullOrWhiteSpace(platformTemporaryRoot);
         ArgumentNullException.ThrowIfNull(pathInspector);
+        ArgumentNullException.ThrowIfNull(additionalTemporaryRoots);
 
         _environment = environment;
         _pathInspector = pathInspector;
-        _authoredTemporaryRoot = ShellPathRules.TryNormalize(
-            platformTemporaryRoot,
-            environment.PathStyle,
-            out var authoredRoot)
-                ? authoredRoot
-                : null;
-        TemporaryRoot = _authoredTemporaryRoot is not null
-            && pathInspector.TryResolveRoot(
-            platformTemporaryRoot,
-            environment.PathStyle,
-            out var resolvedRoot)
-                ? resolvedRoot
-                : null;
+        var roots = new List<PlatformTemporaryRoot>();
+        AddTemporaryRoot(platformTemporaryRoot, roots);
+        foreach (var additionalRoot in additionalTemporaryRoots)
+            AddTemporaryRoot(additionalRoot, roots);
+
+        _temporaryRoots = Array.AsReadOnly(roots.ToArray());
+        TemporaryRoot = roots.Count > 0 ? roots[0].Canonical : null;
     }
 
     internal string? TemporaryRoot { get; }
 
     internal static PlatformTemporaryScopePolicy Create(ShellExecutionEnvironment environment)
-        => new(environment, Path.GetTempPath(), HostPlatformTemporaryPathInspector.Instance);
+        => new(
+            environment,
+            Path.GetTempPath(),
+            HostPlatformTemporaryPathInspector.Instance,
+            environment.PathStyle == ShellPathStyle.Posix ? ["/tmp"] : []);
 
     internal ToolAgentCorrection.SessionScratchSuggested? Evaluate(
         ShellCommandAnalysis analysis,
@@ -82,14 +90,13 @@ internal sealed class PlatformTemporaryScopePolicy
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context)
     {
-        if (TemporaryRoot is null
-            || !analysis.IsResolved
+        if (!analysis.IsResolved
             || analysis.HasDynamicSyntax
             || context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available
             || context.Audience != TrustAudience.Personal
             || !TryNormalizeSessionDirectory(context.SessionDirectory, out var sessionDirectory)
-            || !HasExplicitTemporaryIntent(analysis, arguments)
-            || !AllScopesStayWithinTemporaryRoot(analysis, candidates))
+            || !TryGetExplicitTemporaryRoot(analysis, arguments, out var temporaryRoot)
+            || !AllScopesStayWithinTemporaryRoot(analysis, candidates, temporaryRoot))
         {
             return null;
         }
@@ -99,54 +106,82 @@ internal sealed class PlatformTemporaryScopePolicy
             : ApprovalShell.PowerShell;
         return new ToolAgentCorrection.SessionScratchSuggested(
             sessionDirectory,
-            TemporaryRoot,
+            temporaryRoot.Canonical,
             shell);
     }
 
     internal bool IsPlatformTemporaryRoot(string? path)
-        => TemporaryRoot is not null
-           && TryNormalizePath(path, out var normalized)
-           && (PathEquals(normalized, TemporaryRoot)
-               || _authoredTemporaryRoot is not null
-               && PathEquals(normalized, _authoredTemporaryRoot));
+        => TryGetTemporaryRoot(path, out _);
 
-    private bool HasExplicitTemporaryIntent(
+    internal bool IsSafePlatformTemporaryPath(string? path)
+    {
+        if (!TryNormalizePath(path, out var normalized))
+            return false;
+
+        foreach (var root in _temporaryRoots)
+        {
+            if ((IsWithinRoot(normalized, root.Authored)
+                 || IsWithinRoot(normalized, root.Canonical))
+                && IsSafeTemporaryPath(normalized, root))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryGetExplicitTemporaryRoot(
         ShellCommandAnalysis analysis,
-        IDictionary<string, object?>? arguments)
+        IDictionary<string, object?>? arguments,
+        out PlatformTemporaryRoot temporaryRoot)
     {
         var explicitDirectory = ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
         if (!string.IsNullOrWhiteSpace(explicitDirectory))
-            return IsPlatformTemporaryRoot(explicitDirectory);
+            return TryGetTemporaryRoot(explicitDirectory, out temporaryRoot);
 
         if (_environment.Grammar != ShellGrammar.Bash)
+        {
+            temporaryRoot = default;
             return false;
+        }
 
-        return analysis.Commands.Any(command =>
-            command.Clause.Args.Any(argument =>
-                argument.IsCwdAttribution
-                && IsPlatformTemporaryRoot(argument.Resolved))
-            && command.WorkingDirectory is ShellValueDomain.Exact exact
-            && IsPlatformTemporaryRoot(exact.Value));
+        foreach (var command in analysis.Commands)
+        {
+            if (command.WorkingDirectoryEffect is
+                    ShellWorkingDirectoryEffect.ChangesOnSuccess
+                {
+                    Target: ShellValueDomain.Exact exact
+                }
+                && TryGetTemporaryRoot(exact.Value, out temporaryRoot))
+            {
+                return true;
+            }
+        }
+
+        temporaryRoot = default;
+        return false;
     }
 
     private bool AllScopesStayWithinTemporaryRoot(
         ShellCommandAnalysis analysis,
-        IReadOnlyList<ApprovalCandidate> candidates)
+        IReadOnlyList<ApprovalCandidate> candidates,
+        PlatformTemporaryRoot temporaryRoot)
     {
         foreach (var candidate in candidates)
         {
             if (candidate.Directory is null)
                 continue;
 
-            if (!IsSafeTemporaryPath(candidate.Directory))
+            if (!IsSafeTemporaryPath(candidate.Directory, temporaryRoot))
                 return false;
         }
 
         foreach (var command in analysis.Commands)
         {
-            if (!IsBashDirectoryTransition(command)
+            if (!HasSafeDirectoryTransitionEffect(command, temporaryRoot)
                 && (command.WorkingDirectory is not ShellValueDomain.Exact workingDirectory
-                    || !IsSafeTemporaryPath(workingDirectory.Value)))
+                    || !IsSafeTemporaryPath(workingDirectory.Value, temporaryRoot)))
             {
                 return false;
             }
@@ -157,7 +192,7 @@ internal sealed class PlatformTemporaryScopePolicy
                     continue;
 
                 if (string.IsNullOrWhiteSpace(argument.Resolved)
-                    || !IsSafeTemporaryPath(argument.Resolved))
+                    || !IsSafeTemporaryPath(argument.Resolved, temporaryRoot))
                 {
                     return false;
                 }
@@ -167,7 +202,8 @@ internal sealed class PlatformTemporaryScopePolicy
             {
                 var safe = redirect switch
                 {
-                    FileRedirectAnalysis file => HasSafeRedirectTarget(file.Target),
+                    FileRedirectAnalysis file =>
+                        HasSafeRedirectTarget(file.Target, temporaryRoot),
                     DescriptorDuplicateRedirectAnalysis => true,
                     DescriptorMoveRedirectAnalysis => true,
                     DescriptorCloseRedirectAnalysis => true,
@@ -185,63 +221,114 @@ internal sealed class PlatformTemporaryScopePolicy
         return true;
     }
 
-    private bool IsBashDirectoryTransition(CommandOccurrence command)
+    private bool HasSafeDirectoryTransitionEffect(
+        CommandOccurrence command,
+        PlatformTemporaryRoot temporaryRoot)
         => _environment.Grammar == ShellGrammar.Bash
-           && command.Clause.Verb.Tokens.Count > 0
-           && command.Clause.Verb.Tokens[0] is "cd" or "chdir";
+           && command.WorkingDirectoryEffect is
+               ShellWorkingDirectoryEffect.ChangesOnSuccess
+           {
+               Target: ShellValueDomain.Exact exact
+           }
+           && IsSafeTemporaryPath(exact.Value, temporaryRoot);
 
-    private bool HasSafeRedirectTarget(ShellValueDomain target)
+    private bool HasSafeRedirectTarget(
+        ShellValueDomain target,
+        PlatformTemporaryRoot temporaryRoot)
         => target switch
         {
-            ShellValueDomain.Exact exact => IsSafeTemporaryPath(exact.Value),
+            ShellValueDomain.Exact exact =>
+                IsSafeTemporaryPath(exact.Value, temporaryRoot),
             ShellValueDomain.FiniteSet finite =>
-                finite.Values.Count > 0 && finite.Values.All(IsSafeTemporaryPath),
+                finite.Values.Count > 0
+                && finite.Values.All(path => IsSafeTemporaryPath(path, temporaryRoot)),
             ShellValueDomain.PathPattern pattern =>
-                IsSafeTemporaryPath(pattern.CoveringDirectory),
+                IsSafeTemporaryPath(pattern.CoveringDirectory, temporaryRoot),
             _ => false
         };
 
-    private bool IsSafeTemporaryPath(string path)
+    private bool IsSafeTemporaryPath(
+        string path,
+        PlatformTemporaryRoot temporaryRoot)
     {
-        if (TemporaryRoot is null
-            || !TryNormalizePath(path, out var normalized)
-            || !TryMapToCanonicalTemporaryPath(normalized, out var canonicalPath))
+        if (!TryNormalizePath(path, out var normalized)
+            || !TryMapToCanonicalTemporaryPath(
+                normalized,
+                temporaryRoot,
+                out var canonicalPath))
         {
             return false;
         }
 
         return _pathInspector.IsSafeDescendant(
-            TemporaryRoot,
+            temporaryRoot.Canonical,
             canonicalPath,
             _environment.PathStyle);
     }
 
-    private bool TryMapToCanonicalTemporaryPath(string path, out string canonicalPath)
+    private bool TryMapToCanonicalTemporaryPath(
+        string path,
+        PlatformTemporaryRoot temporaryRoot,
+        out string canonicalPath)
     {
         canonicalPath = string.Empty;
-        if (TemporaryRoot is null)
-            return false;
-
-        if (IsWithinRoot(path, TemporaryRoot))
+        if (IsWithinRoot(path, temporaryRoot.Canonical))
         {
             canonicalPath = path;
             return true;
         }
 
-        if (_authoredTemporaryRoot is null
-            || !IsWithinRoot(path, _authoredTemporaryRoot))
+        if (!IsWithinRoot(path, temporaryRoot.Authored))
         {
             return false;
         }
 
-        var relative = path[_authoredTemporaryRoot.Length..]
+        var relative = path[temporaryRoot.Authored.Length..]
             .TrimStart('/', '\\');
         canonicalPath = relative.Length == 0
-            ? TemporaryRoot
-            : TemporaryRoot.TrimEnd('/', '\\') +
+            ? temporaryRoot.Canonical
+            : temporaryRoot.Canonical.TrimEnd('/', '\\') +
               (_environment.PathStyle == ShellPathStyle.Windows ? '\\' : '/') +
               relative;
         return true;
+    }
+
+    private void AddTemporaryRoot(
+        string path,
+        ICollection<PlatformTemporaryRoot> roots)
+    {
+        if (!ShellPathRules.TryNormalize(path, _environment.PathStyle, out var authored)
+            || !_pathInspector.TryResolveRoot(
+                path,
+                _environment.PathStyle,
+                out var canonical)
+            || roots.Any(root => PathEquals(root.Authored, authored)))
+        {
+            return;
+        }
+
+        roots.Add(new PlatformTemporaryRoot(authored, canonical));
+    }
+
+    private bool TryGetTemporaryRoot(
+        string? path,
+        out PlatformTemporaryRoot temporaryRoot)
+    {
+        temporaryRoot = default;
+        if (!TryNormalizePath(path, out var normalized))
+            return false;
+
+        foreach (var root in _temporaryRoots)
+        {
+            if (PathEquals(normalized, root.Authored)
+                || PathEquals(normalized, root.Canonical))
+            {
+                temporaryRoot = root;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryNormalizeSessionDirectory(string? path, out string normalized)
@@ -260,6 +347,10 @@ internal sealed class PlatformTemporaryScopePolicy
 
     private bool PathEquals(string left, string right)
         => ShellPathRules.Equals(left, right, _environment.PathStyle);
+
+    private readonly record struct PlatformTemporaryRoot(
+        string Authored,
+        string Canonical);
 }
 
 internal interface IPlatformTemporaryPathInspector
