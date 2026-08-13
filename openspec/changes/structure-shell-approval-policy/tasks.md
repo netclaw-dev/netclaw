@@ -118,7 +118,7 @@
   `AuthoredPathShape` as lexical-only. Keep unknown path values strict.
 - [x] 7.5 Delete the broad Bash environment-variable relaxation and its
   superseded tests.
-- [ ] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.
+- [x] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.
 
 ## 8. Trace, guides, and behavioral evals
 
@@ -127,7 +127,7 @@
 - [x] 8.2 Append actor grant rows without a second scan; project near-miss logs
   from the same trace.
 - [x] 8.3 Keep trace data out of model prompts and session journals.
-- [ ] 8.4 Update consumer and operator guides with complete input, facts,
+- [x] 8.4 Update consumer and operator guides with complete input, facts,
   coverage, trace, and output examples.
 - [ ] 8.5 Update the `netclaw-operations` skill and deterministic approval evals
   for schema 3 and the authored-source boundary.

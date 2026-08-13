@@ -268,12 +268,21 @@ expected per-candidate coverage, ordered trace rows, and final outcome for the
 policy-owned acceptance cases. Tests SHALL load those fields directly and
 SHALL NOT branch on Dxx identifiers to manufacture expected results.
 
-Fixture defaults SHALL explicitly provide tool name, audience, approval mode,
-interactive capability, session identity and safe root, project safe root,
-inherited cwd, and persistent-store status. Each case SHALL provide canonical
-shell environment and initial cwd. Every stored grant SHALL carry a canonical
-shell tag. D02, D03, D07, D08, D09, D10, D11, D14, D17, and D18 SHALL be exact
-executable fixtures.
+Fixture defaults SHALL explicitly provide:
+
+- tool name, audience, and approval mode;
+- interactive capability;
+- session identity and safe root;
+- project safe root and inherited cwd;
+- persistent-store status; and
+- a fixed clock.
+
+Each case SHALL provide canonical shell environment and initial cwd. Parser facts SHALL use
+command indexes. Policy facts SHALL use stable candidate IDs. Every stored
+grant SHALL carry a canonical shell tag. D02, D03, D07, D08, D09, D10, D11,
+D14, D17, and D18 SHALL be exact executable fixtures. Tests SHALL deserialize
+the schema through source-generated `System.Text.Json` metadata and reject
+unknown members.
 
 Additional adversarial rows SHALL cover dynamic identity, deny-only wrappers,
 redirects, protected paths, prefix collisions, runtime iterators, PowerShell

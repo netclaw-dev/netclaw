@@ -25,6 +25,11 @@ internal sealed record ObservedApproval(
     bool? IsMessy,
     IReadOnlyList<string> ApprovalMatches);
 
+internal sealed record ShellApprovalHarnessScope(
+    string ProjectDirectory,
+    string SessionDirectory,
+    string InvocationSessionId);
+
 internal sealed class ShellApprovalHarness : IAsyncDisposable
 {
     private const string InvocationSessionId = "signalr/approval-matrix";
@@ -60,10 +65,26 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     public CountingApprovalService ApprovalService { get; }
 
-    public static async Task<ShellApprovalHarness> CreateAsync(
+    public static Task<ShellApprovalHarness> CreateAsync(
         ShellApprovalCase testCase,
         ActorSystem actorSystem,
         CancellationToken ct)
+        => CreateAsync(
+            testCase.Id,
+            testCase.Invocation,
+            testCase.Approvals,
+            actorSystem,
+            ct);
+
+    internal static async Task<ShellApprovalHarness> CreateAsync(
+        string caseId,
+        ShellApprovalInvocation invocation,
+        ApprovalState approvals,
+        ActorSystem actorSystem,
+        CancellationToken ct,
+        TimeProvider? timeProvider = null,
+        ShellApprovalHarnessScope? scope = null,
+        SafeVerbList? safeVerbs = null)
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
@@ -76,9 +97,9 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
 
-        var environment = testCase.Invocation.CreateEnvironment();
-        var approvalProjectDirectory = projectDirectory;
-        var approvalSessionDirectory = sessionDirectory;
+        var environment = invocation.CreateEnvironment();
+        var approvalProjectDirectory = scope?.ProjectDirectory ?? projectDirectory;
+        var approvalSessionDirectory = scope?.SessionDirectory ?? sessionDirectory;
         var approvalExternalDirectory = externalDirectory;
         if (environment.PathStyle == ShellPathStyle.Windows)
         {
@@ -93,13 +114,13 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             : ApprovalShell.PowerShell;
         var store = new ToolApprovalStore(
             Path.Combine(rootDirectory, "tool-approvals.json"),
-            timeProvider: null,
+            timeProvider,
             migrationContext: new ApprovalStoreMigrationContext(approvalShell),
             lockTimeout: TimeSpan.Zero);
         var approvalActor = CreateApprovalActor(actorSystem, store);
         var approvalService = CreateApprovalService(approvalActor);
 
-        var persistentSeeds = testCase.Approvals.Seeds
+        var persistentSeeds = approvals.Seeds
             .Where(seed => seed.Source == ApprovalSeedSource.Persistent)
             .ToList();
         foreach (var seed in persistentSeeds)
@@ -124,10 +145,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             approvalService = CreateApprovalService(approvalActor);
         }
 
-        foreach (var seed in testCase.Approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
+        foreach (var seed in approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
         {
             await approvalService.RecordApprovalCandidatesAsync(
-                (ToolApprovalSessionId)ResolveSession(seed.Session),
+                (ToolApprovalSessionId)ResolveSession(
+                    seed.Session,
+                    scope?.InvocationSessionId ?? InvocationSessionId),
                 seed.Audience,
                 new ToolName(ShellTool.ToolName),
                 [CreateGrant(seed.Pattern, approvalShell, directory: null)],
@@ -161,28 +184,28 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 config,
                 new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
-            safeVerbs: SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
+            safeVerbs: safeVerbs ?? SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 
         var workingDirectory = ResolveDirectory(
-            testCase.Invocation.WorkingDirectory,
+            invocation.WorkingDirectory,
             approvalProjectDirectory,
             approvalSessionDirectory,
             approvalExternalDirectory);
         var arguments = workingDirectory is null
-            ? ToolInput.Create("Command", testCase.Invocation.Command)
+            ? ToolInput.Create("Command", invocation.Command)
             : ToolInput.Create(
-                "Command", testCase.Invocation.Command,
+                "Command", invocation.Command,
                 "WorkingDirectory", workingDirectory);
-        var toolCall = new FunctionCallContent(testCase.Id, ShellTool.ToolName, arguments);
+        var toolCall = new FunctionCallContent(caseId, ShellTool.ToolName, arguments);
         var context = TestToolExecutionContext.CreateBound(
-            InvocationSessionId,
+            scope?.InvocationSessionId ?? InvocationSessionId,
             approvalSessionDirectory,
             new TestToolExecutionContextOptions
             {
-                Audience = testCase.Invocation.Audience,
+                Audience = invocation.Audience,
                 ProjectDirectory = approvalProjectDirectory,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(testCase.Invocation.Interactive)
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
             });
 
         return new ShellApprovalHarness(
@@ -295,10 +318,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private static AkkaToolApprovalService CreateApprovalService(IActorRef actor)
         => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 
-    private static string ResolveSession(ApprovalSessionShape session)
+    private static string ResolveSession(
+        ApprovalSessionShape session,
+        string invocationSessionId)
         => session switch
         {
-            ApprovalSessionShape.Invocation => InvocationSessionId,
+            ApprovalSessionShape.Invocation => invocationSessionId,
             ApprovalSessionShape.Other => OtherSessionId,
             _ => throw new ArgumentOutOfRangeException(nameof(session), session, "Unknown approval session shape.")
         };

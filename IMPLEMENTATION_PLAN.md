@@ -193,6 +193,10 @@ Done when:
   executable basename, grant scope, and grant time. The actor derives a match
   or one near miss from one store snapshot pass. Raw paths, command text,
   arguments, secrets, prompts, and session events never receive trace data.
+- [x] The approval runbook documents the complete parser-fact-to-policy flow,
+  bounded status and finite-loop examples, partial candidate coverage, and a
+  trace-first operator diagnostic procedure. The source-generated fixture
+  replay pins current D02, D10, and D14 coordinator behavior.
 - [ ] The bundled safe catalog removes every executable whose accepted
   arguments can write, delete, execute code, or mutate a remote service through
   executable argv interpretation. Redirect, parser-owned path/provider, and

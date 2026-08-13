@@ -335,9 +335,11 @@ inputs, expected coverage, the ordered bounded trace, and final outcome for the
 policy-owned acceptance cases. Tests load these structured fields directly;
 they do not branch on Dxx IDs or derive expectations from prose.
 
-The fixture's top-level defaults are executable inputs, not test conventions:
-tool name, audience, approval mode, interactive capability, session identity
-and safe root, project safe root, inherited cwd, and persistent-store status.
+The fixture's top-level defaults are executable inputs, not test conventions.
+They include tool, audience, approval mode, interactive capability, session,
+safe roots, inherited cwd, store status, and a fixed clock. Parser facts use
+command indexes. Policy rows use stable candidate
+IDs because one parser occurrence can project a different policy cardinality.
 Each case supplies its canonical shell environment, initial cwd, and every
 stored grant includes its canonical shell tag. The exact executable cases are
 D02, D03, D07, D08, D09, D10, D11, D14, D17, and D18.
@@ -346,11 +348,13 @@ Complete D03 example:
 
 ```text
 Input: cd /tmp && gh api ... > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log
-Preflight: candidates C0=cd, C1=gh api, C2=wc, C3=head; intent=/tmp
-Actor: C0=PersistentGlobal, C1=PersistentGlobal, C2/C3=Uncovered
-Safe policy: C2=ReviewedSafePolicy, C3=ReviewedSafePolicy
-Final: Allow(AllCandidatesCovered)
+Preflight: unresolved approval scope; no reusable candidate rows
+Trace: Completion/RequiresApproval/UncoveredCandidates
+Final: RequiresApproval(IsMessy=true)
 ```
+
+This current result remains explicit evidence debt. The fixture does not claim
+that a future session-scratch correction or stronger parser fact already exists.
 
 ## Risks / Trade-offs
 

@@ -57,6 +57,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Equal("Personal", fixtures.FixtureDefaults.Audience);
         Assert.Equal("Approval", fixtures.FixtureDefaults.ApprovalMode);
         Assert.Equal("Available", fixtures.FixtureDefaults.InteractiveApprovalCapability);
+        Assert.Equal("2026-08-13T00:00:00+00:00", fixtures.FixtureDefaults.ClockUtc);
         Assert.Equal("Ready", fixtures.FixtureDefaults.PersistentStoreStatus);
         Assert.Equal("fixture-session", fixtures.FixtureDefaults.Session.SessionId);
         Assert.Equal("/work", fixtures.FixtureDefaults.Session.SessionDirectory);
@@ -95,12 +96,27 @@ public sealed partial class ShellApprovalEvidenceContractTests
     }
 
     [Fact]
+    public void Policy_fixture_schema_rejects_unknown_members()
+    {
+        var json = File.ReadAllText(EvidencePath(PolicyFixturesFile));
+        var malformed = json.Replace(
+            "\"schemaVersion\": 1,",
+            "\"schemaVersion\": 1, \"unexpected\": true,",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(
+            malformed,
+            ShellPolicyFixtureJsonContext.Default.PolicyFixtureCatalog));
+    }
+
+    [Fact]
     public void Exact_symbolic_parser_facts_match_the_policy_fixtures()
     {
         var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
         var factCases = fixtures.Cases.Where(item =>
             item.ValueFacts is { Count: > 0 }
-            || item.AuthoredPathFacts is { Count: > 0 });
+            || item.AuthoredPathFacts is { Count: > 0 }
+            || item.ShellEffects is not null);
 
         foreach (var fixture in factCases)
         {
@@ -108,20 +124,14 @@ public sealed partial class ShellApprovalEvidenceContractTests
             var analysis = new ShellCommandAnalyzer(environment).Analyze(
                 fixture.Command,
                 fixture.InitialWorkingDirectory);
+            var allowedPathPolicy = new ToolPathPolicy(environment, ["/protected"]);
 
             Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-            Assert.Equal(fixture.Candidates.Count, analysis.Commands.Count);
-
-            for (var index = 0; index < fixture.Candidates.Count; index++)
-            {
-                Assert.Equal(
-                    fixture.Candidates[index].Tokens,
-                    analysis.Commands[index].Clause.Verb.Tokens);
-            }
-
             foreach (var fact in fixture.ValueFacts ?? [])
             {
-                var argument = analysis.Commands[fact.CandidateId].Arguments[fact.ArgumentIndex];
+                var command = analysis.Commands[fact.CommandIndex];
+                Assert.Equal(fact.VerbTokens, command.Clause.Verb.Tokens);
+                var argument = command.Arguments[fact.ArgumentIndex];
                 var concatenation = Assert.IsType<ShellValueDomain.Concatenation>(argument.Value);
                 Assert.Equal("Concatenation", fact.Domain);
                 Assert.Equal(fact.Parts.Count, concatenation.Parts.Count);
@@ -134,8 +144,10 @@ public sealed partial class ShellApprovalEvidenceContractTests
 
             foreach (var fact in fixture.AuthoredPathFacts ?? [])
             {
+                var command = analysis.Commands[fact.CommandIndex];
+                Assert.Equal(fact.VerbTokens, command.Clause.Verb.Tokens);
                 var argument = Assert.Single(
-                    analysis.Commands[fact.CandidateId].Arguments,
+                    command.Arguments,
                     item => item.AuthoredPathShape.ToString() == fact.AuthoredPathShape);
                 Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
                 Assert.Equal("Unknown", fact.EffectiveValue);
@@ -146,6 +158,20 @@ public sealed partial class ShellApprovalEvidenceContractTests
                 Assert.Equal(fact.AuthoredFileSystemValues, authoredFileSystem.Values);
                 Assert.Equal(fact.AuthoredPathShape, argument.AuthoredPathShape.ToString());
             }
+
+            foreach (var expected in fixture.ShellEffects?.Redirects ?? [])
+            {
+                var redirect = Assert.Single(
+                    analysis.Commands[expected.CommandIndex].Redirects.OfType<FileRedirectAnalysis>());
+                var target = Assert.IsType<ShellValueDomain.Exact>(redirect.Target);
+                Assert.Equal(expected.Target, target.Value);
+                Assert.Equal(expected.Mode, redirect.Mode.ToString());
+                Assert.Equal(
+                    expected.ExpectedPathPolicy,
+                    allowedPathPolicy.CommandReferencesDeniedPath(analysis) ? "Deny" : "Allow");
+                Assert.True(new ToolPathPolicy(environment, [expected.Target])
+                    .CommandReferencesDeniedPath(StructuredOnly(analysis)));
+            }
         }
     }
 
@@ -155,11 +181,12 @@ public sealed partial class ShellApprovalEvidenceContractTests
         var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
         var fixture = Assert.Single(fixtures.Cases, item => item.AuthoredPathFacts is { Count: > 0 });
         var fact = Assert.Single(fixture.AuthoredPathFacts!);
-        var analysis = new ShellCommandAnalyzer(CreateEnvironment(fixture.Environment)).Analyze(
+        var environment = CreateEnvironment(fixture.Environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(
             fixture.Command,
             fixture.InitialWorkingDirectory);
         var argument = Assert.Single(
-            analysis.Commands[fact.CandidateId].Arguments,
+            analysis.Commands[fact.CommandIndex].Arguments,
             item => item.AuthoredPathShape.ToString() == fact.AuthoredPathShape);
 
         Assert.False(fact.ArgumentIsPath);
@@ -168,6 +195,11 @@ public sealed partial class ShellApprovalEvidenceContractTests
             argument.AuthoredFileSystemValue);
         Assert.Equal(fact.AuthoredFileSystemValues, authoredFileSystem.Values);
         Assert.Equal("Allow", fact.ExpectedPathPolicy);
+        Assert.False(new ToolPathPolicy(environment, ["/protected"])
+            .CommandReferencesDeniedPath(analysis));
+        Assert.All(fact.AuthoredFileSystemValues, path =>
+            Assert.True(new ToolPathPolicy(environment, [path])
+                .CommandReferencesDeniedPath(StructuredOnly(analysis))));
         Assert.Equal("Allow", fixture.ExpectedFinal.Outcome);
     }
 
@@ -323,6 +355,14 @@ public sealed partial class ShellApprovalEvidenceContractTests
                 $"Unsupported fixture environment: {environment.Platform}/{environment.Grammar}.")
         };
 
+    private static ShellCommandAnalysis StructuredOnly(ShellCommandAnalysis analysis)
+        => new(
+            analysis.Environment,
+            source: string.Empty,
+            analysis.WorkingDirectory,
+            analysis.Commands,
+            ShellAnalysisFailure.None);
+
     private static ApprovalEvidenceMatrix DeserializeMatrix(byte[] bytes)
         => JsonSerializer.Deserialize(
                bytes,
@@ -332,7 +372,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private static PolicyFixtureCatalog DeserializeFixtures(byte[] bytes)
         => JsonSerializer.Deserialize(
                bytes,
-               ShellApprovalEvidenceJsonContext.Default.PolicyFixtureCatalog)
+               ShellPolicyFixtureJsonContext.Default.PolicyFixtureCatalog)
            ?? throw new InvalidDataException($"{PolicyFixturesFile} has no root object.");
 
     private static string EvidencePath(string fileName)
@@ -408,209 +448,6 @@ internal sealed record ApprovalEvidenceCase
     public required string NetclawExpectation { get; init; }
 }
 
-internal sealed record PolicyFixtureCatalog
-{
-    public required int SchemaVersion { get; init; }
-
-    public required PolicyFixtureDefaults FixtureDefaults { get; init; }
-
-    public required List<PolicyFixtureCase> Cases { get; init; }
-}
-
-internal sealed record PolicyFixtureDefaults
-{
-    public required string ToolName { get; init; }
-
-    public required string Audience { get; init; }
-
-    public required string ApprovalMode { get; init; }
-
-    public required string InteractiveApprovalCapability { get; init; }
-
-    public required PolicyFixtureSession Session { get; init; }
-
-    public required string ProjectDirectory { get; init; }
-
-    public string? InheritedWorkingDirectory { get; init; }
-
-    public required string PersistentStoreStatus { get; init; }
-}
-
-internal sealed record PolicyFixtureSession
-{
-    public required string SessionId { get; init; }
-
-    public required string SessionDirectory { get; init; }
-}
-
-internal sealed record PolicyFixtureCase
-{
-    public required string EvidenceId { get; init; }
-
-    public required string Command { get; init; }
-
-    public required PolicyFixtureEnvironment Environment { get; init; }
-
-    public required string InitialWorkingDirectory { get; init; }
-
-    public required PolicyFixtureAuthority Available { get; init; }
-
-    public required List<PolicyFixtureCandidate> Candidates { get; init; }
-
-    public List<PolicyValueFact>? ValueFacts { get; init; }
-
-    public List<PolicyAuthoredPathFact>? AuthoredPathFacts { get; init; }
-
-    public PolicyShellEffects? ShellEffects { get; init; }
-
-    public PolicyParserOptions? ParserOptions { get; init; }
-
-    public required List<PolicyTraceRow> ExpectedTrace { get; init; }
-
-    public required PolicyExpectedFinal ExpectedFinal { get; init; }
-}
-
-internal sealed record PolicyFixtureEnvironment
-{
-    public required string Platform { get; init; }
-
-    public required string ExecutablePath { get; init; }
-
-    public required List<string> CommandArguments { get; init; }
-
-    public required string Grammar { get; init; }
-
-    public required string PathStyle { get; init; }
-
-    public string? PowerShellDialect { get; init; }
-}
-
-internal sealed record PolicyFixtureAuthority
-{
-    public required List<string> OneTimeApprovalKeys { get; init; }
-
-    public required List<PolicyGrant> SessionGrants { get; init; }
-
-    public required List<PolicyGrant> PersistentGrants { get; init; }
-
-    public required List<PolicySafePhrase> SafePhrases { get; init; }
-}
-
-internal sealed record PolicyGrant
-{
-    public required string Kind { get; init; }
-
-    public required string Shell { get; init; }
-
-    public required string Match { get; init; }
-
-    public required List<string> Tokens { get; init; }
-
-    public string? Directory { get; init; }
-}
-
-internal sealed record PolicySafePhrase
-{
-    public required List<string> Tokens { get; init; }
-
-    public required string Proof { get; init; }
-}
-
-internal sealed record PolicyFixtureCandidate
-{
-    public required int Id { get; init; }
-
-    public required List<string> Tokens { get; init; }
-
-    public string? RealDirectory { get; init; }
-
-    public string? IntentDirectory { get; init; }
-
-    public required string ExpectedCoverage { get; init; }
-}
-
-internal sealed record PolicyValueFact
-{
-    public required int CandidateId { get; init; }
-
-    public required int ArgumentIndex { get; init; }
-
-    public required string Domain { get; init; }
-
-    public required List<PolicyValuePart> Parts { get; init; }
-}
-
-internal sealed record PolicyValuePart
-{
-    public string? Exact { get; init; }
-
-    public List<long>? IntegerRange { get; init; }
-}
-
-internal sealed record PolicyAuthoredPathFact
-{
-    public required int CandidateId { get; init; }
-
-    public required bool ArgumentIsPath { get; init; }
-
-    public required string EffectiveValue { get; init; }
-
-    public required List<string> AuthoredValues { get; init; }
-
-    public required List<string> AuthoredFileSystemValues { get; init; }
-
-    public required string AuthoredPathShape { get; init; }
-
-    public required string ExpectedPathPolicy { get; init; }
-}
-
-internal sealed record PolicyShellEffects
-{
-    public required List<PolicyRedirect> Redirects { get; init; }
-}
-
-internal sealed record PolicyRedirect
-{
-    public required int CandidateId { get; init; }
-
-    public required string Target { get; init; }
-
-    public required string Mode { get; init; }
-
-    public required string ExpectedPathPolicy { get; init; }
-}
-
-internal sealed record PolicyParserOptions
-{
-    public required bool PublishAuthoredSourceFacts { get; init; }
-}
-
-internal sealed record PolicyTraceRow
-{
-    public required string Stage { get; init; }
-
-    public int? CandidateId { get; init; }
-
-    public string? ExecutableBasename { get; init; }
-
-    public required string Outcome { get; init; }
-
-    public required string Reason { get; init; }
-
-    public string? Coverage { get; init; }
-
-    public string? ScopeRelation { get; init; }
-
-    public string? GrantTimestamp { get; init; }
-}
-
-internal sealed record PolicyExpectedFinal
-{
-    public required string Outcome { get; init; }
-
-    public required string Reason { get; init; }
-}
-
 internal sealed record PostMergeApprovalHarvest
 {
     public required int SchemaVersion { get; init; }
@@ -658,6 +495,5 @@ internal sealed record PostMergeApprovalCase
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
 [JsonSerializable(typeof(ApprovalEvidenceMatrix))]
-[JsonSerializable(typeof(PolicyFixtureCatalog))]
 [JsonSerializable(typeof(PostMergeApprovalHarvest))]
 internal sealed partial class ShellApprovalEvidenceJsonContext : JsonSerializerContext;

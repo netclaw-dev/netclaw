@@ -34,6 +34,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../Netclaw.Security.Tests/ShellPolicyEvidenceModels.cs"
+             Link="Tools/ApprovalEvidence/ShellPolicyEvidenceModels.cs" />
+    <None Include="../../openspec/changes/structure-shell-approval-policy/evidence/netclaw-policy-fixtures.json"
+          Link="ApprovalEvidence/netclaw-policy-fixtures.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
