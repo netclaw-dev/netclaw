@@ -17,7 +17,8 @@ public enum ChannelType
     Reminder,
     Webhook,
     Discord,
-    Mattermost
+    Mattermost,
+    Telegram
 }
 
 public static class ChannelTypeExtensions
@@ -32,6 +33,7 @@ public static class ChannelTypeExtensions
         ChannelType.Webhook => "webhook",
         ChannelType.Discord => "discord",
         ChannelType.Mattermost => "mattermost",
+        ChannelType.Telegram => "telegram",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
     };
 
@@ -40,6 +42,7 @@ public static class ChannelTypeExtensions
         ChannelType.Slack => true,
         ChannelType.Discord => true,
         ChannelType.Mattermost => true,
+        ChannelType.Telegram => true,
         ChannelType.Tui => true,
         ChannelType.SignalR => true,
         _ => false
@@ -63,6 +66,8 @@ public static class ChannelTypeExtensions
         { value = ChannelType.Discord; return true; }
         if (string.Equals(wire, "mattermost", StringComparison.OrdinalIgnoreCase))
         { value = ChannelType.Mattermost; return true; }
+        if (string.Equals(wire, "telegram", StringComparison.OrdinalIgnoreCase))
+        { value = ChannelType.Telegram; return true; }
         value = default;
         return false;
     }

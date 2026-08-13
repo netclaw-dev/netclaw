@@ -13,6 +13,7 @@ using Netclaw.Channels.Mattermost;
 using Netclaw.Channels.Mattermost.Tools;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
+using Netclaw.Channels.Telegram;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Tools;
 using Xunit;
@@ -36,7 +37,7 @@ public sealed class ChannelRegistryRegistrationTests
         });
 
         Assert.Equal(
-            new[] { "discord", "mattermost", "slack", "tui" },
+            new[] { "discord", "mattermost", "slack", "telegram", "tui" },
             descriptors.Keys.Order(StringComparer.Ordinal));
 
         Assert.DoesNotContain("headless", descriptors.Keys);
@@ -92,13 +93,18 @@ public sealed class ChannelRegistryRegistrationTests
         {
             ["Slack:Enabled"] = "false",
             ["Discord:Enabled"] = "false",
-            ["Mattermost:Enabled"] = "false"
+            ["Mattermost:Enabled"] = "false",
+            ["Telegram:Enabled"] = "false"
         });
 
         Assert.False(descriptors["slack"].IsEnabled);
         Assert.False(descriptors["discord"].IsEnabled);
         Assert.False(descriptors["mattermost"].IsEnabled);
+        Assert.False(descriptors["telegram"].IsEnabled);
         Assert.True(descriptors["tui"].IsEnabled);
+
+        Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["telegram"].SupportedOutputEffects);
+        Assert.DoesNotContain(ChannelOutputEffectKind.ProcessingIndicator, descriptors["mattermost"].SupportedOutputEffects);
     }
 
     [Fact]
@@ -173,6 +179,28 @@ public sealed class ChannelRegistryRegistrationTests
         Assert.True(IsRegistered<DiscordAddressResolver>(services));
         Assert.True(IsRegistered<MattermostDestinationAddressResolver>(services));
         Assert.True(IsRegistered<LookupMattermostUserTool>(services));
+    }
+
+    [Fact]
+    public async Task Enabled_telegram_registers_proactive_send_and_address_resolution()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["Telegram:Enabled"] = "true",
+            ["Telegram:AllowDirectMessages"] = "true"
+        };
+        var services = BuildServices(settings);
+
+        Assert.True(IsRegistered<TelegramAddressResolver>(services));
+        Assert.True(IsRegistered<TelegramProactiveOutboundClient>(services));
+
+        await using var provider = BuildProvider(settings);
+        var registry = provider.GetRequiredService<IChannelRegistry>();
+        Assert.IsType<TelegramAddressResolver>(registry.GetResolver(
+            ChannelDescriptorKey.FromChannelType(ChannelType.Telegram),
+            ChannelAddressKind.Destination));
+        Assert.IsType<TelegramProactiveOutboundClient>(registry.GetOutboundClient(
+            ChannelDescriptorKey.FromChannelType(ChannelType.Telegram)));
     }
 
     [Fact]

@@ -14,6 +14,7 @@ using Netclaw.Channels.Mattermost.Tools;
 using Netclaw.Channels.Mattermost.Transport;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
+using Netclaw.Channels.Telegram;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -36,6 +37,23 @@ public static class ChannelIntegrationRegistrationExtensions
         AddSlackChannel(services, configuration);
         AddDiscordChannel(services, configuration);
         AddMattermostChannel(services, configuration);
+        AddTelegramChannel(services, configuration);
+    }
+
+    internal static void AddTelegramChannel(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddRemoteChatChannel<TelegramChannel, TelegramChannelOptions>(
+                ChannelType.Telegram,
+                configuration,
+                new HashSet<ChannelOutputEffectKind> { ChannelOutputEffectKind.ProcessingIndicator })
+            .WithRenderer<TelegramProcessingOutputRenderer>()
+            .WithResolver((_, options) => new TelegramAddressResolver(options))
+            .WithServices((channelServices, _) =>
+                channelServices.AddSingleton<TelegramTransport>())
+            .WithProactiveSendClient((sp, options) => new TelegramProactiveOutboundClient(
+                sp.GetRequiredService<TelegramTransport>(),
+                options,
+                () => sp.GetRequiredService<TelegramChannel>().Gateway));
     }
 
     internal static void AddSlackChannel(IServiceCollection services, IConfiguration configuration)

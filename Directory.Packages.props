@@ -10,6 +10,7 @@
     <SlackNetVersion>0.17.11</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.7</MattermostNetVersion>
+    <TelegramBotVersion>22.10.2.1</TelegramBotVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
@@ -73,6 +74,7 @@
     <PackageVersion Include="Mattermost.NET" Version="$(MattermostNetVersion)" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
+    <PackageVersion Include="Telegram.Bot" Version="$(TelegramBotVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.3.3" />

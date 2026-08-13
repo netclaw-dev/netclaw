@@ -19,9 +19,11 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, ToolAudienceProfilesDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecurityPolicyDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAclDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, TelegramAclDoctorCheck>();
         services.AddSingleton<IDoctorCheck, TelemetryDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecretsJsonDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAuthDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, TelegramAuthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SqliteProvisioningDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ImageProcessingDoctorCheck>();
         services.AddSingleton<IDoctorCheck, DaemonCrashDoctorCheck>();

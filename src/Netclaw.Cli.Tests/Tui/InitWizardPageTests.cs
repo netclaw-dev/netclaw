@@ -321,5 +321,10 @@ public sealed class InitWizardPageTests : IDisposable
     }
 
     private InitWizardViewModel CreateViewModel()
-        => new(_paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
+        => new(
+            _paths,
+            _registry,
+            _fakeProbe,
+            _fakeSlackProbe,
+            _fakeDiscordProbe);
 }
