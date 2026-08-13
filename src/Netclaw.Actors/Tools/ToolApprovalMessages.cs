@@ -34,9 +34,19 @@ internal static class ToolApprovalProtocol
         IReadOnlyList<ApprovalCandidate> Candidates,
         string? Cwd) : IToolApprovalQuery;
 
+    internal sealed record MatchShellCandidates(
+        SessionId? SessionId,
+        TrustAudience Audience,
+        ToolName ToolName,
+        ShellExecutionEnvironment Environment,
+        IReadOnlyList<ShellGrantCandidate> Candidates) : IToolApprovalQuery;
+
     // ===== Responses =====
 
     internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result) : IToolApprovalResponse;
+
+    internal sealed record ShellApprovalMatchResponse(
+        ShellApprovalMatchResult Result) : IToolApprovalResponse;
 
     // ===== Commands =====
 
@@ -55,3 +65,43 @@ internal static class ToolApprovalProtocol
         IReadOnlyList<ToolApprovalGrant> Grants,
         bool Persistent) : IToolApprovalCommand;
 }
+
+internal interface IShellApprovalMatchService
+{
+    Task<ShellApprovalMatchResult> MatchShellCandidatesAsync(
+        ShellApprovalMatchRequest request,
+        CancellationToken cancellationToken);
+}
+
+internal sealed record ShellApprovalMatchRequest(
+    ToolApprovalSessionId? SessionId,
+    TrustAudience Audience,
+    ToolName ToolName,
+    ShellExecutionEnvironment Environment,
+    IReadOnlyList<ShellGrantCandidate> Candidates);
+
+internal sealed record ShellGrantCandidate(
+    ShellPolicyCandidateId CandidateId,
+    ApprovalCandidate Candidate,
+    string? RealDirectory);
+
+internal sealed record ShellApprovalMatchResult(
+    PersistentGrantStoreStatus PersistentStore,
+    IReadOnlyList<ShellGrantCandidateMatch> CandidateMatches);
+
+internal abstract record PersistentGrantStoreStatus
+{
+    private PersistentGrantStoreStatus()
+    {
+    }
+
+    internal sealed record Ready : PersistentGrantStoreStatus;
+
+    internal sealed record Unavailable(ApprovalStoreFailure Failure) : PersistentGrantStoreStatus;
+}
+
+internal sealed record ShellGrantCandidateMatch(
+    ShellPolicyCandidateId CandidateId,
+    ToolApprovalMatch? Match,
+    ShellCoverageKind? GrantCoverage,
+    IReadOnlyList<ApprovalNearMiss> NearMisses);

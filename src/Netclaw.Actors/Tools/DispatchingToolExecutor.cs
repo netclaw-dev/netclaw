@@ -24,6 +24,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
     private readonly IToolApprovalService? _approvalService;
+    private readonly ShellPolicyCoordinator _shellPolicyCoordinator;
     private readonly ILogger _logger;
 
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
@@ -32,6 +33,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         _registry = registry;
         _policy = policy;
         _approvalService = approvalService;
+        _shellPolicyCoordinator = new ShellPolicyCoordinator(policy, approvalService);
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -297,6 +299,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             return missingToolDecision;
         }
 
+        if (string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
+        {
+            var shellDecision = await _shellPolicyCoordinator.EvaluateAsync(
+                tool,
+                toolCall,
+                context,
+                ct);
+            LogAuthorizationDecision(toolCall.Name, shellDecision);
+            return shellDecision;
+        }
+
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
         IReadOnlyList<ToolApprovalMatch> approvalMatches = [];
 
@@ -304,119 +317,48 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         {
             var approvalContext = accessDecision.ApprovalContext
                 ?? throw new InvalidOperationException("Approval decision missing approval context.");
+            var candidatesForCheck = approvalContext.Candidates is { Count: > 0 } candidates
+                ? candidates.ToList()
+                : approvalContext.CandidateVerbs
+                    .Select(verb => new ApprovalCandidate(verb, Directory: null))
+                    .ToList();
 
-            // Cwd resolution happens upstream in ToolAccessPolicy.CheckApprovalGate
-            // for shell tools, so the attempt Cwd is already populated when the
-            // gate produced an approval context. Other tools have no
-            // directory anchor; cwd stays null.
-
-            // Messy commands cannot be persistently approved — the matcher
-            // refuses to extract verb chains we could match a future
-            // invocation against. Always round-trip through the user, even if
-            // the candidate-verbs list happens to be empty for unrelated
-            // reasons (which would otherwise short-circuit to allow).
-            if (approvalContext.IsMessy)
+            if (candidatesForCheck.Count > 0)
             {
-                accessDecision = ToolAccessDecision.RequiresApproval(approvalContext);
-            }
-            else
-            {
-                var audience = context.Audience;
+                var approvalCheck = await _approvalService.CheckApprovalAsync(
+                    ToApprovalSessionId(context.SessionId),
+                    context.Audience,
+                    new ToolName(tool.Name),
+                    candidatesForCheck,
+                    context.Approval.Cwd,
+                    ct);
+                approvalMatches = approvalCheck.ApprovedMatches;
+                var hasExactCandidateChecks = TryGetExactUnapprovedCandidates(
+                    approvalCheck,
+                    candidatesForCheck,
+                    out _);
+                var hasInconsistentCandidateChecks = approvalCheck.CandidateChecks is not null
+                                                     && !hasExactCandidateChecks;
+                var storeUnavailableForMiss = approvalCheck.PersistentStoreFailure is not null
+                                              && approvalCheck.UnapprovedPatterns.Count > 0;
 
-                // Pure side-effect candidates (echo "X" with no path/redirect,
-                // bash :, true/false) are not persisted on Always-here clicks
-                // and must also be treated as authorized at match time —
-                // otherwise the matcher would see them as unapproved on retry
-                // after the click, throw ToolApprovalRequiredException again,
-                // and fail the turn (the outer try/catch is already inside
-                // the conditional catch so a re-throw escapes).
-                var candidatesForCheck = approvalContext.Candidates is { Count: > 0 } candidates
-                    ? candidates
-                        .Where(c => !ApprovalPatternMatching.IsPureSideEffect(c))
-                        .ToList()
-                    : approvalContext.CandidateVerbs
-                        .Select(verb => new ApprovalCandidate(verb, Directory: null))
-                        .ToList();
-
-                if (approvalContext.Candidates is { Count: > 0 }
-                    && candidatesForCheck.Count == 0)
+                if (storeUnavailableForMiss)
                 {
-                    // Every candidate is side-effect-only — auto-allow.
-                    accessDecision = ToolAccessDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates);
+                    accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
+                        ? ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval)
+                        : ToolAccessDecision.Deny("approval_store_unavailable");
                 }
-                else if (candidatesForCheck.Count == 0)
+                else if (approvalCheck.UnapprovedPatterns.Count == 0
+                         && !hasInconsistentCandidateChecks)
                 {
-                    // A zero-candidate result does not prove that the command is exempt.
-                    // Malformed input or a parser rejection can also produce this result.
-                    accessDecision = ToolAccessDecision.RequiresApproval(approvalContext);
+                    context.Approval.ApplyDecision(
+                        "PreviouslyApproved",
+                        FormatApprovalMatches(approvalCheck.ApprovedMatches));
+                    accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
                 }
                 else
                 {
-                    // Use tool.Name (canonical) — not toolCall.Name — so the
-                    // lookup key matches what PersistApprovalCandidatesAsync
-                    // stored. For MCP tools the LLM-facing name is the
-                    // sanitized alias (`server__tool`), while the policy
-                    // builds the approval context — and the session actor
-                    // records the grant — under the canonical `server/tool`.
-                    // Looking up by the sanitized alias here would miss every
-                    // grant and re-throw ToolApprovalRequiredException on
-                    // approved retries.
-                    var approvalCheck = await _approvalService.CheckApprovalAsync(
-                        ToApprovalSessionId(context.SessionId),
-                        audience,
-                        new ToolName(tool.Name),
-                        candidatesForCheck,
-                        context.Approval.Cwd,
-                        ct);
-                    approvalMatches = approvalCheck.ApprovedMatches;
-                    var hasExactCandidateChecks = TryGetExactUnapprovedCandidates(
-                        approvalCheck,
-                        candidatesForCheck,
-                        out var unapprovedCandidates);
-                    var hasInconsistentCandidateChecks = approvalCheck.CandidateChecks is not null
-                                                         && !hasExactCandidateChecks;
-
-                    var storeUnavailableForMiss = approvalCheck.PersistentStoreFailure is not null &&
-                                                  approvalCheck.UnapprovedPatterns.Count > 0;
-                    if (storeUnavailableForMiss)
-                    {
-                        accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
-                            ? ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval)
-                            : ToolAccessDecision.Deny("approval_store_unavailable");
-                    }
-                    else
-                    {
-                        if (approvalCheck.UnapprovedPatterns.Count == 0
-                            && !hasInconsistentCandidateChecks)
-                        {
-                            context.Approval.ApplyDecision(
-                                "PreviouslyApproved",
-                                FormatApprovalMatches(approvalCheck.ApprovedMatches));
-                        }
-
-                        if (accessDecision.Allowed
-                            && approvalCheck.UnapprovedPatterns.Count == 0
-                            && !hasInconsistentCandidateChecks)
-                        {
-                            accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
-                        }
-                        else if (accessDecision.Allowed)
-                        {
-                            // New approval services return exact candidate occurrences.
-                            // An older implementation can only return verb strings, so
-                            // keep the broader context instead of guessing which scoped
-                            // candidate lacks approval.
-                            var promptContext = hasExactCandidateChecks
-                                && unapprovedCandidates.Count > 0
-                                && string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal)
-                                    ? ToolAccessPolicy.NarrowShellApprovalContext(
-                                        approvalContext,
-                                        unapprovedCandidates,
-                                        context.SessionDirectory)
-                                    : approvalContext;
-                            accessDecision = ToolAccessDecision.RequiresApproval(promptContext);
-                        }
-                    }
+                    accessDecision = ToolAccessDecision.RequiresApproval(approvalContext);
                 }
             }
         }

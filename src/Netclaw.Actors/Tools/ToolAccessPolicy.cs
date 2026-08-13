@@ -43,6 +43,8 @@ public sealed class ToolAccessPolicy
         ? ApprovalShell.Bash
         : ApprovalShell.PowerShell;
 
+    internal ShellExecutionEnvironment ShellEnvironment => _shellCommandPolicy.Environment;
+
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,
@@ -156,6 +158,19 @@ public sealed class ToolAccessPolicy
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
+        => AuthorizeInvocationCore(tool, context, arguments, deferReviewedSafeCoverage: false);
+
+    internal ToolAccessDecision AuthorizeShellPreflight(
+        INetclawTool tool,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments)
+        => AuthorizeInvocationCore(tool, context, arguments, deferReviewedSafeCoverage: true);
+
+    private ToolAccessDecision AuthorizeInvocationCore(
+        INetclawTool tool,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments,
+        bool deferReviewedSafeCoverage)
     {
         _authorizedShellAnalyses.Remove(context);
 
@@ -256,7 +271,8 @@ public sealed class ToolAccessPolicy
             arguments,
             _shellApprovalMatcher,
             shellApproval,
-            shellAnalysis);
+            shellAnalysis,
+            deferReviewedSafeCoverage);
     }
 
     internal bool TryTakeAuthorizedShellAnalysis(
@@ -270,6 +286,11 @@ public sealed class ToolAccessPolicy
         return true;
     }
 
+    internal bool TryGetAuthorizedShellAnalysis(
+        ToolExecutionContext context,
+        out ShellCommandAnalysis? analysis)
+        => _authorizedShellAnalyses.TryGetValue(context, out analysis);
+
     internal void MarkSessionScratchRetry(
         ToolExecutionContext context,
         ToolAgentCorrection.SessionScratchSuggested correction)
@@ -277,6 +298,13 @@ public sealed class ToolAccessPolicy
         _sessionScratchRetries.Remove(context);
         _sessionScratchRetries.Add(context, new SessionScratchRetryMarker(correction));
     }
+
+    internal bool IsReviewedSafeCandidate(
+        ApprovalCandidate candidate,
+        string? cwd,
+        ToolInvocationContext context)
+        => _safeVerbPolicy is not null
+           && _safeVerbPolicy.AllShortCircuit([candidate], cwd, context);
 
     /// <summary>
     /// For non-interactive channels, validates that the working directory and all
@@ -376,7 +404,8 @@ public sealed class ToolAccessPolicy
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
         ShellApprovalAnalysis? shellApproval = null,
-        ShellCommandAnalysis? shellAnalysis = null)
+        ShellCommandAnalysis? shellAnalysis = null,
+        bool deferReviewedSafeCoverage = false)
     {
         var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
@@ -470,15 +499,18 @@ public sealed class ToolAccessPolicy
                 suggestedProjectDirectory = context.Approval.Cwd;
             }
 
-            approvalCandidates = approvalCandidates
-                .Where(candidate => !_safeVerbPolicy.AllShortCircuit(
-                    [candidate],
-                    context.Approval.Cwd,
-                    context.Invocation))
-                .ToList();
+            if (!deferReviewedSafeCoverage)
+            {
+                approvalCandidates = approvalCandidates
+                    .Where(candidate => !_safeVerbPolicy.AllShortCircuit(
+                        [candidate],
+                        context.Approval.Cwd,
+                        context.Invocation))
+                    .ToList();
 
-            if (approvalCandidates.Count == 0)
-                return ToolAccessDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
+                if (approvalCandidates.Count == 0)
+                    return ToolAccessDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
+            }
         }
 
         var candidateVerbs = approvalCandidates

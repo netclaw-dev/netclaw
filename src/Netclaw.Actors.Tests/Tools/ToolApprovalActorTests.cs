@@ -728,6 +728,63 @@ public sealed class ToolApprovalActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task Typed_shell_batch_preserves_ids_and_store_status()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
+            var store = new ToolApprovalStore(
+                tempFile,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(NativeShell),
+                lockTimeout: TimeSpan.Zero);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(NativeCandidate("git status"), Directory: null)],
+                persistent: false,
+                ct);
+            var candidates = Array.AsReadOnly(
+                [
+                    new ShellGrantCandidate(
+                        new ShellPolicyCandidateId(7),
+                        NativeCandidate("git status"),
+                        RealDirectory: null),
+                    new ShellGrantCandidate(
+                        new ShellPolicyCandidateId(11),
+                        NativeCandidate("dotnet test"),
+                        RealDirectory: null)
+                ]);
+
+            var result = await ((IShellApprovalMatchService)service).MatchShellCandidatesAsync(
+                new ShellApprovalMatchRequest(
+                    (ToolApprovalSessionId)"session-a",
+                    TrustAudience.Personal,
+                    new ToolName("shell_execute"),
+                    TestShellEnvironment.Current,
+                    candidates),
+                ct);
+
+            var unavailable = Assert.IsType<PersistentGrantStoreStatus.Unavailable>(result.PersistentStore);
+            Assert.Equal(ApprovalStoreFailure.InvalidData, unavailable.Failure);
+            Assert.Equal([7, 11], result.CandidateMatches.Select(match => match.CandidateId.Value));
+            Assert.Equal(ShellCoverageKind.Session, result.CandidateMatches[0].GrantCoverage);
+            Assert.NotNull(result.CandidateMatches[0].Match);
+            Assert.Null(result.CandidateMatches[1].GrantCoverage);
+            Assert.Null(result.CandidateMatches[1].Match);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     private static AkkaToolApprovalService CreateService(IActorRef actor)
         => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 

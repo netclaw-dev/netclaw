@@ -14,7 +14,10 @@ using static Netclaw.Actors.Tools.ToolApprovalProtocol;
 
 namespace Netclaw.Actors.Tools;
 
-public sealed class AkkaToolApprovalService : IToolApprovalService, IStructuredToolApprovalService
+public sealed class AkkaToolApprovalService :
+    IToolApprovalService,
+    IStructuredToolApprovalService,
+    IShellApprovalMatchService
 {
     private readonly IRequiredActor<ToolApprovalActorKey> _actorProvider;
     private readonly ShellExecutionEnvironment? _compatibilityEnvironment;
@@ -77,6 +80,27 @@ public sealed class AkkaToolApprovalService : IToolApprovalService, IStructuredT
             new GetUnapprovedPatterns(protocolSessionId, audience, toolName, candidates, cwd),
             TimeSpan.FromSeconds(5),
             ct);
+
+        return response.Result;
+    }
+
+    async Task<ShellApprovalMatchResult> IShellApprovalMatchService.MatchShellCandidatesAsync(
+        ShellApprovalMatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await _actorProvider.GetAsync(cancellationToken);
+        var protocolSessionId = request.SessionId.HasValue
+            ? (SessionId)request.SessionId.Value.Value
+            : (SessionId?)null;
+        var response = await actor.Ask<ShellApprovalMatchResponse>(
+            new MatchShellCandidates(
+                protocolSessionId,
+                request.Audience,
+                request.ToolName,
+                request.Environment,
+                request.Candidates),
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
 
         return response.Result;
     }

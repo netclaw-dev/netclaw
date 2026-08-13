@@ -571,7 +571,7 @@ public class DispatchingToolExecutorTests
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.NotNull(decision.ApprovalContext);
         Assert.Equal(["git status", "git push"], decision.ApprovalContext.CandidateVerbs);
-        Assert.Equal([approvedMatch], decision.ApprovalMatches);
+        Assert.Empty(decision.ApprovalMatches);
     }
 
     [Fact]
@@ -634,6 +634,158 @@ public class DispatchingToolExecutorTests
         Assert.Equal(["git push"], approvalContext.CandidateVerbs);
         Assert.Equal([unapprovedCandidate], approvalContext.Candidates);
         Assert.Equal([approvedMatch], decision.ApprovalMatches);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins the Bash compound-command coverage model used by the Linux approval policy.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell coverage semantics")]
+    public async Task Authorization_evaluation_composes_session_and_reviewed_safe_coverage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"netclaw-coverage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+            config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["shell_execute"] = ToolApprovalMode.Approval
+                }
+            };
+            var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+            var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
+            var registry = new ToolRegistry();
+            registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+            var approvalService = new FixedShellApprovalService(request =>
+            {
+                var matches = request.Candidates.Select(candidate =>
+                {
+                    if (!candidate.Candidate.Verb.StartsWith("git status", StringComparison.Ordinal))
+                    {
+                        return new ShellGrantCandidateMatch(
+                            candidate.CandidateId,
+                            Match: null,
+                            GrantCoverage: null,
+                            NearMisses: []);
+                    }
+
+                    return new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
+                        ShellCoverageKind.Session,
+                        []);
+                }).ToArray();
+                return new ShellApprovalMatchResult(
+                    new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
+                    Array.AsReadOnly(matches));
+            });
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false),
+                    commandPolicy,
+                    pathPolicy,
+                    safeVerbs: SafeVerbList.FromVerbs(["head"])),
+                approvalService);
+            var context = TestToolExecutionContext.CreateBound(
+                "signalr/mixed-coverage",
+                sessionDirectory: null,
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Personal,
+                    ProjectDirectory = root,
+                    InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+                });
+            var call = new FunctionCallContent(
+                "call-mixed-coverage",
+                "shell_execute",
+                ToolInput.Create(
+                    "Command",
+                    "git status && head README.md",
+                    "WorkingDirectory",
+                    root));
+
+            var decision = await executor.EvaluateAuthorizationAsync(
+                call,
+                context,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+            Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
+            Assert.Equal(1, approvalService.RequestCount);
+            var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
+            Assert.Equal(
+                Enumerable.Range(0, request.Candidates.Count),
+                request.Candidates.Select(candidate => candidate.CandidateId.Value));
+            Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "git status");
+            Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "head");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Authorization_evaluation_denies_duplicate_actor_candidate_id()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var duplicateId = request.Candidates[0].CandidateId;
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        duplicateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: [])).ToArray()));
+        });
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-duplicate-candidate-id",
+            "shell_execute",
+            ToolInput.Create("Command", "git status && git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/duplicate-candidate-id"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+    }
+
+    [Fact]
+    public async Task Authorization_evaluation_denies_uncovered_candidate_when_store_is_unavailable()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: [])).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-unavailable-store-miss",
+            "shell_execute",
+            ToolInput.Create("Command", "git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/unavailable-store-miss"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("approval_store_unavailable", decision.DenyReason);
     }
 
     [SlopwatchSuppress("SW001", "This test verifies Bash parser directory attribution, which does not apply to the Windows shell parser.")]
@@ -715,7 +867,7 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public async Task Authorization_evaluation_keeps_broad_prompt_for_inconsistent_candidate_result()
+    public async Task Authorization_evaluation_denies_inconsistent_candidate_result()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -766,12 +918,12 @@ public class DispatchingToolExecutorTests
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.Equal(["git status", "git push"], decision.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
     [Fact]
-    public async Task Authorization_evaluation_keeps_broad_prompt_for_inconsistent_parser_tokens()
+    public async Task Authorization_evaluation_denies_inconsistent_parser_tokens()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -826,9 +978,8 @@ public class DispatchingToolExecutorTests
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.Equal(["git status", "git push"], decision.ApprovalContext!.CandidateVerbs);
-        Assert.Equal(2, decision.ApprovalContext.Candidates!.Count);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
     [Fact]
@@ -883,8 +1034,8 @@ public class DispatchingToolExecutorTests
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.Equal(["git status", "git push"], decision.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
     [Fact]
@@ -1913,6 +2064,52 @@ public class DispatchingToolExecutorTests
             string? cwd,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The test does not use the legacy approval check.");
+
+        public Task RecordApprovalAsync(
+            ToolApprovalSessionId sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            bool persistent,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
+    }
+
+    private sealed class FixedShellApprovalService(
+        Func<ShellApprovalMatchRequest, ShellApprovalMatchResult> responseFactory)
+        : IToolApprovalService, IShellApprovalMatchService
+    {
+        public int RequestCount { get; private set; }
+
+        public ShellApprovalMatchRequest? LastRequest { get; private set; }
+
+        public Task<ShellApprovalMatchResult> MatchShellCandidatesAsync(
+            ShellApprovalMatchRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            LastRequest = request;
+            return Task.FromResult(responseFactory(request));
+        }
+
+        public Task<ToolApprovalCheckResult> CheckApprovalAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<ApprovalCandidate> candidates,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The shell coordinator must use the typed batch protocol.");
+
+        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The shell coordinator must use the typed batch protocol.");
 
         public Task RecordApprovalAsync(
             ToolApprovalSessionId sessionId,
