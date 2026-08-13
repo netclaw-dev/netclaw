@@ -399,7 +399,11 @@ public sealed class PlatformTemporaryScopePolicyTests
             commandPolicy,
             pathPolicy,
             tempPolicy,
-            safeVerbs: SafeVerbList.FromVerbs(["head", "cat"]));
+            safeVerbs: SafeVerbList.FromVerbs(
+                environment.Grammar == ShellGrammar.Bash
+                    ? ApprovalShell.Bash
+                    : ApprovalShell.PowerShell,
+                ["head", "cat"]));
         var shellTool = new ShellTool(config, pathPolicy, commandPolicy);
         var context = TestToolExecutionContext.CreateBound(
             "signalr/example",

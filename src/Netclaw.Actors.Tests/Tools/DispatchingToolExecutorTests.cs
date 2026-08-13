@@ -889,7 +889,8 @@ public class DispatchingToolExecutorTests
                 ShellPolicyTraceStage.ReviewedSafePolicy,
                 new ShellPolicyCandidate(
                     new ShellPolicyCandidateId(index),
-                    BashCandidate($"/usr/bin/tool-{index}")),
+                    BashCandidate($"/usr/bin/tool-{index}"),
+                    SourceOccurrence: null),
                 ShellCoverageKind.ReviewedSafePolicy,
                 ShellPolicyReason.ReviewedSafePhrase,
                 ShellScopeRelation.UnderRealRoot);
@@ -947,7 +948,8 @@ public class DispatchingToolExecutorTests
             ShellPolicyTraceStage.ReviewedSafePolicy,
             new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(0),
-                BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof")),
+                BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
+                SourceOccurrence: null),
             ShellCoverageKind.ReviewedSafePolicy,
             ShellPolicyReason.ReviewedSafePhrase,
             ShellScopeRelation.UnderRealRoot);
@@ -978,7 +980,8 @@ public class DispatchingToolExecutorTests
         var traceReason = Enum.Parse<ShellPolicyTraceReason>(traceReasonName);
         var candidate = new ShellPolicyCandidate(
             new ShellPolicyCandidateId(0),
-            BashCandidate("git push"));
+            BashCandidate("git push"),
+            SourceOccurrence: null);
         var grant = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["git", "status"]);

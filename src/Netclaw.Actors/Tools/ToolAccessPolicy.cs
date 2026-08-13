@@ -301,10 +301,15 @@ public sealed class ToolAccessPolicy
 
     internal bool IsReviewedSafeCandidate(
         ApprovalCandidate candidate,
+        ShellSyntaxTree.CommandOccurrence? sourceOccurrence,
         string? cwd,
         ToolInvocationContext context)
         => _safeVerbPolicy is not null
-           && _safeVerbPolicy.AllShortCircuit([candidate], cwd, context);
+           && _safeVerbPolicy.ShortCircuits(
+               candidate,
+               sourceOccurrence,
+               cwd,
+               context);
 
     /// <summary>
     /// For non-interactive channels, validates that the working directory and all
@@ -465,9 +470,7 @@ public sealed class ToolAccessPolicy
         var isMessy = shellApproval?.IsMessy
             ?? matcher.IsMessy(toolName, analysisArguments);
 
-        IReadOnlyList<ApprovalCandidate> approvalCandidates = _safeVerbPolicy is not null && isShell
-            ? candidates.Select(_safeVerbPolicy.NormalizeCandidate).ToList()
-            : candidates;
+        IReadOnlyList<ApprovalCandidate> approvalCandidates = candidates;
         string? suggestedProjectDirectory = null;
         ToolAgentCorrection? agentCorrection = null;
 

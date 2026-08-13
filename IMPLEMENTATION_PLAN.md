@@ -197,11 +197,11 @@ Done when:
   bounded status and finite-loop examples, partial candidate coverage, and a
   trace-first operator diagnostic procedure. The source-generated fixture
   replay pins current D02, D10, and D14 coordinator behavior.
-- [ ] The bundled safe catalog removes every executable whose accepted
-  arguments can write, delete, execute code, or mutate a remote service through
-  executable argv interpretation. Redirect, parser-owned path/provider, and
-  unknown shell-expansion checks remain separate.
-- [ ] The `git ls-tree` production special case is removed. Token-boundary
+- [x] The bundled reviewed-diagnostic catalog constrains shell-authored argv.
+  Parser-owned prefix order and lexical path-shape guards remain required.
+  Redirect, filesystem-value, provider, and unknown-expansion checks stay
+  separate.
+- [x] The `git ls-tree` production special case is removed. Token-boundary
   policy match handles longer parser phrases without private command grammar.
 - [x] A synthetic workload corpus covers ordinary search, read, pipeline,
   redirect, and file-change commands without production command text.
@@ -220,8 +220,8 @@ Done when:
   keep their strict behavior.
 - [x] Directory operands preserve dotted directory names without weakening the
   external-path or symlink checks.
-- [x] The policy normalizes a variable `git ls-tree` tree operand to the
-  reviewed read-only verb. Other Git subcommands keep exact parser output.
+- [x] Reviewed-safe policy matches canonical ShellSyntaxTree token prefixes.
+  It does not rewrite a variable `git ls-tree` operand or any other command.
 - [x] Tool schemas and always-loaded guidance distinguish a persistent project
   root from one-command `WorkingDirectory` scope, prevent redundant project
   switches, and preserve `cd` when directory mutation is the requested shell

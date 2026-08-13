@@ -19,7 +19,7 @@ namespace Netclaw.Actors.Tools;
 [NetclawTool(ToolName,
     "Call this once before multi-command work in a named project. Do not call it again when the current project already matches. " +
     "It declares the project root and expands your trusted scope. " +
-    "Once set, read-only verbs (ls, grep, cat, git status, git log, ...) inside that tree " +
+    "Once set, read-only phrases (ls, grep, cat, git status, git ls-tree, ...) inside that tree " +
     "auto-run without prompting — the safe-verb short-circuit treats the directory as a safe space. " +
     "Mutating commands still prompt, but the prompt shows the right cwd so persisted approvals are " +
     "correctly scoped. Also loads the project's identity file (AGENTS.md / CLAUDE.md / etc.) into the " +

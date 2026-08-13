@@ -1384,7 +1384,9 @@ public class SubAgentActorTests : TestKit
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 toolConfig,
                 new NetclawPaths(workspacesDirectory, workspacesDirectory)),
-            safeVerbs: SafeVerbList.FromVerbs(["grep", "cat"]));
+            safeVerbs: SafeVerbList.FromVerbs(
+                ApprovalShell.Bash,
+                ["grep", "cat"]));
     }
 
     private static FunctionCallContent ScratchCall(string callId)

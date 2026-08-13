@@ -175,7 +175,7 @@ ShellSyntaxTree proves them.
 
 PowerShell 7 and Windows PowerShell 5.1 are analyzed as distinct dialects.
 In particular, `&&` and `||` are unresolved under 5.1 and cannot create a
-persistent approval candidate or receive the read-only safe-verb shortcut.
+persistent approval candidate or receive the reviewed diagnostic shortcut.
 Incomplete commands, dynamic command identities, and non-filesystem provider
 drives also remain one-time-only. Netclaw does not claim knowledge of ambient
 profiles, modules, inherited variables, executable lookup, or external script
@@ -190,25 +190,37 @@ control-plane targets. Writes under the control-plane root use mode keys like
 path-scoped patterns (for example,
 `file_write:control-plane:netclaw.json`).
 
-### Read-only verbs skip the prompt
+### Reviewed diagnostic phrases skip the prompt
 
-In an interactive session, demonstrably read-only verbs auto-run with no prompt
-when invoked inside a trusted zone (`session_dir`, or `project_dir` for
-Personal/Team). In a headless session, this catalog does not grant authority;
-the call still needs an exact one-time, session, or persistent grant. The bundled
-safe-verb lists (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover file
-readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
-`Get-Content`, and `Select-String` on PowerShell), system/info verbs (`date`,
-`whoami`, `uname`, `uptime`), and read-only `git`/`gh` queries (`git status`,
-`git log`, `gh pr view`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
+In an interactive session, reviewed diagnostic phrases auto-run inside a
+trusted zone. Personal and Team use `session_dir` or `project_dir`. In a
+headless session, this catalog does not grant authority. The call still needs
+an exact one-time, session, or persistent grant. The bundled safe-policy
+catalogs (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover
+file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
+`Get-Content`, and `Select-String` on PowerShell), system/info phrases
+(`whoami`, `uname`, `uptime`), and narrowly reviewed `git`/`gh` queries
+(`git status`, `git rev-parse`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
 command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
 (`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
 `ps`) are never auto-allowed — the trusted-zone gate scopes verbs that act on
 a path, so it cannot contain a verb that dumps the process environment or the
-process table. The list ships with the daemon and is widened only through
-code review — the agent cannot extend its own auto-pass surface. A compound
-command auto-runs only when every clause is a safe verb; a single mutating
-clause makes the whole command prompt.
+process table. Each entry stores canonical shell tokens and a proof category.
+`ReviewedDiagnostic` classifies the shell-authored invocation. It does not
+claim that Netclaw sandboxes the executable.
+
+The reviewed phrase cannot accept an authored helper command, output file,
+destructive state request, or remote mutation. Netclaw also rejects an
+argument before the phrase completes. A possible local path must stay beneath
+the eligible safe root.
+
+Ambient executable configuration is outside this claim. Tool-private cache or
+metadata refresh is also outside this claim. The same limit applies to paths
+that a tool discovers after execution starts.
+
+The catalog ships with the daemon and changes only through code review. The
+agent cannot extend its own auto-pass surface. Every clause needs coverage.
+One uncovered clause makes the call prompt.
 
 ### How parser facts become one policy result
 
@@ -262,22 +274,27 @@ gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \
   | head -200; echo "---EXIT $?---"
 ```
 
-With a trusted `/work` scope and no stored grants, the facts and result are:
+Assume the operator already stored a global Bash token-prefix grant for
+`gh run view`. With a trusted `/work` scope, the facts and result are:
 
 | Candidate | Parser fact | Coverage |
 |-----------|-------------|----------|
-| `gh run view` | Complete Bash occurrence with canonical tokens | Reviewed-safe policy |
+| `gh run view` | Complete Bash occurrence with canonical tokens | Persistent global `gh run view` grant |
 | `head` | Complete occurrence under the real trusted root | Reviewed-safe policy |
 | `echo` | Argument is `Concatenation(Exact, IntegerRange(0..255), Exact)` and is not a path | Approval-exempt side effect |
 
 Output: `Allowed`. The status expansion is bounded data; it does not make the
-command complex and it does not add filesystem authority.
+command complex and it does not add filesystem authority. Without the stored
+grant, `gh run view` remains uncovered. It accepts `--web`, so the complete
+phrase cannot satisfy `ReviewedDiagnostic` without executable-private
+flag logic.
 
-If the call is outside every trusted root, `gh run view` and `head` remain
-uncovered. When an eligible Personal or Team call names a directory that the
-session can declare, Netclaw can first return a `set_working_directory`
-correction to the agent. Otherwise the uncovered candidates require approval.
-The bare `echo` side effect does not become a reusable prompt choice.
+If the call is outside every trusted root, the global `gh run view` grant still
+matches, while `head` remains uncovered. When an eligible Personal or Team call
+names a directory that the session can declare, Netclaw can first return a
+`set_working_directory` correction to the agent. Otherwise the uncovered
+candidates require approval. The bare `echo` side effect does not become a
+reusable prompt choice.
 
 #### Example: a finite Bash loop over known files
 
@@ -484,12 +501,11 @@ secrets, or model content. The trace never enters the prompt or session journal.
 Example for the compound status command above:
 
 ```text
-Shell policy trace: stage=StoredGrantMatch outcome=Uncovered reason=NoGrant candidate_id=0 executable=gh coverage=Uncovered scope_relation=None grant_timestamp=(null)
+Shell policy trace: stage=StoredGrantMatch outcome=Covered reason=PersistentGlobalGrant candidate_id=0 executable=gh coverage=PersistentGlobal scope_relation=Global grant_timestamp=2026-08-13T00:00:00.0000000+00:00
 Shell policy trace: stage=StoredGrantMatch outcome=Uncovered reason=NoGrant candidate_id=1 executable=head coverage=Uncovered scope_relation=None grant_timestamp=(null)
 Shell policy trace: stage=ReviewedSafePolicy outcome=Covered reason=ApprovalExemptSideEffect candidate_id=2 executable=echo coverage=ReviewedSafePolicy scope_relation=None grant_timestamp=(null)
-Shell policy trace: stage=ReviewedSafePolicy outcome=Covered reason=ReviewedSafePhrase candidate_id=0 executable=gh coverage=ReviewedSafePolicy scope_relation=UnderRealRoot grant_timestamp=(null)
 Shell policy trace: stage=ReviewedSafePolicy outcome=Covered reason=ReviewedSafePhrase candidate_id=1 executable=head coverage=ReviewedSafePolicy scope_relation=UnderRealRoot grant_timestamp=(null)
-Shell policy trace: stage=Completion outcome=Allow reason=SafeVerbInTrustedScope candidate_id=(null) executable=(null) coverage=(null) scope_relation=None grant_timestamp=(null)
+Shell policy trace: stage=Completion outcome=Allow reason=AllCandidatesCovered candidate_id=(null) executable=(null) coverage=(null) scope_relation=None grant_timestamp=(null)
 ```
 
 Read a trace from the final row backward:

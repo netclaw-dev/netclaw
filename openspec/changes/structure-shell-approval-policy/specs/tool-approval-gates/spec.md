@@ -174,7 +174,7 @@ candidate and first non-navigation action on its success edge SHALL already
 have one-time, session, or stored-grant coverage. Safe policy alone SHALL NOT
 manufacture causal intent.
 
-Only a reviewed read-only-for-all-arguments candidate without a file-writing
+Only a reviewed diagnostic candidate without a file-writing
 redirect MAY consume eligible intent. Hard deny, protected paths, folder
 grants, noninteractive authority, and process execution SHALL use real facts.
 The system SHALL NOT rewrite source, arguments, cwd, or model history.
@@ -185,7 +185,7 @@ scope from `Set-Location`.
 #### Scenario: Exact D03 chain composes under intended tmp scope
 
 - **GIVEN** global grants cover `cd` and `gh api`
-- **AND** `wc` and `head` are reviewed read-only entries
+- **AND** `wc` and `head` are reviewed diagnostic entries
 - **WHEN** the agent submits
   `cd /tmp && gh api repos/example/project/actions/jobs/123456/logs > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log`
 - **THEN** real redirect and path facts pass deny policy
@@ -548,15 +548,21 @@ global entries. Unknown or synthetic-only scope SHALL omit `Always here`.
 - **THEN** folder coverage fails
 - **AND** protected-path policy denies when applicable
 
-### Requirement: Safe-verb auto-allow short-circuit in declared safe spaces
+### Requirement: Reviewed diagnostic auto-allow in declared safe spaces
 
 The system SHALL load an embedded immutable per-platform policy catalog.
-`ReadOnlyForAllArguments` SHALL mean no accepted argument shape can write or
-delete a file, execute another command, or mutate a remote service through the
-executable's argv interpretation. Runtime user overrides SHALL NOT widen the
-catalog. Redirects, parser-owned path operands, provider paths, and unknown
-shell expansions SHALL remain separate strict effects. Displaying a value
-explicitly supplied by the shell SHALL NOT by itself disqualify a phrase.
+`ReviewedDiagnostic` SHALL classify only the shell-authored invocation.
+Runtime user overrides SHALL NOT widen the catalog.
+
+No accepted authored argument shape SHALL select a child executable, select a
+caller-authored output file, request destructive persistent state, or request
+a remote mutation. Tool-private metadata or cache refresh SHALL remain outside
+this claim. Ambient executable configuration and executable-discovered paths
+SHALL also remain outside this claim.
+
+Redirects, parser-owned filesystem values, provider paths, and unknown shell
+expansions SHALL remain separate strict effects. Bounded shell-local output
+variables MAY remain eligible. Any unresolved later use SHALL remain strict.
 
 Safe policy SHALL refine only uncovered candidates. It SHALL require reviewed
 phrase coverage, an allowed real or eligible intent scope, no symlink segment,
@@ -568,12 +574,46 @@ plus declared project directory. Public SHALL use session directory only.
 code SHALL contain no executable-specific flag exceptions. PowerShell provider
 paths SHALL retain existing strict checks.
 
-#### Scenario: Read-only candidate in project scope is covered
+Reviewed-safe phrase identity SHALL use canonical ShellSyntaxTree token
+prefixes. Legacy display and compatibility strings SHALL NOT establish
+reviewed-safe coverage.
+
+An authored argument before the matched phrase completes SHALL prevent
+reviewed-safe coverage. The check SHALL use parser-owned element order.
+
+A known `AuthoredPathShape` SHALL be conservative negative evidence only.
+Every represented authored value SHALL resolve beneath an eligible safe root.
+Unknown or unsupported domains SHALL prevent reviewed-safe coverage. A lexical
+path shape SHALL NOT create filesystem authority.
+
+#### Scenario: Reviewed diagnostic in project scope is covered
 
 - **GIVEN** `head` is reviewed safe
 - **AND** its real scope is under a Personal project root
 - **WHEN** every earlier stage passes
 - **THEN** safe policy covers that candidate
+
+#### Scenario: Global argument before a reviewed phrase stays strict
+
+- **GIVEN** `git status` is a reviewed diagnostic phrase
+- **WHEN** the authored command is `git -c include.path=/tmp/config status`
+- **THEN** reviewed-safe policy does not cover the candidate
+- **AND** Netclaw does not parse Git's private option grammar
+
+#### Scenario: Hidden option path outside the safe root stays strict
+
+- **GIVEN** `grep` is a reviewed diagnostic phrase
+- **AND** ShellSyntaxTree marks `/tmp/patterns` with a POSIX path shape
+- **WHEN** the authored command is `grep -f /tmp/patterns ./safe.txt`
+- **THEN** reviewed-safe policy does not cover the candidate
+- **AND** lexical path shape creates no new authority
+
+#### Scenario: Path-shaped data beneath the safe root can remain eligible
+
+- **GIVEN** a reviewed diagnostic receives `example/project` as data
+- **AND** its possible local-path interpretation stays beneath the safe root
+- **WHEN** all stronger shell facts pass
+- **THEN** lexical path shape alone does not reject the candidate
 
 #### Scenario: Exact path scope does not declare a safe root
 
@@ -670,7 +710,7 @@ paths SHALL retain existing strict checks.
 #### Scenario: Public project directory is not safe
 
 - **GIVEN** a Public session has a project directory
-- **WHEN** a reviewed read-only candidate runs only there
+- **WHEN** a reviewed diagnostic candidate runs only there
 - **THEN** safe policy does not cover it
 
 #### Scenario: PowerShell environment provider stays strict

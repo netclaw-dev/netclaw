@@ -198,8 +198,8 @@ session, or stored-grant coverage. This existing user authority is what lets a
 later reviewed diagnostic consume intent even when the target is not a normal
 session/project safe root. Safe policy alone cannot manufacture causal intent.
 
-Only a catalog entry proved read-only for every accepted argument shape and an
-occurrence without a file-writing redirect can consume eligible intent. Native
+Only a reviewed diagnostic entry and an occurrence without a file-writing
+redirect can consume eligible intent. Native
 PowerShell remains strict in this slice: `Set-Location` does not create causal
 intent. Existing PowerShell filesystem-provider checks remain mandatory, and
 `Get-Content Env:SECRET` cannot receive filesystem safe-space coverage.
@@ -252,18 +252,42 @@ the approval surface before Netclaw stores the grant.
 ### 6. Use a reviewed immutable safe-policy catalog
 
 The bundled per-platform resource contains typed phrase entries. A
-`ReadOnlyForAllArguments` entry means no accepted argument shape can write or
-delete a file, execute another command, or mutate a remote service through the
-executable's argv interpretation. Redirects, parser-owned path operands,
-provider paths, and unknown shell expansions remain separate strict effects.
-Displaying a value explicitly supplied by the shell does not itself make a
-phrase executable-private or unsafe.
+`ReviewedDiagnostic` entry classifies the shell-authored invocation. It does
+not classify all executable behavior.
+
+No accepted authored argument shape may:
+
+- select a child executable;
+- select a caller-authored output file;
+- request destructive or persistent configuration state; or
+- request a remote mutation.
+
+Tool-private metadata or cache refresh is outside this claim. Ambient
+executable configuration is also outside this claim. Paths that an executable
+discovers after execution starts are outside this claim.
+
+These exclusions do not relax shell-authored checks. Redirects, parser-owned
+filesystem values, provider paths, and unknown shell expansions remain strict.
+Bounded shell-local output variables are permitted. Any unresolved later use
+of that state remains strict.
 
 The catalog is immutable at runtime. User-overridable safe-verb files are
 removed because an agent-writable or operator-edited file can silently widen
 authority outside code review. At minimum `find`, `awk`, `rg`, and `sort` are
 not eligible. Production code has no flag-specific exceptions. The existing
 `git ls-tree` special case is deleted.
+
+Reviewed-safe authorization uses only canonical ShellSyntaxTree token prefixes.
+Legacy display and compatibility strings do not establish safe coverage.
+
+The parser-owned source order supplies two conservative guards. No authored
+argument may appear before the matched phrase completes. Every argument with a
+known lexical path shape must resolve beneath an eligible safe root.
+
+Lexical path shape never creates authority. It only blocks reviewed-safe
+coverage when a possible local path escapes the allowed roots or stays
+unresolved. Parser-owned filesystem values and redirects still pass through
+their stronger existing checks.
 
 Parent sessions and subagents consume the same project-scope correction before
 they open an approval request. The correction is available only when the

@@ -14,7 +14,7 @@
 | compound-hard-deny-denies | Bash | Personal | Project | Interactive | git status && netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | safe-verb-project-allows | Bash | Personal | Project | Interactive | git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-git-ls-tree-ref-allows | Bash | Personal | Project | Interactive | git ls-tree feature | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| safe-git-ls-tree-external-prompts-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | RequiresApproval | approval required | git ls-tree | No |
+| safe-git-ls-tree-external-prompts-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | RequiresApproval | approval required | git ls-tree feature | No |
 | safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
 | safe-verb-context-project-fallback-allows | Bash | Personal | None | Interactive | cat src/readme.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | safe-verb-context-project-traversal-prompts | Bash | Personal | None | Interactive | cat ../secret.txt | none | RequiresApproval | approval required | cat | No |
@@ -27,16 +27,31 @@
 | safe-verb-external-redirect-prompts | Bash | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
 | safe-verb-null-device-redirect-allows | Bash | Personal | Project | Interactive | ls -la 2>/dev/null | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | mutating-verb-project-prompts | Bash | Personal | Project | Interactive | git push | none | RequiresApproval | approval required | git push | No |
-| all-safe-compound-allows | Bash | Personal | Project | Interactive | git status && git log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| four-safe-mixed-operator-clauses-allow | Bash | Personal | Project | Interactive | git status && git log \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| all-safe-compound-allows | Bash | Personal | Project | Interactive | git status && git ls-tree HEAD | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| four-safe-mixed-operator-clauses-allow | Bash | Personal | Project | Interactive | git status && git ls-tree HEAD \| head -20; pwd | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | mixed-safe-unsafe-compound-prompts | Bash | Personal | Project | Interactive | git status && git push | none | RequiresApproval | approval required | git push | No |
 | safe-pipe-unsafe-tail-prompts | Bash | Personal | Project | Interactive | git status \| git push | none | RequiresApproval | approval required | git push | No |
-| safe-pipeline-allows | Bash | Personal | Project | Interactive | git log \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| live-read-chain-with-separator-allows | Bash | Personal | Project | Interactive | rg -rn "operation failed" src/ tests/ \| head -20; echo "---"; rg -rln "upload" src/ \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| live-git-diagnostic-chain-with-separators-allows | Bash | Personal | Project | Interactive | git status --short 2>&1 \| head; echo "---branch---"; git branch --show-current 2>&1; echo "---remotes---"; git remote -v 2>&1 \| head -4; echo "---recent---"; git log --oneline -3 2>&1 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| safe-pipeline-allows | Bash | Personal | Project | Interactive | git ls-tree HEAD \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| unsafe-catalog-find-exec-prompts | Bash | Personal | Project | Interactive | find . -exec rm {} + | none | RequiresApproval | approval required | find | No |
+| unsafe-catalog-awk-system-prompts | Bash | Personal | Project | Interactive | awk 'BEGIN { system("touch marker") }' | none | RequiresApproval | approval required | awk | No |
+| unsafe-catalog-rg-pre-prompts | Bash | Personal | Project | Interactive | rg --pre helper pattern . | none | RequiresApproval | approval required | rg | No |
+| unsafe-catalog-sort-output-prompts | Bash | Personal | Project | Interactive | sort -o output input | none | RequiresApproval | approval required | sort | No |
+| unsafe-catalog-date-set-prompts | Bash | Personal | Project | Interactive | date --set tomorrow | none | RequiresApproval | approval required | date | No |
+| unsafe-catalog-tree-output-prompts | Bash | Personal | Project | Interactive | tree -o output | none | RequiresApproval | approval required | tree | No |
+| unsafe-catalog-uniq-output-prompts | Bash | Personal | Project | Interactive | uniq input output | none | RequiresApproval | approval required | uniq input output | No |
+| unsafe-catalog-gh-web-prompts | Bash | Personal | Project | Interactive | gh run view 123456 --web | none | RequiresApproval | approval required | gh run view | No |
+| reviewed-git-global-option-before-phrase-prompts | Bash | Personal | Project | Interactive | git -c include.path=/tmp/external status | none | RequiresApproval | approval required | git status | No |
+| reviewed-grep-external-option-path-prompts | Bash | Personal | Project | Interactive | grep -f /tmp/patterns ./data.txt | none | RequiresApproval | approval required | grep | No |
+| reviewed-wc-external-option-path-prompts | Bash | Personal | Project | Interactive | wc --files0-from=/tmp/list | none | RequiresApproval | approval required | wc | No |
+| reviewed-du-external-option-path-prompts | Bash | Personal | Project | Interactive | du --exclude-from=/tmp/patterns ./data | none | RequiresApproval | approval required | du | No |
+| reviewed-realpath-external-option-path-prompts | Bash | Personal | Project | Interactive | realpath --relative-to=/tmp ./data | none | RequiresApproval | approval required | realpath | No |
+| reviewed-grep-local-option-path-allows | Bash | Personal | Project | Interactive | grep -f ./patterns ./data.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| reviewed-path-shaped-data-under-project-allows | Bash | Personal | Project | Interactive | gh run list --repo example/project | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| live-read-chain-with-separator-prompts-for-rg | Bash | Personal | Project | Interactive | rg -rn "operation failed" src/ tests/ \| head -20; echo "---"; rg -rln "upload" src/ \| head -20 | none | RequiresApproval | approval required | rg | No |
+| live-git-diagnostic-chain-prompts-for-unproved-phrases | Bash | Personal | Project | Interactive | git status --short 2>&1 \| head; echo "---branch---"; git branch --show-current 2>&1; echo "---remotes---"; git remote -v 2>&1 \| head -4; echo "---recent---"; git log --oneline -3 2>&1 | none | RequiresApproval | approval required | git branch, git remote, git log | No |
 | live-finite-url-loop-prompts-with-reusable-phrase | Bash | Personal | Project | Interactive | for url in /api/first /api/second; do echo "=== $url ==="; curl -sS -m 10 "$url" \| head -c 1500; echo; done | none | RequiresApproval | approval required | curl | No |
-| safe-gh-run-diagnostic-exit-status-allows | Bash | Personal | Project | Interactive | gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \| head -200; echo "---EXIT $?---" | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| native-project-path-operand-allows-safe-verb | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| gh-run-diagnostic-exit-status-prompts-without-grant | Bash | Personal | Project | Interactive | gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \| head -200; echo "---EXIT $?---" | none | RequiresApproval | approval required | gh run view | No |
+| native-project-path-operand-prompts-for-unproved-verb | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | RequiresApproval | approval required | git diff | No |
 | native-external-path-operand-prompts | Bash | Personal | Project | Interactive | git diff /etc/passwd | none | RequiresApproval | approval required | git diff | No |
 | native-project-path-operand-reuses-grant | Bash | Personal | Project | Interactive | kubectl apply deployment.yaml | persistent[project]:kubectl apply | Allowed | StoredApproval | none | Not applicable |
 | native-external-path-operand-does-not-reuse-project-grant | Bash | Personal | Project | Interactive | kubectl apply /etc/deployment.yaml | persistent[project]:kubectl apply | RequiresApproval | approval required | kubectl apply | No |
@@ -101,6 +116,11 @@
 | powershell7-local-redirect-keeps-safe-command | PowerShell7 | Personal | Project | Interactive | Get-Content .\input.txt > .\output.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | powershell7-protected-path-denies-before-approval | PowerShell7 | Personal | Project | Interactive | Get-Content C:\protected\config\secret.txt | persistent[anywhere]:Get-Content | Denied | shell_references_protected_path | none | Not applicable |
 | powershell7-provider-drive-is-reviewed | PowerShell7 | Personal | Project | Interactive | Get-Content Env:\Path | none | RequiresApproval | approval required | none | Yes |
+| powershell7-environment-provider-value-stays-strict | PowerShell7 | Personal | Project | Interactive | Get-Content Env:SECRET | none | RequiresApproval | approval required | none | Yes |
+| powershell7-unsafe-catalog-gh-web-prompts | PowerShell7 | Personal | Project | Interactive | gh run view 123456 --web | none | RequiresApproval | approval required | gh run view | No |
+| powershell7-findstr-external-option-path-prompts | PowerShell7 | Personal | Project | Interactive | findstr /G:C:\outside\patterns.txt C:\project\data.txt | none | RequiresApproval | approval required | findstr | No |
+| powershell7-output-variable-alone-allows | PowerShell7 | Personal | Project | Interactive | Get-Date -OutVariable marker | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| powershell7-output-variable-execution-stays-strict | PowerShell7 | Personal | Project | Interactive | Get-Date -OutVariable marker; & $marker | none | RequiresApproval | approval required | none | Yes |
 | powershell7-incomplete-pipeline-fails-closed | PowerShell7 | Personal | Project | Interactive | Get-ChildItem \| | persistent[anywhere]:Get-ChildItem | RequiresApproval | approval required | none | Yes |
 | powershell7-foreach-inherited-state-prompts | PowerShell7 | Personal | Project | Interactive | foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f } | persistent[anywhere]:Get-Content | RequiresApproval | approval required | none | Yes |
 | powershell7-foreach-mutation-inherited-state-prompts | PowerShell7 | Personal | Project | Interactive | foreach ($f in @('a.txt', 'b.txt')) { Remove-Item -LiteralPath $f } | persistent[anywhere]:Remove-Item | RequiresApproval | approval required | none | Yes |
@@ -128,7 +148,7 @@
 | dynamic-path-fails-closed | Bash | Personal | Project | Interactive | cat "$FILE" | none | RequiresApproval | approval required | none | Yes |
 | dynamic-redirect-fails-closed | Bash | Personal | Project | Interactive | git status > "$OUTPUT" | none | RequiresApproval | approval required | none | Yes |
 | fd-dup-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 2>&1 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| fd-dup-redirect-safe-pipeline-allows | Bash | Personal | Project | Interactive | git log --oneline -5 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| fd-dup-redirect-safe-pipeline-allows | Bash | Personal | Project | Interactive | git ls-tree HEAD 2>&1 \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-close-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 2>&- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | fd-move-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status 2>&1- | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | combined-output-project-redirect-safe-verb-allows | Bash | Personal | Project | Interactive | git status &> result.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
@@ -143,7 +163,7 @@
 | all-pipeline-clauses-approved | Bash | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push, persistent[anywhere]:curl | Allowed | StoredApproval | none | Not applicable |
 | input-redirect-outside-zone-prompts | Bash | Personal | Project | Interactive | cat < /netclaw-approval-external/netclaw-approval-input.txt | none | RequiresApproval | approval required | cat | No |
 | error-redirect-outside-zone-prompts | Bash | Personal | Project | Interactive | git status 2> /netclaw-approval-external/netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
-| cd-current-then-safe-allows | Bash | Personal | Project | Interactive | cd . && git status | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| cd-current-then-safe-prompts-for-navigation | Bash | Personal | Project | Interactive | cd . && git status | none | RequiresApproval | approval required | cd | No |
 | cd-parent-then-safe-prompts | Bash | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | multiple-cd-then-safe-prompts | Bash | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
 | side-effect-before-mutation-prompts | Bash | Personal | Project | Interactive | echo ready && git push | none | RequiresApproval | approval required | git push | No |
@@ -154,18 +174,18 @@
 | dynamic-here-string-cat-prompts | Bash | Personal | Project | Interactive | cat <<< "$value" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | here-string-cat-with-argument-prompts | Bash | Personal | Project | Interactive | cat -n <<< "hello" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | here-string-interpreter-grant-prompts | Bash | Personal | Project | Interactive | bash <<< "echo ok" | persistent[anywhere]:bash | RequiresApproval | approval required | none | Yes |
-| workload-search-rg-in-project-allows | Bash | Personal | Project | Interactive | rg -n "TODO" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-rg-in-project-prompts | Bash | Personal | Project | Interactive | rg -n "TODO" src | none | RequiresApproval | approval required | rg | No |
 | workload-search-grep-in-project-allows | Bash | Personal | Project | Interactive | grep -R "error" src | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| workload-search-find-in-project-allows | Bash | Personal | Project | Interactive | find src -name "*.cs" -print | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-find-in-project-prompts | Bash | Personal | Project | Interactive | find src -name "*.cs" -print | none | RequiresApproval | approval required | find | No |
 | workload-search-cat-in-project-allows | Bash | Personal | Project | Interactive | cat src/file.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-head-in-project-allows | Bash | Personal | Project | Interactive | head -40 src/file.txt | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-tail-in-project-allows | Bash | Personal | Project | Interactive | tail -100 logs/app.log | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
 | workload-search-sed-print-in-project-currently-prompts | Bash | Personal | Project | Interactive | sed -n '20,80p' src/file.txt | none | RequiresApproval | approval required | sed | No |
 | workload-search-rg-external-prompts | Bash | Personal | External | Interactive | rg -n "TODO" . | none | RequiresApproval | approval required | rg | No |
 | workload-search-rg-external-grant-allows | Bash | Personal | External | Interactive | rg -n "TODO" . | persistent[external]:rg | Allowed | StoredApproval | none | Not applicable |
-| workload-search-rg-head-pipeline-allows | Bash | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-rg-head-pipeline-prompts | Bash | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | RequiresApproval | approval required | rg | No |
 | workload-search-grep-tail-pipeline-allows | Bash | Personal | Project | Interactive | grep -R "error" logs \| tail -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
-| workload-search-find-head-pipeline-allows | Bash | Personal | Project | Interactive | find src -name "*.cs" -print \| head -20 | none | Allowed | SafeVerbInTrustedScope | none | Not applicable |
+| workload-search-find-head-pipeline-prompts | Bash | Personal | Project | Interactive | find src -name "*.cs" -print \| head -20 | none | RequiresApproval | approval required | find | No |
 | workload-search-cat-jq-pipeline-prompts-for-tail | Bash | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | RequiresApproval | approval required | jq | No |
 | workload-search-jq-direct-prompts | Bash | Personal | Project | Interactive | jq '.items[]' config.json | none | RequiresApproval | approval required | jq | No |
 | workload-search-jq-direct-grant-allows | Bash | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
@@ -245,7 +265,7 @@
 | four-one-other-session-grant-prompts | Bash | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:git commit, session[this-chat]:git push, session[other-chat]:gh pr merge | RequiresApproval | approval required | gh pr merge | No |
 | four-one-other-audience-grant-prompts | Bash | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere,Team]:gh pr merge | RequiresApproval | approval required | gh pr merge | No |
 | four-mixed-grant-sources-allow | Bash | Personal | Project | Interactive | git add . && git commit -m fix && git push && gh pr merge 123 | session[this-chat]:git add, session[this-chat]:gh pr merge, persistent[project]:git commit, persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
-| safe-and-stored-authority-compose | Bash | Personal | Project | Interactive | git status && git push && git log && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
+| safe-and-stored-authority-compose | Bash | Personal | Project | Interactive | git status && git push && git ls-tree HEAD && gh pr merge 123 | persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-hard-deny-beats-grants | Bash | Personal | Project | Interactive | git add . && git commit -m fix && netclaw daemon stop && git push | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:netclaw daemon stop, persistent[anywhere]:git push | Denied | hard_deny_self_destructive | none | Not applicable |
 | four-or-branches-with-grants-allow | Bash | Personal | Project | Interactive | git add . \|\| git commit -m fix \|\| git push \|\| gh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |
 | four-newline-statements-with-grants-allow | Bash | Personal | Project | Interactive | git add .\ngit commit -m fix\ngit push\ngh pr merge 123 | persistent[anywhere]:git add, persistent[anywhere]:git commit, persistent[anywhere]:git push, persistent[anywhere]:gh pr merge | Allowed | StoredApproval | none | Not applicable |

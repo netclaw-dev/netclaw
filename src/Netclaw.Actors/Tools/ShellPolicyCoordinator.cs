@@ -166,6 +166,7 @@ internal sealed class ShellPolicyCoordinator(
         {
             if (policy.IsReviewedSafeCandidate(
                     candidate.Candidate,
+                    candidate.SourceOccurrence,
                     projection.ApprovalContext.Cwd,
                     context.Invocation))
             {

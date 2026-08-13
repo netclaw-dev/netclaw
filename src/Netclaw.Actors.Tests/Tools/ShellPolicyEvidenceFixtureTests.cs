@@ -139,13 +139,15 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
     private static SafeVerbList CreateSafeVerbs(PolicyFixtureCase policyCase)
     {
         if (policyCase.Available.SafePhrases.Any(phrase =>
-                phrase.Proof != "ReadOnlyForAllArguments"))
+                phrase.Proof != "ReviewedDiagnostic"))
         {
             throw new InvalidDataException("The fixture has an unsupported safe-phrase proof.");
         }
 
-        return SafeVerbList.FromVerbs(policyCase.Available.SafePhrases.Select(phrase =>
-            string.Join(' ', phrase.Tokens)));
+        return SafeVerbList.FromVerbs(
+            ApprovalShell.Bash,
+            policyCase.Available.SafePhrases.Select(phrase =>
+                string.Join(' ', phrase.Tokens)));
     }
 
     private static ApprovalSeed CreatePersistentSeed(PolicyGrant grant)

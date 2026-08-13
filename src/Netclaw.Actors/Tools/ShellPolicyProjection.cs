@@ -45,7 +45,8 @@ internal readonly record struct ShellPolicyCandidateId
 
 internal sealed record ShellPolicyCandidate(
     ShellPolicyCandidateId Id,
-    ApprovalCandidate Candidate);
+    ApprovalCandidate Candidate,
+    ShellSyntaxTree.CommandOccurrence? SourceOccurrence);
 
 internal sealed record ShellCandidateCoverage(
     ShellPolicyCandidateId CandidateId,
@@ -135,12 +136,14 @@ internal sealed record ShellPolicyProjection
             {
                 VerbTokens = source.VerbTokens is null
                     ? null
-                    : Array.AsReadOnly(source.VerbTokens.ToArray())
+                    : Array.AsReadOnly(source.VerbTokens.ToArray()),
+                SourceOccurrence = null
             };
             candidateCopies[index] = copy;
             candidates[index] = new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(index),
-                copy);
+                copy,
+                source.SourceOccurrence);
         }
 
         var contextCopy = approvalContext with

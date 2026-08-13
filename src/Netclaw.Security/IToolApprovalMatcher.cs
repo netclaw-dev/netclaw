@@ -28,6 +28,10 @@ public sealed record ApprovalCandidate(string Verb, string? Directory)
     /// <summary>The native shell grammar that produced the candidate.</summary>
     public ApprovalShell? Shell { get; init; }
 
+    // Policy uses this parser reference before actor dispatch. The immutable
+    // projection removes it from approval and persistence candidates.
+    internal CommandOccurrence? SourceOccurrence { get; init; }
+
     /// <summary>
     /// Retains the released candidate identity contract. Parser metadata does
     /// not change occurrence identity.
@@ -277,6 +281,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 {
                     VerbTokens = GetCanonicalVerbTokens(clause),
                     Shell = shell,
+                    SourceOccurrence = occurrence,
                 });
             }
         }

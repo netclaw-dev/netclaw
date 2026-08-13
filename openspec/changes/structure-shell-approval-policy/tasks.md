@@ -76,17 +76,19 @@
 
 ## 5. Immutable reviewed safe-policy catalog
 
-- [ ] 5.1 Replace runtime-overridable safe-verb strings with embedded typed
+- [x] 5.1 Replace runtime-overridable safe-verb strings with embedded typed
   per-platform catalog entries.
-- [ ] 5.2 Audit every Linux and Windows entry against the
-  read-only-for-all-arguments rule.
-- [ ] 5.3 Remove `find`, `awk`, `rg`, `sort`, and every other unproved entry;
+- [x] 5.2 Audit every Linux and Windows entry against the reviewed-diagnostic
+  rule and its explicit threat-model boundary.
+- [x] 5.3 Remove `find`, `awk`, `rg`, `sort`, and every other unproved entry;
   add direct adversarial cases.
-- [ ] 5.4 Delete the `git ls-tree` and all other executable-specific production
-  normalization branches.
-- [ ] 5.5 Preserve redirect, explicit path, safe-root, audience, and symlink
-  checks as separate effects.
-- [ ] 5.6 Preserve native PowerShell provider checks, including strict
+- [x] 5.4 Delete executable-specific normalization from reviewed-safe
+  authorization. Match canonical ShellSyntaxTree token prefixes instead.
+  Reject parser-owned arguments before the matched phrase completes.
+- [x] 5.5 Preserve redirect, explicit path, safe-root, audience, and symlink
+  checks as separate effects. Use lexical path shape only to reject unsafe or
+  unresolved possible local paths.
+- [x] 5.6 Preserve native PowerShell provider checks, including strict
   `Get-Content Env:SECRET` behavior.
 - [x] 5.7 Return an agent scope-declaration correction before a parent-session
   or subagent user prompt only when each reviewed-safe candidate remains
@@ -105,7 +107,7 @@
   facts without changing execution analysis.
 - [ ] 6.2 Implement replacement and invalidation across later directory changes,
   `||`, joins, groups/subshells, dynamic flow, and unsupported regions.
-- [ ] 6.3 Apply intent only to reviewed read-only candidates without writing
+- [ ] 6.3 Apply intent only to reviewed diagnostic candidates without writing
   redirects; keep folder grants and every deny check on real facts.
 - [ ] 6.4 Pin D03's `/tmp` trace and later-directory-mutation counterexamples.
 - [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
@@ -144,14 +146,14 @@
 
 ## 9. Validation and staged delivery
 
-- [ ] 9.1 Run strict OpenSpec validation before implementation and delivery.
-- [ ] 9.2 Run focused `Netclaw.Security`, `Netclaw.Actors`, persistence, CLI,
+- [x] 9.1 Run strict OpenSpec validation before implementation and delivery.
+- [x] 9.2 Run focused `Netclaw.Security`, `Netclaw.Actors`, persistence, CLI,
   recovery, and eval tests.
 - [ ] 9.3 Run the complete Linux approval matrix and native Windows PowerShell
   matrix.
-- [ ] 9.4 Run Release build, repository tests, header verification, and
+- [x] 9.4 Run Release build, repository tests, header verification, and
   Slopwatch.
-- [ ] 9.5 Obtain adversarial review of every vertical slice and resolve all
+- [x] 9.5 Obtain adversarial review of every vertical slice and resolve all
   findings.
 - [ ] 9.6 Rebase each slice on `upstream/dev` and deliver dependency-ordered PRs
   with observed CI status.
