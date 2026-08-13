@@ -284,6 +284,8 @@ internal static class NetclawProtoMapper
         proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         if (evt.TurnContext is not null)
             proto.TurnContext = ToProto(evt.TurnContext);
+        if (evt.SessionScratchDirectory is not null)
+            proto.SessionScratchDirectory = evt.SessionScratchDirectory;
         return proto;
     }
 
@@ -308,6 +310,9 @@ internal static class NetclawProtoMapper
         OptionKeys = proto.OptionKeys.ToArray(),
         Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
         TurnContext = proto.TurnContext is null ? null : FromProto(proto.TurnContext),
+        SessionScratchDirectory = proto.HasSessionScratchDirectory
+            ? proto.SessionScratchDirectory
+            : null,
         RequestedAtMs = proto.RequestedAtMs
     };
 

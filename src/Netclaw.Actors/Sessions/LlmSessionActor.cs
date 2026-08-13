@@ -1977,7 +1977,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
-        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null)
+        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
+        IReadOnlyDictionary<string, string>? sessionScratchDenialDirectories = null)
     {
         _activeToolBatch.Start(toolCalls);
 
@@ -2065,6 +2066,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = decisionOverride
                 ?? new Dictionary<string, ApprovalDecision>(),
+            SessionScratchDenialDirectories = sessionScratchDenialDirectories
+                ?? new Dictionary<string, string>(),
             ScratchCorrections = _sessionScratchCorrections.Snapshot(),
             CancellationToken = toolExecutionCt
         };
@@ -3557,6 +3560,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
             Candidates = msg.Candidates,
             TurnContext = _currentTurnContext?.ToRecord(),
+            SessionScratchDirectory = dispatch.SessionScratchDirectory,
             RequestedAtMs = NowMs()
         };
 
@@ -3602,7 +3606,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             turnContext,
             restoreFailure,
             evt.OptionKeys,
-            evt.Candidates);
+            evt.Candidates,
+            evt.SessionScratchDirectory);
         _resolvedToolApprovals.Remove(evt.CallId);
 
         if (persistApprovalState && turnContext is not null)
@@ -4334,6 +4339,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // we abandon the parked batch instead of replaying side effects.
         var preSeed = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var decisionOverride = new Dictionary<string, ApprovalDecision>(StringComparer.Ordinal);
+        var sessionScratchDenialDirectories = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var call in assistantMessage.ToolCalls)
         {
             if (!_resolvedToolApprovals.TryGetValue(call.CallId.Value, out var resolved))
@@ -4361,12 +4367,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // history stays well-formed, but the reconstructed dispatch
                 // must not execute the tool or ask for approval again.
                 decisionOverride[call.CallId.Value] = resolved.Decision;
+                if (resolved.Decision == ApprovalDecision.Denied
+                    && resolved.Pending.SessionScratchDirectory is { Length: > 0 } scratchDirectory)
+                {
+                    sessionScratchDenialDirectories[call.CallId.Value] = scratchDirectory;
+                }
             }
         }
 
         return new ApprovalRedrivePlan(
             preSeed.Count == 0 ? null : preSeed,
-            decisionOverride.Count == 0 ? null : decisionOverride);
+            decisionOverride.Count == 0 ? null : decisionOverride,
+            sessionScratchDenialDirectories.Count == 0 ? null : sessionScratchDenialDirectories);
     }
 
     /// <summary>
@@ -4436,7 +4448,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         DispatchToolBatch(
             toolCalls,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
-            decisionOverride: redrivePlan.DecisionOverride);
+            decisionOverride: redrivePlan.DecisionOverride,
+            sessionScratchDenialDirectories: redrivePlan.SessionScratchDenialDirectories);
         return true;
     }
 

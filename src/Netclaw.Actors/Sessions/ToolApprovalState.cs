@@ -39,14 +39,18 @@ internal sealed record PendingToolInteraction(
     // Per-clause (verb, directory) pairs preserved across the pause-for-approval
     // round trip so persistent approvals can write folder-scoped grants from the
     // path arguments the agent originally passed, rather than collapsing to cwd.
-    IReadOnlyList<ApprovalCandidate> Candidates) : INoSerializationVerificationNeeded;
+    IReadOnlyList<ApprovalCandidate> Candidates,
+    string? SessionScratchDirectory) : INoSerializationVerificationNeeded;
 
 // Internal actor message for approval prompts. The request is the public output
 // shape; PersistApprovalState is session routing policy that decides whether the
 // prompt becomes durable parent-session approval state.
 internal sealed record ToolInteractionRequestDispatch(
     SessionProtocol.ToolInteractionRequest Request,
-    bool PersistApprovalState) : INoSerializationVerificationNeeded;
+    bool PersistApprovalState) : INoSerializationVerificationNeeded
+{
+    internal string? SessionScratchDirectory { get; init; }
+}
 
 internal abstract record ApprovalTurnState : INoSerializationVerificationNeeded
 {
@@ -68,7 +72,8 @@ internal sealed record AbandoningApprovalTurn(TurnContext Context, string Reason
 
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
-    IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride);
+    IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride,
+    IReadOnlyDictionary<string, string>? SessionScratchDenialDirectories);
 
 internal sealed record ResolvedToolApproval(
     PendingToolInteraction Pending,

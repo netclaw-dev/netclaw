@@ -806,6 +806,7 @@ public sealed class SerializationRoundTripTests : TestKit
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
+            SessionScratchDirectory = "/home/user/.netclaw/sessions/example",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
@@ -864,6 +865,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Equal(wrapped.SessionScratchDirectory, result.SessionScratchDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);

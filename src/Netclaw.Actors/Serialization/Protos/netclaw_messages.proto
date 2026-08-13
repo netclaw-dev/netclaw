@@ -179,6 +179,7 @@ message ToolApprovalRequestedProto {
   bool has_third_party_adopted_context = 16;
   repeated string adopted_speaker_ids = 17;
   TurnContextRecordProto turn_context = 18;
+  optional string session_scratch_directory = 19;
 }
 
 message ToolApprovalResolvedProto {

@@ -210,9 +210,13 @@ internal sealed class SessionToolBatch
         = new Dictionary<string, IReadOnlyList<string>>().ToFrozenDictionary();
     private static readonly IReadOnlyDictionary<string, ApprovalDecision> NoDecisionOverrides
         = new Dictionary<string, ApprovalDecision>().ToFrozenDictionary();
+    private static readonly IReadOnlyDictionary<string, string> NoSessionScratchDenialDirectories
+        = new Dictionary<string, string>().ToFrozenDictionary();
     private IReadOnlyList<FunctionCallContent> _toolCalls = [];
     private IReadOnlyDictionary<string, IReadOnlyList<string>> _oneTimeApprovalPreSeed = NoApprovalPreSeed;
     private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides = NoDecisionOverrides;
+    private IReadOnlyDictionary<string, string> _sessionScratchDenialDirectories =
+        NoSessionScratchDenialDirectories;
 
     public SessionToolBatch(TurnContext turnContext, SessionToolRunEnvironment environment)
     {
@@ -282,6 +286,15 @@ internal sealed class SessionToolBatch
             _decisionOverrides = value.ToFrozenDictionary(StringComparer.Ordinal);
         }
     }
+    public IReadOnlyDictionary<string, string> SessionScratchDenialDirectories
+    {
+        get => _sessionScratchDenialDirectories;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _sessionScratchDenialDirectories = value.ToFrozenDictionary(StringComparer.Ordinal);
+        }
+    }
     public CancellationToken CancellationToken { get; init; }
 
     public SessionId SessionId => TurnContext.SessionId;
@@ -301,6 +314,7 @@ internal sealed class SessionToolBatch
         ArgumentNullException.ThrowIfNull(BackgroundJobs);
         ArgumentNullException.ThrowIfNull(OneTimeApprovalPreSeed);
         ArgumentNullException.ThrowIfNull(DecisionOverrides);
+        ArgumentNullException.ThrowIfNull(SessionScratchDenialDirectories);
     }
 }
 
@@ -351,6 +365,9 @@ internal sealed class SessionToolExecutionPipeline
                         : null,
                     batch.DecisionOverrides.TryGetValue(tc.CallId, out var overrideDecision)
                         ? overrideDecision
+                        : null,
+                    batch.SessionScratchDenialDirectories.TryGetValue(tc.CallId, out var scratchDirectory)
+                        ? scratchDirectory
                         : null,
                     modelInputBudget);
                 if (batch.StreamResults)
@@ -405,6 +422,7 @@ internal sealed class SessionToolExecutionPipeline
         SessionToolBatch batch,
         IReadOnlyList<string>? oneTimeApprovalPreSeed,
         ApprovalDecision? decisionOverride,
+        string? sessionScratchDenialDirectory,
         ModelInputBatchBudget modelInputBudget)
     {
         // Single execution-preflight seam, shared with the sub-agent path via
@@ -567,6 +585,11 @@ internal sealed class SessionToolExecutionPipeline
                 resultText = decisionOverride == ApprovalDecision.TimedOut
                     ? "Tool access denied: approval_timed_out"
                     : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";
+                if (decisionOverride == ApprovalDecision.Denied
+                    && sessionScratchDenialDirectory is { Length: > 0 })
+                {
+                    resultText = $"{resultText}\n{BuildSessionScratchDenialHint(sessionScratchDenialDirectory)}";
+                }
 
                 var deniedMessage = new SerializableChatMessage
                 {
@@ -713,7 +736,12 @@ internal sealed class SessionToolExecutionPipeline
                 Options = ctx.Options
                     .Select(o => new ToolInteractionOption(o.Key, o.Label))
                     .ToList()
-            }, PersistApprovalState: true));
+            }, PersistApprovalState: true)
+            {
+                SessionScratchDirectory = ctx.IsSessionScratchRetry
+                    ? ctx.SessionScratchDirectory
+                    : null
+            });
 
             var decision = await waitTask;
 
@@ -1310,8 +1338,7 @@ internal sealed class SessionToolExecutionPipeline
                 SessionScratchDirectory: { Length: > 0 } scratchDirectory
             })
         {
-            return $"Hint: Use the private session scratch directory '{scratchDirectory}' for disposable artifacts. " +
-                   "The shared platform temporary root remains outside the session's trusted scope.";
+            return BuildSessionScratchDenialHint(scratchDirectory);
         }
 
         if (!setWorkingDirectoryAvailable)
@@ -1335,6 +1362,10 @@ internal sealed class SessionToolExecutionPipeline
 
         return $"Hint: '{cwd}' is outside the session's trusted scope. Call set_working_directory \"{cwd}\" first, then retry — that brings the directory into your trusted scope so the approval policy can reason about it.";
     }
+
+    internal static string BuildSessionScratchDenialHint(string scratchDirectory)
+        => $"Hint: Use the private session scratch directory '{scratchDirectory}' for disposable artifacts. " +
+           "The shared platform temporary root remains outside the session's trusted scope.";
 
     private static bool IsCwdInsideSafeSpace(string cwd, string? safeSpace)
     {
