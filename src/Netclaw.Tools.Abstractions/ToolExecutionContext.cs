@@ -317,6 +317,7 @@ public sealed class ToolApprovalAttempt
         AppliedDecision = null;
         AppliedPattern = null;
     }
+
 }
 
 /// <summary>

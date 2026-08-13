@@ -6,6 +6,8 @@
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -117,5 +119,98 @@ public sealed class SessionToolExecutionPipelineHintTests
             setWorkingDirectoryAvailable: true);
 
         Assert.Empty(hint);
+    }
+
+    [Fact]
+    public void Denied_platform_temp_retry_recommends_session_scratch()
+    {
+        var context = new ToolApprovalContext(
+            ToolName: ShellTool,
+            DisplayText: "diagnostic-command",
+            Patterns: ["diagnostic-command"],
+            CandidateVerbs: ["diagnostic-command"],
+            Options: [])
+        {
+            IsSessionScratchRetry = true,
+            SessionScratchDirectory = "/home/user/.netclaw/sessions/abc",
+            PlatformTemporaryRoot = "/tmp"
+        };
+
+        var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
+            toolName: ShellTool,
+            decision: ApprovalDecision.Denied,
+            cwd: "/tmp",
+            sessionDirectory: "/home/user/.netclaw/sessions/abc",
+            projectDirectory: null,
+            setWorkingDirectoryAvailable: true,
+            approvalContext: context);
+
+        Assert.Contains("private session scratch", hint);
+        Assert.Contains("/home/user/.netclaw/sessions/abc", hint);
+        Assert.DoesNotContain("set_working_directory", hint);
+    }
+
+    [Fact]
+    public void Undeclarable_foreign_cwd_has_no_project_hint()
+    {
+        var invocation = TestToolExecutionContext.CreateBound(
+            "signalr/example",
+            "/home/user/.netclaw/sessions/abc",
+            TrustAudience.Personal).Invocation;
+
+        var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
+            toolName: ShellTool,
+            decision: ApprovalDecision.Denied,
+            cwd: "/outside/project",
+            sessionDirectory: "/home/user/.netclaw/sessions/abc",
+            projectDirectory: null,
+            setWorkingDirectoryAvailable: true,
+            invocation: invocation,
+            canDeclare: static (_, _) => false);
+
+        Assert.Empty(hint);
+    }
+
+    [Fact]
+    public void Project_scope_correction_preserves_exact_directory_and_retry_intent()
+    {
+        var context = new ToolApprovalContext(
+            ToolName: ShellTool,
+            DisplayText: "head -40 src/file.cs",
+            Patterns: ["head"],
+            CandidateVerbs: ["head"],
+            Options: [])
+        {
+            SuggestedProjectDirectory = "/home/user/repos/project"
+        };
+
+        var correction = SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
+            context,
+            setWorkingDirectoryAvailable: true);
+
+        Assert.Contains("working_directory_not_declared", correction);
+        Assert.Contains("set_working_directory", correction);
+        Assert.Contains("/home/user/repos/project", correction);
+        Assert.Contains("exact shell command unchanged", correction);
+    }
+
+    [Fact]
+    public void Project_scope_correction_is_suppressed_when_tool_is_unavailable()
+    {
+        var context = new ToolApprovalContext(
+            ToolName: ShellTool,
+            DisplayText: "head -40 src/file.cs",
+            Patterns: ["head"],
+            CandidateVerbs: ["head"],
+            Options: [])
+        {
+            SuggestedProjectDirectory = "/home/user/repos/project"
+        };
+
+        var correction = SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
+            context,
+            setWorkingDirectoryAvailable: false);
+
+        Assert.Empty(correction);
     }
 }

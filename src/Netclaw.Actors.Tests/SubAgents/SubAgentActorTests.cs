@@ -594,6 +594,119 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task Subagent_platform_temp_call_receives_scratch_correction_before_parent_bridge()
+    {
+        var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                ScratchCall("call-scratch-correction")
+            ]
+        };
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            CreateScratchCorrectionPolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    approvalBridge: approvalBridge),
+                Task = "Inspect a disposable diagnostic artifact.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            ApprovalAskTimeout,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Output);
+        Assert.False(fakeTool.WasCalled);
+        Assert.Equal(0, approvalBridge.RequestCount);
+        Assert.Contains(
+            "shared_temporary_directory",
+            GetLastToolResult(fakeClient, "call-scratch-correction"));
+    }
+
+    [Fact]
+    public async Task Subagent_parallel_temp_calls_both_receive_first_attempt_corrections()
+    {
+        var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                ScratchCall("call-scratch-parallel-1"),
+                ScratchCall("call-scratch-parallel-2")
+            ]
+        };
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            CreateScratchCorrectionPolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    approvalBridge: approvalBridge),
+                Task = "Inspect two disposable diagnostic artifacts.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            ApprovalAskTimeout,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Output);
+        Assert.False(fakeTool.WasCalled);
+        Assert.Equal(0, approvalBridge.RequestCount);
+        Assert.Contains(
+            "shared_temporary_directory",
+            GetLastToolResult(fakeClient, "call-scratch-parallel-1"));
+        Assert.Contains(
+            "shared_temporary_directory",
+            GetLastToolResult(fakeClient, "call-scratch-parallel-2"));
+    }
+
+    [Fact]
+    public async Task Subagent_exact_temp_retry_reaches_once_or_deny_parent_bridge()
+    {
+        var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
+        var fakeClient = new SequencedToolCallChatClient(
+        [
+            ScratchCall("call-scratch-first"),
+            ScratchCall("call-scratch-retry")
+        ]);
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.Denied);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            CreateScratchCorrectionPolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    approvalBridge: approvalBridge),
+                Task = "Retry the exact disposable diagnostic call if corrected.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            ApprovalAskTimeout,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Output);
+        Assert.False(fakeTool.WasCalled);
+        Assert.Equal(1, approvalBridge.RequestCount);
+        Assert.Equal(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            approvalBridge.RequestedOptions.Select(option => option.Key));
+    }
+
+    [Fact]
     public async Task Approve_once_does_not_leak_between_subagent_tool_calls()
     {
         var fakeTool = new FakeNetclawTool("shell_execute", "ok");
@@ -930,6 +1043,41 @@ public class SubAgentActorTests : TestKit
             new ToolPathPolicy([]));
     }
 
+    private static ToolAccessPolicy CreateScratchCorrectionPolicy()
+    {
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [ShellTool.ToolName] = ToolApprovalMode.Approval
+            }
+        };
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        return new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy,
+            new PlatformTemporaryScopePolicy(
+                environment,
+                "/tmp",
+                new AlwaysSafeTemporaryPathInspector()));
+    }
+
+    private static FunctionCallContent ScratchCall(string callId)
+        => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
+        {
+            ["Command"] = "gh api repos/example/project",
+            ["WorkingDirectory"] = "/tmp"
+        });
+
     private static string? GetLastToolResult(FakeChatClient fakeClient, string callId)
     {
         Assert.NotNull(fakeClient.LastReceivedMessages);
@@ -937,6 +1085,21 @@ public class SubAgentActorTests : TestKit
             .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
             .Single(r => r.CallId == callId)
             .Result?.ToString();
+    }
+
+    private sealed class AlwaysSafeTemporaryPathInspector : IPlatformTemporaryPathInspector
+    {
+        public bool TryResolveRoot(
+            string path,
+            ShellPathStyle pathStyle,
+            out string resolvedRoot)
+            => ShellPathRules.TryNormalize(path, pathStyle, out resolvedRoot);
+
+        public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
+            => true;
+
+        public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
+            => false;
     }
 
     private static void AssertPromptOrder(string prompt, params string[] markers)
@@ -1599,7 +1762,7 @@ internal sealed class SequencedToolCallChatClient(IReadOnlyList<FunctionCallCont
         else
         {
             response = new ChatResponse(
-                new ChatMessage(ChatRole.Assistant, [new TextContent("[fake] finished") ]));
+                new ChatMessage(ChatRole.Assistant, [new TextContent("[fake] finished")]));
         }
 
         foreach (var update in response.ToChatResponseUpdates())

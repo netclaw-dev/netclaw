@@ -88,6 +88,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ModelInputMediaBuffer _mediaBuffer = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
+    private readonly SessionScratchCorrectionState _sessionScratchCorrections = new();
     private bool _processingStateActive;
     private ApprovalTurnState _approvalTurnState = ApprovalTurnState.None;
     private readonly ToolRegistry? _fullRegistry;
@@ -926,6 +927,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Result = result.Content ?? string.Empty
             }, OutputFilter.ToolCalls);
         }
+
+        foreach (var change in msg.ScratchCorrectionChanges)
+            _sessionScratchCorrections.Apply(change);
 
         // Processes all results, including failed tool calls. RecentFiles tracks
         // interaction intent, not successful reads only.
@@ -2022,7 +2026,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // pipeline's deny-path hint logic can run without a policy lookup.
         // The hint is suppressed for audiences that cannot call the tool
         // (Public, audience profiles that explicitly drop it).
-        var setWorkingDirectoryAvailable = IsSetWorkingDirectoryAvailable();
+        var setWorkingDirectoryTool = GetExposedSetWorkingDirectoryTool();
+        var setWorkingDirectoryAvailable = setWorkingDirectoryTool is not null;
 
         CancelAndDisposeToolExecutionCts();
         _activeToolExecutionCts = new CancellationTokenSource();
@@ -2052,11 +2057,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
             BackgroundJobs = backgroundJobs,
             SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
+            CanDeclareWorkingDirectory = setWorkingDirectoryTool is null
+                ? null
+                : setWorkingDirectoryTool.CanDeclare,
             StreamResults = true,
             OneTimeApprovalPreSeed = oneTimeApprovalPreSeed
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = decisionOverride
                 ?? new Dictionary<string, ApprovalDecision>(),
+            ScratchCorrections = _sessionScratchCorrections.Snapshot(),
             CancellationToken = toolExecutionCt
         };
 
@@ -2301,6 +2310,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ContinueIncomingUserMessage(SendUserMessage cmd)
     {
+        _sessionScratchCorrections.Clear();
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         BindTurnTelemetry(cmd.Source);
@@ -3000,14 +3010,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// at the tool, so emitting it on a Public-audience turn that cannot call
     /// the tool would be misleading.
     /// </summary>
-    private bool IsSetWorkingDirectoryAvailable()
+    private SetWorkingDirectoryTool? GetExposedSetWorkingDirectoryTool()
     {
         if (_toolAccessPolicy is null || _fullRegistry is null)
-            return false;
+            return null;
 
         var registration = _fullRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
-        return registration is not null
-               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext);
+        return registration?.Tool is SetWorkingDirectoryTool tool
+               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext)
+            ? tool
+            : null;
     }
 
 
@@ -3630,6 +3642,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ClearApprovalTurnState()
     {
+        _sessionScratchCorrections.Clear();
         _approvalTurnState = ApprovalTurnState.None;
         _currentTurnContext = null;
     }
@@ -4619,6 +4632,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ProcessToolCallResult(Pipelines.ToolCallResult result)
     {
+        _sessionScratchCorrections.Apply(result.ScratchCorrectionChange);
         TrackStartedBackgroundJob(result.StartedBackgroundJob);
 
         var emittedRunIds = new HashSet<SubAgentRunId>();

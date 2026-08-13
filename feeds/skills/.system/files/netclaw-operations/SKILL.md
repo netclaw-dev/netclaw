@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.49.0"
+  version: "2.50.0"
 ---
 
 # Netclaw Operations
@@ -265,6 +265,11 @@ extracted path is under the entry's directory. You don't have to call
 declares scope implicitly.
 
 The approval gate runs three layers in order:
+
+Use the announced `session_dir` as private scratch for disposable command
+output. Preserve `/tmp` or the Windows temporary root when the task explicitly
+requires that platform path. Netclaw does not automatically clean session
+scratch yet.
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
 2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated

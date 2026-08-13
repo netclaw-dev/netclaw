@@ -91,6 +91,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     // Conversation state (not persisted — ephemeral)
     private readonly List<AiChatMessage> _history = [];
+    private readonly SessionScratchCorrectionState _sessionScratchCorrections = new();
     private long _llmCallId;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private CancellationTokenSource? _executionCts;
@@ -445,6 +446,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     _definition.Name, result.Name ?? "unknown", SecretOutputRedactor.Redact(preview));
             }
 
+            foreach (var change in msg.ScratchCorrectionChanges)
+                _sessionScratchCorrections.Apply(change);
+
             AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
             var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _maxToolIterations);
@@ -696,7 +700,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _executionCts?.Token ?? CancellationToken.None,
             _externalCts?.Token ?? CancellationToken.None,
             self,
-            _approvalBridge);
+            _approvalBridge,
+            _sessionScratchCorrections.Snapshot());
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -761,6 +766,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         // caller wins; subsequent calls are no-ops.
         if (_completed) return;
         _completed = true;
+        _sessionScratchCorrections.Clear();
 
         _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
         _pendingApprovalWaits = 0;
@@ -1127,7 +1133,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         CancellationToken ct,
         CancellationToken externalCt,
         IActorRef self,
-        IParentApprovalBridge? approvalBridge = null)
+        IParentApprovalBridge? approvalBridge,
+        SessionScratchCorrectionDispatch scratchCorrections)
     {
         try
         {
@@ -1147,15 +1154,60 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
                 var meta = interpretation.Meta;
                 var cleanedTc = interpretation.Cleaned;
+                var scratchCall = SessionToolExecutionPipeline.BuildSessionScratchCallSemantics(
+                    cleanedTc,
+                    meta,
+                    toolContext.ExecutionTimeout.Value,
+                    executor is ISessionScratchRetryAwareExecutor scratchAwareExecutor
+                        ? scratchAwareExecutor.Shell
+                        : ApprovalShell.Bash);
+                SessionScratchCorrectionKey? consumedScratchKey = null;
+                if (scratchCall is { } call
+                    && scratchCorrections.TryConsume(call, out var correctionKey)
+                    && executor is ISessionScratchRetryAwareExecutor retryAwareExecutor)
+                {
+                    consumedScratchKey = correctionKey;
+                    retryAwareExecutor.MarkSessionScratchRetry(
+                        toolContext,
+                        new ToolAgentCorrection.SessionScratchSuggested(
+                            correctionKey.SessionDirectory,
+                            correctionKey.TemporaryRoot,
+                            correctionKey.Call.Shell));
+                }
                 try
                 {
                     var result = await executor.ExecuteAsync(cleanedTc, toolContext, ct);
-                    return BuildToolResult(cleanedTc, result, toolContext, modelInputBudget);
+                    return BuildToolResult(
+                        cleanedTc,
+                        result,
+                        toolContext,
+                        modelInputBudget,
+                        consumedScratchKey is { } directConsumed
+                            ? new SessionScratchCorrectionChange.Consume(directConsumed)
+                            : null);
                 }
                 catch (ToolApprovalRequiredException approvalEx)
                     when (approvalBridge is not null)
                 {
                     var ctx = approvalEx.ApprovalContext;
+                    if (ctx.AgentCorrection is
+                        ToolAgentCorrection.SessionScratchSuggested scratchCorrection
+                        && scratchCall is { } correctedCall)
+                    {
+                        var correctionText = SessionToolExecutionPipeline.BuildSessionScratchCorrection(
+                            scratchCorrection.SessionDirectory);
+                        var newCorrectionKey = new SessionScratchCorrectionKey(
+                            correctedCall,
+                            scratchCorrection.TemporaryRoot,
+                            scratchCorrection.SessionDirectory);
+                        return BuildToolResult(
+                            cleanedTc,
+                            correctionText,
+                            toolContext,
+                            modelInputBudget,
+                            new SessionScratchCorrectionChange.Arm(newCorrectionKey));
+                    }
+
                     var bridgeCandidates = ctx.Candidates is { Count: > 0 } c
                         ? c.Select(x => new ParentApprovalCandidate(x.Verb, x.Directory)
                         {
@@ -1203,13 +1255,27 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         var retryContext = CreatePerToolExecutionContext(executionContext, meta);
                         retryContext.Approval.SeedOneTimeApproval(tc.Name, OneTimeApprovalKeys.Create(ctx));
                         var result = await executor.ExecuteAsync(cleanedTc, retryContext, ct);
-                        return BuildToolResult(cleanedTc, result, retryContext, modelInputBudget);
+                        return BuildToolResult(
+                            cleanedTc,
+                            result,
+                            retryContext,
+                            modelInputBudget,
+                            consumedScratchKey is { } approvedConsumed
+                                ? new SessionScratchCorrectionChange.Consume(approvedConsumed)
+                                : null);
                     }
 
                     var reason = decision == ParentApprovalDecision.TimedOut
                         ? "Tool access denied: approval_timed_out"
                         : "Tool access denied: approval_denied_by_user";
-                    return BuildToolResult(tc, reason, toolContext, modelInputBudget);
+                    return BuildToolResult(
+                        tc,
+                        reason,
+                        toolContext,
+                        modelInputBudget,
+                        consumedScratchKey is { } deniedConsumed
+                            ? new SessionScratchCorrectionChange.Consume(deniedConsumed)
+                            : null);
                 }
                 catch (ToolApprovalRequiredException)
                 {
@@ -1235,7 +1301,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (Exception ex)
                 {
-                    return BuildToolResult(tc, $"Error: {ex.Message}", toolContext, modelInputBudget);
+                    return BuildToolResult(
+                        tc,
+                        $"Error: {ex.Message}",
+                        toolContext,
+                        modelInputBudget,
+                        consumedScratchKey is { } failedConsumed
+                            ? new SessionScratchCorrectionChange.Consume(failedConsumed)
+                            : null);
                 }
             });
 
@@ -1243,7 +1316,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             self.Tell(new ToolExecutionCompleted
             {
                 ToolResults = [.. results.Select(r => r.Message)],
-                ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)]
+                ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)],
+                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)]
             });
         }
         catch (Exception ex)
@@ -1266,7 +1340,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         FunctionCallContent toolCall,
         string resultText,
         ToolExecutionContext toolContext,
-        ModelInputBatchBudget modelInputBudget)
+        ModelInputBatchBudget modelInputBudget,
+        SessionScratchCorrectionChange? scratchCorrectionChange = null)
     {
         var materialization = MaterializeModelInputFiles(toolContext, modelInputBudget);
         if (materialization.RequestedCount > materialization.MediaReferences.Count)
@@ -1284,7 +1359,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ToolCallId = new ToolCallId(toolCall.CallId),
                 Name = toolCall.Name
             },
-            materialization.MediaReferences);
+            materialization.MediaReferences,
+            scratchCorrectionChange);
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1306,7 +1382,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private sealed record SubAgentToolCallResult(
         SerializableChatMessage Message,
-        IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences);
+        IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
+        SessionScratchCorrectionChange? ScratchCorrectionChange);
 
     private static string BuildSystemPrompt(SubAgentDefinition definition)
     {

@@ -67,6 +67,32 @@ public sealed class ShellApprovalMatcherTests
             analysis.Candidates.Select(static candidate => candidate.Verb));
     }
 
+    [Theory]
+    [InlineData("head -c 20 /tmp/work/site.css | xxd | head -3")]
+    [InlineData("rg -rn \"operation failed\" src/ tests/ | head -20; echo \"---\"; rg -rln \"upload\" src/ | head -20")]
+    [InlineData("netclaw mcp --help 2>&1 | head -50")]
+    [InlineData("find /work/project -iname \"*Command*\" -o -iname \"*Add*\" 2>/dev/null | head; echo \"---\"; rg -rn \"transport http|--transport\" /work/project --include=\"*.cs\" -l 2>/dev/null | head")]
+    [InlineData("for u in /api/first /api/second; do echo \"=== $u ===\"; curl -sS -m 10 \"$u\" | head -c 1500; echo; done")]
+    [InlineData("cd /work/project && git status --short 2>&1 | head; echo \"---branch---\"; git branch --show-current 2>&1; echo \"---remotes---\"; git remote -v 2>&1 | head -4; echo \"---recent---\"; git log --oneline -3 2>&1")]
+    [InlineData("~/.dotnet/dotnet test tests/Project.Tests/Project.Tests.csproj --filter \"FullyQualifiedName~SchemaTests\" --nologo 2>&1 | tail -30")]
+    [InlineData("docker run --rm -v tools:/tools --entrypoint sh ruby:3.1 -c 'find /tools -maxdepth 2 -type f | head'")]
+    [InlineData("docker run --rm --user root -v tools:/workbench/tools -v /tmp/site:/workbench/site -w /workbench/site --entrypoint bash image:tag -c 'bundle exec jekyll build | head'")]
+    public void Bash_live_read_and_diagnostic_shapes_are_reusable(string command)
+    {
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, "/work/project"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.NotEmpty(analysis.Candidates);
+        Assert.All(analysis.Candidates, static candidate =>
+        {
+            Assert.Equal(ApprovalShell.Bash, candidate.Shell);
+            Assert.NotNull(candidate.VerbTokens);
+            Assert.NotEmpty(candidate.VerbTokens);
+        });
+    }
+
     [Fact]
     public void Power_shell_matcher_uses_the_native_power_shell_grammar()
     {
@@ -706,10 +732,10 @@ public sealed class ShellApprovalMatcherTests
         // Even if every conceivable verb is approved, a messy command never
         // auto-runs: the matcher cannot extract verb chains to evaluate, and
         // the prompt must offer Once/Deny only.
-        var approved = new[] { Verb("for"), Verb("do"), Verb("done"), Verb("echo") };
+        var approved = new[] { Verb("for"), Verb("do"), Verb("done"), Verb("echo"), Verb("printf") };
         Assert.False(_matcher.IsApproved(
             new ToolName("shell_execute"),
-            Args("for x in 1 2 3; do echo $x; done"),
+            Args("for x in $(printf '1 2 3'); do echo \"$x\"; done"),
             approved,
             cwd: null));
     }

@@ -52,7 +52,10 @@ internal sealed class ShellCommandAnalyzer
         ParsedCommand parsed;
         try
         {
-            parsed = _environment.Parse(command, workingDirectory);
+            parsed = _environment.Parse(
+                command,
+                workingDirectory,
+                publishAuthoredSourceFacts: depth == 0);
         }
         catch
         {
@@ -428,7 +431,16 @@ public sealed record ShellCommandAnalysis
         };
 
     private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
-        => argument.Value switch
+    {
+        var value = argument.Value;
+        if (value is ShellValueDomain.Unknown
+            && !argument.Argument.IsPath
+            && argument.AuthoredValue is not ShellValueDomain.Unknown)
+        {
+            value = argument.AuthoredValue;
+        }
+
+        return value switch
         {
             // A raw authored glob has no one runtime value. Netclaw applies
             // its fixed covering-scope checks to the source Arg below.
@@ -446,6 +458,7 @@ public sealed record ShellCommandAnalysis
                 || string.IsNullOrWhiteSpace(pattern.CoveringDirectory),
             _ => true
         };
+    }
 
     private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)
         => occurrence.Redirects.Any(redirect => HasUnresolvedRedirect(occurrence, redirect));

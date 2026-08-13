@@ -91,12 +91,14 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
         var executor = new DispatchingToolExecutor(registry, policy, approvalService);
 
-        // bash for-loop is messy — tokenizer refuses to extract verb chains
-        // for control-flow commands, so Patterns is empty.
+        // The runtime iterator is unresolved, so the command remains messy
+        // even though bounded literal loops can now publish authored facts.
         var toolCall = new FunctionCallContent(
             "call-messy-once",
             "shell_execute",
-            ToolInput.Create("Command", "for i in 1 2 3; do echo $i; done"));
+            ToolInput.Create(
+                "Command",
+                "for i in $(printf '1 2 3'); do echo \"$i\"; done"));
 
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {

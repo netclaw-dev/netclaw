@@ -16,6 +16,13 @@ namespace Netclaw.Actors.Tools;
 
 public sealed class ToolAccessPolicy
 {
+    private static readonly IReadOnlyList<ToolApprovalOption> SessionScratchRetryOptions =
+        Array.AsReadOnly<ToolApprovalOption>(
+        [
+            new(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+        ]);
+
     private readonly ToolConfig _toolConfig;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
@@ -26,14 +33,44 @@ public sealed class ToolAccessPolicy
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
     private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
+    private readonly PlatformTemporaryScopePolicy _platformTemporaryScopePolicy;
     private readonly ConditionalWeakTable<ToolExecutionContext, ShellCommandAnalysis>
         _authorizedShellAnalyses = new();
+    private readonly ConditionalWeakTable<ToolExecutionContext, SessionScratchRetryMarker>
+        _sessionScratchRetries = new();
+
+    internal ApprovalShell Shell => _shellCommandPolicy.Environment.Grammar == ShellGrammar.Bash
+        ? ApprovalShell.Bash
+        : ApprovalShell.PowerShell;
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,
         ShellCommandPolicy shellCommandPolicy,
         ToolPathPolicy toolPathPolicy,
+        IToolApprovalMatcher? fileApprovalMatcher = null,
+        FeatureGates? featureGates = null,
+        IShellTrustZonePolicy? shellTrustZonePolicy = null,
+        SafeVerbList? safeVerbs = null)
+        : this(
+            toolConfig,
+            defaults,
+            shellCommandPolicy,
+            toolPathPolicy,
+            PlatformTemporaryScopePolicy.Create(shellCommandPolicy.Environment),
+            fileApprovalMatcher,
+            featureGates,
+            shellTrustZonePolicy,
+            safeVerbs)
+    {
+    }
+
+    internal ToolAccessPolicy(
+        ToolConfig toolConfig,
+        EffectivePolicyDefaults defaults,
+        ShellCommandPolicy shellCommandPolicy,
+        ToolPathPolicy toolPathPolicy,
+        PlatformTemporaryScopePolicy platformTemporaryScopePolicy,
         IToolApprovalMatcher? fileApprovalMatcher = null,
         FeatureGates? featureGates = null,
         IShellTrustZonePolicy? shellTrustZonePolicy = null,
@@ -60,6 +97,7 @@ public sealed class ToolAccessPolicy
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
         _featureGates = featureGates ?? FeatureGates.AllEnabled;
         _safeVerbPolicy = safeVerbs is not null ? new ScopedShellSafeVerbPolicy(safeVerbs) : null;
+        _platformTemporaryScopePolicy = platformTemporaryScopePolicy;
     }
 
     public IReadOnlyList<AITool> FilterExposedTools(
@@ -217,7 +255,8 @@ public sealed class ToolAccessPolicy
             context,
             arguments,
             _shellApprovalMatcher,
-            shellApproval);
+            shellApproval,
+            shellAnalysis);
     }
 
     internal bool TryTakeAuthorizedShellAnalysis(
@@ -229,6 +268,14 @@ public sealed class ToolAccessPolicy
 
         _authorizedShellAnalyses.Remove(context);
         return true;
+    }
+
+    internal void MarkSessionScratchRetry(
+        ToolExecutionContext context,
+        ToolAgentCorrection.SessionScratchSuggested correction)
+    {
+        _sessionScratchRetries.Remove(context);
+        _sessionScratchRetries.Add(context, new SessionScratchRetryMarker(correction));
     }
 
     /// <summary>
@@ -328,7 +375,8 @@ public sealed class ToolAccessPolicy
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
-        ShellApprovalAnalysis? shellApproval = null)
+        ShellApprovalAnalysis? shellApproval = null,
+        ShellCommandAnalysis? shellAnalysis = null)
     {
         var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
@@ -391,6 +439,18 @@ public sealed class ToolAccessPolicy
         IReadOnlyList<ApprovalCandidate> approvalCandidates = _safeVerbPolicy is not null && isShell
             ? candidates.Select(_safeVerbPolicy.NormalizeCandidate).ToList()
             : candidates;
+        string? suggestedProjectDirectory = null;
+        ToolAgentCorrection? agentCorrection = null;
+
+        if (isShell && shellAnalysis is not null)
+        {
+            agentCorrection = _platformTemporaryScopePolicy.Evaluate(
+                shellAnalysis,
+                approvalCandidates,
+                arguments,
+                context.Invocation,
+                isMessy);
+        }
 
         // A clean shell command can combine safe candidates with candidates
         // that need a stored grant. Remove only candidates that independently
@@ -401,6 +461,16 @@ public sealed class ToolAccessPolicy
             && !isMessy
             && approvalCandidates.Count > 0)
         {
+            if (agentCorrection is null
+                && !_platformTemporaryScopePolicy.IsPlatformTemporaryRoot(context.Approval.Cwd)
+                && _safeVerbPolicy.CanShortCircuitAfterProjectDeclaration(
+                    approvalCandidates,
+                    context.Approval.Cwd,
+                    context.Invocation))
+            {
+                suggestedProjectDirectory = context.Approval.Cwd;
+            }
+
             approvalCandidates = approvalCandidates
                 .Where(candidate => !_safeVerbPolicy.AllShortCircuit(
                     [candidate],
@@ -417,15 +487,18 @@ public sealed class ToolAccessPolicy
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var options = BuildApprovalOptions(
-            isMessy,
-            hasReusablePhraseForEveryCandidate: !isShell ||
-                approvalCandidates.All(HasReusableShellPhrase),
-            isCwdShallow: IsCwdTooShallow(context.Approval.Cwd),
-            allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
-                approvalCandidates, context.Approval.Cwd, context.SessionDirectory),
-            supportsDirectoryScope: matcher is ShellApprovalMatcher,
-            isMcpTool: toolName.IsMcp);
+        var isSessionScratchRetry = _sessionScratchRetries.TryGetValue(context, out var retryMarker);
+        var options = isSessionScratchRetry
+            ? SessionScratchRetryOptions
+            : BuildApprovalOptions(
+                isMessy,
+                hasReusablePhraseForEveryCandidate: !isShell ||
+                    approvalCandidates.All(HasReusableShellPhrase),
+                isCwdShallow: IsCwdTooShallow(context.Approval.Cwd),
+                allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
+                    approvalCandidates, context.Approval.Cwd, context.SessionDirectory),
+                supportsDirectoryScope: matcher is ShellApprovalMatcher,
+                isMcpTool: toolName.IsMcp);
 
         var approvalContext = new ToolApprovalContext(
             toolName.Value,
@@ -435,7 +508,14 @@ public sealed class ToolAccessPolicy
             options,
             Cwd: context.Approval.Cwd,
             IsMessy: isMessy,
-            Candidates: approvalCandidates);
+            Candidates: approvalCandidates)
+        {
+            SuggestedProjectDirectory = suggestedProjectDirectory,
+            AgentCorrection = isSessionScratchRetry ? null : agentCorrection,
+            IsSessionScratchRetry = isSessionScratchRetry,
+            SessionScratchDirectory = retryMarker?.Correction.SessionDirectory,
+            PlatformTemporaryRoot = retryMarker?.Correction.TemporaryRoot
+        };
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
@@ -449,15 +529,17 @@ public sealed class ToolAccessPolicy
             .Select(static candidate => candidate.Verb)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var options = BuildApprovalOptions(
-            isMessy: false,
-            hasReusablePhraseForEveryCandidate:
-                unapprovedCandidates.All(HasReusableShellPhrase),
-            isCwdShallow: IsCwdTooShallow(context.Cwd),
-            allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
-                unapprovedCandidates, context.Cwd, sessionDirectory),
-            supportsDirectoryScope: true,
-            isMcpTool: false);
+        var options = context.IsSessionScratchRetry
+            ? SessionScratchRetryOptions
+            : BuildApprovalOptions(
+                isMessy: false,
+                hasReusablePhraseForEveryCandidate:
+                    unapprovedCandidates.All(HasReusableShellPhrase),
+                isCwdShallow: IsCwdTooShallow(context.Cwd),
+                allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
+                    unapprovedCandidates, context.Cwd, sessionDirectory),
+                supportsDirectoryScope: true,
+                isMcpTool: false);
 
         return context with
         {
@@ -760,7 +842,29 @@ public sealed record ToolApprovalContext(
     // Per-clause (verb, directory) pairs for the persisted ApprovalEntry store.
     // The list includes path operands, redirect targets, and pipeline clauses.
     // A null directory uses Cwd. ApprovedAlways stores these effective scopes.
-    IReadOnlyList<ApprovalCandidate>? Candidates = null);
+    IReadOnlyList<ApprovalCandidate>? Candidates = null)
+{
+    /// <summary>
+    /// Gets the exact shell cwd that the agent can declare through
+    /// <c>set_working_directory</c> when undeclared scope is the only obstacle
+    /// to the reviewed-safe policy.
+    /// </summary>
+    internal string? SuggestedProjectDirectory { get; init; }
+
+    internal ToolAgentCorrection? AgentCorrection { get; init; }
+
+    internal bool IsSessionScratchRetry { get; init; }
+
+    internal string? SessionScratchDirectory { get; init; }
+
+    internal string? PlatformTemporaryRoot { get; init; }
+}
+
+internal sealed class SessionScratchRetryMarker(
+    ToolAgentCorrection.SessionScratchSuggested correction)
+{
+    internal ToolAgentCorrection.SessionScratchSuggested Correction { get; } = correction;
+}
 
 public sealed record ToolApprovalOption(ApprovalOptionKey Key, string Label);
 

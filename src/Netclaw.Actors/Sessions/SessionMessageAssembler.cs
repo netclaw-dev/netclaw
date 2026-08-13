@@ -187,7 +187,11 @@ public static class SessionMessageAssembler
         }
         else
         {
-            var sessionBlock = $"[session]\nid: {input.SessionId.Value}" + $"\nsession_dir: {sessionDir}";
+            var sessionBlock = $"[session]\nid: {input.SessionId.Value}" +
+                               $"\nsession_dir: {sessionDir}" +
+                               "\nsession_dir is private scratch for disposable artifacts. " +
+                               "Use an explicitly required platform temporary path unchanged. " +
+                               "Netclaw does not automatically clean session scratch yet.";
             parts.Add(sessionBlock);
         }
 

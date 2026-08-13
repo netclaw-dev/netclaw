@@ -19,7 +19,7 @@ namespace Netclaw.Actors.Tools;
 /// Routes <see cref="FunctionCallContent"/> to the correct tool by name via the <see cref="ToolRegistry"/>.
 /// Logs every tool execution with name, duration, and result preview.
 /// </summary>
-public sealed class DispatchingToolExecutor : IToolExecutor
+public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetryAwareExecutor
 {
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
@@ -431,6 +431,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         LogAuthorizationDecision(toolCall.Name, authorizationDecision);
         return authorizationDecision;
     }
+
+    void ISessionScratchRetryAwareExecutor.MarkSessionScratchRetry(
+        ToolExecutionContext context,
+        ToolAgentCorrection.SessionScratchSuggested correction)
+        => _policy.MarkSessionScratchRetry(context, correction);
+
+    ApprovalShell ISessionScratchRetryAwareExecutor.Shell => _policy.Shell;
 
     private async Task<INetclawTool> GetAuthorizedToolAsync(
         FunctionCallContent toolCall,

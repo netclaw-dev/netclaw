@@ -217,6 +217,215 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Empty(approvals);
     }
 
+    [Fact]
+    public async Task Undeclared_project_scope_returns_agent_correction_without_user_prompt()
+    {
+        var executor = new ProjectScopeDeclarationRequiredExecutor("/home/user/repos/project");
+        var probe = CreateTestProbe("project-scope-correction-probe");
+        var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("D1/project-scope-correction");
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-1", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "head -40 src/file.cs"
+            })
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithSetWorkingDirectoryAvailable()
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Contains("working_directory_not_declared", result.Content);
+        Assert.Contains("set_working_directory", result.Content);
+        Assert.Contains("/home/user/repos/project", result.Content);
+        Assert.Empty(approvals);
+        Assert.Equal(1, executor.Attempts);
+    }
+
+    [Fact]
+    public async Task Parallel_platform_temp_calls_all_return_corrections_before_prompt()
+    {
+        var executor = new ScratchCorrectionRequiredExecutor();
+        var probe = CreateTestProbe("scratch-parallel-correction-probe");
+        var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("D1/scratch-parallel-correction");
+        var calls = new List<FunctionCallContent>
+        {
+            ScratchCall("scratch-1"),
+            ScratchCall("scratch-2")
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, calls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory("/home/user/.netclaw/sessions/example")
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, completed.ToolResults.Count);
+        Assert.All(completed.ToolResults, result =>
+            Assert.Contains("shared_temporary_directory", result.Content));
+        Assert.Equal(2, completed.ScratchCorrectionChanges.Count);
+        Assert.All(completed.ScratchCorrectionChanges,
+            change => Assert.IsType<SessionScratchCorrectionChange.Arm>(change));
+        Assert.Empty(approvals);
+    }
+
+    [Fact]
+    public async Task Later_exact_retry_consumes_key_and_offers_once_or_deny()
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var executor = new ScratchRetryApprovalExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("scratch-retry-probe");
+        var approvalRequest = new TaskCompletionSource<ToolInteractionRequest>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/scratch-retry");
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [ScratchCall("scratch-retry")],
+                sessionId,
+                probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory(key.SessionDirectory)
+            .WithScratchCorrections(key)
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequest.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var request = await approvalRequest.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal([ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            request.Options.Select(option => option.Key.Value));
+        approvalChannel.Complete(request.CallId, ApprovalDecision.Denied);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.True(executor.RetryMarked);
+        var change = Assert.Single(completed.ScratchCorrectionChanges);
+        Assert.Equal(key, Assert.IsType<SessionScratchCorrectionChange.Consume>(change).Key);
+    }
+
+    [Fact]
+    public void Scratch_retry_key_is_consumed_once()
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var dispatch = new SessionScratchCorrectionDispatch([key]);
+
+        Assert.True(dispatch.TryConsume(key.Call, out var consumed));
+        Assert.Equal(key, consumed);
+        Assert.False(dispatch.TryConsume(key.Call, out _));
+    }
+
+    [Theory]
+    [InlineData("different-command", true, "/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", false, null, false, 5)]
+    [InlineData("gh api repos/example/project", true, "/var/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", true, "/tmp", true, 5)]
+    [InlineData("gh api repos/example/project", true, "/tmp", false, 30)]
+    public void Execution_change_does_not_consume_scratch_retry_key(
+        string command,
+        bool hasExplicitWorkingDirectory,
+        string? workingDirectory,
+        bool background,
+        int timeoutSeconds)
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var dispatch = new SessionScratchCorrectionDispatch([key]);
+        var changedCall = key.Call with
+        {
+            Command = command,
+            HasExplicitWorkingDirectory = hasExplicitWorkingDirectory,
+            ExplicitWorkingDirectory = workingDirectory,
+            Background = background,
+            Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+        };
+
+        Assert.False(dispatch.TryConsume(changedCall, out _));
+    }
+
+    [Fact]
+    public void Rationale_is_not_part_of_scratch_retry_semantics()
+    {
+        var call = ScratchCall("scratch-rationale");
+        var first = SessionToolExecutionPipeline.BuildSessionScratchCallSemantics(
+            call,
+            new ToolCallMeta { Rationale = "first explanation" },
+            TimeSpan.FromSeconds(5));
+        var second = SessionToolExecutionPipeline.BuildSessionScratchCallSemantics(
+            call,
+            new ToolCallMeta { Rationale = "different explanation" },
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Shell_change_does_not_consume_scratch_retry_key()
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var dispatch = new SessionScratchCorrectionDispatch([key]);
+
+        Assert.False(dispatch.TryConsume(
+            key.Call with { Shell = ApprovalShell.PowerShell },
+            out _));
+    }
+
+    [Fact]
+    public void Scratch_correction_state_clears_lifecycle_authority()
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var state = new SessionScratchCorrectionState();
+        state.Apply(new SessionScratchCorrectionChange.Arm(key));
+        state.Clear();
+
+        Assert.False(state.Snapshot().TryConsume(key.Call, out _));
+    }
+
+    [Fact]
+    public void Scratch_correction_state_removes_consumed_key_after_history_commit()
+    {
+        var key = ScratchCorrectionRequiredExecutor.Key;
+        var state = new SessionScratchCorrectionState();
+        state.Apply(new SessionScratchCorrectionChange.Arm(key));
+        state.Apply(new SessionScratchCorrectionChange.Consume(key));
+
+        Assert.False(state.Snapshot().TryConsume(key.Call, out _));
+    }
+
+    private static FunctionCallContent ScratchCall(string callId)
+        => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
+        {
+            ["Command"] = "gh api repos/example/project",
+            ["WorkingDirectory"] = "/tmp"
+        });
+
     [Theory]
     [InlineData(ChannelType.Headless)]
     [InlineData(ChannelType.Reminder)]
@@ -840,6 +1049,116 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
+        }
+    }
+
+    private sealed class ProjectScopeDeclarationRequiredExecutor(string directory) : IToolExecutor
+    {
+        public int Attempts { get; private set; }
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            Attempts++;
+            throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                ToolName: toolCall.Name,
+                DisplayText: "head -40 src/file.cs",
+                Patterns: ["head"],
+                CandidateVerbs: ["head"],
+                Options: [])
+            {
+                SuggestedProjectDirectory = directory
+            });
+        }
+    }
+
+    private sealed class ScratchCorrectionRequiredExecutor : IToolExecutor
+    {
+        internal static SessionScratchCorrectionKey Key { get; } = new(
+            new SessionScratchCallSemantics(
+                ApprovalShell.Bash,
+                "gh api repos/example/project",
+                HasExplicitWorkingDirectory: true,
+                ExplicitWorkingDirectory: "/tmp",
+                Background: false,
+                Timeout: TimeSpan.FromSeconds(5)),
+            TemporaryRoot: "/tmp",
+            SessionDirectory: "/home/user/.netclaw/sessions/example");
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                ToolName: toolCall.Name,
+                DisplayText: Key.Call.Command,
+                Patterns: ["gh api"],
+                CandidateVerbs: ["gh api"],
+                Options: [])
+            {
+                AgentCorrection = new ToolAgentCorrection.SessionScratchSuggested(
+                    Key.SessionDirectory,
+                    Key.TemporaryRoot,
+                    Key.Call.Shell)
+            });
+    }
+
+    private sealed class ScratchRetryApprovalExecutor
+        : IToolExecutor, ISessionScratchRetryAwareExecutor
+    {
+        public ApprovalShell Shell => ApprovalShell.Bash;
+
+        public bool RetryMarked { get; private set; }
+
+        public void MarkSessionScratchRetry(
+            ToolExecutionContext context,
+            ToolAgentCorrection.SessionScratchSuggested correction)
+            => RetryMarked = true;
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            var options = RetryMarked
+                ? new ToolApprovalOption[]
+                {
+                    new(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                }
+                : [];
+            throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                ToolName: toolCall.Name,
+                DisplayText: "gh api repos/example/project",
+                Patterns: ["gh api"],
+                CandidateVerbs: ["gh api"],
+                Options: options,
+                Cwd: "/tmp")
+            {
+                IsSessionScratchRetry = RetryMarked,
+                SessionScratchDirectory = ScratchCorrectionRequiredExecutor.Key.SessionDirectory,
+                PlatformTemporaryRoot = ScratchCorrectionRequiredExecutor.Key.TemporaryRoot
+            });
         }
     }
 

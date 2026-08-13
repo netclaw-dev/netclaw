@@ -235,6 +235,9 @@ a whole new agent file. Do not duplicate the agent's built-in instructions.
 reload automatically on the next turn or subagent lookup. Invalid edits fail
 closed — the broken agent disappears until fixed. Spawned subagents inherit the
 parent session's `session_dir` and current `project_dir` as read-only grounding.
+Use `session_dir` as private scratch for disposable artifacts. Preserve an
+explicit platform temporary path when the task requires that path. Netclaw does
+not automatically clean session scratch yet.
 
 **Parallelization tip:** When researching multiple independent topics, spawn
 separate subagents for each — they run concurrently and reduce total wait time.

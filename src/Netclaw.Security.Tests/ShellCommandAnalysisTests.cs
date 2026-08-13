@@ -232,6 +232,21 @@ public sealed class ShellCommandAnalysisTests
         Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
+    [Fact]
+    public void Bash_finite_loop_data_keeps_static_structure()
+    {
+        var analysis = _analyzer.Analyze(
+            "for value in first second; do status-report \"$value\"; done",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
+        var authored = Assert.IsType<ShellValueDomain.FiniteSet>(argument.AuthoredValue);
+        Assert.Equal(["first", "second"], authored.Values);
+    }
+
     [Theory]
     [InlineData("status-report \"$1\"")]
     [InlineData("rm \"$1\"")]
@@ -240,6 +255,7 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("\"$1\" --version")]
     [InlineData("sh -c \"$1\"")]
     [InlineData("sh -c \"$?\"")]
+    [InlineData("for value in first second; do rm \"$value\"; done")]
     public void Bash_unknown_or_authority_bearing_data_stays_dynamic(string command)
     {
         var analyzer = new ShellCommandAnalyzer(BashEnvironment);

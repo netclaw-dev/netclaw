@@ -25,7 +25,8 @@ session and persistent grant snapshots.
 - Replace exact flat grant strings with versioned shell-token phrases and a
   decision-gated v2 migration.
 - Emit a bounded, redacted decision trace that also supplies near-miss data.
-- Adopt the paired ShellSyntaxTree 0.3.1 authored/effective fact separation.
+- Adopt the authored/effective fact separation introduced in ShellSyntaxTree
+  0.3.1 through the corrected public 0.3.2 package.
 - Pin the exact sanitized D01-D18 catalog and adversarial cases.
 
 No production branch will parse an executable's private options or operands.
@@ -51,5 +52,5 @@ No production branch will parse an executable's private options or operands.
   per-candidate coverage from one atomic snapshot.
 - UX: covered diagnostic chains stop prompting; unresolved syntax remains
   one-time-only.
-- Dependencies: implementation waits for ShellSyntaxTree 0.3.1.
+- Dependencies: implementation consumes public ShellSyntaxTree 0.3.2.
 - Documentation/evals: operator guidance and approval behavioral evals change.

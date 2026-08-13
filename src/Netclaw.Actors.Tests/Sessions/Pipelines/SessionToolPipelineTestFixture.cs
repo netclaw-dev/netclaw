@@ -39,12 +39,14 @@ internal sealed class SessionToolPipelineTestFixture(
     private string? _projectDirectory;
     private IReadOnlyList<string> _recentFiles = [];
     private bool _setWorkingDirectoryAvailable;
+    private Func<string, ToolInvocationContext, bool>? _canDeclareWorkingDirectory;
     private bool _streamResults;
     private ModelModality _modelInputModalities = ModelModality.Text;
     private IReadOnlyDictionary<string, IReadOnlyList<string>> _oneTimeApprovalPreSeed
         = new Dictionary<string, IReadOnlyList<string>>();
     private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides
         = new Dictionary<string, ApprovalDecision>();
+    private IReadOnlyList<SessionScratchCorrectionKey> _scratchCorrectionKeys = [];
 
     public SessionToolPipelineTestFixture From(MessageSource source)
     {
@@ -130,6 +132,7 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture WithSetWorkingDirectoryAvailable()
     {
         _setWorkingDirectoryAvailable = true;
+        _canDeclareWorkingDirectory = static (_, _) => true;
         return this;
     }
 
@@ -151,6 +154,13 @@ internal sealed class SessionToolPipelineTestFixture(
     {
         _oneTimeApprovalPreSeed = preSeed;
         _decisionOverrides = overrides;
+        return this;
+    }
+
+    public SessionToolPipelineTestFixture WithScratchCorrections(
+        params SessionScratchCorrectionKey[] keys)
+    {
+        _scratchCorrectionKeys = Array.AsReadOnly(keys.ToArray());
         return this;
     }
 
@@ -185,9 +195,11 @@ internal sealed class SessionToolPipelineTestFixture(
                 _approvalTimeout),
             BackgroundJobs = _backgroundJobs,
             SetWorkingDirectoryAvailable = _setWorkingDirectoryAvailable,
+            CanDeclareWorkingDirectory = _canDeclareWorkingDirectory,
             StreamResults = _streamResults,
             OneTimeApprovalPreSeed = _oneTimeApprovalPreSeed,
             DecisionOverrides = _decisionOverrides,
+            ScratchCorrections = new SessionScratchCorrectionDispatch(_scratchCorrectionKeys),
             CancellationToken = cancellationToken
         };
 

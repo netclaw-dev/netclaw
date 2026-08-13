@@ -290,4 +290,54 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
 
         Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
     }
+
+    [Fact]
+    public void Reviewed_safe_work_under_cwd_can_request_project_declaration()
+    {
+        var nested = Path.Combine(_outsideDir, "src");
+        Directory.CreateDirectory(nested);
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("head", "wc"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var candidates = new[]
+        {
+            new ApprovalCandidate("head", nested),
+            new ApprovalCandidate("wc", _outsideDir)
+        };
+
+        Assert.True(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
+    }
+
+    [Fact]
+    public void Unsafe_work_cannot_request_project_declaration()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("head"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var candidates = new[]
+        {
+            new ApprovalCandidate("head", _outsideDir),
+            new ApprovalCandidate("rm", _outsideDir)
+        };
+
+        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
+    }
+
+    [Fact]
+    public void Explicit_path_outside_cwd_cannot_request_project_declaration()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("head"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var candidates = new[] { new ApprovalCandidate("head", _projectDir) };
+
+        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
+    }
+
+    [Fact]
+    public void Public_session_cannot_request_project_declaration()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("head"));
+        var ctx = PublicContext(projectDir: _projectDir);
+        var candidates = new[] { new ApprovalCandidate("head", _outsideDir) };
+
+        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
+    }
 }

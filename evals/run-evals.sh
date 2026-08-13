@@ -1555,7 +1555,7 @@ assert_approval_set_working_directory_positive() {
     local set_call
     stdout_json_envelope_valid || return 1
     set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
-    jq -e '.Path == "/tmp"' <<<"$set_call" >/dev/null || return 1
+    jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"$set_call" >/dev/null || return 1
 
     # If shell_execute also happened, ensure set_working_directory came first.
     if stdout_json_tool_called 'shell_execute'; then
@@ -1591,7 +1591,7 @@ assert_approval_recovery_hint() {
     local set_call
     stdout_json_envelope_valid || return 1
     set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
-    jq -e '.Path == "/tmp"' <<<"$set_call" >/dev/null
+    jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"$set_call" >/dev/null
 }
 
 # One command in another directory should use the typed shell argument.
@@ -1623,8 +1623,8 @@ assert_approval_set_working_directory_retry() {
     shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
 
     [[ "${#swd_calls[@]}" -ge 2 ]] && \
-        jq -e '.Path == "/tmp/missing-project"' <<<"${swd_calls[0]}" >/dev/null && \
-        jq -e '.Path == "/tmp"' <<<"${swd_calls[1]}" >/dev/null && \
+        jq -e '.Path == "/home/netclaw/.netclaw/workspaces/missing-project"' <<<"${swd_calls[0]}" >/dev/null && \
+        jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"${swd_calls[1]}" >/dev/null && \
         jq -e '
             [.toolCalls[]?.toolName] as $names
             | [$names[] | select(. == "set_working_directory")] | length >= 2
@@ -1632,6 +1632,20 @@ assert_approval_set_working_directory_retry() {
             and ($names | index("shell_execute")) > ($names | rindex("set_working_directory"))
         ' "$STDOUT_FILE" >/dev/null && \
         jq -e '.Command == "pwd"' <<<"$shell_call" >/dev/null
+}
+
+# This headless case measures model guidance. It does not exercise an approval prompt.
+assert_approval_session_scratch_disposable() {
+    local shell_call
+    stdout_json_envelope_valid || return 1
+    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+
+    jq -e '
+        (.WorkingDirectory | type == "string")
+        and (.WorkingDirectory | contains("/.netclaw/sessions/"))
+        and (.WorkingDirectory != "/tmp")
+    ' <<<"$shell_call" >/dev/null && \
+        ! stdout_json_tool_called 'set_working_directory'
 }
 
 # Schedule pre-approval: user asks to schedule an unattended task that
@@ -2102,15 +2116,15 @@ run_all() {
     print_category "Approval Policy v2"
 
     run_case --json approval_set_working_directory_positive "calls set_working_directory before shell tool when project mentioned" \
-        "I'm starting a debugging session on the project checked out at /tmp. Get oriented in that codebase — look at the layout, identify build files, and figure out what kind of project it is. We'll be running multiple shell commands across the tree." \
-        "I want to start working on the Netclaw checkout at /tmp. Plan to run several commands across that tree — start by getting yourself oriented."
+        "I'm starting a debugging session on the project at /home/netclaw/.netclaw/workspaces. Inspect its layout and build files. We will run several shell commands across the tree." \
+        "I want to work on the checkout at /home/netclaw/.netclaw/workspaces. Plan several commands across that tree and start by inspecting it."
 
     run_case --json approval_set_working_directory_negative "does NOT call set_working_directory for unrelated prompts" \
         "What's two plus two? Just give me the number." \
         "Explain what a hash table is in one sentence."
 
     run_case --json approval_recovery_hint "recovers from cwd-outside-safe-spaces denial by calling set_working_directory" \
-        "I just tried to run a shell command in /tmp and the daemon returned: 'Tool access denied: approval_denied_by_user. Hint: \"/tmp\" is outside the session'\\''s trusted scope. Call set_working_directory \"/tmp\" first, then retry — that brings the directory into your trusted scope so the approval policy can reason about it.' How should I unblock this so the next shell call works?"
+        "I tried a shell command in /home/netclaw/.netclaw/workspaces and received: 'Tool access denied. Call set_working_directory \"/home/netclaw/.netclaw/workspaces\" first.' Apply that correction now."
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
         "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."
@@ -2119,7 +2133,10 @@ run_all() {
         "Run a Bash control-flow experiment in one shell_execute call: execute 'cd /tmp && pwd' exactly as a compound command. Changing directory is the behavior being tested, so do not replace it with a WorkingDirectory argument."
 
     run_case --json approval_set_working_directory_retry "corrects a failed project switch before shell work" \
-        "Test project-directory recovery: first call set_working_directory with /tmp/missing-project and observe the rejection. Then correct it by calling set_working_directory with /tmp, and only after that run pwd in the shell."
+        "Test project recovery: first call set_working_directory with /home/netclaw/.netclaw/workspaces/missing-project. Then use /home/netclaw/.netclaw/workspaces, and only after that run pwd."
+
+    run_case --json approval_session_scratch_disposable "uses session scratch for ordinary disposable output" \
+        "Run a diagnostic command that writes a disposable result.log file. Use the private session scratch directory announced in context. Do not use /tmp and do not declare a project."
 
     run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
         "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."

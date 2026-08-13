@@ -68,6 +68,50 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(["cat", "git push"], retry.ApprovalContext!.CandidateVerbs);
     }
 
+    [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
+    public async Task Reviewed_safe_external_cwd_exposes_project_scope_correction()
+    {
+        var testCase = new ShellApprovalCase(
+            "reviewed-safe-external-cwd-suggests-project-scope",
+            new ShellApprovalInvocation(
+                "head -40 src/file.cs",
+                ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["head"]));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+
+        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+
+        Assert.Equal(context.Cwd, context.SuggestedProjectDirectory);
+    }
+
+    [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
+    public async Task Unsafe_external_cwd_does_not_expose_project_scope_correction()
+    {
+        var testCase = new ShellApprovalCase(
+            "unsafe-external-cwd-keeps-normal-approval",
+            new ShellApprovalInvocation(
+                "git push",
+                ApprovalDirectoryShape.External),
+            Approvals.None,
+            ExpectedApproval.Require(["git push"]));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+
+        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+
+        Assert.Null(context.SuggestedProjectDirectory);
+    }
+
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The glob retry regression defines Bash authorization behavior.")]
     public async Task One_time_retry_does_not_cover_a_clean_command_that_becomes_messy()

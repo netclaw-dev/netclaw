@@ -375,6 +375,9 @@ public sealed class SessionMessageAssemblerTests
         var text = staticBlock.Text ?? string.Empty;
 
         Assert.Contains("session_dir:", text);
+        Assert.Contains("private scratch for disposable artifacts", text);
+        Assert.Contains("explicitly required platform temporary path unchanged", text);
+        Assert.Contains("does not automatically clean session scratch yet", text);
         Assert.DoesNotContain("media_dir:", text);
     }
 
@@ -417,9 +420,11 @@ public sealed class SessionMessageAssemblerTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.Personal,
                 OutputLogPath = "/home/op/.netclaw/jobs/secret01/output.log"
-            }) with { History = SeedHistory("hi") };
+            }) with
+        { History = SeedHistory("hi") };
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Public)
-            with { State = stateWithJob };
+            with
+        { State = stateWithJob };
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
         Assert.DoesNotContain("[active-background-jobs]", block);
@@ -441,9 +446,11 @@ public sealed class SessionMessageAssemblerTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.Personal,
                 OutputLogPath = "/home/op/.netclaw/jobs/job01/output.log"
-            }) with { History = SeedHistory("hi") };
+            }) with
+        { History = SeedHistory("hi") };
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Personal)
-            with { State = stateWithJob };
+            with
+        { State = stateWithJob };
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
         Assert.Contains("[active-background-jobs]", block);

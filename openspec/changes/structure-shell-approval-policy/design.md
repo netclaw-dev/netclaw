@@ -265,7 +265,7 @@ authority outside code review. At minimum `find`, `awk`, `rg`, and `sort` are
 not eligible. Production code has no flag-specific exceptions. The existing
 `git ls-tree` special case is deleted.
 
-### 7. Consume ShellSyntaxTree 0.3.1 facts explicitly
+### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.2 explicitly
 
 Netclaw uses effective `AnalyzedArgument.Value` for runtime-sensitive checks.
 It may use `AuthoredValue` for approval matching only after the maintainer

@@ -112,6 +112,70 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     /// <summary>
+    /// Returns true when declaring <paramref name="cwd"/> as the project root
+    /// would make every candidate eligible for the reviewed-safe short circuit.
+    /// </summary>
+    /// <remarks>
+    /// This does not grant authority. It identifies a self-correction that the
+    /// agent can make through <c>set_working_directory</c>. Every candidate must
+    /// already use a reviewed phrase, and every effective directory must remain
+    /// beneath the exact cwd supplied for this shell invocation.
+    /// </remarks>
+    public bool CanShortCircuitAfterProjectDeclaration(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        ToolInvocationContext context)
+    {
+        if (context.Audience == TrustAudience.Public
+            || candidates.Count == 0
+            || string.IsNullOrWhiteSpace(cwd))
+        {
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.Verb) || !_safeVerbs.Contains(candidate.Verb))
+                return false;
+        }
+
+        string fullCwd;
+        try
+        {
+            fullCwd = Path.GetFullPath(cwd);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            var effectiveDirectory = candidate.Directory ?? fullCwd;
+            if (string.IsNullOrWhiteSpace(effectiveDirectory))
+                return false;
+
+            string fullDirectory;
+            try
+            {
+                fullDirectory = Path.GetFullPath(effectiveDirectory);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+
+            if (!PathUtility.IsWithinRoot(fullDirectory, fullCwd)
+                || PathUtility.ContainsSymlinkSegment(fullCwd, fullDirectory))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Resolves the audience-aware safe-space roots for the current
     /// invocation. Personal and Team get <c>session_dir + project_dir</c>;
     /// Public gets <c>session_dir</c> only.

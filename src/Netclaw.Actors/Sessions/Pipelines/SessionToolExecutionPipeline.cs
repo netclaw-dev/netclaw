@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using System.Collections.Frozen;
+using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
@@ -35,7 +36,84 @@ internal sealed record ToolCallResult(
     IReadOnlyList<FileAttachmentInfo> FileAttachments,
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings,
-    Jobs.ActiveJobInfo? StartedBackgroundJob = null);
+    Jobs.ActiveJobInfo? StartedBackgroundJob = null,
+    SessionScratchCorrectionChange? ScratchCorrectionChange = null);
+
+internal abstract record SessionScratchCorrectionChange
+{
+    private SessionScratchCorrectionChange()
+    {
+    }
+
+    internal sealed record Arm(SessionScratchCorrectionKey Key) : SessionScratchCorrectionChange;
+
+    internal sealed record Consume(SessionScratchCorrectionKey Key) : SessionScratchCorrectionChange;
+}
+
+internal sealed class SessionScratchCorrectionDispatch
+{
+    internal static SessionScratchCorrectionDispatch Empty { get; } = new([]);
+
+    private readonly IReadOnlyList<SessionScratchCorrectionKey> _armed;
+    private readonly ConcurrentDictionary<SessionScratchCorrectionKey, byte> _consumed = new();
+
+    internal SessionScratchCorrectionDispatch(IEnumerable<SessionScratchCorrectionKey> armed)
+        => _armed = Array.AsReadOnly(armed.ToArray());
+
+    internal bool TryConsume(
+        SessionScratchCallSemantics call,
+        out SessionScratchCorrectionKey key)
+    {
+        foreach (var candidate in _armed)
+        {
+            if (!HasSameExecutionSemantics(candidate.Call, call)
+                || !_consumed.TryAdd(candidate, 0))
+                continue;
+
+            key = candidate;
+            return true;
+        }
+
+        key = default;
+        return false;
+    }
+
+    private static bool HasSameExecutionSemantics(
+        SessionScratchCallSemantics left,
+        SessionScratchCallSemantics right)
+        => left.Shell == right.Shell
+           && string.Equals(left.Command, right.Command, StringComparison.Ordinal)
+           && left.HasExplicitWorkingDirectory == right.HasExplicitWorkingDirectory
+           && string.Equals(
+               left.ExplicitWorkingDirectory,
+               right.ExplicitWorkingDirectory,
+               StringComparison.Ordinal)
+           && left.Background == right.Background
+           && left.Timeout == right.Timeout;
+}
+
+internal sealed class SessionScratchCorrectionState
+{
+    private readonly HashSet<SessionScratchCorrectionKey> _keys = [];
+
+    internal SessionScratchCorrectionDispatch Snapshot()
+        => new(_keys);
+
+    internal void Apply(SessionScratchCorrectionChange? change)
+    {
+        switch (change)
+        {
+            case SessionScratchCorrectionChange.Arm arm:
+                _keys.Add(arm.Key);
+                break;
+            case SessionScratchCorrectionChange.Consume consume:
+                _keys.Remove(consume.Key);
+                break;
+        }
+    }
+
+    internal void Clear() => _keys.Clear();
+}
 
 internal sealed record ModelInputMaterializationResult(
     IReadOnlyList<SerializableMediaReference> MediaReferences,
@@ -179,7 +257,10 @@ internal sealed class SessionToolBatch
     public required ToolApprovalRequests ApprovalRequests { get; init; }
     public required BackgroundJobDispatch BackgroundJobs { get; init; }
     public bool SetWorkingDirectoryAvailable { get; init; }
+    public Func<string, ToolInvocationContext, bool>? CanDeclareWorkingDirectory { get; init; }
     public bool StreamResults { get; init; }
+    public SessionScratchCorrectionDispatch ScratchCorrections { get; init; }
+        = SessionScratchCorrectionDispatch.Empty;
     public IReadOnlyDictionary<string, IReadOnlyList<string>> OneTimeApprovalPreSeed
     {
         get => _oneTimeApprovalPreSeed;
@@ -293,7 +374,8 @@ internal sealed class SessionToolExecutionPipeline
                 FileAttachments = fileAttachments,
                 CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
                 AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)],
-                StartedBackgroundJobs = [.. results.Where(r => r.StartedBackgroundJob is not null).Select(r => r.StartedBackgroundJob!)]
+                StartedBackgroundJobs = [.. results.Where(r => r.StartedBackgroundJob is not null).Select(r => r.StartedBackgroundJob!)],
+                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)]
             });
         }
         catch (TimeoutException ex)
@@ -448,6 +530,23 @@ internal sealed class SessionToolExecutionPipeline
             callScope,
             new ToolExecutionTimeout(timeout),
             outputs);
+        var scratchShell = _executor is ISessionScratchRetryAwareExecutor scratchAwareExecutor
+            ? scratchAwareExecutor.Shell
+            : ApprovalShell.Bash;
+        var scratchCall = BuildSessionScratchCallSemantics(tc, meta, timeout, scratchShell);
+        SessionScratchCorrectionKey? consumedScratchKey = null;
+        if (scratchCall is { } call
+            && batch.ScratchCorrections.TryConsume(call, out var correctionKey)
+            && _executor is ISessionScratchRetryAwareExecutor retryAwareExecutor)
+        {
+            consumedScratchKey = correctionKey;
+            retryAwareExecutor.MarkSessionScratchRetry(
+                context,
+                new ToolAgentCorrection.SessionScratchSuggested(
+                    correctionKey.SessionDirectory,
+                    correctionKey.TemporaryRoot,
+                    correctionKey.Call.Shell));
+        }
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
         // "approve once" before the session passivated, but there is no
@@ -477,7 +576,15 @@ internal sealed class SessionToolExecutionPipeline
                     Name = tc.Name
                 };
 
-                return new ToolCallResult(deniedMessage, [], [], [], []);
+                return new ToolCallResult(
+                    deniedMessage,
+                    [],
+                    [],
+                    [],
+                    [],
+                    ScratchCorrectionChange: consumedScratchKey is { } deniedConsumed
+                        ? new SessionScratchCorrectionChange.Consume(deniedConsumed)
+                        : null);
             }
 
             if (meta is { Background: true })
@@ -500,7 +607,7 @@ internal sealed class SessionToolExecutionPipeline
                 {
                     await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
-                    return await RouteToBackgroundJobAsync(
+                    var backgroundResult = await RouteToBackgroundJobAsync(
                         tc, batch, context,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
@@ -508,6 +615,12 @@ internal sealed class SessionToolExecutionPipeline
                         // process with no completion expectation, reaped by its
                         // own exit, cancellation, or session passivation.
                         meta.TimeoutHintSeconds ?? 0);
+                    return backgroundResult with
+                    {
+                        ScratchCorrectionChange = consumedScratchKey is { } backgroundConsumed
+                            ? new SessionScratchCorrectionChange.Consume(backgroundConsumed)
+                            : null
+                    };
                 }
             }
 
@@ -518,6 +631,46 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (ToolApprovalRequiredException approvalEx)
         {
+            if (approvalEx.ApprovalContext.AgentCorrection is
+                ToolAgentCorrection.SessionScratchSuggested scratchCorrection
+                && scratchCall is { } correctedCall)
+            {
+                sw.Stop();
+                resultText = BuildSessionScratchCorrection(scratchCorrection.SessionDirectory);
+                var newCorrectionKey = new SessionScratchCorrectionKey(
+                    correctedCall,
+                    scratchCorrection.TemporaryRoot,
+                    scratchCorrection.SessionDirectory);
+
+                return new ToolCallResult(new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = resultText,
+                    ToolCallId = new ToolCallId(tc.CallId),
+                    Name = tc.Name
+                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                    ScratchCorrectionChange: new SessionScratchCorrectionChange.Arm(newCorrectionKey));
+            }
+
+            var projectScopeCorrection = BuildProjectScopeDeclarationCorrection(
+                approvalEx.ApprovalContext,
+                batch.SetWorkingDirectoryAvailable,
+                context.Invocation,
+                batch.CanDeclareWorkingDirectory);
+            if (!string.IsNullOrEmpty(projectScopeCorrection))
+            {
+                sw.Stop();
+                resultText = projectScopeCorrection;
+
+                return new ToolCallResult(new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = resultText,
+                    ToolCallId = new ToolCallId(tc.CallId),
+                    Name = tc.Name
+                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings);
+            }
+
             if (!CanRequestInteractiveApproval(batch.TurnContext))
             {
                 sw.Stop();
@@ -590,7 +743,7 @@ internal sealed class SessionToolExecutionPipeline
                 {
                     await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
-                    return await RouteToBackgroundJobAsync(
+                    var backgroundResult = await RouteToBackgroundJobAsync(
                         tc, batch, context,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
@@ -598,6 +751,12 @@ internal sealed class SessionToolExecutionPipeline
                         // process with no completion expectation, reaped by its
                         // own exit, cancellation, or session passivation.
                         meta.TimeoutHintSeconds ?? 0);
+                    return backgroundResult with
+                    {
+                        ScratchCorrectionChange = consumedScratchKey is { } backgroundConsumed
+                            ? new SessionScratchCorrectionChange.Consume(backgroundConsumed)
+                            : null
+                    };
                 }
 
                 resultText = await ExecuteToolAttemptAsync(
@@ -623,7 +782,10 @@ internal sealed class SessionToolExecutionPipeline
                     cwd: context.Approval.Cwd,
                     sessionDirectory: context.SessionDirectory,
                     projectDirectory: context.ProjectDirectory,
-                    setWorkingDirectoryAvailable: batch.SetWorkingDirectoryAvailable);
+                    setWorkingDirectoryAvailable: batch.SetWorkingDirectoryAvailable,
+                    approvalContext: ctx,
+                    invocation: context.Invocation,
+                    canDeclare: batch.CanDeclareWorkingDirectory);
                 resultText = string.IsNullOrEmpty(hint) ? reason : $"{reason}\n{hint}";
 
             }
@@ -673,7 +835,34 @@ internal sealed class SessionToolExecutionPipeline
             modelInputMaterialization.MediaReferences,
             context.Outputs.FileAttachments,
             completedRuns,
-            acceptedFindings);
+            acceptedFindings,
+            ScratchCorrectionChange: consumedScratchKey is { } consumed
+                ? new SessionScratchCorrectionChange.Consume(consumed)
+                : null);
+    }
+
+    internal static SessionScratchCallSemantics? BuildSessionScratchCallSemantics(
+        FunctionCallContent toolCall,
+        ToolCallMeta? meta,
+        TimeSpan timeout,
+        ApprovalShell shell = ApprovalShell.Bash)
+    {
+        if (!string.Equals(toolCall.Name, Tools.ShellTool.ToolName, StringComparison.Ordinal))
+            return null;
+
+        var command = ToolArgumentHelper.GetString(toolCall.Arguments, "Command")
+            ?? ToolArgumentHelper.GetString(toolCall.Arguments, "command");
+        if (string.IsNullOrWhiteSpace(command))
+            return null;
+
+        var explicitCwd = ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory");
+        return new SessionScratchCallSemantics(
+            Shell: shell,
+            Command: command,
+            HasExplicitWorkingDirectory: !string.IsNullOrWhiteSpace(explicitCwd),
+            ExplicitWorkingDirectory: explicitCwd,
+            Background: meta?.Background == true,
+            Timeout: timeout);
     }
 
     private static async Task<string> ExecuteToolAttemptAsync(
@@ -1061,6 +1250,34 @@ internal sealed class SessionToolExecutionPipeline
     private static bool CanRequestInteractiveApproval(TurnContext turnContext)
         => turnContext.SupportsInteractiveApproval && turnContext.HasApprovalRequester;
 
+    internal static string BuildSessionScratchCorrection(string sessionDirectory)
+        => "Tool execution deferred: shared_temporary_directory\n" +
+           $"Use the private session scratch directory '{sessionDirectory}' for disposable artifacts. " +
+           "Author a replacement shell call there. If this exact platform path is required, retry the original call unchanged.";
+
+    /// <summary>
+    /// Builds the agent-facing correction for reviewed-safe shell work whose
+    /// requested directory has not yet been declared as project scope.
+    /// </summary>
+    internal static string BuildProjectScopeDeclarationCorrection(
+        ToolApprovalContext context,
+        bool setWorkingDirectoryAvailable,
+        ToolInvocationContext? invocation = null,
+        Func<string, ToolInvocationContext, bool>? canDeclare = null)
+    {
+        if (!setWorkingDirectoryAvailable
+            || string.IsNullOrWhiteSpace(context.SuggestedProjectDirectory)
+            || invocation is not null
+                && (canDeclare is null
+                    || !canDeclare(context.SuggestedProjectDirectory, invocation)))
+        {
+            return string.Empty;
+        }
+
+        return "Tool execution deferred: working_directory_not_declared\n" +
+               $"Call set_working_directory with '{context.SuggestedProjectDirectory}', then retry this exact shell command unchanged.";
+    }
+
     /// <summary>
     /// Returns a one-line agent-facing hint pointing at <c>set_working_directory</c>
     /// when a shell call was denied specifically because its cwd is outside
@@ -1076,19 +1293,38 @@ internal sealed class SessionToolExecutionPipeline
         string? cwd,
         string? sessionDirectory,
         string? projectDirectory,
-        bool setWorkingDirectoryAvailable)
+        bool setWorkingDirectoryAvailable,
+        ToolApprovalContext? approvalContext = null,
+        ToolInvocationContext? invocation = null,
+        Func<string, ToolInvocationContext, bool>? canDeclare = null)
     {
-        if (!setWorkingDirectoryAvailable)
-            return string.Empty;
-
         if (decision != ApprovalDecision.Denied)
             return string.Empty;
 
         if (!string.Equals(toolName, Tools.ShellTool.ToolName, StringComparison.Ordinal))
             return string.Empty;
 
+        if (approvalContext is
+            {
+                IsSessionScratchRetry: true,
+                SessionScratchDirectory: { Length: > 0 } scratchDirectory
+            })
+        {
+            return $"Hint: Use the private session scratch directory '{scratchDirectory}' for disposable artifacts. " +
+                   "The shared platform temporary root remains outside the session's trusted scope.";
+        }
+
+        if (!setWorkingDirectoryAvailable)
+            return string.Empty;
+
         if (string.IsNullOrWhiteSpace(cwd))
             return string.Empty;
+
+        if (invocation is not null
+            && (canDeclare is null || !canDeclare(cwd, invocation)))
+        {
+            return string.Empty;
+        }
 
         // Already inside a safe space — denial was for a different reason.
         if (IsCwdInsideSafeSpace(cwd, sessionDirectory)

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -56,5 +57,14 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
 
         return Task.FromResult(fullPath);
     }
+
+    internal bool CanDeclare(string path, ToolInvocationContext context)
+        => _fileAccessPolicy.TryResolveWorkingDirectory(
+               path,
+               context,
+               out var fullPath,
+               out _)
+           && PathUtility.AreEquivalentPaths(path, fullPath)
+           && Directory.Exists(fullPath);
 
 }

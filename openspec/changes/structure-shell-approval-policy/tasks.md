@@ -83,6 +83,10 @@
   checks as separate effects.
 - [ ] 5.6 Preserve native PowerShell provider checks, including strict
   `Get-Content Env:SECRET` behavior.
+- [ ] 5.7 Return an agent scope-declaration correction before a user prompt
+  only when each reviewed-safe candidate remains beneath the exact shell cwd
+  and the shared `set_working_directory` policy accepts that non-temp cwd;
+  preserve the authored call and tool history.
 
 ## 6. Bash causal approval intent
 
@@ -96,10 +100,11 @@
 - [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
   expected results.
 
-## 7. ShellSyntaxTree 0.3.1 adoption
+## 7. ShellSyntaxTree 0.3.1 facts through 0.3.2
 
-- [x] 7.1 Upgrade the central package after 0.3.1 is published.
-- [ ] 7.2 Consume effective `Value` for runtime checks and approved
+- [x] 7.1 Upgrade the central package to public 0.3.2, which includes the
+  0.3.1 authored-source facts and keeps same-language child shells strict.
+- [x] 7.2 Consume effective `Value` for runtime checks and approved
   `AuthoredValue` only for the documented approval perspective.
 - [x] 7.3 Treat `IntegerRange` and `Concatenation` as bounded scalar data only.
 - [ ] 7.4 Check every effective or authored finite value whose existing

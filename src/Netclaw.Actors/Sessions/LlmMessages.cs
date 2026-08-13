@@ -79,6 +79,7 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
     public List<Jobs.ActiveJobInfo> StartedBackgroundJobs { get; init; } = [];
+    public List<SessionScratchCorrectionChange> ScratchCorrectionChanges { get; init; } = [];
 }
 
 internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;
