@@ -130,7 +130,7 @@
   </ItemGroup>
   <!-- SourceLink support for all Akka.NET projects -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.400" />
   </ItemGroup>
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2
