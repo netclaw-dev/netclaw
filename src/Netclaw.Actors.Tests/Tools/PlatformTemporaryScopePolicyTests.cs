@@ -314,6 +314,48 @@ public sealed class PlatformTemporaryScopePolicyTests
         }
     }
 
+    [Fact]
+    public void Canonical_platform_temp_alias_can_recommend_scratch_for_redirect()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-temp-alias-{Guid.NewGuid():N}");
+        var realTemp = Path.Combine(testRoot, "real-temp");
+        var aliasTemp = Path.Combine(testRoot, "alias-temp");
+        Directory.CreateDirectory(realTemp);
+        Directory.CreateSymbolicLink(aliasTemp, realTemp);
+
+        try
+        {
+            var output = Path.Combine(aliasTemp, "result.log");
+            var externalFirst = Evaluate(
+                BashEnvironment(),
+                aliasTemp,
+                $"head '{PosixSession}/prior.log'; cd '{aliasTemp}' && " +
+                $"gh api repos/example/project > '{output}'",
+                PosixSession,
+                inspector: HostPlatformTemporaryPathInspector.Instance);
+            Assert.Null(externalFirst.ApprovalContext?.AgentCorrection);
+
+            var decision = Evaluate(
+                BashEnvironment(),
+                aliasTemp,
+                $"cd '{aliasTemp}' && gh api repos/example/project > '{output}'",
+                PosixSession,
+                inspector: HostPlatformTemporaryPathInspector.Instance);
+
+            var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+            var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
+            Assert.Equal(realTemp, correction.TemporaryRoot);
+        }
+        finally
+        {
+            Directory.Delete(aliasTemp);
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
     private static ToolAccessDecision Evaluate(
         ShellExecutionEnvironment environment,
         string tempRoot,

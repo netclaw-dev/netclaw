@@ -448,8 +448,7 @@ public sealed class ToolAccessPolicy
                 shellAnalysis,
                 approvalCandidates,
                 arguments,
-                context.Invocation,
-                isMessy);
+                context.Invocation);
         }
 
         // A clean shell command can combine safe candidates with candidates

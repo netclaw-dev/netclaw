@@ -16,7 +16,7 @@
 
 ## 3. Regression and Model Evals
 
-- [x] 3.1 Add deterministic positive tests for POSIX explicit cwd, POSIX causal `cd`, and native Windows temporary roots.
+- [x] 3.1 Add deterministic positive tests for POSIX explicit cwd, POSIX causal `cd`, a platform-owned POSIX temp alias with a redirect, and native Windows temporary roots.
 - [x] 3.2 Add deterministic negatives for hard deny, protected paths, dynamic identity/flow/cwd, unresolved redirects, mixed incomplete batches, native PowerShell `Set-Location`, inherited/default temp cwd, external authored paths, POSIX symlinks, Windows reparse points, inspection failures, invalid/empty session scope, and Public redaction; add a fresh valid session path that does not exist yet as a positive.
 - [x] 3.3 Add parent and subagent end-to-end tests for duplicate first-attempt batches, later once-only consumption, Once/Deny-only retry options, no actor/store grant writes, execution-meta near misses, lifecycle/cancel/recovery reset, unchanged calls, and denial after an intentional retry.
 - [x] 3.4 Replace eval cases that teach `set_working_directory("/tmp")` as project scope with the eval-owned configured workspace directory.

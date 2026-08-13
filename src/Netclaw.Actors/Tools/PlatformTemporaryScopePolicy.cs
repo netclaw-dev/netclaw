@@ -80,14 +80,11 @@ internal sealed class PlatformTemporaryScopePolicy
         ShellCommandAnalysis analysis,
         IReadOnlyList<ApprovalCandidate> candidates,
         IDictionary<string, object?>? arguments,
-        ToolInvocationContext context,
-        bool isMessy)
+        ToolInvocationContext context)
     {
         if (TemporaryRoot is null
-            || isMessy
             || !analysis.IsResolved
             || analysis.HasDynamicSyntax
-            || candidates.Count == 0
             || context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available
             || context.Audience != TrustAudience.Personal
             || !TryNormalizeSessionDirectory(context.SessionDirectory, out var sessionDirectory)
@@ -147,6 +144,13 @@ internal sealed class PlatformTemporaryScopePolicy
 
         foreach (var command in analysis.Commands)
         {
+            if (!IsBashDirectoryTransition(command)
+                && (command.WorkingDirectory is not ShellValueDomain.Exact workingDirectory
+                    || !IsSafeTemporaryPath(workingDirectory.Value)))
+            {
+                return false;
+            }
+
             foreach (var argument in command.Clause.Args)
             {
                 if (!argument.IsPath && !argument.IsCwdAttribution)
@@ -180,6 +184,11 @@ internal sealed class PlatformTemporaryScopePolicy
 
         return true;
     }
+
+    private bool IsBashDirectoryTransition(CommandOccurrence command)
+        => _environment.Grammar == ShellGrammar.Bash
+           && command.Clause.Verb.Tokens.Count > 0
+           && command.Clause.Verb.Tokens[0] is "cd" or "chdir";
 
     private bool HasSafeRedirectTarget(ShellValueDomain target)
         => target switch
