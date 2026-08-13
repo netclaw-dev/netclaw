@@ -42,13 +42,18 @@
   covered and call-level invariants pass.
 - [x] 3.3 Make internal exceptions, invalid enums, duplicate candidate IDs,
   mismatched actor results, and impossible transitions terminal deny.
-- [x] 3.4 Allow fully one-time/session/safe-covered calls when persistent state
-  is unavailable; deny with `ApprovalStoreUnavailable` instead of prompting
-  when any candidate still depends on that state.
+- [x] 3.4 Allow calls covered by one-time or session authority and
+  approval-exempt side effects when persistent state is unavailable. Also allow
+  reviewed-safe phrase coverage for an interactive run. Deny with
+  `ApprovalStoreUnavailable` rather than open a prompt when any candidate still
+  depends on persistent state.
 - [ ] 3.5 Let expected unresolved shell input offer only one-time approval and
   deny; never create a reusable candidate.
 - [ ] 3.6 Keep legacy token scans deny-only and prove they cannot authorize,
   create persistence choices, or widen scope.
+- [x] 3.7 Apply reviewed-safe phrase coverage only when interactive approval is
+  available. Prove that unattended calls need explicit one-time or stored-grant
+  authority while approval-exempt side effects keep their current behavior.
 
 ## 4. Typed grant phrases and persistence
 

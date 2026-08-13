@@ -207,6 +207,9 @@ Done when:
   can persist.
 - [x] A prompt excludes candidates that existing session or persistent grants
   already cover, while it preserves exact directory-scoped occurrences.
+- [x] Reviewed-safe phrases grant no implicit authority to a headless, reminder,
+  or webhook run. Unattended candidates need explicit one-time or stored-grant
+  authority; approval-exempt shell side effects retain their bounded exception.
 - [x] A one-time retry is bound to the exact prompted candidate set, including
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules

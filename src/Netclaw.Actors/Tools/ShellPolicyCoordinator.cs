@@ -158,8 +158,11 @@ internal sealed class ShellPolicyCoordinator(
                 ShellScopeRelation.None);
         }
 
+        var canUseReviewedSafePolicy =
+            projection.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
         foreach (var candidate in grantCandidates.Where(candidate =>
-                     coverage.UncoveredIds.Contains(candidate.Id)))
+                     canUseReviewedSafePolicy
+                     && coverage.UncoveredIds.Contains(candidate.Id)))
         {
             if (policy.IsReviewedSafeCandidate(
                     candidate.Candidate,

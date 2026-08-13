@@ -26,7 +26,11 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     private async Task AssertApprovalContract(string caseId)
     {
-        var testCase = ShellApprovalCases.Get(caseId);
+        await AssertApprovalContract(ShellApprovalCases.Get(caseId));
+    }
+
+    private async Task AssertApprovalContract(ShellApprovalCase testCase)
+    {
         await using var harness = await ShellApprovalHarness.CreateAsync(
             testCase,
             fixture.ActorSystem,
@@ -42,6 +46,43 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(testCase.Expected.ApprovalChecks, harness.ApprovalService.CheckCount);
         Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
     }
+
+    [Fact]
+    public Task Interactive_reviewed_safe_candidate_uses_reviewed_policy()
+        => AssertApprovalContract(new ShellApprovalCase(
+            "interactive-reviewed-safe-allows",
+            new ShellApprovalInvocation("git status"),
+            Approvals.None,
+            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)));
+
+    [Fact]
+    public Task Noninteractive_reviewed_safe_candidate_stays_uncovered()
+        => AssertApprovalContract(new ShellApprovalCase(
+            "noninteractive-reviewed-safe-requires-approval",
+            new ShellApprovalInvocation("git status", Interactive: false),
+            Approvals.None,
+            ExpectedApproval.Require(["git status"])));
+
+    [Fact]
+    public Task Noninteractive_candidate_can_use_an_explicit_persistent_grant()
+        => AssertApprovalContract(new ShellApprovalCase(
+            "noninteractive-reviewed-safe-with-grant-allows",
+            new ShellApprovalInvocation("git status", Interactive: false),
+            Approvals.PersistentAnywhere("git status"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:git status")));
+
+    [Fact]
+    public Task Noninteractive_safe_candidate_does_not_fill_a_partial_grant_gap()
+        => AssertApprovalContract(new ShellApprovalCase(
+            "noninteractive-partial-grant-keeps-safe-candidate-uncovered",
+            new ShellApprovalInvocation("git push && git status", Interactive: false),
+            Approvals.PersistentAnywhere("git push"),
+            ExpectedApproval.Require(
+                ["git status"],
+                approvalMatches: ["persistent:git push"])));
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The symlink retry regression defines Bash authorization behavior.")]

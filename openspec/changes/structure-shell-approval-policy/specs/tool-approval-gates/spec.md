@@ -21,12 +21,18 @@ own or inspect one-time approval state. The coordinator SHALL import actor
 coverage, apply safe policy to still-uncovered candidates, validate the
 invocation-owned one-time set exactly, and SHALL NOT rescan grants.
 
+Reviewed-safe phrase coverage SHALL cover a candidate only when the run has
+interactive approval capability. A run without that capability SHALL require
+explicit one-time, session, or persistent authority for every candidate that
+is not an approval-exempt side effect.
+
 The actor result SHALL include typed persistent-store status. An absent store
 file SHALL be ready with an empty snapshot. Expected corruption or migration
 failure SHALL be unavailable. Completion SHALL allow a call fully covered by
-one-time, session, or reviewed-safe authority without persistent state. If any
-candidate remains uncovered and persistent state was unavailable, completion
-SHALL return terminal `ApprovalStoreUnavailable` instead of a prompt.
+one-time, session, approval-exempt side effects, or, for an interactive run,
+reviewed-safe phrase coverage without persistent state. If any candidate
+remains uncovered and persistent state was unavailable, completion SHALL
+return terminal `ApprovalStoreUnavailable` instead of a prompt.
 
 `ToolApprovalAttempt` SHALL remain owner of one-time invocation state.
 `ToolApprovalActor` SHALL remain owner of session and persistent grants. The
@@ -49,10 +55,27 @@ a fact that no current type represents.
 #### Scenario: Independent coverage survives unavailable persistence
 
 - **GIVEN** the persistent store is unavailable
+- **AND** interactive approval capability is available
 - **AND** session and reviewed-safe coverage jointly cover every candidate
 - **WHEN** completion evaluates the actor result
 - **THEN** the call is allowed
 - **AND** no persisted grant is assumed
+
+#### Scenario: Reviewed-safe policy does not grant headless authority
+
+- **GIVEN** interactive approval capability is unavailable
+- **AND** a complete candidate is in the reviewed-safe catalog
+- **WHEN** no one-time, session, or persistent grant covers that candidate
+- **THEN** the candidate remains uncovered
+- **AND** the caller follows the current unsupported-channel denial path
+
+#### Scenario: Explicit grant covers a headless candidate
+
+- **GIVEN** interactive approval capability is unavailable
+- **AND** a session or persistent grant covers a complete candidate
+- **WHEN** completion evaluates the call
+- **THEN** the explicit grant covers that candidate
+- **AND** reviewed-safe policy adds no authority
 
 #### Scenario: Uncovered candidate fails closed when persistence is unavailable
 
