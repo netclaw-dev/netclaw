@@ -590,6 +590,45 @@ paths SHALL retain existing strict checks.
 - **AND** the correction tells the agent to declare the exact cwd and retry the
   exact command unchanged
 
+#### Scenario: Subagent scope correction precedes parent approval
+
+- **GIVEN** a subagent submits eligible reviewed-safe shell work beneath an
+  undeclared cwd
+- **AND** its registered `set_working_directory` tool accepts that exact cwd
+- **WHEN** policy would otherwise open the parent approval bridge
+- **THEN** the subagent returns the same scope-declaration correction as a
+  parent session
+- **AND** it does not execute the shell command or request parent approval
+- **AND** the authored tool call remains unchanged in model history
+
+#### Scenario: Subagent declaration applies to the unchanged retry
+
+- **GIVEN** a subagent received a scope-declaration correction
+- **WHEN** it calls `set_working_directory` with the exact suggested cwd
+- **THEN** the child replaces its local project-scope snapshot
+- **AND** it reloads project instructions before the next model call
+- **AND** an unchanged eligible shell retry uses the declared child scope
+- **AND** the child does not replace the parent project directory
+
+#### Scenario: Headless subagent declaration does not grant authority
+
+- **GIVEN** a headless subagent received a scope-declaration correction
+- **AND** it successfully declared the exact suggested cwd
+- **WHEN** it retries the unchanged shell call
+- **THEN** the declared child scope prevents another correction
+- **AND** the retry follows ordinary headless authority rules
+- **AND** the declaration does not grant reviewed-safe, session, or persistent
+  authority
+
+#### Scenario: Subagent keeps the approval bridge when scope cannot change
+
+- **GIVEN** a subagent submits eligible reviewed-safe shell work beneath an
+  undeclared cwd
+- **AND** `set_working_directory` is absent or rejects that cwd
+- **WHEN** policy requires approval
+- **THEN** the scope-declaration correction does not apply
+- **AND** the existing parent approval bridge handles the request
+
 #### Scenario: Scope correction cannot hide unsafe work
 
 - **GIVEN** any candidate lacks reviewed-safe phrase coverage
@@ -599,7 +638,8 @@ paths SHALL retain existing strict checks.
 - **OR** `set_working_directory` is unavailable
 - **OR** `set_working_directory` policy would reject or substitute the cwd
 - **WHEN** policy evaluates the call
-- **THEN** the scope-declaration correction does not apply
+- **THEN** the scope-declaration correction does not apply in a parent session
+  or subagent
 - **AND** the normal approval or deny result remains
 
 #### Scenario: Unsafe argument surface excludes whole phrase

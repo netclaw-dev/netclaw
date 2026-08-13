@@ -265,6 +265,31 @@ authority outside code review. At minimum `find`, `awk`, `rg`, and `sort` are
 not eligible. Production code has no flag-specific exceptions. The existing
 `git ls-tree` special case is deleted.
 
+Parent sessions and subagents consume the same project-scope correction before
+they open an approval request. The correction is available only when the
+registered `set_working_directory` tool accepts the exact suggested directory
+under its normal filesystem policy. A subagent returns the correction as the
+tool result and leaves the authored call in history. If the tool is absent or
+rejects the directory, the subagent keeps the existing parent approval bridge
+path.
+
+A headless subagent may receive this model-facing correction even though it
+cannot open an approval bridge. After a successful declaration, the unchanged
+retry follows the ordinary headless authority rules. The declared root prevents
+another correction; it does not grant reviewed-safe or stored authority.
+
+A successful child `set_working_directory` call replaces only the child run's
+immutable project-scope snapshot. It reloads project instructions through the
+same prompt provider and rebuilds the child's system prompt before the next
+model call. Later child tool calls use the new scope. The child reports the
+local scope in its result, but the parent merge keeps its existing rule: child
+project selection does not replace the parent project directory.
+
+The shared `set_working_directory` validation rejects NUL, CR, and LF before
+filesystem resolution. This rule applies to both execution and the eligibility
+probe. An invalid path returns a bounded error and cannot enter model history,
+child scope, or project-instruction lookup as a successful declaration.
+
 ### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.3 explicitly
 
 Netclaw uses effective `AnalyzedArgument.Value` for runtime-sensitive checks.

@@ -308,6 +308,16 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
     }
 
     [Fact]
+    public void Already_declared_project_scope_does_not_request_another_declaration()
+    {
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("head"));
+        var ctx = PersonalContext(projectDir: _outsideDir);
+        var candidates = new[] { new ApprovalCandidate("head", _outsideDir) };
+
+        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
+    }
+
+    [Fact]
     public void Unsafe_work_cannot_request_project_declaration()
     {
         var policy = new ScopedShellSafeVerbPolicy(VerbList("head"));

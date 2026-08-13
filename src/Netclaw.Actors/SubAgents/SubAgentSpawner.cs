@@ -204,10 +204,11 @@ public sealed class SubAgentSpawner
         });
 
         // Spawn as child of the session actor via the context factory
-        var props = SubAgentActor.CreateProps(
+        var props = SubAgentActor.CreatePropsWithProjectInstructionProvider(
             definition,
             chatClient,
             _toolAccessPolicy,
+            _promptProvider,
             _approvalService,
             SubAgentMaxToolIterations,
             _sessionMetrics);

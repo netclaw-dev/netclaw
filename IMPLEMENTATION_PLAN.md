@@ -226,11 +226,15 @@ Done when:
   root from one-command `WorkingDirectory` scope, prevent redundant project
   switches, and preserve `cd` when directory mutation is the requested shell
   behavior.
-- [x] Reviewed-safe shell work beneath an undeclared cwd returns a
-  `set_working_directory` correction to the agent before any user prompt. The
-  original tool call remains unchanged; the shared directory policy must accept
-  the exact non-temp cwd, while unsafe phrases, outside paths, Public sessions,
-  and unavailable scope tools retain normal approval behavior.
+- [x] Reviewed-safe shell work beneath an undeclared cwd returns the same
+  `set_working_directory` correction in parent sessions and subagents before
+  any user prompt. The original tool call remains unchanged. The registered
+  tool must accept the exact non-temp cwd; unsafe phrases, outside paths,
+  Public sessions, and unavailable scope tools retain normal approval behavior.
+  A successful child declaration updates only the child scope, reloads its
+  project instructions, and leaves the parent project unchanged. Headless
+  declarations prevent repeated corrections but do not grant execution
+  authority.
 - [x] Bounded non-path `IntegerRange` and `Concatenation` data do not make a
   complete shell command complex. Unknown values, identities, paths, and
   redirects stay strict.

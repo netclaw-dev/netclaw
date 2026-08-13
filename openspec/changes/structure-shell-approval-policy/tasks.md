@@ -88,10 +88,16 @@
   checks as separate effects.
 - [ ] 5.6 Preserve native PowerShell provider checks, including strict
   `Get-Content Env:SECRET` behavior.
-- [ ] 5.7 Return an agent scope-declaration correction before a user prompt
-  only when each reviewed-safe candidate remains beneath the exact shell cwd
-  and the shared `set_working_directory` policy accepts that non-temp cwd;
-  preserve the authored call and tool history.
+- [x] 5.7 Return an agent scope-declaration correction before a parent-session
+  or subagent user prompt only when each reviewed-safe candidate remains
+  beneath the exact shell cwd and the registered `set_working_directory` tool
+  accepts that non-temp cwd; preserve the authored call and tool history, and
+  retain the approval bridge when the tool is absent or rejects the cwd. Apply
+  a successful child declaration to later child contexts, reload project
+  instructions, and keep the parent project unchanged. Reject NUL, CR, and LF
+  at the shared declaration boundary; prove the tool returns a bounded error
+  without a child-scope or prompt update. Prove a headless declaration prevents
+  a repeated correction but does not grant authority to the unchanged retry.
 
 ## 6. Bash causal approval intent
 

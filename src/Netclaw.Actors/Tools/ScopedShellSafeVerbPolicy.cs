@@ -149,6 +149,12 @@ internal sealed class ScopedShellSafeVerbPolicy
             return false;
         }
 
+        if (ResolveSafeSpaceRoots(context)
+            .Any(root => PathUtility.IsWithinRoot(fullCwd, root)))
+        {
+            return false;
+        }
+
         foreach (var candidate in candidates)
         {
             var effectiveDirectory = candidate.Directory ?? fullCwd;

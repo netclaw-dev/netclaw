@@ -12,8 +12,8 @@ namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Sets the session's project directory — the root of the codebase or project
-/// the agent is currently working on. The session actor intercepts successful
-/// results by tool name to update <c>WorkingContext.ProjectDirectory</c> and
+/// the agent is currently working on. The owning session or subagent actor
+/// intercepts successful results by tool name to update its project scope and
 /// re-assemble the system prompt with project-scoped identity files.
 /// </summary>
 [NetclawTool(ToolName,
@@ -45,6 +45,9 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
+        if (ContainsInvalidControlCharacter(args.Path))
+            return Task.FromResult("Error: path contains an invalid control character.");
+
         var raw = args.Path?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(raw))
             return Task.FromResult("Error: path is required.");
@@ -59,12 +62,16 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
     }
 
     internal bool CanDeclare(string path, ToolInvocationContext context)
-        => _fileAccessPolicy.TryResolveWorkingDirectory(
+        => !ContainsInvalidControlCharacter(path)
+           && _fileAccessPolicy.TryResolveWorkingDirectory(
                path,
                context,
                out var fullPath,
                out _)
            && PathUtility.AreEquivalentPaths(path, fullPath)
            && Directory.Exists(fullPath);
+
+    private static bool ContainsInvalidControlCharacter(string? path)
+        => path is not null && path.AsSpan().IndexOfAny('\0', '\r', '\n') >= 0;
 
 }
