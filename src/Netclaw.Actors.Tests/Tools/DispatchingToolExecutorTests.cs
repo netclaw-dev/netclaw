@@ -24,6 +24,18 @@ public class DispatchingToolExecutorTests
     private readonly DispatchingToolExecutor _executor;
     private readonly DispatchingToolExecutor _restrictedExecutor;
 
+    private static FunctionCallContent CreateToolCall(
+        string callId,
+        string name,
+        IDictionary<string, object?> arguments)
+    {
+        var callArguments = new Dictionary<string, object?>(arguments, StringComparer.Ordinal)
+        {
+            ["_rationale"] = "Verify the executor behavior."
+        };
+        return new FunctionCallContent(callId, name, callArguments);
+    }
+
     public DispatchingToolExecutorTests()
     {
         var baseConfig = new ToolConfig();
@@ -90,7 +102,7 @@ public class DispatchingToolExecutorTests
         try
         {
             // shell_execute declares the small verbose budget (2000); echo > 2000 chars.
-            var toolCall = new FunctionCallContent("call-spill", "shell_execute",
+            var toolCall = CreateToolCall("call-spill", "shell_execute",
                 ToolInput.Create("Command", $"echo {new string('x', 3000)}"));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
@@ -120,7 +132,7 @@ public class DispatchingToolExecutorTests
         try
         {
             // Secret + padding so it both redacts and exceeds the shell budget → spills.
-            var toolCall = new FunctionCallContent("call-redact", "shell_execute",
+            var toolCall = CreateToolCall("call-redact", "shell_execute",
                 ToolInput.Create("Command", $"echo API_KEY=supersecret123 {new string('x', 3000)}"));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
@@ -144,7 +156,7 @@ public class DispatchingToolExecutorTests
     public async Task Small_output_is_redacted_without_spilling()
     {
         // Redaction happens centrally for every result, spill or not.
-        var toolCall = new FunctionCallContent("call-r", "shell_execute",
+        var toolCall = CreateToolCall("call-r", "shell_execute",
             ToolInput.Create("Command", "echo API_KEY=secret123"));
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -171,7 +183,7 @@ public class DispatchingToolExecutorTests
             await File.WriteAllTextAsync(file,
                 """{"secretKey": "real-secret-value", "name": "myapp"}""",
                 CancellationToken.None);
-            var toolCall = new FunctionCallContent("call-secret", "file_read",
+            var toolCall = CreateToolCall("call-secret", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
@@ -193,7 +205,7 @@ public class DispatchingToolExecutorTests
     public async Task Shell_output_still_redacts_secrets()
     {
         // Shell output continues to be redacted — only file tools suppress it.
-        var toolCall = new FunctionCallContent("call-shell-secret", "shell_execute",
+        var toolCall = CreateToolCall("call-shell-secret", "shell_execute",
             ToolInput.Create("Command", "echo API_KEY=secret123"));
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -221,7 +233,7 @@ public class DispatchingToolExecutorTests
             var bigContent = $$"""{"secretKey": "real-secret-value", "data": "{{new string('x', 15000)}}"}""";
             await File.WriteAllTextAsync(file, bigContent, CancellationToken.None);
 
-            var toolCall = new FunctionCallContent("call-spill-secret", "file_read",
+            var toolCall = CreateToolCall("call-spill-secret", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
@@ -260,7 +272,7 @@ public class DispatchingToolExecutorTests
             // small file is returned whole with no spill.
             var file = Path.Combine(sessionDir, "note.txt");
             await File.WriteAllTextAsync(file, "hello content", CancellationToken.None);
-            var toolCall = new FunctionCallContent("call-content", "file_read",
+            var toolCall = CreateToolCall("call-content", "file_read",
                 ToolInput.Create("Path", file));
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
@@ -282,7 +294,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Routes_shell_execute()
     {
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-1", "shell_execute",
             ToolInput.Create("Command", "echo routed"));
 
@@ -302,7 +314,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Routes_file_read_missing_file()
     {
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-2", "file_read",
             ToolInput.Create("Path", "/nonexistent/file.txt"));
 
@@ -321,7 +333,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Shell_execute_is_denied_outside_personal_context()
     {
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-deny", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
@@ -360,7 +372,7 @@ public class DispatchingToolExecutorTests
                 commandPolicy,
                 pathPolicy));
 
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-shell-profile-deny", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
@@ -399,7 +411,7 @@ public class DispatchingToolExecutorTests
                 commandPolicy,
                 pathPolicy));
 
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-shell-off", "shell_execute",
             ToolInput.Create("Command", "echo denied"));
 
@@ -424,7 +436,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Shell_execute_is_allowed_in_personal_context()
     {
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-allow", "shell_execute",
             ToolInput.Create("Command", "echo allowed"));
 
@@ -448,7 +460,7 @@ public class DispatchingToolExecutorTests
     public async Task Approval_exempt_shell_candidates_report_allow_reason(string command)
     {
         var executor = CreateApprovalGatedShellExecutor();
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-approval-exempt",
             "shell_execute",
             ToolInput.Create("Command", command));
@@ -470,7 +482,7 @@ public class DispatchingToolExecutorTests
     public async Task Shell_approval_without_extracted_candidates_fails_closed(string command)
     {
         var executor = CreateApprovalGatedShellExecutor();
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-no-approval-candidates",
             "shell_execute",
             ToolInput.Create("Command", command));
@@ -501,7 +513,7 @@ public class DispatchingToolExecutorTests
         Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
 
         var executor = CreateApprovalGatedShellExecutor();
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-parser-rejection",
             "shell_execute",
             arguments);
@@ -550,7 +562,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
             approvalService);
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-partial-approval",
             "shell_execute",
             ToolInput.Create("Command", "git status && git push"));
@@ -617,7 +629,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
             approvalService);
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-exact-partial-approval",
             "shell_execute",
             ToolInput.Create("Command", "git status && git push"));
@@ -1198,7 +1210,7 @@ public class DispatchingToolExecutorTests
                     new ShellCommandPolicy(),
                     new ToolPathPolicy([])),
                 approvalService);
-            var call = new FunctionCallContent(
+            var call = CreateToolCall(
                 "call-duplicate-verb-scopes",
                 "shell_execute",
                 ToolInput.Create(
@@ -1265,7 +1277,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
             approvalService);
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-inconsistent-partial-approval",
             "shell_execute",
             ToolInput.Create("Command", "git status && git push"));
@@ -1381,7 +1393,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
             approvalService);
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-inconsistent-all-approved",
             "shell_execute",
             ToolInput.Create("Command", "git status && git push"));
@@ -1422,7 +1434,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])),
             logger: logger);
-        var call = new FunctionCallContent(
+        var call = CreateToolCall(
             "call-authorization-telemetry",
             "telemetry_probe",
             ToolInput.Empty());
@@ -1455,7 +1467,7 @@ public class DispatchingToolExecutorTests
 
         try
         {
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-file-read-deny", "file_read",
                 ToolInput.Create("Path", filePath));
 
@@ -1486,7 +1498,7 @@ public class DispatchingToolExecutorTests
 
         try
         {
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-file-write-deny", "file_write",
                 ToolInput.Create("Path", filePath, "Content", "blocked"));
 
@@ -1517,7 +1529,7 @@ public class DispatchingToolExecutorTests
         var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-{Guid.NewGuid():N}.txt");
         try
         {
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-3", "file_write",
                 ToolInput.Create("Path", filePath, "Content", "dispatch test"));
 
@@ -1544,7 +1556,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Unknown_tool_returns_error_string()
     {
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-4", "unknown_tool",
             ToolInput.Create("arg", "value"));
 
@@ -1644,7 +1656,7 @@ public class DispatchingToolExecutorTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([])));
 
-        var toolCall = new FunctionCallContent("call-mcp-deny", "memorizer/search_memories", ToolInput.Empty());
+        var toolCall = CreateToolCall("call-mcp-deny", "memorizer/search_memories", ToolInput.Empty());
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
@@ -1691,7 +1703,7 @@ public class DispatchingToolExecutorTests
                     pathPolicy),
                 approvalService);
 
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-approve-once",
                 "shell_execute",
                 // Use a non-side-effect verb (echo/printf/:/true/false
@@ -1759,7 +1771,7 @@ public class DispatchingToolExecutorTests
                 commandPolicy,
                 pathPolicy));
 
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             "call-approve-once-bypass",
             "shell_execute",
             ToolInput.Create("Command", "echo bypass"));
@@ -1865,7 +1877,7 @@ public class DispatchingToolExecutorTests
                     new ToolPathPolicy([]),
                     fileApprovalMatcher: new FilePathApprovalMatcher(controlPlaneRoot)));
 
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-file-approve-once-bypass",
                 "file_write",
                 ToolInput.Create("Path", targetPath, "Content", "approved once"));
@@ -1888,7 +1900,7 @@ public class DispatchingToolExecutorTests
             Assert.Contains("Successfully wrote", retryResult, StringComparison.Ordinal);
             Assert.True(File.Exists(targetPath));
 
-            var secondCall = new FunctionCallContent(
+            var secondCall = CreateToolCall(
                 "call-file-approve-once-bypass-second",
                 "file_write",
                 ToolInput.Create("Path", secondPath, "Content", "different path"));
@@ -1971,7 +1983,7 @@ public class DispatchingToolExecutorTests
                 cwd: null,
                 TestContext.Current.CancellationToken);
 
-            var call = new FunctionCallContent(
+            var call = CreateToolCall(
                 "call-filtered-once",
                 "shell_execute",
                 ToolInput.Create("Command", command));
@@ -2051,7 +2063,7 @@ public class DispatchingToolExecutorTests
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
-            var call = new FunctionCallContent(
+            var call = CreateToolCall(
                 "call-audit",
                 "shell_execute",
                 ToolInput.Create("Command", "git status"));
@@ -2112,7 +2124,7 @@ public class DispatchingToolExecutorTests
                     new ToolPathPolicy([])),
                 approvalService);
 
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-session-approve",
                 "shell_execute",
                 // Non-side-effect verb so the approval flow under test
@@ -2228,7 +2240,7 @@ public class DispatchingToolExecutorTests
             // The LLM emits tool_use with the sanitized alias — mirror that
             // here. The registry's two-form lookup (introduced in PR #1134)
             // resolves it back to the same adapter.
-            var toolCall = new FunctionCallContent(
+            var toolCall = CreateToolCall(
                 "call-mcp-approve-session",
                 sanitizedAlias,
                 ToolInput.Empty());
@@ -2270,7 +2282,7 @@ public class DispatchingToolExecutorTests
             // Same call dispatched by the canonical name must also resolve
             // — the registry accepts both forms, so the gate should
             // authorize either way.
-            var canonicalToolCall = new FunctionCallContent(
+            var canonicalToolCall = CreateToolCall(
                 "call-mcp-approve-session-canonical",
                 canonicalName,
                 ToolInput.Empty());
@@ -2313,7 +2325,7 @@ public class DispatchingToolExecutorTests
             "slack/thread-1",
             null,
             new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
-        var toolCall = new FunctionCallContent(
+        var toolCall = CreateToolCall(
             $"call-job-{cancel}",
             CheckBackgroundJobTool.ToolName,
             ToolInput.Create("JobId", "abc123", "Cancel", cancel));
@@ -2352,6 +2364,26 @@ public class DispatchingToolExecutorTests
                 new ToolPathPolicy([])),
             approvalService ?? new UnexpectedApprovalService(),
             logger: logger);
+    }
+
+    [Fact]
+    public async Task Missing_rationale_rejects_before_the_approval_service()
+    {
+        var executor = CreateApprovalGatedShellExecutor();
+        var context = CreateInteractivePersonalContext("signalr/rationale-rejection");
+        var toolCall = new FunctionCallContent(
+            "call-missing-rationale",
+            "shell_execute",
+            ToolInput.Create("Command", "echo should-not-run"));
+
+        var result = await executor.ExecuteAsync(
+            toolCall,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("'_rationale'", result);
+        Assert.Contains("NOT executed", result);
+        Assert.DoesNotContain("should-not-run", result);
     }
 
     private static ToolExecutionContext CreateInteractivePersonalContext(string sessionId)

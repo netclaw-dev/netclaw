@@ -73,6 +73,26 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
         var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Failed, tc.Outcome);
+
+        var child = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Watch(child);
+        Sys.Stop(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+
+        var resumedSubscriber = CreateTestProbe("error-resume-subscriber");
+        var resumed = await sessionManager.Ask<SessionJoined>(new JoinSession(resumedSubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, resumed.TurnCount);
+        Assert.NotNull(resumed.RecentMessages);
+        var resumedError = Assert.Single(resumed.RecentTranscript!, entry =>
+            entry.Type == SessionTranscriptEntryTypes.Error);
+        Assert.Equal(error.CorrelationId.ToString("D"), resumedError.ErrorCorrelationId);
+        Assert.Equal(nameof(ErrorCategory.ProviderFailure), resumedError.ErrorCategory);
     }
 
     [Fact]

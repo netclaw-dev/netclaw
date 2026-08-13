@@ -29,6 +29,7 @@ internal sealed class SessionToolPipelineTestFixture(
     private string _sessionDirectory = Path.GetTempPath();
     private InlineOutputBudget _inlineOutputBudget = new(4096);
     private ToolExecutionTimeout _timeout = new(TimeSpan.FromSeconds(5));
+    private Action<ToolActivityOutput> _emitToolActivityOutput = _ => { };
     private Action<SubAgentOutput> _emitSubAgentOutput = _ => { };
     private Func<object, string, CancellationToken, Task<object>> _spawnChildActor
         = static (_, _, _) => Task.FromResult<object>(new object());
@@ -87,6 +88,12 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture EmittingSubAgentOutput(Action<SubAgentOutput> emit)
     {
         _emitSubAgentOutput = emit;
+        return this;
+    }
+
+    public SessionToolPipelineTestFixture EmittingToolActivityOutput(Action<ToolActivityOutput> emit)
+    {
+        _emitToolActivityOutput = emit;
         return this;
     }
 
@@ -188,6 +195,7 @@ internal sealed class SessionToolPipelineTestFixture(
             ToolCalls = toolCalls,
             DefaultTimeout = _timeout,
             ReplyTo = replyTo,
+            EmitToolActivityOutput = _emitToolActivityOutput,
             EmitSubAgentOutput = _emitSubAgentOutput,
             ApprovalRequests = new ToolApprovalRequests(
                 _approvalChannel,

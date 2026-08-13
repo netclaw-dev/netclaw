@@ -129,8 +129,6 @@ check_prerequisites() {
         RESULTS_DB=""
     fi
 
-    NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
-
     if [[ "$RUNS" -lt 1 ]]; then
         echo "ERROR: NETCLAW_EVAL_RUNS must be >= 1 (got: $RUNS)" >&2
         exit 1
@@ -144,7 +142,7 @@ check_prerequisites() {
     if command -v sqlite3 >/dev/null 2>&1; then
         RESULTS_DB="$RESULTS_DIR/results.db"
     fi
-    DAEMON_LOG="$EVAL_HOME/logs/daemon-$(date +%F).log"
+    DAEMON_LOG="$EVAL_HOME/logs/daemon-$(date -u +%F).log"
 
     trap 'cleanup_eval_env' EXIT
 }
@@ -765,7 +763,6 @@ check_daemon_alive() {
     fi
 }
 
-
 run_prompt() {
     local prompt="$1"
     local output_format="${2:-text}"
@@ -774,9 +771,7 @@ run_prompt() {
     STDOUT_FILE="$TMPDIR_EVAL/stdout_${ts}.txt"
     STDERR_FILE="$TMPDIR_EVAL/stderr_${ts}.txt"
 
-    # Record daemon log position before the prompt (the daemon writes to a
-    # daily-rotating file at /root/.netclaw/logs/daemon-YYYY-MM-DD.log, and
-    # the container bind-mounts that directory from $EVAL_HOME/logs).
+    # Record the UTC daemon log position before the prompt.
     if [[ -f "$DAEMON_LOG" ]]; then
         DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
     else
@@ -1099,6 +1094,16 @@ assert_skill_operations_diagnostics() {
     stdout_contains '\[tool:call\]'
 }
 
+assert_skill_chat_tui_knowledge() {
+    daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_tool_called 'skill_read_resource' \
+        && stdout_contains 'Queue Shelf' \
+        && stdout_contains 'Session Strip' \
+        && stdout_contains 'Pulse Line' \
+        && stdout_contains 'one.*approval\|approval.*one' \
+        && stdout_no_skill_file_read_called
+}
+
 assert_skill_citation_search() {
     # Model should actually search when asked to search.
     stdout_contains '\[tool:call\] web_search'
@@ -1229,8 +1234,12 @@ assert_memory_checkpoint_enqueue() {
 assert_memory_recall_filters() {
     # After overfetch fix: at least one candidate selection should reduce the set.
     daemon_log_tail | awk '
-        match($0, /rawCount=([0-9]+).*selectedCount=([0-9]+)/, m) {
-            if ((m[1] + 0) > (m[2] + 0)) {
+        match($0, /rawCount=[0-9]+/) {
+            raw = substr($0, RSTART + 9, RLENGTH - 9) + 0
+            if (match($0, /selectedCount=[0-9]+/)) {
+                selected = substr($0, RSTART + 14, RLENGTH - 14) + 0
+            }
+            if (raw > selected) {
                 found = 1
             }
         }
@@ -1914,6 +1923,10 @@ run_all() {
         "My session seems broken, help me fix it" \
         "Debug my Netclaw session"
 
+    run_case skill_chat_tui_knowledge "knows the chat queue, approvals, and bottom dock" \
+        "While netclaw chat is busy, where does another message go? Name the bottom regions. Also explain how parallel approvals appear." \
+        "Explain prompt queue and parallel approval behavior. Name the persistent session and wait-state rows at the bottom."
+
     run_case skill_citation_search "performs web search when asked" \
         "Search the web for the latest Akka.NET release" \
         "Look up the current version of Akka.NET"
@@ -2249,6 +2262,7 @@ main() {
         echo "ERROR: CLI binary not found at '$NETCLAW_BIN'" >&2
         exit 1
     fi
+    NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     start_eval_daemon
     init_db

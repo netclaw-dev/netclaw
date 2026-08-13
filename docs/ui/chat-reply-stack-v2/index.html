@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Netclaw Chat — Quiet Reply Stack v2</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #0a0c11;
+      --canvas: #101219;
+      --surface: #171a22;
+      --surface-strong: #1d212b;
+      --surface-human: #151d1a;
+      --text: #d9ddea;
+      --muted: #858da0;
+      --faint: #535b6d;
+      --primary: #8fb8f4;
+      --human: #96cda2;
+      --decision: #dbad67;
+      --danger: #de7d8d;
+      --line: #2b303c;
+      --mono: "Berkeley Mono", "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(900px 480px at 16% -10%, rgba(143, 184, 244, 0.11), transparent 65%),
+        linear-gradient(180deg, #0d1016, var(--page));
+      font-family: var(--sans);
+    }
+
+    button { font: inherit; }
+
+    .review-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 12, 17, 0.92);
+      backdrop-filter: blur(14px);
+    }
+
+    .title-lockup { min-width: 260px; }
+
+    .eyebrow {
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 3px 0 0;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .control-group {
+      display: inline-flex;
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--canvas);
+    }
+
+    .controls button {
+      border: 0;
+      border-radius: 5px;
+      padding: 7px 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .controls button:hover { color: var(--text); }
+
+    .controls button.active {
+      color: var(--text);
+      background: var(--surface-strong);
+      box-shadow: inset 0 0 0 1px rgba(143, 184, 244, 0.2);
+    }
+
+    .page-grid {
+      display: grid;
+      grid-template-columns: minmax(620px, 1.45fr) minmax(300px, 0.55fr);
+      gap: 22px;
+      max-width: 1640px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .stage-column { min-width: 0; }
+
+    .stage-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 16px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stage-meta strong {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .terminal-shell {
+      position: relative;
+      max-width: 1060px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid #343a48;
+      border-radius: 10px;
+      background: var(--canvas);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+      transition: max-width 220ms ease;
+    }
+
+    .terminal-shell.width-80 { max-width: 780px; }
+    .terminal-shell.width-48 { max-width: 480px; }
+
+    .terminal-chrome {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+      padding: 0 12px;
+      color: #727b8d;
+      background: #0d0f15;
+      border-bottom: 1px solid #242934;
+      font: 11px var(--mono);
+    }
+
+    .terminal-dots { display: flex; gap: 6px; }
+    .terminal-dots span { width: 7px; height: 7px; border-radius: 50%; background: #343b49; }
+
+    .screen {
+      position: relative;
+      min-height: 720px;
+      padding: 18px 20px 14px;
+      font: 14px/1.42 var(--mono);
+      letter-spacing: -0.012em;
+      background: var(--canvas);
+    }
+
+    .screen[hidden] { display: none; }
+
+    .region {
+      position: relative;
+      border-radius: 3px;
+    }
+
+    .region-tag {
+      display: none;
+      position: absolute;
+      z-index: 8;
+      top: -8px;
+      right: 8px;
+      padding: 2px 6px;
+      border: 1px solid rgba(143, 184, 244, 0.45);
+      border-radius: 4px;
+      color: #b9d4fa;
+      background: #182237;
+      font: 9px/1.3 var(--sans);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    }
+
+    .show-regions .region {
+      outline: 1px dashed rgba(143, 184, 244, 0.22);
+      outline-offset: 3px;
+    }
+
+    .show-regions .region-tag { display: block; }
+    .show-regions .reply-stack > .speaker-line .state { margin-right: 86px; }
+
+    .session-strip {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-height: 28px;
+      margin-bottom: 17px;
+      padding: 5px 9px;
+      color: var(--muted);
+      background: #13161d;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .session-strip .brand { color: var(--primary); font-weight: 700; }
+    .session-strip .session-name { color: #aab2c2; }
+    .connection { color: var(--human); }
+
+    .transcript { padding: 0 9px; }
+
+    .speaker-line {
+      display: flex;
+      gap: 9px;
+      align-items: baseline;
+      min-height: 21px;
+      color: var(--muted);
+    }
+
+    .speaker-line .speaker { font-weight: 700; }
+    .speaker-line .you { color: var(--human); }
+    .speaker-line .netclaw { color: var(--primary); }
+    .speaker-line .state { margin-left: auto; font-size: 11px; letter-spacing: 0.08em; color: var(--primary); }
+
+    .prompt-surface {
+      margin: 3px 0 18px;
+      padding: 9px 11px;
+      color: var(--text);
+      background: var(--surface-human);
+    }
+
+    .reply-stack {
+      margin-bottom: 13px;
+      padding: 2px 11px 4px;
+    }
+
+    .reply-prose {
+      max-width: 92ch;
+      margin: 4px 0 11px;
+      color: var(--text);
+      white-space: pre-wrap;
+    }
+
+    .reply-passage + .reply-passage { margin-top: 15px; }
+
+    .work-trace {
+      margin: 7px 0 10px;
+      padding: 9px 11px;
+      color: #bac1cf;
+      background: var(--surface);
+    }
+
+    .work-title {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .work-title strong { color: #aab2c4; font-weight: 600; }
+
+    .tool-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      column-gap: 7px;
+      align-items: baseline;
+      min-height: 23px;
+      padding: 1px 0;
+    }
+
+    .tool-row.child { margin-left: 22px; }
+    .tool-row .glyph { color: var(--primary); text-align: center; }
+    .tool-row.done .glyph { color: var(--human); }
+    .tool-row.warn .glyph { color: var(--decision); }
+    .tool-row .action { color: var(--text); }
+    .tool-row .detail { color: var(--muted); }
+    .tool-row .duration { color: var(--faint); font-size: 12px; }
+
+    .flyby {
+      min-height: 20px;
+      margin: 1px 0 4px 25px;
+      color: var(--muted);
+      font-size: 12px;
+      transition: opacity 120ms ease;
+    }
+
+    .parallel-label {
+      margin: 6px 0 3px 25px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .queue-shelf {
+      margin: 11px 9px 8px;
+      padding: 7px 10px;
+      color: #b8c0cf;
+      background: rgba(21, 29, 26, 0.72);
+    }
+
+    .queue-shelf strong { color: var(--human); font-weight: 650; }
+    .queue-shelf .preview { margin-top: 3px; color: var(--muted); }
+
+    .composer {
+      margin: 9px 9px 0;
+      padding: 8px 10px 10px;
+      background: var(--surface-strong);
+    }
+
+    .composer-title {
+      margin-bottom: 5px;
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .composer-input { color: #6f7788; }
+    .composer-input::before { content: "▌"; margin-right: 4px; color: var(--primary); animation: caret 1s steps(1) infinite; }
+
+    .pulse-line {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-height: 30px;
+      margin: 0 9px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .pulse-line .pulse {
+      flex: 0 0 12ch;
+      width: 12ch;
+      padding-right: 1ch;
+      color: var(--decision);
+      white-space: pre;
+    }
+    .pulse-line.ready .pulse { color: var(--human); }
+    .pulse-line.decision .pulse { color: var(--decision); }
+    .pulse-line .keys { color: #687184; }
+
+    .decision-sheet {
+      margin: 8px 0 10px;
+      padding: 10px 12px 12px;
+      background: #1d1a16;
+      box-shadow: inset 3px 0 0 rgba(219, 173, 103, 0.72);
+    }
+
+    .decision-heading {
+      margin-bottom: 9px;
+      color: var(--decision);
+      font-weight: 700;
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 4px 10px;
+      margin-bottom: 10px;
+      color: #c8ceda;
+    }
+
+    .decision-grid .key { color: var(--muted); }
+
+    .command-surface {
+      margin: 7px 0 10px;
+      padding: 7px 9px;
+      color: #c8ceda;
+      background: #121317;
+      white-space: pre-wrap;
+    }
+
+    .choice {
+      padding: 3px 7px;
+      color: #b7becd;
+    }
+
+    .choice.selected {
+      color: #17130c;
+      background: var(--decision);
+    }
+
+    .receipt {
+      margin: 7px 0 11px;
+      padding: 7px 10px;
+      color: var(--muted);
+      background: rgba(23, 26, 34, 0.68);
+    }
+
+    .receipt .ok { color: var(--human); }
+    .receipt .warn { color: var(--decision); }
+
+    .annotation-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .note-card {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 15px;
+      background: rgba(16, 18, 25, 0.88);
+    }
+
+    .note-card h2 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .note-card p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .note-card ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      color: #b5bdcc;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .note-card li + li { margin-top: 5px; }
+
+    .region-map {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 7px 10px;
+      font-size: 12px;
+    }
+
+    .region-map code {
+      color: var(--primary);
+      font: 11px var(--mono);
+    }
+
+    .region-map span { color: var(--muted); line-height: 1.4; }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .matrix th,
+    .matrix td {
+      padding: 6px 5px;
+      border-bottom: 1px solid #242934;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .matrix th { color: var(--muted); font-weight: 600; }
+    .matrix td { color: #b4bccb; }
+    .yes { color: var(--human); }
+    .no { color: var(--faint); }
+
+    .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+
+    .swatch {
+      min-height: 52px;
+      padding: 8px;
+      border-radius: 6px;
+      color: #0b0d12;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 7px 10px;
+      font-size: 12px;
+    }
+
+    .flow .step {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      color: #101219;
+      background: var(--primary);
+      font-weight: 800;
+    }
+
+    .flow div:nth-child(even) { color: #b7bfce; line-height: 1.45; }
+
+    .terminal-shell.width-48 .screen { padding: 14px 10px 12px; font-size: 12px; }
+    .terminal-shell.width-48 .optional { display: none; }
+    .terminal-shell.width-48 .session-strip { gap: 8px; }
+    .terminal-shell.width-48 .transcript { padding: 0 4px; }
+    .terminal-shell.width-48 .reply-stack { padding-left: 8px; padding-right: 4px; }
+    .terminal-shell.width-48 .work-trace { padding: 8px; }
+    .terminal-shell.width-48 .tool-row.child { margin-left: 10px; }
+    .terminal-shell.width-48 .queue-shelf,
+    .terminal-shell.width-48 .composer,
+    .terminal-shell.width-48 .pulse-line { margin-left: 4px; margin-right: 4px; }
+    .terminal-shell.width-48 .keys .less-important { display: none; }
+    .terminal-shell.width-48 .decision-grid { grid-template-columns: 72px minmax(0, 1fr); }
+
+    @keyframes caret { 0%, 48% { opacity: 1; } 49%, 100% { opacity: 0; } }
+
+    @media (max-width: 1100px) {
+      .page-grid { grid-template-columns: 1fr; }
+      .annotation-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .review-header { align-items: flex-start; flex-direction: column; }
+      .controls { justify-content: flex-start; }
+      .page-grid { padding: 14px; }
+      .annotation-column { grid-template-columns: 1fr; }
+      .screen { min-height: 640px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="review-header">
+    <div class="title-lockup">
+      <div class="eyebrow">Netclaw chat design review</div>
+      <h1>Quiet Reply Stack · visual grammar v2</h1>
+    </div>
+    <div class="controls" aria-label="Mock-up controls">
+      <div class="control-group" aria-label="State">
+        <button class="state-button active" data-state="active">Active</button>
+        <button class="state-button" data-state="sequence">Sequence</button>
+        <button class="state-button" data-state="approval">Approval</button>
+        <button class="state-button" data-state="settled">Settled</button>
+      </div>
+      <div class="control-group" aria-label="Width">
+        <button class="width-button active" data-width="120">120 col</button>
+        <button class="width-button" data-width="80">80 col</button>
+        <button class="width-button" data-width="48">48 col</button>
+      </div>
+      <div class="control-group">
+        <button id="region-toggle" class="active">Hide region names</button>
+        <button id="replay-button">Replay flow</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-grid">
+    <section class="stage-column">
+      <div class="stage-meta">
+        <div><strong id="state-title">Active reply with a queued prompt</strong><br>Interactive HTML mock-up · no production code</div>
+        <div id="width-label">120-column hierarchy</div>
+      </div>
+
+      <div class="terminal-shell width-120" id="terminal-shell">
+        <div class="terminal-chrome">
+          <div class="terminal-dots"><span></span><span></span><span></span></div>
+          <span>netclaw chat · primary terminal buffer</span>
+          <span>design target</span>
+        </div>
+
+        <section class="screen show-regions" data-screen="active">
+          <div class="transcript region">
+            <span class="region-tag">Transcript</span>
+            <div class="speaker-line"><span class="speaker you">You</span><span>13:35</span></div>
+            <div class="prompt-surface region">
+              <span class="region-tag">Prompt Surface</span>
+              Find the configured context window and explain which setting wins.
+            </div>
+
+            <div class="reply-stack region">
+              <span class="region-tag">Reply Stack</span>
+              <div class="speaker-line">
+                <span class="speaker netclaw">Netclaw</span><span>13:35</span><span class="state">LIVE</span>
+              </div>
+              <div class="reply-prose">I will inspect the deployment settings and the active session.</div>
+
+              <div class="work-trace region">
+                <span class="region-tag">Work Trace</span>
+                <div class="work-title"><strong>Current work</strong><span>2 active · 1 complete</span></div>
+                <div class="tool-row">
+                  <span class="glyph spinner">/</span>
+                  <span><span class="action">Search deployment settings</span> <span class="detail optional">· shell_execute</span></span>
+                  <span class="duration">1.2s</span>
+                </div>
+                <div class="flyby" id="flyby">Searching session files for context values...</div>
+                <div class="parallel-label">Parallel work · 2 calls</div>
+                <div class="tool-row child done">
+                  <span class="glyph">✓</span>
+                  <span><span class="action">Read session manifest</span> <span class="detail optional">· file_read</span></span>
+                  <span class="duration">0.2s</span>
+                </div>
+                <div class="tool-row child">
+                  <span class="glyph spinner">/</span>
+                  <span><span class="action">Inspect model configuration</span> <span class="detail optional">· file_list</span></span>
+                  <span class="duration">0.8s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="queue-shelf region">
+            <span class="region-tag">Queue Shelf</span>
+            <strong>Queued · 1</strong>
+            <div class="preview">Then tell me which setting wins.</div>
+          </div>
+
+          <div class="session-strip region">
+            <span class="region-tag">Session Strip</span>
+            <span class="brand">NETCLAW</span>
+            <span class="session-name">Casual Greeting Exchange</span>
+            <span class="optional">deepseek-v4-flash-dspark</span>
+            <span class="optional">18%</span>
+            <span class="connection optional">connected</span>
+          </div>
+
+          <div class="composer region">
+            <span class="region-tag">Composer</span>
+            <div class="composer-title">MESSAGE</div>
+            <div class="composer-input">Ask Netclaw...</div>
+          </div>
+
+          <div class="pulse-line region">
+            <span class="region-tag">Pulse Line</span>
+            <span class="pulse thinking-pulse">Thinking.</span>
+            <span class="keys">Enter send&nbsp;&nbsp; Shift+Enter newline&nbsp;&nbsp; Esc x2 clear&nbsp;&nbsp; <span class="less-important">Ctrl+O inspect&nbsp;&nbsp; Ctrl+Q quit</span></span>
+          </div>
+        </section>
+
+        <section class="screen" data-screen="sequence" hidden>
+          <div class="transcript region">
+            <span class="region-tag">Transcript</span>
+            <div class="speaker-line"><span class="speaker you">You</span><span>13:41</span></div>
+            <div class="prompt-surface region">
+              <span class="region-tag">Prompt Surface</span>
+              Which Netclaw binary is active, and does it match this source tree?
+            </div>
+
+            <div class="reply-stack region">
+              <span class="region-tag">Reply Stack</span>
+              <div class="speaker-line">
+                <span class="speaker netclaw">Netclaw</span><span>13:41</span><span class="state">LIVE</span>
+              </div>
+
+              <div class="reply-passage region">
+                <span class="region-tag">Reply Passage 1</span>
+                <div class="reply-prose">I found the installed binary. It reports version 2.47.0.</div>
+                <div class="work-trace region">
+                  <span class="region-tag">Work Trace 1</span>
+                  <div class="work-title"><strong>Completed work</strong><span>1 call</span></div>
+                  <div class="tool-row done">
+                    <span class="glyph">✓</span>
+                    <span><span class="action">Check the installed Netclaw version</span> <span class="detail optional">· shell_execute</span></span>
+                    <span class="duration">0.2s</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="reply-passage region">
+                <span class="region-tag">Reply Passage 2</span>
+                <div class="reply-prose">The source tree can differ from that binary. I will compare its package and release metadata.</div>
+                <div class="work-trace region">
+                  <span class="region-tag">Work Trace 2</span>
+                  <div class="work-title"><strong>Current work</strong><span>2 active · 1 complete</span></div>
+                  <div class="parallel-label">Parallel work · 3 calls</div>
+                  <div class="tool-row child done">
+                    <span class="glyph">✓</span>
+                    <span><span class="action">Read the package version</span> <span class="detail optional">· file_read</span></span>
+                    <span class="duration">0.1s</span>
+                  </div>
+                  <div class="tool-row child">
+                    <span class="glyph spinner">/</span>
+                    <span><span class="action">Read the release notes</span> <span class="detail optional">· file_read</span></span>
+                    <span class="duration">0.6s</span>
+                  </div>
+                  <div class="flyby">Scanning the current release section...</div>
+                  <div class="tool-row child">
+                    <span class="glyph spinner">/</span>
+                    <span><span class="action">Compare the published daemon</span> <span class="detail optional">· shell_execute</span></span>
+                    <span class="duration">0.6s</span>
+                  </div>
+                  <div class="flyby">Reading assembly and file versions...</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="session-strip region">
+            <span class="region-tag">Session Strip</span>
+            <span class="brand">NETCLAW</span>
+            <span class="session-name">Local Binary Audit</span>
+            <span class="optional">deepseek-v4-flash-dspark</span>
+            <span class="optional">19%</span>
+            <span class="connection optional">connected</span>
+          </div>
+
+          <div class="composer region">
+            <span class="region-tag">Composer</span>
+            <div class="composer-title">MESSAGE</div>
+            <div class="composer-input">Ask Netclaw...</div>
+          </div>
+
+          <div class="pulse-line region">
+            <span class="region-tag">Pulse Line</span>
+            <span class="pulse thinking-pulse">Thinking.</span>
+            <span class="keys">Enter send&nbsp;&nbsp; Shift+Enter newline&nbsp;&nbsp; Esc x2 clear&nbsp;&nbsp; <span class="less-important">Ctrl+O inspect&nbsp;&nbsp; Ctrl+Q quit</span></span>
+          </div>
+        </section>
+
+        <section class="screen" data-screen="approval" hidden>
+          <div class="transcript region">
+            <span class="region-tag">Transcript</span>
+            <div class="speaker-line"><span class="speaker you">You</span><span>13:35</span></div>
+            <div class="prompt-surface">Find the configured context window and explain which setting wins.</div>
+
+            <div class="reply-stack region">
+              <span class="region-tag">Reply Stack</span>
+              <div class="speaker-line">
+                <span class="speaker netclaw">Netclaw</span><span>13:35</span><span class="state" style="color:var(--decision)">WAITING</span>
+              </div>
+              <div class="reply-prose">I need permission to inspect one protected session path.</div>
+
+              <div class="work-trace">
+                <div class="tool-row warn">
+                  <span class="glyph">◇</span>
+                  <span><span class="action">Search protected session settings</span> <span class="detail optional">· shell_execute</span></span>
+                  <span class="duration">paused</span>
+                </div>
+
+                <div class="decision-sheet region">
+                  <span class="region-tag">Decision Sheet</span>
+                  <div class="decision-heading">Approval required</div>
+                  <div class="decision-grid">
+                    <span class="key">Requester</span><span>Netclaw</span>
+                    <span class="key">Action</span><span>Search context values in the current session</span>
+                    <span class="key">Directory</span><span>~/.netclaw/sessions/current</span>
+                    <span class="key">Scope</span><span>This exact command</span>
+                  </div>
+                  <div class="command-surface">grep -riE "context|window|model" ~/.netclaw/sessions/current</div>
+                  <div class="choice selected">1. Allow once · only this request</div>
+                  <div class="choice">2. Allow for this chat</div>
+                  <div class="choice">3. Always in this folder</div>
+                  <div class="choice">4. Deny</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="session-strip region">
+            <span class="region-tag">Session Strip</span>
+            <span class="brand">NETCLAW</span>
+            <span class="session-name">Casual Greeting Exchange</span>
+            <span class="optional">deepseek-v4-flash-dspark</span>
+            <span class="optional">18%</span>
+            <span class="connection optional">connected</span>
+          </div>
+
+          <div class="pulse-line decision region">
+            <span class="region-tag">Pulse Line</span>
+            <span class="pulse">Decision needed</span>
+            <span class="keys">Up/Down select&nbsp;&nbsp; Enter confirm&nbsp;&nbsp; Ctrl+O details&nbsp;&nbsp; Esc deny</span>
+          </div>
+        </section>
+
+        <section class="screen" data-screen="settled" hidden>
+          <div class="transcript region">
+            <span class="region-tag">Transcript</span>
+            <div class="speaker-line"><span class="speaker you">You</span><span>13:35</span></div>
+            <div class="prompt-surface">Find the configured context window and explain which setting wins.</div>
+
+            <div class="reply-stack region">
+              <span class="region-tag">Settled Reply Stack</span>
+              <div class="speaker-line"><span class="speaker netclaw">Netclaw</span><span>13:35</span></div>
+              <div class="reply-prose">I inspected the deployment settings and the active session.</div>
+              <div class="receipt region">
+                <span class="region-tag">Work Receipt</span>
+                <span class="ok">✓</span> Inspected configuration · 3 tools · 1.7s<br>
+                <span class="warn">!</span> One protected path blocked direct access
+              </div>
+              <div class="reply-prose">The main model uses a 131,072-token context window.
+The named model definition overrides the provider default.</div>
+            </div>
+
+            <div class="speaker-line"><span class="speaker you">You</span><span>13:36</span></div>
+            <div class="prompt-surface">Then tell me which setting wins.</div>
+          </div>
+
+          <div class="session-strip region">
+            <span class="region-tag">Session Strip</span>
+            <span class="brand">NETCLAW</span>
+            <span class="session-name">Casual Greeting Exchange</span>
+            <span class="optional">deepseek-v4-flash-dspark</span>
+            <span class="optional">19%</span>
+            <span class="connection optional">connected</span>
+          </div>
+
+          <div class="composer region">
+            <span class="region-tag">Composer</span>
+            <div class="composer-title">MESSAGE</div>
+            <div class="composer-input">Ask Netclaw...</div>
+          </div>
+
+          <div class="pulse-line ready region">
+            <span class="region-tag">Pulse Line</span>
+            <span class="pulse">Ready</span>
+            <span class="keys">Enter send&nbsp;&nbsp; Shift+Enter newline&nbsp;&nbsp; Esc x2 clear&nbsp;&nbsp; <span class="less-important">Ctrl+O inspect&nbsp;&nbsp; Ctrl+Q quit</span></span>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="annotation-column">
+      <section class="note-card">
+        <h2>One unit of comprehension</h2>
+        <p>The Reply Stack owns all model work for one Turn.</p>
+        <ul>
+          <li>Tools do not become transcript speakers.</li>
+          <li>Parallel calls remain child rows.</li>
+          <li>The approval stays under its requesting tool.</li>
+          <li>The final receipt replaces transient work rows.</li>
+        </ul>
+      </section>
+
+      <section class="note-card">
+        <h2>Named region map</h2>
+        <div class="region-map">
+          <code>Session Strip</code><span>Identity and connection context.</span>
+          <code>Transcript</code><span>Immutable terminal scrollback.</span>
+          <code>Prompt Surface</code><span>One user message.</span>
+          <code>Reply Stack</code><span>One complete Netclaw reply.</span>
+          <code>Reply Passage</code><span>One model step with its prose and work.</span>
+          <code>Work Trace</code><span>Transient tools and sub-agents.</span>
+          <code>Decision Sheet</code><span>Approval context and choices.</span>
+          <code>Queue Shelf</code><span>Prompts that wait for the next Turn.</span>
+          <code>Composer</code><span>Persistent message input.</span>
+          <code>Pulse Line</code><span>Wait state and valid keys.</span>
+        </div>
+      </section>
+
+      <section class="note-card">
+        <h2>Chronology contract</h2>
+        <p>The Reply Stack keeps the order that the operator experienced.</p>
+        <ul>
+          <li>A completed call remains as a receipt while later calls run.</li>
+          <li>New model prose starts a new Reply Passage in the same Turn.</li>
+          <li>The next Work Trace follows the prose that explains that work.</li>
+          <li>Parallel calls share one group and retain separate states.</li>
+          <li>The settled Turn replaces all transient rows with one receipt.</li>
+        </ul>
+      </section>
+
+      <section class="note-card">
+        <h2>Motion contract</h2>
+        <p>Animation communicates liveness. It never creates scrollback rows.</p>
+        <table class="matrix">
+          <thead><tr><th>Element</th><th>Motion</th><th>Stops when</th></tr></thead>
+          <tbody>
+            <tr><td>Pulse Line</td><td><code>Thinking.</code> dots in a fixed 12-character slot</td><td>Decision, error, or idle</td></tr>
+            <tr><td>Tool glyph</td><td><code>/ - \\ |</code> in place</td><td>Tool settles</td></tr>
+            <tr><td>Fly-by text</td><td>Safe action text replaces in place</td><td>Tool settles</td></tr>
+            <tr><td>Composer caret</td><td>Slow blink</td><td>Decision owns input</td></tr>
+            <tr><td>Approval</td><td>None</td><td>Always stable</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="note-card">
+        <h2>Appearance matrix</h2>
+        <table class="matrix">
+          <thead><tr><th>Region</th><th>Active</th><th>Sequence</th><th>Approval</th><th>Settled</th></tr></thead>
+          <tbody>
+            <tr><td>Reply Stack</td><td class="yes">Live</td><td class="yes">Live</td><td class="yes">Paused</td><td class="yes">Frozen</td></tr>
+            <tr><td>Work Trace</td><td class="yes">Expanded</td><td class="yes">Per passage</td><td class="yes">Expanded</td><td class="no">Receipt</td></tr>
+            <tr><td>Decision Sheet</td><td class="no">Hidden</td><td class="no">Hidden</td><td class="yes">Visible</td><td class="no">Hidden</td></tr>
+            <tr><td>Queue Shelf</td><td class="yes">If queued</td><td class="yes">If queued</td><td class="no">Hidden</td><td class="no">Promoted</td></tr>
+            <tr><td>Composer</td><td class="yes">Visible</td><td class="yes">Visible</td><td class="no">Hidden</td><td class="yes">Visible</td></tr>
+            <tr><td>Pulse animation</td><td class="yes">Runs</td><td class="yes">Runs</td><td class="no">Stopped</td><td class="no">Ready</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="note-card">
+        <h2>Reduced color system</h2>
+        <p>Background and indentation carry hierarchy. Color only communicates identity or state.</p>
+        <div class="swatches">
+          <div class="swatch" style="background:var(--primary)">Primary<br>Netclaw</div>
+          <div class="swatch" style="background:var(--human)">Human<br>Prompt</div>
+          <div class="swatch" style="background:var(--decision)">Decision<br>Approval</div>
+        </div>
+        <ul>
+          <li>Completed tools reuse the Human color.</li>
+          <li>Errors use Danger only when the result affects meaning.</li>
+          <li>All metadata uses one Muted color.</li>
+          <li>Each state shows at most three emphasis colors.</li>
+        </ul>
+      </section>
+
+      <section class="note-card">
+        <h2>Fragment budget</h2>
+        <ul>
+          <li>One Prompt Surface per user message.</li>
+          <li>One Reply Stack per user Turn.</li>
+          <li>One Reply Passage per model step.</li>
+          <li>One Work Trace per passage that uses tools.</li>
+          <li>One Composer or one Decision Sheet. Never both.</li>
+          <li>No event-level cards in settled scrollback.</li>
+        </ul>
+      </section>
+
+      <section class="note-card">
+        <h2>Turn transition</h2>
+        <div class="flow">
+          <div class="step">1</div><div>The user prompt opens one Reply Stack.</div>
+          <div class="step">2</div><div>The Pulse Line starts before the first model delta.</div>
+          <div class="step">3</div><div>Prose and Work Trace rows update inside that Reply Stack.</div>
+          <div class="step">4</div><div>A Decision Sheet can pause one tool and own input.</div>
+          <div class="step">5</div><div>The Turn freezes as one block. The queue promotes the next prompt.</div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const screens = [...document.querySelectorAll('[data-screen]')];
+    const stateButtons = [...document.querySelectorAll('.state-button')];
+    const widthButtons = [...document.querySelectorAll('.width-button')];
+    const terminalShell = document.getElementById('terminal-shell');
+    const stateTitle = document.getElementById('state-title');
+    const widthLabel = document.getElementById('width-label');
+    const regionToggle = document.getElementById('region-toggle');
+    const replayButton = document.getElementById('replay-button');
+    const stateNames = {
+      active: 'Active reply with a queued prompt',
+      sequence: 'Completed and active work across model steps',
+      approval: 'Approval inside the requesting reply',
+      settled: 'One immutable settled Turn'
+    };
+    const flowStates = ['active', 'sequence', 'approval', 'settled'];
+    let currentState = 'active';
+    let replayTimer = null;
+    let spinnerFrame = 0;
+    let pulseFrame = 0;
+    let flybyFrame = 0;
+
+    const spinnerFrames = ['/', '-', '\\', '|'];
+    const pulseFrames = ['Thinking.', 'Thinking..', 'Thinking...'];
+    const flybyFrames = [
+      'Searching session files for context values...',
+      'Reading the active model definition...',
+      'Comparing provider and model defaults...'
+    ];
+
+    function setState(state) {
+      currentState = state;
+      screens.forEach(screen => { screen.hidden = screen.dataset.screen !== state; });
+      stateButtons.forEach(button => button.classList.toggle('active', button.dataset.state === state));
+      stateTitle.textContent = stateNames[state];
+    }
+
+    const requestedState = new URLSearchParams(window.location.search).get('state');
+    if (requestedState && Object.hasOwn(stateNames, requestedState)) setState(requestedState);
+
+    stateButtons.forEach(button => button.addEventListener('click', () => {
+      stopReplay();
+      setState(button.dataset.state);
+    }));
+
+    widthButtons.forEach(button => button.addEventListener('click', () => {
+      const width = button.dataset.width;
+      terminalShell.className = `terminal-shell width-${width}`;
+      widthButtons.forEach(item => item.classList.toggle('active', item === button));
+      widthLabel.textContent = `${width}-column hierarchy`;
+    }));
+
+    regionToggle.addEventListener('click', () => {
+      const show = !screens[0].classList.contains('show-regions');
+      screens.forEach(screen => screen.classList.toggle('show-regions', show));
+      regionToggle.textContent = show ? 'Hide region names' : 'Show region names';
+      regionToggle.classList.toggle('active', show);
+    });
+
+    function stopReplay() {
+      if (replayTimer !== null) window.clearInterval(replayTimer);
+      replayTimer = null;
+      replayButton.textContent = 'Replay flow';
+      replayButton.classList.remove('active');
+    }
+
+    replayButton.addEventListener('click', () => {
+      if (replayTimer !== null) {
+        stopReplay();
+        return;
+      }
+
+      let index = flowStates.indexOf(currentState);
+      replayButton.textContent = 'Stop replay';
+      replayButton.classList.add('active');
+      replayTimer = window.setInterval(() => {
+        index = (index + 1) % flowStates.length;
+        setState(flowStates[index]);
+      }, 2600);
+    });
+
+    window.setInterval(() => {
+      if (currentState !== 'active' && currentState !== 'sequence') return;
+      spinnerFrame = (spinnerFrame + 1) % spinnerFrames.length;
+      document.querySelectorAll(`[data-screen="${currentState}"] .spinner`)
+        .forEach(element => { element.textContent = spinnerFrames[spinnerFrame]; });
+    }, 140);
+
+    window.setInterval(() => {
+      if (currentState !== 'active' && currentState !== 'sequence') return;
+      pulseFrame = (pulseFrame + 1) % pulseFrames.length;
+      document.querySelectorAll(`[data-screen="${currentState}"] .thinking-pulse`)
+        .forEach(element => { element.textContent = pulseFrames[pulseFrame]; });
+    }, 460);
+
+    window.setInterval(() => {
+      if (currentState !== 'active') return;
+      flybyFrame = (flybyFrame + 1) % flybyFrames.length;
+      const element = document.getElementById('flyby');
+      element.style.opacity = '0.25';
+      window.setTimeout(() => {
+        element.textContent = flybyFrames[flybyFrame];
+        element.style.opacity = '1';
+      }, 120);
+    }, 1700);
+  </script>
+</body>
+</html>

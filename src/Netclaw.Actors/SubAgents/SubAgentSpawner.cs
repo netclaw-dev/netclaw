@@ -288,7 +288,13 @@ public sealed class SubAgentSpawner
                     // through its own session-correlated logs regardless. Streaming
                     // spawn_agent calls pass a real sink so the parent tool's
                     // liveness watchdog sees progress.
-                    ActivitySink = activitySink
+                    ActivitySink = activitySink is null
+                        ? null
+                        : new SubAgentActivityWriter(
+                            activitySink,
+                            context.Outputs,
+                            runId,
+                            definition.Name.Value)
                 },
                 // No Ask timeout: a healthy run is bounded by the sub-agent's own
                 // watchdogs, not by wall-clock, so any finite ceiling here could
@@ -508,5 +514,34 @@ public sealed class SubAgentSpawner
         // the deployment mission playbook. This keeps safety, grounding, and the
         // operator's quality workflow aligned without exposing SOUL.md or TOOLING.md.
         return _promptProvider.GetOperatingRules(context.Audience);
+    }
+
+    private sealed class SubAgentActivityWriter(
+        ChannelWriter<ToolActivityUpdate> inner,
+        ToolExecutionOutputs outputs,
+        SubAgentRunId runId,
+        string agentName) : ChannelWriter<ToolActivityUpdate>
+    {
+        public override bool TryComplete(Exception? error = null) => inner.TryComplete(error);
+
+        public override bool TryWrite(ToolActivityUpdate item)
+        {
+            if (!inner.TryWrite(item))
+                return false;
+
+            outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
+            {
+                RunId = runId,
+                AgentName = agentName,
+                IsStarted = false,
+                IsActivity = true,
+                ActivityPhase = item.Phase,
+                ActivitySummary = item.OutputChunk
+            });
+            return true;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+            => inner.WaitToWriteAsync(cancellationToken);
     }
 }

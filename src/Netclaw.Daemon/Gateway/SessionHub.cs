@@ -75,6 +75,16 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         return _registry.SendMessageAsync(Context.ConnectionId, sessionId, text, Context.User);
     }
 
+    public Task SendMessageWithId(string sessionId, string messageId, string text)
+    {
+        return _registry.SendMessageWithIdAsync(
+            Context.ConnectionId,
+            sessionId,
+            messageId,
+            text,
+            Context.User);
+    }
+
     public Task RespondToInteraction(string sessionId, string callId, string selectedKey)
     {
         return _registry.RespondToInteractionAsync(Context.ConnectionId, sessionId, callId, selectedKey, Context.User);

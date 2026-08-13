@@ -71,6 +71,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ToolCalls = [new FunctionCallContent("call-1", "inspect_context")],
             DefaultTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(5)),
             ReplyTo = ActorRefs.Nobody,
+            EmitToolActivityOutput = _ => { },
             EmitSubAgentOutput = _ => { },
             ApprovalRequests = new ToolApprovalRequests(
                 new ApprovalChannel(),
@@ -455,7 +456,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             .WithTimeout(TimeSpan.FromSeconds(1))
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
@@ -649,6 +650,44 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal("no_completion_tool", result.Name);
         Assert.Contains("without a completion item", result.Content);
+    }
+
+    [Fact]
+    public async Task Parallel_tool_activity_keeps_call_and_turn_correlation()
+    {
+        var executor = new CorrelatedActivityExecutor();
+        var probe = CreateTestProbe("correlated-activity-probe");
+        var activity = new System.Collections.Concurrent.ConcurrentQueue<ToolActivityOutput>();
+        var sessionId = new SessionId("D1/correlated-activity-test");
+        var turnContext = InteractiveTurnContext(sessionId) with
+        {
+            TurnId = new TurnId("turn-activity")
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [
+                    new FunctionCallContent("call-a", "tool-a", new Dictionary<string, object?>()),
+                    new FunctionCallContent("call-b", "tool-b", new Dictionary<string, object?>())
+                ],
+                sessionId,
+                probe.Ref)
+            .WithTurnContext(turnContext)
+            .EmittingToolActivityOutput(activity.Enqueue)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, activity.Count);
+        Assert.Equal(["call-a", "call-b"], activity.Select(item => item.CallId.Value).Order().ToArray());
+        Assert.All(activity, item => Assert.Equal("turn-activity", item.TurnId.Value));
+        Assert.All(activity, item => Assert.DoesNotContain('\x1b', item.Phase));
+        Assert.All(activity, item => Assert.DoesNotContain('\n', item.Summary ?? string.Empty));
+        Assert.All(completed.ToolResults, item =>
+            Assert.DoesNotContain("summary-", item.Content, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -972,6 +1011,31 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ActivitySeen.TrySetResult();
             yield return new ToolActivityUpdate("stdout", ".");
             await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
+        }
+    }
+
+    private sealed class CorrelatedActivityExecutor : IToolExecutor
+    {
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => throw new NotSupportedException("CorrelatedActivityExecutor is streaming-only.");
+
+        public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            yield return new ToolActivityUpdate($"phase-{toolCall.CallId}\x1b", $"summary-{toolCall.CallId}\n");
+            yield return new ToolCompletedUpdate("ok");
         }
     }
 

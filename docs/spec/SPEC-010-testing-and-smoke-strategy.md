@@ -29,6 +29,36 @@ tests can validate real provider integrations.
 - explicit opt-in tests using real endpoints (for example, local Ollama)
 - intended for developer or pre-release validation
 
+## Chat TUI Proof Matrix
+
+The chat redesign requires deterministic headless proof and visual review.
+Unit tests alone cannot validate the visual grammar.
+
+Headless tests SHALL cover:
+
+- every supported `SessionOutput` disposition
+- parallel tools that finish out of order
+- same-name sub-agents with distinct `RunId` values
+- structured resume and old payload conversion
+- layouts at 40, 60, 80, and 120 columns
+- `Shift+Enter`, history draft restore, and double Escape with virtual time
+- approval priority, `Ctrl+O`, detail scroll, paste, and semantic copy
+
+Development review SHALL use three disposable video checkpoints outside the
+repository. The checkpoints SHALL cover the core chat, rich activity with
+approval, and the Inspector with responsive layout.
+
+Each checkpoint SHALL produce a temporary video and selected lossless frame
+images. A developer SHALL review these files and record material visual defects.
+The tapes SHALL not enter CI or the permanent smoke suite.
+
+The Termina package SHALL provide separate primary-buffer proof for Linux,
+macOS, Windows Terminal, and tmux. The proof SHALL cover resize, paste,
+selection, scrollback, and exit recovery.
+
+The full-screen smoke suite SHALL prove that init, config, provider, model, and
+picker applications retain their current terminal lifecycle.
+
 ## Critical Producer/Consumer Contract Inventory
 
 The contracts below are the minimum cross-boundary producer/consumer pairs that
@@ -45,6 +75,7 @@ proof is not complete yet, the gap is assigned to an explicit `NOW` task in
 | Scheduler -> delivery gateway | `SetReminderTool` and reminder persistence write `ReminderDefinition.Delivery` and later emit trusted delivery messages | Reminder execution actor and provider session binding actors that deliver without re-running inbound ACL | `Delivery.Kind` is `Channel` for channel delivery, `Delivery.Transport` is the lowercase provider key such as `slack`, and `Delivery.Address` is a canonical provider channel/user ID resolved before persistence. Runtime trusted delivery uses the stored target rather than a display name. | `src/Netclaw.Daemon.Tests/Reminder/ReminderTargetResolutionPathTests.cs` proves display target resolution to canonical channel/user IDs and unresolved target rejection. `src/Netclaw.Actors.Tests/Reminders/ReminderExecutionActorTests.cs` proves delivery success/failure reporting. Full gateway-chain and no-inbound-ACL re-entry coverage remains an explicit gap in Task 5.3. |
 | Tool schemas -> model/tool dispatcher | Built-in tool registrations and MCP tool adapters expose tool declarations and schemas | Provider serializers, `SessionToolExecutionPipeline`, `McpToolAdapter`, and MCP client manager | Model-facing tools serialize as OpenAI-compatible function tools with stable names, descriptions, JSON Schema parameters, and required fields. MCP tool names use `server/tool`. Dispatcher arguments preserve schema-declared string values and reconstruct structured JSON values only when the schema requires them. | `src/Netclaw.Daemon.Tests/Configuration/OpenAiCompatibleChatClientTests.cs` proves OpenAI function-tool serialization and tool-call history shape. `src/Netclaw.Daemon.Tests/Mcp/SmokeMcpServerArgumentCoercionTests.cs` proves schema-driven MCP argument reconstruction over the real stdio JSON-RPC path. Approval allow/deny/prompt and malformed metadata coverage remains an explicit gap in Task 4.2. |
 | Memory persistence -> prompt assembly | Memory curation, SQLite memory store, session events, and compaction events persist memory and conversation state | `SQLiteMemoryRecallCoordinator`, `SessionMessageAssembler`, and system prompt/session state assembly | Persisted memory uses framework-owned SQLite records and wire enum strings such as trust audience wire values. Session history uses `SerializableChatMessage` records, not provider SDK chat types. Recall appears as volatile context/nudges and does not mutate the stable system prompt prefix. | `src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs` proves memory persistence/search filtering and audience boundaries. `src/Netclaw.Actors.Tests/Memory/MemoryRedesignedEvalSuiteTests.cs` proves formation -> persistence -> recall. `src/Netclaw.Actors.Tests/Sessions/SessionMessageAssemblerTests.cs`, `SessionStateTests.cs`, and `src/Netclaw.Actors.Tests/Protocol/SerializationRoundTripTests.cs` prove prompt assembly placement and serialization-safe session records. Restart/recovery and corrupt/missing state coverage remains an explicit gap in Task 5.2. |
+| Session output -> SignalR -> chat reducer | Session actor output relay and `SessionOutputMapper` | `DaemonClient`, chat presentation reducer, and inline output owner | Typed output keeps all security-safe fields. Tools use `CallId`. Sub-agents use `RunId` and parent `CallId`. Resume uses settled framework-owned transcript entries. | The `redesign-netclaw-chat-tui` change requires output parity, legacy payload, reducer, and native chat tests before completion. |
 
 ## CI Rules
 

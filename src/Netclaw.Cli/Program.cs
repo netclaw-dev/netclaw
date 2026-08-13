@@ -528,134 +528,134 @@ static async Task RunAsync(string[] args)
                 return;
 
             case "pair":
-            {
-                if (args.Length > 2 && IsHelpToken(args[2]))
                 {
-                    WriteDaemonPairHelp();
-                    return;
-                }
-
-                var pairBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(pairBuilder.Services, pairBuilder.Configuration);
-                pairBuilder.Logging.ClearProviders();
-                pairBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-                using var pairHost = pairBuilder.Build();
-                var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
-                var pairHubUrl = $"{pairApi.Endpoint}/hub/session";
-                var pairPaths = pairHost.Services.GetRequiredService<NetclawPaths>();
-                var pairExposureMode = DaemonClientFactory.ResolveExposureMode(pairPaths);
-                var pairTokenFactory = DaemonClientFactory.CreateAccessTokenProvider(pairApi.Endpoint, pairPaths, pairExposureMode);
-
-                await using var pairConn = new HubConnectionBuilder()
-                    .ConfigureAccessToken(pairHubUrl, pairTokenFactory)
-                    .Build();
-
-                try
-                {
-                    await pairConn.StartAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
-                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
-                    Environment.ExitCode = 1;
-                    return;
-                }
-
-                try
-                {
-                    var pairingResult = await pairConn.InvokeAsync<PairingCodeResultDto>("GeneratePairingCode");
-                    Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
-                    Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
-                    Console.WriteLine();
-                    Console.WriteLine("On the remote device, run:");
-                    Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
-                }
-                catch (HubException ex)
-                {
-                    Console.Error.WriteLine($"error: {ex.Message}");
-                    Environment.ExitCode = 1;
-                }
-
-                return;
-            }
-
-            case "devices":
-            {
-                var devicesSubcmd = args.Length > 2 ? args[2] : "list";
-                if (IsHelpToken(devicesSubcmd))
-                {
-                    WriteDaemonDevicesHelp();
-                    return;
-                }
-
-                var devBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(devBuilder.Services, devBuilder.Configuration);
-                devBuilder.Logging.ClearProviders();
-                devBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-                using var devHost = devBuilder.Build();
-                var devApi = devHost.Services.GetRequiredService<DaemonApi>();
-
-                if (devicesSubcmd is "revoke")
-                {
-                    var deviceName = args.Length > 3 ? args[3] : null;
-                    if (string.IsNullOrWhiteSpace(deviceName))
+                    if (args.Length > 2 && IsHelpToken(args[2]))
                     {
-                        Console.Error.WriteLine("error: device name required.");
-                        Console.Error.WriteLine("Usage: netclaw daemon devices revoke <name>");
+                        WriteDaemonPairHelp();
+                        return;
+                    }
+
+                    var pairBuilder = Host.CreateApplicationBuilder(args);
+                    ConfigureConfigServices(pairBuilder.Services, pairBuilder.Configuration);
+                    pairBuilder.Logging.ClearProviders();
+                    pairBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+                    using var pairHost = pairBuilder.Build();
+                    var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
+                    var pairHubUrl = $"{pairApi.Endpoint}/hub/session";
+                    var pairPaths = pairHost.Services.GetRequiredService<NetclawPaths>();
+                    var pairExposureMode = DaemonClientFactory.ResolveExposureMode(pairPaths);
+                    var pairTokenFactory = DaemonClientFactory.CreateAccessTokenProvider(pairApi.Endpoint, pairPaths, pairExposureMode);
+
+                    await using var pairConn = new HubConnectionBuilder()
+                        .ConfigureAccessToken(pairHubUrl, pairTokenFactory)
+                        .Build();
+
+                    try
+                    {
+                        await pairConn.StartAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
+                        Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
                         Environment.ExitCode = 1;
                         return;
                     }
 
                     try
                     {
-                        var removed = await devApi.RevokePairedDeviceAsync(deviceName);
-                        if (removed)
-                            Console.WriteLine($"Device '{deviceName}' revoked.");
-                        else
+                        var pairingResult = await pairConn.InvokeAsync<PairingCodeResultDto>("GeneratePairingCode");
+                        Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
+                        Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
+                        Console.WriteLine();
+                        Console.WriteLine("On the remote device, run:");
+                        Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
+                    }
+                    catch (HubException ex)
+                    {
+                        Console.Error.WriteLine($"error: {ex.Message}");
+                        Environment.ExitCode = 1;
+                    }
+
+                    return;
+                }
+
+            case "devices":
+                {
+                    var devicesSubcmd = args.Length > 2 ? args[2] : "list";
+                    if (IsHelpToken(devicesSubcmd))
+                    {
+                        WriteDaemonDevicesHelp();
+                        return;
+                    }
+
+                    var devBuilder = Host.CreateApplicationBuilder(args);
+                    ConfigureConfigServices(devBuilder.Services, devBuilder.Configuration);
+                    devBuilder.Logging.ClearProviders();
+                    devBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+                    using var devHost = devBuilder.Build();
+                    var devApi = devHost.Services.GetRequiredService<DaemonApi>();
+
+                    if (devicesSubcmd is "revoke")
+                    {
+                        var deviceName = args.Length > 3 ? args[3] : null;
+                        if (string.IsNullOrWhiteSpace(deviceName))
                         {
-                            Console.Error.WriteLine($"Device '{deviceName}' not found.");
+                            Console.Error.WriteLine("error: device name required.");
+                            Console.Error.WriteLine("Usage: netclaw daemon devices revoke <name>");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+
+                        try
+                        {
+                            var removed = await devApi.RevokePairedDeviceAsync(deviceName);
+                            if (removed)
+                                Console.WriteLine($"Device '{deviceName}' revoked.");
+                            else
+                            {
+                                Console.Error.WriteLine($"Device '{deviceName}' not found.");
+                                Environment.ExitCode = 1;
+                            }
+                        }
+                        catch (HttpRequestException ex)
+                        {
+                            Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
                             Environment.ExitCode = 1;
                         }
                     }
-                    catch (HttpRequestException ex)
+                    else
                     {
-                        Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
-                        Environment.ExitCode = 1;
-                    }
-                }
-                else
-                {
-                    // Default: list devices
-                    try
-                    {
-                        var devices = await devApi.ListPairedDevicesAsync();
-                        if (devices.Count == 0)
+                        // Default: list devices
+                        try
                         {
-                            Console.WriteLine("No paired devices.");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"{"Name",-24} {"Created",-22} {"Last Used",-22}");
-                            Console.WriteLine(new string('-', 70));
-                            foreach (var d in devices)
+                            var devices = await devApi.ListPairedDevicesAsync();
+                            if (devices.Count == 0)
                             {
-                                Console.WriteLine(
-                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
+                                Console.WriteLine("No paired devices.");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"{"Name",-24} {"Created",-22} {"Last Used",-22}");
+                                Console.WriteLine(new string('-', 70));
+                                foreach (var d in devices)
+                                {
+                                    Console.WriteLine(
+                                        $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
+                                }
                             }
                         }
+                        catch (HttpRequestException ex)
+                        {
+                            Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
+                            Environment.ExitCode = 1;
+                        }
                     }
-                    catch (HttpRequestException ex)
-                    {
-                        Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
-                        Environment.ExitCode = 1;
-                    }
-                }
 
-                return;
-            }
+                    return;
+                }
 
             default:
                 WriteDaemonHelp();
@@ -1098,8 +1098,8 @@ static async Task RunAsync(string[] args)
         case "chat":
             webBuilder.Services.AddTermina("/chat", termina =>
             {
-                ConfigureNativeSelection(termina);
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+                ConfigureInlineChat(termina);
+                termina.RegisterRoute<InlineChatPage, ChatViewModel>("/chat");
             });
             break;
 
@@ -1108,7 +1108,6 @@ static async Task RunAsync(string[] args)
             {
                 ConfigureNativeSelection(termina);
                 termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
             break;
 
@@ -1130,18 +1129,59 @@ static async Task RunAsync(string[] args)
             return;
     }
 
-    using var app = webBuilder.Build();
-    await RunTerminaHostAsync(app);
+    using (var app = webBuilder.Build())
+    {
+        if (mode == "chat")
+            await RunChatHostAsync(app);
+        else
+            await RunTerminaHostAsync(app);
+    }
+
+    if (mode == "sessions" && navState.ChatLaunchRequested)
+        await RunInlineChatHostAsync(args, navState.ResumeSessionId);
+}
+
+static async Task RunInlineChatHostAsync(string[] args, string? resumeSessionId)
+{
+    var builder = WebApplication.CreateBuilder(args);
+    builder.WebHost.UseUrls("http://127.0.0.1:0");
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    ConfigureCliChatServices(builder.Services, builder.Configuration);
+    builder.Services.AddSingleton(new ChatNavigationState
+    {
+        ResumeSessionId = resumeSessionId
+    });
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    builder.Services.AddTermina("/chat", termina =>
+    {
+        ConfigureInlineChat(termina);
+        termina.RegisterRoute<InlineChatPage, ChatViewModel>("/chat");
+    });
+
+    using var app = builder.Build();
+    await RunChatHostAsync(app);
+}
+
+static async Task RunChatHostAsync(IHost host)
+{
+    var started = await ChatHostGuard.TryRunAsync(
+        () => RunTerminaHostAsync(host),
+        Console.Error,
+        WriteCrashLog);
+
+    if (!started)
+        Environment.ExitCode = 1;
 }
 
 static void ConfigureNativeSelection(TerminaBuilder termina)
 {
-    termina.ConfigureRuntime(options =>
-    {
-        options.PreferRawInput = true;
-        options.ScrollInputMode = ScrollInputMode.AlternateScroll;
-        options.CtrlCHandlingMode = CtrlCHandlingMode.DoublePressWhenRawInput;
-    });
+    termina.ConfigureRuntime(TerminalRuntimeProfiles.ConfigureFullScreenSelection);
+}
+
+static void ConfigureInlineChat(TerminaBuilder termina)
+{
+    termina.ConfigureRuntime(TerminalRuntimeProfiles.ConfigureInlineChat);
 }
 
 static void WriteCrashLog(Exception ex)
@@ -1385,6 +1425,15 @@ static void WriteChatHelp()
     Console.WriteLine("  -p, --prompt        Send a single headless prompt (non-interactive)");
     Console.WriteLine("  --json              Output structured JSON (headless mode only)");
     Console.WriteLine("                      Includes sessionId, response, toolCalls, and usage");
+    Console.WriteLine();
+    Console.WriteLine("Interactive keys:");
+    Console.WriteLine("  Enter               Send the prompt");
+    Console.WriteLine("  Shift+Enter         Add a line to the prompt");
+    Console.WriteLine("  Up / Down           Recall prompts and restore the current draft");
+    Console.WriteLine("  Esc x2              Clear the prompt");
+    Console.WriteLine("  Ctrl+O              Open the Inspector or expand an approval");
+    Console.WriteLine("  Y / Shift+Y         Copy an Inspector event or its complete turn");
+    Console.WriteLine("  Ctrl+Q              Exit chat");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  netclaw chat                                       Interactive TUI");

@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using System.Collections.Frozen;
 using System.Collections.Concurrent;
+using System.Text;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
@@ -37,7 +38,8 @@ internal sealed record ToolCallResult(
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings,
     Jobs.ActiveJobInfo? StartedBackgroundJob = null,
-    SessionScratchCorrectionChange? ScratchCorrectionChange = null);
+    SessionScratchCorrectionChange? ScratchCorrectionChange = null,
+    string? FailureCode = null);
 
 internal abstract record SessionScratchCorrectionChange
 {
@@ -257,6 +259,7 @@ internal sealed class SessionToolBatch
     public ToolRunScope RunScope { get; }
     public required ToolExecutionTimeout DefaultTimeout { get; init; }
     public required IActorRef ReplyTo { get; init; }
+    public required Action<ToolActivityOutput> EmitToolActivityOutput { get; init; }
     public required Action<SubAgentOutput> EmitSubAgentOutput { get; init; }
     public required ToolApprovalRequests ApprovalRequests { get; init; }
     public required BackgroundJobDispatch BackgroundJobs { get; init; }
@@ -309,6 +312,7 @@ internal sealed class SessionToolBatch
         ArgumentNullException.ThrowIfNull(ToolCalls);
         ArgumentNullException.ThrowIfNull(DefaultTimeout);
         ArgumentNullException.ThrowIfNull(ReplyTo);
+        ArgumentNullException.ThrowIfNull(EmitToolActivityOutput);
         ArgumentNullException.ThrowIfNull(EmitSubAgentOutput);
         ArgumentNullException.ThrowIfNull(ApprovalRequests);
         ArgumentNullException.ThrowIfNull(BackgroundJobs);
@@ -392,7 +396,16 @@ internal sealed class SessionToolExecutionPipeline
                 CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
                 AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)],
                 StartedBackgroundJobs = [.. results.Where(r => r.StartedBackgroundJob is not null).Select(r => r.StartedBackgroundJob!)],
-                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)]
+                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)],
+                ToolFailureCodes = results
+                    .Where(result => result.FailureCode is not null)
+                    .ToDictionary<ToolCallResult, string, string>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A failed tool result requires a call identity."),
+                        result => result.FailureCode
+                            ?? throw new InvalidOperationException("A failed tool result requires a failure code."),
+                        StringComparer.Ordinal)
             });
         }
         catch (TimeoutException ex)
@@ -425,6 +438,8 @@ internal sealed class SessionToolExecutionPipeline
         string? sessionScratchDenialDirectory,
         ModelInputBatchBudget modelInputBudget)
     {
+        var originalToolCall = tc;
+
         // Single execution-preflight seam, shared with the sub-agent path via
         // IToolExecutor.InterpretToolCall: validate the ORIGINAL arguments (parse
         // sentinel, invalid/ambiguous meta values, unrecognized keys) and, on
@@ -438,7 +453,7 @@ internal sealed class SessionToolExecutionPipeline
                 Content = rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], [], [], []);
+            }, [], [], [], [], FailureCode: rejection.DenyReason);
         }
 
         var meta = interpretation.Meta;
@@ -455,8 +470,38 @@ internal sealed class SessionToolExecutionPipeline
         string resultText;
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
+        void EmitToolActivity(ToolActivityUpdate update)
+        {
+            batch.EmitToolActivityOutput(new ToolActivityOutput
+            {
+                SessionId = batch.SessionId,
+                TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                CallId = new ToolCallId(tc.CallId),
+                ToolName = new ToolName(tc.Name),
+                TurnId = batch.TurnContext.TurnId,
+                Phase = SanitizeActivityText(update.Phase) ?? "active",
+                Summary = SanitizeActivityText(update.OutputChunk)
+            });
+        }
+
         var outputs = new ToolExecutionOutputs(info =>
         {
+            if (info.IsActivity)
+            {
+                batch.EmitSubAgentOutput(new SubAgentOutput
+                {
+                    SessionId = batch.SessionId,
+                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = new SubAgents.AgentName(info.AgentName),
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Activity,
+                    RunId = info.RunId,
+                    ParentCallId = new ToolCallId(tc.CallId),
+                    ActivityPhase = SanitizeActivityText(info.ActivityPhase),
+                    ActivitySummary = SanitizeActivityText(info.ActivitySummary)
+                });
+                return;
+            }
+
             if (info.IsStarted)
             {
                 batch.EmitSubAgentOutput(new SubAgentOutput
@@ -465,6 +510,8 @@ internal sealed class SessionToolExecutionPipeline
                     TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                     AgentName = new SubAgents.AgentName(info.AgentName),
                     Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Started,
+                    RunId = info.RunId,
+                    ParentCallId = new ToolCallId(tc.CallId),
                     ToolCount = info.ToolCount,
                     Success = info.Success,
                     Duration = info.Duration
@@ -486,6 +533,7 @@ internal sealed class SessionToolExecutionPipeline
                 completedRuns.Add(new CompletedSubAgentRun
                 {
                     RunId = info.RunId,
+                    ParentCallId = new ToolCallId(tc.CallId),
                     AgentName = new SubAgents.AgentName(info.AgentName),
                     Completion = ChildRunCompletion.FromReportedOutcome(
                         info.Outcome ?? (info.Success ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed),
@@ -506,6 +554,7 @@ internal sealed class SessionToolExecutionPipeline
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
                         RunId = info.RunId,
+                        ParentCallId = new ToolCallId(tc.CallId),
                         AgentName = new SubAgents.AgentName(info.AgentName),
                         Duration = info.Duration,
                         Shape = finding.Shape,
@@ -648,7 +697,7 @@ internal sealed class SessionToolExecutionPipeline
             }
 
             resultText = await ExecuteToolAttemptAsync(
-                _executor, tc, context, timeout, _timeProvider, batch.CancellationToken);
+                _executor, originalToolCall, context, timeout, _timeProvider, EmitToolActivity, batch.CancellationToken);
             sw.Stop();
 
         }
@@ -788,7 +837,7 @@ internal sealed class SessionToolExecutionPipeline
                 }
 
                 resultText = await ExecuteToolAttemptAsync(
-                    _executor, tc, context, timeout, _timeProvider, batch.CancellationToken);
+                    _executor, originalToolCall, context, timeout, _timeProvider, EmitToolActivity, batch.CancellationToken);
                 sw.Stop();
 
             }
@@ -899,6 +948,7 @@ internal sealed class SessionToolExecutionPipeline
         ToolExecutionContext context,
         TimeSpan timeout,
         TimeProvider timeProvider,
+        Action<ToolActivityUpdate> emitActivity,
         CancellationToken cancellationToken)
     {
         var grantedOneTimeToolName = context.Approval.OneTimeApprovedToolName;
@@ -919,7 +969,7 @@ internal sealed class SessionToolExecutionPipeline
             // the spawner Ask — the terminal stream item depends on that finally
             // running.)
             if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
-                return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
+                return await DrainToCompletionAsync(stream, toolCall.Name, emitActivity, cancellationToken);
 
             // Opaque tools are bounded by one wall-clock budget. A TimeProvider-driven
             // timeout token (no hand-rolled timer, no volatile) cancels the drain when the
@@ -929,7 +979,7 @@ internal sealed class SessionToolExecutionPipeline
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
             try
             {
-                return await DrainToCompletionAsync(stream, toolCall.Name, linkedCts.Token);
+                return await DrainToCompletionAsync(stream, toolCall.Name, emitActivity, linkedCts.Token);
             }
             catch (OperationCanceledException)
                 when (budgetCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -960,16 +1010,64 @@ internal sealed class SessionToolExecutionPipeline
     /// tool-call contract and fails loudly.
     /// </summary>
     private static async Task<string> DrainToCompletionAsync(
-        IAsyncEnumerable<ToolCallUpdate> stream, string toolName, CancellationToken cancellationToken)
+        IAsyncEnumerable<ToolCallUpdate> stream,
+        string toolName,
+        Action<ToolActivityUpdate> emitActivity,
+        CancellationToken cancellationToken)
     {
         await foreach (var update in stream.WithCancellation(cancellationToken))
         {
             if (update is ToolCompletedUpdate completed)
                 return completed.Result;
+
+            if (update is ToolActivityUpdate activity)
+                emitActivity(activity);
         }
 
         throw new InvalidOperationException(
             $"Tool '{toolName}' stream ended without a completion item.");
+    }
+
+    private static string? SanitizeActivityText(string? value)
+    {
+        const int maxCharacters = 400;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var builder = new StringBuilder(Math.Min(value.Length, maxCharacters));
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                case '\x1b':
+                    builder.Append("\\e");
+                    break;
+                default:
+                    if (char.IsControl(character))
+                        builder.Append($"\\u{(int)character:X4}");
+                    else
+                        builder.Append(character);
+                    break;
+            }
+
+            if (builder.Length >= maxCharacters)
+                break;
+        }
+
+        if (builder.Length > maxCharacters)
+            builder.Length = maxCharacters;
+
+        return builder.ToString();
     }
 
     private static bool SetsEqual(IReadOnlySet<string> left, IReadOnlySet<string> right)

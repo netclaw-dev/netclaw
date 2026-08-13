@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    text { font-family: "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 18px; fill: #cdd6f4; }
+    .small { font-size: 15px; }
+    .body { font-size: 19px; }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+    .muted { fill: #7f849c; }
+    .primary { fill: #89b4fa; }
+    .human { fill: #a6e3a1; }
+    .warning { fill: #f9e2af; }
+    .dark { fill: #111318; }
+    .bold { font-weight: 700; }
+  </style>
+  <rect width="1440" height="900" fill="#111318"/>
+  <rect x="0" y="0" width="1440" height="64" fill="#171a21"/>
+  <rect x="0" y="63" width="1440" height="1" fill="#313746"/>
+  <text x="54" y="39" class="title primary">NETCLAW</text>
+  <text x="180" y="39" class="small">incident-review</text>
+  <text x="358" y="39" class="small muted">deepseek-v4-flash</text>
+  <circle cx="1166" cy="32" r="5" fill="#a6e3a1"/>
+  <text x="1181" y="39" class="small muted">connected</text>
+  <text x="1309" y="39" class="small muted">39%</text>
+
+  <text x="70" y="112" class="small human bold">You</text>
+  <text x="118" y="112" class="small muted">09:58</text>
+  <rect x="54" y="130" width="1120" height="58" rx="4" fill="#19221f"/>
+  <rect x="54" y="130" width="5" height="58" fill="#a6e3a1"/>
+  <text x="76" y="166" class="body">Fix the test and run the focused suite.</text>
+
+  <rect x="54" y="233" width="1120" height="52" rx="4" fill="#4a3d24"/>
+  <rect x="54" y="233" width="7" height="52" fill="#f9e2af"/>
+  <text x="78" y="266" class="warning bold">Approval required</text>
+  <text x="283" y="266" class="small">The agent wants to start a local process.</text>
+
+  <rect x="54" y="285" width="1120" height="390" rx="4" fill="#1d1c1a"/>
+  <text x="78" y="331" class="small muted">REQUESTED BY</text>
+  <text x="264" y="331" class="small">release-reviewer</text>
+
+  <text x="78" y="371" class="small muted">ACTION</text>
+  <text x="264" y="371" class="small">Run a focused test process</text>
+
+  <text x="78" y="411" class="small muted">DIRECTORY</text>
+  <text x="264" y="411" class="small">/work/netclaw</text>
+
+  <text x="78" y="451" class="small muted">SCOPE</text>
+  <text x="264" y="451" class="small">This exact command</text>
+
+  <rect x="78" y="485" width="1072" height="74" rx="3" fill="#12151a"/>
+  <text x="99" y="516" class="small muted">COMMAND</text>
+  <text x="99" y="544" class="body">dotnet test src/Netclaw.Cli.Tests --filter InlineChatPageTests</text>
+
+  <rect x="78" y="595" width="154" height="46" rx="3" fill="#f9e2af"/>
+  <text x="95" y="624" class="small dark bold">Allow once</text>
+  <rect x="248" y="595" width="184" height="46" rx="3" fill="#2a2d35"/>
+  <text x="265" y="624" class="small">Allow this chat</text>
+  <rect x="448" y="595" width="91" height="46" rx="3" fill="#2a2d35"/>
+  <text x="468" y="624" class="small">Deny</text>
+
+  <text x="70" y="728" class="small warning bold">Decision needed</text>
+  <text x="238" y="728" class="small muted">←→ choose</text>
+  <text x="356" y="728" class="small muted">Enter confirm</text>
+  <text x="505" y="728" class="small muted">Ctrl+O details</text>
+  <text x="672" y="728" class="small muted">Esc deny</text>
+  <text x="782" y="728" class="small muted">Ctrl+Q quit</text>
+</svg>

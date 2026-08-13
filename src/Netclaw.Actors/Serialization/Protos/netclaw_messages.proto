@@ -77,6 +77,53 @@ message SerializableChatMessageProto {
   repeated SerializableMediaReferenceProto media_references = 6;
 }
 
+message SessionTranscriptEntryProto {
+  string type = 1;
+  optional string turn_id = 2;
+  int64 timestamp_ms = 3;
+  optional string role = 4;
+  optional string text = 5;
+  optional string call_id = 6;
+  optional string tool_name = 7;
+  optional string arguments_json = 8;
+  optional string result = 9;
+  optional string run_id = 10;
+  optional string parent_call_id = 11;
+  optional string agent_name = 12;
+  optional string outcome = 13;
+  optional string outcome_reason = 14;
+  optional double duration_ms = 15;
+  optional int32 findings_count = 16;
+  optional string memory_decision = 17;
+  optional string memory_decision_reason = 18;
+  optional string file_path = 19;
+  optional string file_name = 20;
+  optional string mime_type = 21;
+  optional string error_message = 22;
+  optional string error_correlation_id = 23;
+  optional string error_category = 24;
+  optional int64 input_tokens = 25;
+  optional int64 output_tokens = 26;
+  optional int64 total_tokens = 27;
+  optional int64 cached_input_tokens = 28;
+  optional int64 reasoning_tokens = 29;
+  optional int32 context_window_tokens = 30;
+  optional double usage_percent = 31;
+  optional int32 messages_before = 32;
+  optional int32 messages_after = 33;
+  optional bool tool_results_cleared = 34;
+  optional bool summarized = 35;
+  optional int64 pre_compaction_input_tokens = 36;
+  optional int32 keep_count_used = 37;
+  optional string error_detail = 38;
+  optional double prompt_ms = 39;
+  optional double predicted_per_second = 40;
+  optional string batch_id = 41;
+  optional int32 batch_size = 42;
+  optional string approval_selected_key = 43;
+  optional string rationale = 44;
+}
+
 // ── Commands ──
 
 message SendUserMessageProto {
@@ -94,6 +141,8 @@ message TurnRecordedProto {
   int64 recorded_at_ms = 4;
   optional string source_reminder_id = 5;
   optional string source_background_job_id = 6;
+  repeated SessionTranscriptEntryProto transcript_entries = 7;
+  repeated SerializableChatMessageProto user_messages = 8;
 }
 
 message SessionTitleSetProto {
@@ -117,6 +166,7 @@ message ToolBatchStartedProto {
   SerializableChatMessageProto user_message = 2;
   SerializableChatMessageProto assistant_message = 3;
   int64 started_at_ms = 4;
+  repeated SerializableChatMessageProto user_messages = 5;
 }
 
 message ToolCallRecordedProto {
@@ -268,6 +318,7 @@ message SessionSnapshotProto {
   repeated ActiveJobInfoProto active_background_jobs = 7;
   repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
   reserved 9;
+  repeated SessionTranscriptEntryProto recent_transcript = 10;
 }
 
 // ── Session state ──

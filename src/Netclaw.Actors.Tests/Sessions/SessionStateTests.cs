@@ -53,6 +53,59 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void Apply_TurnRecorded_restores_all_batched_user_messages()
+    {
+        var state = SessionState.Empty.Apply(new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Second" },
+            UserMessages =
+            [
+                new SerializableChatMessage { Role = ChatRole.User, Content = "First" },
+                new SerializableChatMessage { Role = ChatRole.User, Content = "Second" }
+            ],
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            RecordedAtMs = 42
+        });
+
+        Assert.Equal(
+            ["First", "Second", "Done"],
+            state.History.Select(message => message.Content));
+        Assert.Equal(
+            [SessionTranscriptEntryTypes.User, SessionTranscriptEntryTypes.User, SessionTranscriptEntryTypes.Assistant],
+            state.RecentTranscript.Select(entry => entry.Type));
+        Assert.Equal(
+            ["First", "Second", "Done"],
+            state.RecentTranscript.Select(entry => entry.Text));
+        Assert.Equal(1, state.TurnCount);
+    }
+
+    [Fact]
+    public void Turn_checkpoint_keeps_all_batched_user_messages()
+    {
+        var turn = new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Second" },
+            UserMessages =
+            [
+                new SerializableChatMessage { Role = ChatRole.User, Content = "First" },
+                new SerializableChatMessage { Role = ChatRole.User, Content = "Second" }
+            ],
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" }
+        };
+
+        var checkpoint = SessionMemoryCheckpointFactory.ForTurnComplete(
+            TestSessionId,
+            turn,
+            "trusted-instance",
+            "personal");
+
+        Assert.Equal("First\n\nSecond", checkpoint.UserContent);
+        Assert.Equal("User: First\n\nSecond\nAssistant: Done", checkpoint.Content);
+    }
+
+    [Fact]
     public void Apply_TurnRecorded_is_cumulative()
     {
         var state = SessionState.Empty;
@@ -72,6 +125,76 @@ public class SessionStateTests
 
         Assert.Equal(4, state.History.Count);
         Assert.Equal(2, state.TurnCount);
+    }
+
+    [Fact]
+    public void Apply_legacy_TurnRecorded_derives_settled_transcript_entries()
+    {
+        var state = SessionState.Empty.Apply(new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Hello" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Hi" },
+            RecordedAtMs = 42
+        });
+
+        Assert.Collection(
+            state.RecentTranscript,
+            entry =>
+            {
+                Assert.Equal(SessionTranscriptEntryTypes.User, entry.Type);
+                Assert.Equal("Hello", entry.Text);
+                Assert.Equal(42, entry.TimestampMs);
+            },
+            entry =>
+            {
+                Assert.Equal(SessionTranscriptEntryTypes.Assistant, entry.Type);
+                Assert.Equal("Hi", entry.Text);
+                Assert.Equal(42, entry.TimestampMs);
+            });
+    }
+
+    [Fact]
+    public void Apply_TurnRecorded_uses_explicit_transcript_entries()
+    {
+        var expected = new SessionTranscriptEntry
+        {
+            Type = SessionTranscriptEntryTypes.Tool,
+            TurnId = "turn-1",
+            CallId = "call-1",
+            ToolName = "shell_execute",
+            Result = "ok"
+        };
+        var state = SessionState.Empty.Apply(new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Run it" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            TranscriptEntries = [expected]
+        });
+
+        Assert.Equal([expected], state.RecentTranscript);
+    }
+
+    [Fact]
+    public void KeepRecentTranscriptTurns_keeps_complete_recent_turns()
+    {
+        var state = SessionState.Empty;
+        for (var turn = 1; turn <= 3; turn++)
+        {
+            state = state.Apply(new TurnRecorded
+            {
+                SessionId = TestSessionId,
+                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = $"User {turn}" },
+                AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = $"Reply {turn}" }
+            });
+        }
+
+        var result = state.KeepRecentTranscriptTurns(2);
+
+        Assert.Equal(4, result.RecentTranscript.Count);
+        Assert.Equal("User 2", result.RecentTranscript[0].Text);
+        Assert.Equal("Reply 3", result.RecentTranscript[^1].Text);
     }
 
     [Fact]
@@ -343,6 +466,50 @@ public class SessionStateTests
             Assert.Equal(state.History[i].Role, restored.History[i].Role);
             Assert.Equal(state.History[i].Content, restored.History[i].Content);
         }
+    }
+
+    [Fact]
+    public void From_legacy_snapshot_derives_tool_transcript_without_active_state()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            TurnCount = 1,
+            History =
+            [
+                new SerializableChatMessage { Role = ChatRole.User, Content = "Check status" },
+                new SerializableChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    Content = string.Empty,
+                    ToolCalls =
+                    [
+                        new SerializableToolCall
+                        {
+                            CallId = new ToolCallId("call-1"),
+                            Name = new ToolName("status"),
+                            ArgumentsJson = "{}"
+                        }
+                    ]
+                },
+                new SerializableChatMessage
+                {
+                    Role = ChatRole.Tool,
+                    Content = "healthy",
+                    Name = "status",
+                    ToolCallId = new ToolCallId("call-1")
+                },
+                new SerializableChatMessage { Role = ChatRole.Assistant, Content = "All healthy" }
+            ]
+        };
+
+        var restored = SessionState.FromSnapshot(snapshot);
+
+        var tool = Assert.Single(restored.RecentTranscript, entry =>
+            entry.Type == SessionTranscriptEntryTypes.Tool);
+        Assert.Equal("call-1", tool.CallId);
+        Assert.Equal("healthy", tool.Result);
+        Assert.DoesNotContain(restored.RecentTranscript, entry =>
+            entry.Type == SessionTranscriptEntryTypes.Diagnostic);
     }
 
     [Fact]

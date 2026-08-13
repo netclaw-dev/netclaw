@@ -11,7 +11,9 @@ using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -68,7 +70,11 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "test query" })
+                new Dictionary<string, object?>
+                {
+                    ["query"] = "test query",
+                    ["_rationale"] = "Find sources for the requested topic"
+                })
         ];
 
         _fakeToolExecutor.Results["web_search"] = "Found 3 results for test query";
@@ -94,6 +100,7 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("web_search", toolCall.ToolName.Value);
         Assert.Equal("call-1", toolCall.CallId.Value);
+        Assert.Equal("Find sources for the requested topic", toolCall.Rationale);
 
         // Drain the tool result output emitted after tool execution
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -346,6 +353,19 @@ internal sealed class FakeToolExecutor : IToolExecutor
 
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
+
+    public bool RequireRationale { get; set; }
+
+    public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
+    {
+        if (!RequireRationale)
+            return null;
+
+        var error = ToolCallMetaExtractor.ValidateRequiredRationale(
+            toolCall.Arguments,
+            ToolCallMeta.ResolveExactMetaField);
+        return error is null ? null : new ToolArgumentRejection(error, "invalid_rationale");
+    }
 
     public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {

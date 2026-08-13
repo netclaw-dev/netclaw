@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    text { font-family: "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 18px; fill: #cdd6f4; }
+    .small { font-size: 15px; }
+    .body { font-size: 18px; }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+    .muted { fill: #7f849c; }
+    .primary { fill: #89b4fa; }
+    .success { fill: #a6e3a1; }
+    .danger { fill: #f38ba8; }
+    .bold { font-weight: 700; }
+  </style>
+  <rect width="1440" height="900" fill="#111318"/>
+  <rect x="0" y="0" width="1440" height="64" fill="#171a21"/>
+  <rect x="0" y="63" width="1440" height="1" fill="#313746"/>
+  <text x="54" y="39" class="title primary">INSPECTOR</text>
+  <text x="185" y="39" class="small">incident-review</text>
+  <text x="1139" y="39" class="small muted">event 5 of 9</text>
+
+  <rect x="54" y="92" width="386" height="696" rx="4" fill="#171a21"/>
+  <text x="78" y="126" class="small muted">TURN EVENTS</text>
+
+  <text x="78" y="173" class="small success bold">Done</text>
+  <text x="142" y="173" class="small">User prompt</text>
+  <text x="371" y="173" class="small muted">09:56</text>
+
+  <text x="78" y="219" class="small success bold">Done</text>
+  <text x="142" y="219" class="small">Thought</text>
+  <text x="371" y="219" class="small muted">4s</text>
+
+  <text x="78" y="265" class="small success bold">Done</text>
+  <text x="142" y="265" class="small">read workflow</text>
+  <text x="371" y="265" class="small muted">1.2s</text>
+
+  <text x="78" y="311" class="small success bold">Done</text>
+  <text x="142" y="311" class="small">release-reviewer</text>
+  <text x="371" y="311" class="small muted">8.4s</text>
+
+  <rect x="66" y="332" width="362" height="52" rx="3" fill="#24354d"/>
+  <text x="78" y="364" class="small primary bold">Tool</text>
+  <text x="142" y="364" class="small">compare manifest</text>
+  <text x="371" y="364" class="small muted">3.1s</text>
+
+  <text x="78" y="423" class="small danger bold">Fail</text>
+  <text x="142" y="423" class="small">release check</text>
+  <text x="371" y="423" class="small muted">0.8s</text>
+
+  <text x="78" y="469" class="small success bold">Done</text>
+  <text x="142" y="469" class="small">Netclaw reply</text>
+  <text x="371" y="469" class="small muted">09:57</text>
+
+  <rect x="464" y="92" width="922" height="696" rx="4" fill="#171a21"/>
+  <rect x="464" y="92" width="6" height="696" fill="#89b4fa"/>
+  <text x="494" y="132" class="small primary bold">TOOL RESULT</text>
+  <text x="494" y="171" class="small muted">compare package manifest</text>
+
+  <text x="494" y="220" class="small muted">CALL</text>
+  <text x="605" y="220" class="small">call_62c8</text>
+  <text x="494" y="258" class="small muted">STATUS</text>
+  <text x="605" y="258" class="small success">completed</text>
+  <text x="494" y="296" class="small muted">DURATION</text>
+  <text x="605" y="296" class="small">3.1s</text>
+
+  <rect x="494" y="333" width="862" height="259" rx="3" fill="#111318"/>
+  <text x="518" y="368" class="small muted">RESULT</text>
+  <text x="518" y="410" class="body">The release tag matches VersionPrefix and VersionSuffix.</text>
+  <text x="518" y="446" class="body">The package manifest contains one stale prerelease entry.</text>
+  <text x="518" y="482" class="body">The feed order places beta.10 after beta.9.</text>
+  <text x="518" y="536" class="body success">The version comparator is correct.</text>
+
+  <text x="494" y="649" class="small muted">Y copies this event as clean text.</text>
+  <text x="494" y="681" class="small muted">Shift+Y copies the complete turn.</text>
+
+  <text x="70" y="844" class="small primary bold">Inspect</text>
+  <text x="160" y="844" class="small muted">↑↓ event</text>
+  <text x="282" y="844" class="small muted">PgUp/PgDn detail</text>
+  <text x="484" y="844" class="small muted">Y copy event</text>
+  <text x="633" y="844" class="small muted">Shift+Y copy turn</text>
+  <text x="837" y="844" class="small muted">Ctrl+O close</text>
+</svg>

@@ -11,6 +11,7 @@
   offline vs daemon-required command categorization)
 - Revised: 2026-05-24 (bootstrap-only `init`, domain-oriented `config`,
   init-owned identity re-entry, explicit reset flow)
+- Revised: 2026-08-11 (inline chat, structured output, input, approval, and copy contracts)
 - Depends on: `PRD-001`, `PRD-002`
 
 ## Goal
@@ -38,7 +39,7 @@ Netclaw ships as two binaries (see PRD-001 for full architecture):
 
 - **Simple arg routing** in `Program.cs` for command selection (Cocona is archived
   as of Dec 2025 — replaced with direct `args[0]` routing)
-- **Termina 0.5.1** for interactive TUI commands (`netclaw init`, `netclaw chat`)
+- **Termina** for interactive TUI commands, with an explicit mode for each application
 - All other commands use plain console output
 - Commands that need the daemon connect via `Microsoft.AspNetCore.SignalR.Client`
 - If the daemon isn't running and a command requires it, print an error with
@@ -133,7 +134,8 @@ Command ownership stays explicit:
   daemon over SignalR. Renders `SessionOutput` stream, sends `ChannelInput`.
   Session entity key: `tui/{uuid}`. If `netclaw.json` is absent, the command
   SHALL fail before contacting the daemon with
-  `daemon not configured - please run netclaw init`. See TUI-001 wireframes.
+  `daemon not configured - please run netclaw init`. Chat SHALL use the primary
+  terminal buffer after its full-screen session picker exits. See TUI-001.
 
 ### TUI-Interactive Commands (Termina, offline)
 
@@ -297,11 +299,13 @@ Results are persisted to the environment inventory file.
 
 ### CLI-010 TUI Commands
 
-`netclaw init`, `netclaw config`, and `netclaw chat` SHALL use Termina 0.5.1
-for interactive TUI rendering. Bare `netclaw provider` and `netclaw model`
-SHALL also use Termina. All other commands SHALL use plain console output. TUI
-commands SHALL launch Termina as a hosted service within the mode-selected host
-builder.
+`netclaw init`, `netclaw config`, and `netclaw chat` SHALL use the pinned Termina
+package. Bare `netclaw provider` and `netclaw model` SHALL also use Termina. All
+other commands SHALL use plain console output.
+
+Each Termina application SHALL select one presentation mode for its lifetime.
+Chat SHALL select `Inline` and `NativeTerminal`. Setup, config, provider, model,
+and session picker applications SHALL retain `FullScreen`.
 
 ### CLI-011 Chat Thin Client
 
@@ -312,11 +316,25 @@ interactive TUI for agent conversations. The TUI SHALL:
 - Create a session via the hub and receive a session ID
 - Send `ChannelInput` messages via SignalR
 - Subscribe to `SessionOutput` stream for rendering
-- Render session output as streaming text via StreamingTextNode
-- Display tool invocation status inline (completed with duration, in-progress
-  with spinner)
-- Show model name, token usage, and context percentage in status bar
+- Reduce each typed output into immutable settled content and a bounded live deck
+- Show thought, parallel tool, sub-agent, approval, file, error, usage,
+  compaction, and turn outcome forms with stable identities
+- Keep the settled transcript borderless in native terminal scrollback
+- Show model name, token usage, and context percentage in the Session Header
+- Use bare `Enter` to submit and `Shift+Enter` to add a newline
+- Keep the Composer active while the agent works
+- Show every later prompt in the ordered Queue Shelf
+- Send all later prompts through the session queue for one FIFO follow-up model call
+- Show assistant text as each streaming delta arrives
+- Restore a saved draft after prompt history reaches its newest entry
+- Clear prompt text only after two Escape keys inside a `TimeProvider` window
+- Give a pending approval input priority and preserve `Ctrl+O` detail expansion
+- Provide an Inspector and semantic copy for complete safe event detail
+- Report copy, terminal, and unsupported-event failures visibly
 - Print a clear error if the daemon is not running
+
+The client SHALL preserve `RecentMessages` compatibility. It SHALL prefer the
+additive structured transcript when the daemon supplies it.
 
 ### CLI-012 Daemon Management
 

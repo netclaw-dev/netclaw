@@ -156,4 +156,32 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(1, tracker.ToolIterationCount);
         Assert.Equal(100, tracker.ToolCallCount);
     }
+
+    [Fact]
+    public void Three_invalid_rationale_iterations_disable_more_tools()
+    {
+        var tracker = new TurnStateTracker();
+
+        Assert.IsType<InvalidRationaleAction.Continue>(
+            tracker.EvaluateInvalidRationaleResults(1, 1));
+        Assert.IsType<InvalidRationaleAction.Continue>(
+            tracker.EvaluateInvalidRationaleResults(1, 1));
+        var stop = Assert.IsType<InvalidRationaleAction.StopTools>(
+            tracker.EvaluateInvalidRationaleResults(1, 1));
+
+        Assert.Contains("omitted", stop.NudgeText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_mixed_tool_batch_resets_the_invalid_rationale_sequence()
+    {
+        var tracker = new TurnStateTracker();
+
+        tracker.EvaluateInvalidRationaleResults(1, 1);
+        tracker.EvaluateInvalidRationaleResults(1, 1);
+        Assert.IsType<InvalidRationaleAction.Continue>(
+            tracker.EvaluateInvalidRationaleResults(1, 2));
+        Assert.IsType<InvalidRationaleAction.Continue>(
+            tracker.EvaluateInvalidRationaleResults(1, 1));
+    }
 }

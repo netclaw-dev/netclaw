@@ -13,6 +13,11 @@ namespace Netclaw.Cli.Tui;
 public sealed class ChatNavigationState
 {
     /// <summary>
+    /// Gets whether the session picker requested a separate inline chat host.
+    /// </summary>
+    public bool ChatLaunchRequested { get; private set; }
+
+    /// <summary>
     /// When set, <see cref="ChatViewModel"/> will resume this session ID
     /// instead of creating a new one. Consumed (cleared) on first read.
     /// </summary>
@@ -26,6 +31,15 @@ public sealed class ChatNavigationState
         var id = ResumeSessionId;
         ResumeSessionId = null;
         return id;
+    }
+
+    /// <summary>
+    /// Requests a new inline chat host after the full-screen picker exits.
+    /// </summary>
+    public void RequestChatLaunch(string? resumeSessionId)
+    {
+        ResumeSessionId = resumeSessionId;
+        ChatLaunchRequested = true;
     }
 
     /// <summary>

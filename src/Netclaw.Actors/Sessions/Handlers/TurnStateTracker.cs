@@ -14,6 +14,7 @@ internal sealed class TurnStateTracker
 {
     private const int MaxPreToolEmptyRetries = 5;
     private const int MaxPostToolEmptyRetries = 8;
+    private const int MaxConsecutiveInvalidRationaleIterations = 3;
     private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
 
@@ -52,6 +53,7 @@ internal sealed class TurnStateTracker
     private int _postToolEmptyResponseCount;
     private int _preToolEmptyResponseCount;
     private bool _duplicateNudgeSent;
+    private int _consecutiveInvalidRationaleIterations;
 
     /// <summary>
     /// Reset all per-turn state. Called at the start of each user turn.
@@ -66,6 +68,7 @@ internal sealed class TurnStateTracker
         ForceNoToolsActive = false;
         _toolCallCounts.Clear();
         _duplicateNudgeSent = false;
+        _consecutiveInvalidRationaleIterations = 0;
     }
 
     /// <summary>
@@ -78,6 +81,7 @@ internal sealed class TurnStateTracker
         ToolIterationCount = 0;
         _toolCallCounts.Clear();
         _duplicateNudgeSent = false;
+        _consecutiveInvalidRationaleIterations = 0;
     }
 
     /// <summary>
@@ -142,6 +146,26 @@ internal sealed class TurnStateTracker
         }
 
         return ToolBudgetStatus.Ok.Instance;
+    }
+
+    public InvalidRationaleAction EvaluateInvalidRationaleResults(
+        int invalidRationaleCount,
+        int resultCount)
+    {
+        if (resultCount <= 0 || invalidRationaleCount != resultCount)
+        {
+            _consecutiveInvalidRationaleIterations = 0;
+            return InvalidRationaleAction.Continue.Instance;
+        }
+
+        _consecutiveInvalidRationaleIterations++;
+        if (_consecutiveInvalidRationaleIterations < MaxConsecutiveInvalidRationaleIterations)
+            return InvalidRationaleAction.Continue.Instance;
+
+        return new InvalidRationaleAction.StopTools(
+            "The provider omitted the required tool rationale three times. "
+            + "Do not request more tools in this turn. "
+            + "Answer with the evidence that you already have, and state any limits.");
     }
 
     // ── Duplicate detection decisions ──
@@ -251,6 +275,16 @@ internal abstract record ToolBudgetStatus
 
 /// <summary>Result of <see cref="TurnStateTracker.CheckForDuplicates"/>.</summary>
 internal sealed record DuplicateToolNudge(string ToolName, int Count, string NudgeText);
+
+internal abstract record InvalidRationaleAction
+{
+    internal sealed record Continue : InvalidRationaleAction
+    {
+        public static readonly Continue Instance = new();
+    }
+
+    internal sealed record StopTools(string NudgeText) : InvalidRationaleAction;
+}
 
 /// <summary>Result of <see cref="TurnStateTracker.EvaluateEmptyResponse"/>.</summary>
 internal abstract record EmptyResponseAction

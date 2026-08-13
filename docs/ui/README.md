@@ -8,6 +8,8 @@ This directory contains management UI planning artifacts for Netclaw.
   component behavior
 - `TUI-001-command-wireframes.md` - Termina TUI wireframes for `netclaw init`,
   `netclaw chat`, and plain CLI commands
+- `chat-reply-stack-v2/index.html` - interactive Netclaw chat hierarchy,
+  state, motion, and responsive mock-ups
 - `ops-console-v1.html` - static high-fidelity mockup for visual direction
 
 ## Design Intent

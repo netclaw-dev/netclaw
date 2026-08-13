@@ -4,8 +4,12 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
+using Netclaw.Configuration;
+using Netclaw.Media;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -75,6 +79,98 @@ public sealed class DaemonClientMappingTests
     }
 
     [Fact]
+    public void ToolActivityOutput_roundtrips_all_correlation_fields()
+    {
+        var original = new ToolActivityOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 124,
+            CallId = new ToolCallId("call-activity"),
+            ToolName = new ToolName("shell_execute"),
+            TurnId = new TurnId("turn-7"),
+            Phase = "stdout",
+            Summary = "tests pass"
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        var roundTripped = DaemonClient.FromDto(dto);
+
+        Assert.Equal(SessionOutputTypes.ToolActivity, dto.Type);
+        Assert.Equal("turn-7", dto.TurnId);
+        var result = Assert.IsType<ToolActivityOutput>(roundTripped);
+        Assert.Equal("call-activity", result.CallId.Value);
+        Assert.Equal("shell_execute", result.ToolName.Value);
+        Assert.Equal("turn-7", result.TurnId.Value);
+        Assert.Equal("stdout", result.Phase);
+        Assert.Equal("tests pass", result.Summary);
+    }
+
+    [Fact]
+    public void UsageOutput_roundtrips_complete_provider_detail()
+    {
+        var original = new UsageOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 130,
+            InputTokens = 1000,
+            OutputTokens = 200,
+            TotalTokens = 1200,
+            CachedInputTokens = 400,
+            ReasoningTokens = 80,
+            ContextWindowTokens = 128000,
+            UsagePercent = 0.125,
+            PromptMs = 22.5,
+            PredictedPerSecond = 41.2
+        };
+
+        var result = Assert.IsType<UsageOutput>(
+            DaemonClient.FromDto(SessionOutputDtoMapper.ToDto(original)));
+
+        Assert.Equal(original.InputTokens, result.InputTokens);
+        Assert.Equal(original.OutputTokens, result.OutputTokens);
+        Assert.Equal(original.TotalTokens, result.TotalTokens);
+        Assert.Equal(original.CachedInputTokens, result.CachedInputTokens);
+        Assert.Equal(original.ReasoningTokens, result.ReasoningTokens);
+        Assert.Equal(original.ContextWindowTokens, result.ContextWindowTokens);
+        Assert.Equal(original.UsagePercent, result.UsagePercent);
+        Assert.Equal(original.PromptMs, result.PromptMs);
+        Assert.Equal(original.PredictedPerSecond, result.PredictedPerSecond);
+    }
+
+    [Fact]
+    public void File_and_turn_outputs_roundtrip_complete_detail()
+    {
+        var file = new FileOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 140,
+            FilePath = "/work/report.md",
+            FileName = "report.md",
+            MimeType = new MimeType("text/markdown")
+        };
+        var turn = new TurnCompleted
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 141,
+            TurnNumber = new TurnNumber(8),
+            Outcome = TurnOutcome.Failed,
+            SourceReminderId = new ReminderId("daily:1")
+        };
+
+        var fileResult = Assert.IsType<FileOutput>(
+            DaemonClient.FromDto(SessionOutputDtoMapper.ToDto(file)));
+        var turnResult = Assert.IsType<TurnCompleted>(
+            DaemonClient.FromDto(SessionOutputDtoMapper.ToDto(turn)));
+
+        Assert.Equal(file.FilePath, fileResult.FilePath);
+        Assert.Equal(file.FileName, fileResult.FileName);
+        Assert.Equal(file.MimeType, fileResult.MimeType);
+        Assert.Equal(turn.TurnNumber, turnResult.TurnNumber);
+        Assert.Equal(turn.Outcome, turnResult.Outcome);
+        Assert.Equal(turn.SourceReminderId, turnResult.SourceReminderId);
+    }
+
+    [Fact]
     public void FromDto_unknown_type_becomes_error_output()
     {
         var dto = new SessionOutputDto
@@ -105,6 +201,17 @@ public sealed class DaemonClientMappingTests
             [
                 new ChatMessageDto("user", "Hello"),
                 new ChatMessageDto("assistant", "Hi there!")
+            ],
+            RecentTranscript =
+            [
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.Tool,
+                    TurnId = "turn-1",
+                    CallId = "call-1",
+                    ToolName = "status",
+                    Result = "healthy"
+                }
             ]
         };
 
@@ -120,6 +227,9 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("Hello", joined.RecentMessages[0].Content);
         Assert.Equal("assistant", joined.RecentMessages[1].Role);
         Assert.Equal("Hi there!", joined.RecentMessages[1].Content);
+        var tool = Assert.Single(joined.RecentTranscript!);
+        Assert.Equal("call-1", tool.CallId);
+        Assert.Equal("healthy", tool.Result);
     }
 
     [Fact]
@@ -142,6 +252,34 @@ public sealed class DaemonClientMappingTests
         Assert.Null(joined.Title);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.RecentMessages);
+        Assert.Null(joined.RecentTranscript);
+    }
+
+    [Fact]
+    public void SessionJoined_roundtrips_both_resume_shapes()
+    {
+        var original = new SessionJoined
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 101,
+            TurnCount = 1,
+            RecentMessages = [new ChatMessageDto("user", "Hello")],
+            RecentTranscript =
+            [
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.User,
+                    TurnId = "turn-1",
+                    Text = "Hello"
+                }
+            ]
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        var result = Assert.IsType<SessionJoined>(DaemonClient.FromDto(dto));
+
+        Assert.Single(result.RecentMessages!);
+        Assert.Equal(original.RecentTranscript, result.RecentTranscript);
     }
 
     [Fact]
@@ -153,6 +291,8 @@ public sealed class DaemonClientMappingTests
             TimestampMs = 500,
             AgentName = new AgentName("memory-curator"),
             Phase = SubAgentPhase.Started,
+            RunId = new SubAgentRunId("run-started"),
+            ParentCallId = new ToolCallId("call-parent"),
             ToolCount = 5
         };
 
@@ -161,6 +301,8 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("memory-curator", dto.AgentName);
         Assert.Equal("started", dto.Phase);
         Assert.Equal(5, dto.ToolCountSub);
+        Assert.Equal("run-started", dto.RunId);
+        Assert.Equal("call-parent", dto.ParentCallId);
         Assert.Null(dto.SubAgentOutcome);
         Assert.Null(dto.SubAgentOutcomeReason);
         Assert.Null(dto.MemoryDecision);
@@ -170,6 +312,35 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("memory-curator", result.AgentName.Value);
         Assert.Equal(SubAgentPhase.Started, result.Phase);
         Assert.Equal(5, result.ToolCount);
+        Assert.Equal("run-started", result.RunId?.Value);
+        Assert.Equal("call-parent", result.ParentCallId?.Value);
+    }
+
+    [Fact]
+    public void SubAgentOutput_roundtrips_activity_with_stable_identity()
+    {
+        var original = new SubAgentOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 550,
+            AgentName = new AgentName("test-diagnostics"),
+            Phase = SubAgentPhase.Activity,
+            RunId = new SubAgentRunId("run-activity"),
+            ParentCallId = new ToolCallId("call-parent"),
+            ActivityPhase = "running tools",
+            ActivitySummary = "dotnet test"
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        var roundTripped = DaemonClient.FromDto(dto);
+
+        Assert.Equal("activity", dto.Phase);
+        var result = Assert.IsType<SubAgentOutput>(roundTripped);
+        Assert.Equal(SubAgentPhase.Activity, result.Phase);
+        Assert.Equal("run-activity", result.RunId?.Value);
+        Assert.Equal("call-parent", result.ParentCallId?.Value);
+        Assert.Equal("running tools", result.ActivityPhase);
+        Assert.Equal("dotnet test", result.ActivitySummary);
     }
 
     [Fact]
@@ -181,6 +352,8 @@ public sealed class DaemonClientMappingTests
             TimestampMs = 600,
             AgentName = new AgentName("memory-retriever"),
             Phase = SubAgentPhase.Completed,
+            RunId = new SubAgentRunId("run-completed"),
+            ParentCallId = new ToolCallId("call-parent"),
             Success = true,
             Outcome = SubAgentRunOutcome.Partial,
             OutcomeReason = SubAgentOutcomeReason.ToolIterationBudgetExhausted,
@@ -211,6 +384,39 @@ public sealed class DaemonClientMappingTests
         Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
         Assert.Equal("accepted", result.MemoryDecision);
         Assert.Equal(2, result.FindingsCount);
+        Assert.Equal("run-completed", result.RunId?.Value);
+        Assert.Equal("call-parent", result.ParentCallId?.Value);
+    }
+
+    [Fact]
+    public void CompactionOutput_roundtrips_complete_detail()
+    {
+        var original = new CompactionOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 700,
+            MessagesBefore = 40,
+            MessagesAfter = 8,
+            ToolResultsCleared = true,
+            Summarized = true,
+            ContextWindowTokens = 128000,
+            PreCompactionInputTokens = 97000,
+            KeepCountUsed = 6
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        var roundTripped = DaemonClient.FromDto(dto);
+
+        Assert.True(dto.ToolResultsCleared);
+        Assert.True(dto.Summarized);
+        var result = Assert.IsType<CompactionOutput>(roundTripped);
+        Assert.Equal(40, result.MessagesBefore);
+        Assert.Equal(8, result.MessagesAfter);
+        Assert.True(result.ToolResultsCleared);
+        Assert.True(result.Summarized);
+        Assert.Equal(128000, result.ContextWindowTokens);
+        Assert.Equal(97000, result.PreCompactionInputTokens);
+        Assert.Equal(6, result.KeepCountUsed);
     }
 
     [Theory]
@@ -227,7 +433,8 @@ public sealed class DaemonClientMappingTests
             TimestampMs = 100,
             Message = "Something went wrong.",
             CorrelationId = correlationId,
-            Category = category
+            Category = category,
+            Cause = new InvalidOperationException("provider detail")
         };
 
         var dto = SessionOutputDtoMapper.ToDto(original);
@@ -241,6 +448,7 @@ public sealed class DaemonClientMappingTests
         Assert.Equal(correlationId, result.CorrelationId);
         Assert.Equal(category, result.Category);
         Assert.Equal("Something went wrong.", result.Message);
+        Assert.Contains("provider detail", result.Cause?.Message);
     }
 
     [Fact]
@@ -298,11 +506,14 @@ public sealed class DaemonClientMappingTests
             ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = "git push origin main",
             RequesterSenderId = new SenderId("device-1"),
+            RequesterPrincipal = PrincipalClassification.Operator,
             HasAdoptedContext = true,
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["device-1", "device-2"],
             Patterns = ["git push"],
             CandidateVerbs = ["git push"],
+            Candidates = [new ApprovalCandidate("git push", "/work/netclaw")],
+            PersistedAdoptedContext = true,
             Options =
             [
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
@@ -318,10 +529,13 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("approval", dto.InteractionKind);
         Assert.Equal("git push origin main", dto.InteractionDisplayText);
         Assert.Equal("device-1", dto.RequesterSenderId);
+        Assert.Equal(nameof(PrincipalClassification.Operator), dto.InteractionRequesterPrincipal);
         Assert.True(dto.InteractionHasAdoptedContext);
         Assert.True(dto.InteractionHasThirdPartyAdoptedContext);
         Assert.Equal(["device-1", "device-2"], dto.InteractionAdoptedSpeakerIds);
         Assert.Equal(["git push"], dto.InteractionCandidateVerbs);
+        Assert.Equal([new ApprovalCandidate("git push", "/work/netclaw")], dto.InteractionCandidates);
+        Assert.True(dto.InteractionPersistedAdoptedContext);
         Assert.Equal(5, dto.InteractionOptions!.Count);
 
         var roundTripped = DaemonClient.FromDto(dto);
@@ -330,11 +544,14 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("shell_execute", result.ToolName.Value);
         Assert.Equal("git push origin main", result.DisplayText);
         Assert.Equal("device-1", result.RequesterSenderId?.Value);
+        Assert.Equal(PrincipalClassification.Operator, result.RequesterPrincipal);
         Assert.True(result.HasAdoptedContext);
         Assert.True(result.HasThirdPartyAdoptedContext);
         Assert.Equal(["device-1", "device-2"], result.AdoptedSpeakerIds);
         Assert.Equal(["git push"], result.Patterns);
         Assert.Equal(["git push"], result.CandidateVerbs);
+        Assert.Equal([new ApprovalCandidate("git push", "/work/netclaw")], result.Candidates);
+        Assert.True(result.PersistedAdoptedContext);
         Assert.Equal(5, result.Options.Count);
     }
 
@@ -355,6 +572,46 @@ public sealed class DaemonClientMappingTests
         var error = Assert.IsType<ErrorOutput>(output);
         Assert.Equal(ErrorCategory.Unknown, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
+    }
+
+    [Fact]
+    public void Old_wire_payloads_keep_defaults_for_additive_activity_fields()
+    {
+        const string subAgentJson = """
+            {"Type":"subagent","SessionId":"signalr/test","TimestampMs":10,"AgentName":"legacy","Phase":"started","ToolCountSub":2}
+            """;
+        const string compactionJson = """
+            {"Type":"compaction","SessionId":"signalr/test","TimestampMs":11,"MessagesBefore":9,"MessagesAfter":3}
+            """;
+        const string interactionJson = """
+            {"Type":"tool_interaction","SessionId":"signalr/test","TimestampMs":12,"InteractionKind":"approval","CallId":"call-1","ToolName":"shell_execute","InteractionDisplayText":"git status","InteractionOptions":[]}
+            """;
+        const string joinedJson = """
+            {"Type":"session_joined","SessionId":"signalr/test","TimestampMs":13,"TurnCount":1,"RecentMessages":[{"Role":"user","Content":"Hello"}]}
+            """;
+
+        var subAgentDto = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(subAgentJson)!;
+        var compactionDto = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(compactionJson)!;
+        var interactionDto = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(interactionJson)!;
+        var joinedDto = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(joinedJson)!;
+
+        var subAgent = Assert.IsType<SubAgentOutput>(DaemonClient.FromDto(subAgentDto));
+        Assert.Null(subAgent.RunId);
+        Assert.Null(subAgent.ParentCallId);
+        Assert.Null(subAgent.ActivityPhase);
+
+        var compaction = Assert.IsType<CompactionOutput>(DaemonClient.FromDto(compactionDto));
+        Assert.False(compaction.ToolResultsCleared);
+        Assert.False(compaction.Summarized);
+
+        var interaction = Assert.IsType<ToolInteractionRequest>(DaemonClient.FromDto(interactionDto));
+        Assert.Null(interaction.RequesterPrincipal);
+        Assert.Empty(interaction.Candidates);
+        Assert.False(interaction.PersistedAdoptedContext);
+
+        var joined = Assert.IsType<SessionJoined>(DaemonClient.FromDto(joinedDto));
+        Assert.Single(joined.RecentMessages!);
+        Assert.Null(joined.RecentTranscript);
     }
 
     [Fact]

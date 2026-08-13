@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    text { font-family: "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 18px; fill: #cdd6f4; }
+    .small { font-size: 15px; }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+    .body { font-size: 19px; }
+    .muted { fill: #7f849c; }
+    .primary { fill: #89b4fa; }
+    .human { fill: #a6e3a1; }
+    .success { fill: #a6e3a1; }
+    .warning { fill: #f9e2af; }
+    .bold { font-weight: 700; }
+  </style>
+  <rect width="1440" height="900" fill="#111318"/>
+
+  <rect x="0" y="0" width="1440" height="64" fill="#171a21"/>
+  <rect x="0" y="63" width="1440" height="1" fill="#313746"/>
+  <text x="54" y="39" class="title primary">NETCLAW</text>
+  <text x="180" y="39" class="small">incident-review</text>
+  <text x="358" y="39" class="small muted">deepseek-v4-flash</text>
+  <circle cx="1166" cy="32" r="5" fill="#a6e3a1"/>
+  <text x="1181" y="39" class="small muted">connected</text>
+  <text x="1309" y="39" class="small muted">38%</text>
+
+  <text x="70" y="112" class="small human bold">You</text>
+  <text x="118" y="112" class="small muted">09:52</text>
+  <rect x="54" y="130" width="1120" height="76" rx="4" fill="#19221f"/>
+  <rect x="54" y="130" width="5" height="76" fill="#a6e3a1"/>
+  <text x="76" y="161" class="body">Check the failed CI run and tell me whether the failure is safe to fix.</text>
+  <text x="76" y="190" class="body">Do not change the branch yet.</text>
+
+  <text x="70" y="257" class="small primary bold">Netclaw</text>
+  <text x="164" y="257" class="small muted">09:53</text>
+  <text x="70" y="298" class="body">The Linux test failed because one path assertion uses a Windows separator.</text>
+  <text x="70" y="332" class="body">The production path logic is correct. The test fixture contains the defect.</text>
+
+  <rect x="54" y="371" width="1120" height="92" rx="4" fill="#171b22"/>
+  <rect x="54" y="371" width="5" height="92" fill="#89b4fa"/>
+  <text x="76" y="403" class="small muted">TOOLS</text>
+  <text x="155" y="403" class="small">3 complete</text>
+  <text x="292" y="403" class="small muted">2.8s</text>
+  <text x="76" y="439" class="small success bold">PASS</text>
+  <text x="140" y="439" class="small">read workflow · inspect failed log · compare fixture</text>
+  <text x="972" y="439" class="small muted">Ctrl+O details</text>
+
+  <text x="70" y="515" class="body">A focused fixture change is safe. I can prepare it after you approve the edit.</text>
+
+  <rect x="54" y="735" width="1120" height="86" rx="4" fill="#202530"/>
+  <rect x="54" y="735" width="6" height="86" fill="#89b4fa"/>
+  <text x="78" y="768" class="small primary bold">MESSAGE</text>
+  <text x="78" y="800" class="body muted">Ask Netclaw…</text>
+
+  <text x="70" y="858" class="small success bold">Ready</text>
+  <text x="141" y="858" class="small muted">Enter send</text>
+  <text x="269" y="858" class="small muted">Shift+Enter newline</text>
+  <text x="487" y="858" class="small muted">↑↓ history</text>
+  <text x="612" y="858" class="small muted">Esc Esc clear</text>
+  <text x="764" y="858" class="small muted">Ctrl+O inspect</text>
+  <text x="931" y="858" class="small muted">Ctrl+Q quit</text>
+</svg>

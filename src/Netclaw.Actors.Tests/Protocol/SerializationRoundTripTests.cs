@@ -133,6 +133,243 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void TurnRecorded_round_trips_all_user_messages_in_order()
+    {
+        var original = new TurnRecorded
+        {
+            SessionId = new SessionId("test/user-message-batch"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Second" },
+            UserMessages =
+            [
+                new SerializableChatMessage { Role = ChatRole.User, Content = "First" },
+                new SerializableChatMessage { Role = ChatRole.User, Content = "Second" }
+            ],
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            RecordedAtMs = 42
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(["First", "Second"], result.UserMessages.Select(message => message.Content));
+        Assert.Equal("Second", result.UserMessage.Content);
+    }
+
+    [Fact]
+    public void ToolBatchStarted_round_trips_all_user_messages_in_order()
+    {
+        var original = new ToolBatchStarted
+        {
+            SessionId = new SessionId("test/tool-user-message-batch"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Second" },
+            UserMessages =
+            [
+                new SerializableChatMessage { Role = ChatRole.User, Content = "First" },
+                new SerializableChatMessage { Role = ChatRole.User, Content = "Second" }
+            ],
+            AssistantMessage = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "" },
+            StartedAtMs = 42
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(["First", "Second"], result.UserMessages.Select(message => message.Content));
+        Assert.Equal("Second", result.UserMessage.Content);
+    }
+
+    [Fact]
+    public void TurnRecorded_round_trips_structured_transcript_entries()
+    {
+        var original = new TurnRecorded
+        {
+            SessionId = new SessionId("test/transcript"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Check it" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            RecordedAtMs = 1_700_000_000_000,
+            TranscriptEntries =
+            [
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.Tool,
+                    TurnId = "turn-1",
+                    TimestampMs = 1_700_000_000_001,
+                    CallId = "call-1",
+                    ToolName = "shell_execute",
+                    ArgumentsJson = "{\"command\":\"dotnet test\"}",
+                    Rationale = "Verify the source tree",
+                    Result = "Passed",
+                    BatchId = "batch-1",
+                    BatchSize = 2
+                },
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.Approval,
+                    TurnId = "turn-1",
+                    TimestampMs = 1_700_000_000_002,
+                    CallId = "call-approval",
+                    ParentCallId = "call-1",
+                    ToolName = "shell_execute",
+                    ApprovalSelectedKey = ApprovalOptionKeys.Deny
+                },
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.Usage,
+                    TurnId = "turn-1",
+                    TimestampMs = 1_700_000_000_003,
+                    InputTokens = 10,
+                    OutputTokens = 4,
+                    TotalTokens = 14,
+                    CachedInputTokens = 3,
+                    ReasoningTokens = 2,
+                    ContextWindowTokens = 4096,
+                    UsagePercent = 0.25,
+                    PromptMs = 12.5,
+                    PredictedPerSecond = 44.2
+                },
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.Error,
+                    TurnId = "turn-1",
+                    TimestampMs = 1_700_000_000_004,
+                    ErrorMessage = "Failed",
+                    ErrorDetail = "detail",
+                    ErrorCorrelationId = "correlation",
+                    ErrorCategory = "provider_failure"
+                }
+            ]
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.TranscriptEntries, result.TranscriptEntries);
+    }
+
+    [Fact]
+    public void Session_output_DTO_round_trips_parallel_and_approval_fields()
+    {
+        var tool = new ToolCallOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            TimestampMs = 1,
+            CallId = new ToolCallId("call-1"),
+            ToolName = new ToolName("search"),
+            ArgumentsJson = "{}",
+            Rationale = "Find the relevant source",
+            BatchId = "batch-1",
+            BatchSize = 2
+        };
+        var toolResult = Assert.IsType<ToolCallOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(tool)));
+        Assert.Equal("batch-1", toolResult.BatchId);
+        Assert.Equal(2, toolResult.BatchSize);
+        Assert.Equal("Find the relevant source", toolResult.Rationale);
+
+        var rejectedToolResult = new ToolResultOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            TimestampMs = 2,
+            CallId = new ToolCallId("call-rejected"),
+            ToolName = new ToolName("search"),
+            Result = "The tool was not executed.",
+            FailureCode = "invalid_rationale"
+        };
+        var rejectedResult = Assert.IsType<ToolResultOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(rejectedToolResult)));
+        Assert.Equal("invalid_rationale", rejectedResult.FailureCode);
+
+        var oldToolResult = Assert.IsType<ToolCallOutput>(SessionOutputDtoMapper.FromDto(new SessionOutputDto
+        {
+            Type = SessionOutputTypes.ToolCall,
+            SessionId = "test/wire",
+            CallId = "old-call",
+            ToolName = "search"
+        }));
+        Assert.Null(oldToolResult.Rationale);
+
+        var approval = new ApprovalOutcomeOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            TimestampMs = 2,
+            CallId = new ToolCallId("call-approval"),
+            ToolName = new ToolName("shell_execute"),
+            ParentCallId = "call-1",
+            SelectedKey = ApprovalOptionKeys.DenyKey
+        };
+        var approvalResult = Assert.IsType<ApprovalOutcomeOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(approval)));
+        Assert.Equal("call-1", approvalResult.ParentCallId);
+        Assert.Equal(ApprovalOptionKeys.DenyKey, approvalResult.SelectedKey);
+    }
+
+    [Fact]
+    public void Session_output_DTO_round_trips_user_message_lifecycle_fields()
+    {
+        var queued = new UserMessageQueuedOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            TimestampMs = 3,
+            MessageId = "tui:message-1",
+            TurnId = new Netclaw.Actors.Protocol.TurnId("turn-3"),
+            QueueDepth = 2
+        };
+        var queuedResult = Assert.IsType<UserMessageQueuedOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(queued)));
+        Assert.Equal(queued.MessageId, queuedResult.MessageId);
+        Assert.Equal(queued.TurnId, queuedResult.TurnId);
+        Assert.Equal(queued.QueueDepth, queuedResult.QueueDepth);
+
+        var pulled = new UserMessagesPulledOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            TimestampMs = 4,
+            BatchId = "batch-3",
+            TurnId = new Netclaw.Actors.Protocol.TurnId("turn-3"),
+            Messages =
+            [
+                new PulledUserMessage("tui:message-1", "First correction"),
+                new PulledUserMessage("tui:message-2", "Second correction")
+            ]
+        };
+        var pulledResult = Assert.IsType<UserMessagesPulledOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(pulled)));
+        Assert.Equal(pulled.BatchId, pulledResult.BatchId);
+        Assert.Equal(pulled.TurnId, pulledResult.TurnId);
+        Assert.Equal(pulled.Messages, pulledResult.Messages);
+
+        Assert.Throws<InvalidOperationException>(() => SessionOutputDtoMapper.FromDto(
+            new SessionOutputDto
+            {
+                Type = SessionOutputTypes.UserMessagesPulled,
+                SessionId = "test/wire",
+                MessageBatchId = "batch-4",
+                TurnId = "turn-4"
+            }));
+    }
+
+    [Fact]
+    public void Old_TurnRecorded_proto_reads_with_an_empty_transcript()
+    {
+        var proto = new Serialization.Proto.TurnRecordedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto { Value = "test/legacy" },
+            UserMessage = new Serialization.Proto.SerializableChatMessageProto
+            {
+                Role = Serialization.Proto.ChatRole.User,
+                Content = "Hello"
+            },
+            AssistantReply = new Serialization.Proto.SerializableChatMessageProto
+            {
+                Role = Serialization.Proto.ChatRole.Assistant,
+                Content = "Hi"
+            },
+            RecordedAtMs = 1_700_000_000_000
+        };
+
+        var result = NetclawProtoMapper.FromProto(proto);
+
+        Assert.Empty(result.TranscriptEntries);
+    }
+
+    [Fact]
     public void TurnRecorded_round_trips_preserving_value_object_source_ids()
     {
         var original = new TurnRecorded
@@ -785,6 +1022,42 @@ public sealed class SerializationRoundTripTests : TestKit
 
         var result = RoundTrip(wrapped);
         Assert.Null(result.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
+    public void SessionSnapshot_round_trips_recent_transcript()
+    {
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 1,
+            History = [],
+            RecentTranscript =
+            [
+                new SessionTranscriptEntry
+                {
+                    Type = SessionTranscriptEntryTypes.File,
+                    TurnId = "turn-1",
+                    TimestampMs = 99,
+                    FilePath = "/tmp/report.txt",
+                    FileName = "report.txt",
+                    MimeType = "text/plain"
+                }
+            ]
+        };
+
+        var result = RoundTrip(wrapped);
+
+        Assert.Equal(wrapped.RecentTranscript, result.RecentTranscript);
+    }
+
+    [Fact]
+    public void Old_SessionSnapshot_proto_reads_with_an_empty_transcript()
+    {
+        var proto = new Serialization.Proto.SessionSnapshotProto { TurnCount = 2 };
+
+        var result = NetclawProtoMapper.FromProto(proto);
+
+        Assert.Empty(result.RecentTranscript);
     }
 
     [Fact]

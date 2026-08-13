@@ -1,6 +1,6 @@
 # SPEC-011: Daemon Architecture and Process Model
 
-Source PRDs: `PRD-001`, `PRD-002`, `PRD-004`
+Source PRDs: `PRD-001`, `PRD-002`, `PRD-004`, `PRD-009`
 
 ## Purpose
 
@@ -135,6 +135,10 @@ ReceiveOutput(output: SessionOutputDto) → void
 
 `SessionOutputDto` is a wire-safe mapping of the `SessionOutput` discriminated
 union. The mapper handles union → flat DTO conversion for SignalR serialization.
+It preserves every security-safe output field and all correlation identities.
+
+The DTO keeps `RecentMessages`. It adds nullable structured transcript and
+activity fields. Old clients ignore the additive properties.
 
 ### Connection Lifecycle
 
@@ -300,13 +304,22 @@ SignalR Client Adapter
 Daemon SignalR Hub (/hub/session)
 ```
 
-The `ChatViewModel` interface remains the same as the current in-process
-implementation — it exposes `IObservable<SessionOutput>` and accepts
-`SubmitAsync(text)`. The only change is the backend: SignalR client instead of
-direct `SessionPipeline`.
+`ChatViewModel` exposes the SignalR output stream and accepts prompt submission.
+It also owns immutable presentation state for stable event identities.
 
-`ChatPage` does not change at all. Same rendering, same paste debounce, same
-status bar, same tool call spinners.
+`ChatPage` uses these semantic regions: Session Header, Transcript, Activity
+Rail, Decision Gate, Composer, and Status Line. It does not flatten typed output
+into one mutable text value.
+
+The chat process uses Termina inline presentation and native terminal scroll.
+The session picker remains a separate full-screen Termina application. The
+picker exits before the inline application starts.
+
+All chat output uses the inline output owner. Diagnostic logs use the configured
+file or structured sink while the live region is active.
+
+The daemon keeps transient tool and sub-agent activity outside persistence. It
+persists only framework-owned settled transcript records with additive tags.
 
 ## Tool Execution Model
 

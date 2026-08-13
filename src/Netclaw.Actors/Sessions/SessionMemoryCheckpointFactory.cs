@@ -75,12 +75,18 @@ internal static class SessionMemoryCheckpointFactory
         TurnRecorded turn,
         string boundary,
         string audience)
-        => new(
+    {
+        var userContent = string.Join(
+            "\n\n",
+            (turn.UserMessages.Count > 0 ? turn.UserMessages : [turn.UserMessage])
+            .Select(message => message.Content));
+
+        return new(
             SessionId: sessionId.Value,
             TriggerType: CheckpointTriggerType.TurnComplete.ToWireValue(),
             Source: "session",
-            Content: $"User: {turn.UserMessage.Content}\nAssistant: {turn.AssistantReply.Content}",
-            UserContent: turn.UserMessage.Content,
+            Content: $"User: {userContent}\nAssistant: {turn.AssistantReply.Content}",
+            UserContent: userContent,
             AssistantContent: turn.AssistantReply.Content,
             IsExplicitRequest: false,
             HasVerifiedToolFinding: false,
@@ -94,4 +100,5 @@ internal static class SessionMemoryCheckpointFactory
             Kind: MemoryKind.Document.ToWireValue(),
             Title: "turn-completion",
             UpdateSemantics: "append-document");
+    }
 }

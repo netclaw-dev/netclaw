@@ -195,6 +195,9 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
             {
                 TextOutput text => $"Assistant: {TextTruncation.EllipsisAppend(text.Text, 1000)}",
                 ToolCallOutput toolCall => FormatToolCall(toolCall),
+                ToolActivityOutput activity =>
+                    $"Tool activity: {activity.ToolName} (call={activity.CallId}, turn={activity.TurnId}) " +
+                    $"phase={activity.Phase} summary={activity.Summary ?? "-"}",
                 ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(toolResult.Result), 1000)}",
                 ThinkingOutput thinking => $"Thinking: {TextTruncation.EllipsisAppend(thinking.Text, 1000)}",
                 ThinkingDeltaOutput thinkingDelta => $"Thinking delta: {TextTruncation.EllipsisAppend(thinkingDelta.Delta, 1000)}",
@@ -205,9 +208,11 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
                     $"Compaction: {compaction.MessagesBefore} → {compaction.MessagesAfter} messages " +
                     $"(keep={compaction.KeepCountUsed}, context={compaction.PreCompactionInputTokens}/{compaction.ContextWindowTokens} tokens)",
                 SubAgentOutput sa when sa.Phase == SubAgentPhase.Started =>
-                    $"SubAgent started: {sa.AgentName} (tools={sa.ToolCount})",
+                    $"SubAgent started: {sa.AgentName} (run={sa.RunId?.Value ?? "-"}, parent={sa.ParentCallId?.Value ?? "-"}, tools={sa.ToolCount})",
+                SubAgentOutput sa when sa.Phase == SubAgentPhase.Activity =>
+                    $"SubAgent activity: {sa.AgentName} (run={sa.RunId?.Value ?? "-"}, parent={sa.ParentCallId?.Value ?? "-"}, phase={sa.ActivityPhase ?? "active"}) {sa.ActivitySummary ?? string.Empty}",
                 SubAgentOutput sa =>
-                    $"SubAgent completed: {sa.AgentName} (success={sa.Success}, outcome={sa.Outcome.ToString().ToLowerInvariant()}, reason={sa.OutcomeReason?.Value ?? "-"}, duration={sa.Duration.TotalSeconds:F1}s, findings={sa.FindingsCount}, memory={sa.MemoryDecision ?? "n/a"}{(string.IsNullOrWhiteSpace(sa.MemoryDecisionReason) ? string.Empty : $", memoryReason={sa.MemoryDecisionReason}")})",
+                    $"SubAgent completed: {sa.AgentName} (run={sa.RunId?.Value ?? "-"}, parent={sa.ParentCallId?.Value ?? "-"}, success={sa.Success}, outcome={sa.Outcome.ToString().ToLowerInvariant()}, reason={sa.OutcomeReason?.Value ?? "-"}, duration={sa.Duration.TotalSeconds:F1}s, findings={sa.FindingsCount}, memory={sa.MemoryDecision ?? "n/a"}{(string.IsNullOrWhiteSpace(sa.MemoryDecisionReason) ? string.Empty : $", memoryReason={sa.MemoryDecisionReason}")})",
                 ErrorOutput error => $"Error [{error.Category}] (ref: {error.CorrelationId:N}): {error.Message}",
                 FileOutput file => $"File: {file.FileName} ({file.MimeType})",
                 _ => null

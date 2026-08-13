@@ -109,6 +109,9 @@ public sealed record SubAgentNotificationInfo
     public required SubAgentRunId RunId { get; init; }
     public required string AgentName { get; init; }
     public required bool IsStarted { get; init; }
+    public bool IsActivity { get; init; }
+    public string? ActivityPhase { get; init; }
+    public string? ActivitySummary { get; init; }
     public int ToolCount { get; init; }
     public bool Success { get; init; }
     public SubAgentRunOutcome? Outcome { get; init; }

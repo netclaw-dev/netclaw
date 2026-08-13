@@ -110,6 +110,33 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Redesign The Developer Chat TUI
+
+**PRDs:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-009-input-adapters-and-unified-input.md`
+**Specs:** `docs/spec/SPEC-002-session-lifecycle-and-protocol.md`, `docs/spec/SPEC-004-cli-contract.md`, `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `docs/spec/SPEC-011-daemon-architecture.md`
+**OpenSpec:** `openspec/changes/redesign-netclaw-chat-tui/`
+**Surface area:** session output, SignalR, Termina, chat command, resume, input, approvals, copy
+**Verification:** L3 plus the Termina cross-platform matrix
+
+The user promoted this work into `NOW`. The chat command must expose the
+daemon's structured event model through a clear developer interface.
+
+The design is extend-only. Existing protocol fields, enum values, presentation
+modes, and non-chat applications keep their current behavior and defaults.
+
+Done when:
+
+- [ ] Termina adds an opt-in inline mode while full-screen mode stays the
+  default.
+- [ ] Netclaw shows thoughts, parallel tools, sub-agents, approvals, file
+  changes, errors, usage, and compaction as structured events.
+- [ ] Structured resume data extends `RecentMessages` without removing it.
+- [ ] The composer supports `Shift+Enter`, draft restoration, and double
+  Escape.
+- [ ] Native terminal scrollback, mouse-wheel input, semantic copy, and the
+  inspector pass their defined proof matrix.
+- [ ] Headless tests and native smoke tests prove the critical chat flows.
+
 ### Priority: Keep MCP HTTP Protocol Fallback Deterministic
 
 **PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`

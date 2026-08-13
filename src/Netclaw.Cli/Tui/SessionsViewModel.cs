@@ -102,8 +102,8 @@ public sealed class SessionsViewModel : ReactiveViewModel
         // N starts a new chat (no resume)
         if (keyInfo.Key == ConsoleKey.N && !keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
-            _navigationState.ResumeSessionId = null;
-            Navigate?.Invoke("/chat");
+            _navigationState.RequestChatLaunch(null);
+            Shutdown();
             return true;
         }
 
@@ -112,8 +112,8 @@ public sealed class SessionsViewModel : ReactiveViewModel
             // Enter on empty state starts a new chat
             if (keyInfo.Key == ConsoleKey.Enter)
             {
-                _navigationState.ResumeSessionId = null;
-                Navigate?.Invoke("/chat");
+                _navigationState.RequestChatLaunch(null);
+                Shutdown();
                 return true;
             }
             return false;
@@ -149,8 +149,8 @@ public sealed class SessionsViewModel : ReactiveViewModel
 
             case ConsoleKey.Enter:
                 var selected = Sessions[SelectedIndex.Value];
-                _navigationState.ResumeSessionId = selected.SessionId;
-                Navigate?.Invoke("/chat");
+                _navigationState.RequestChatLaunch(selected.SessionId);
+                Shutdown();
                 return true;
 
             default:
