@@ -37,6 +37,13 @@ internal static partial class TelegramTextFormatter
         var output = new StringBuilder(markdown.Length);
         for (var index = 0; index < lines.Length; index++)
         {
+            if (TryFormatTable(lines, ref index, output))
+            {
+                if (index < lines.Length - 1)
+                    output.Append('\n');
+                continue;
+            }
+
             var line = lines[index];
             var heading = Heading().Match(line);
             var quote = BlockQuote().Match(line);
@@ -58,6 +65,63 @@ internal static partial class TelegramTextFormatter
         return output.ToString();
     }
 
+    private static bool TryFormatTable(string[] lines, ref int index, StringBuilder output)
+    {
+        if (index + 2 >= lines.Length)
+            return false;
+
+        var headers = ParseTableRow(lines[index]);
+        var separators = ParseTableRow(lines[index + 1]);
+        if (headers.Count < 2
+            || separators.Count != headers.Count
+            || separators.Any(separator => !TableSeparator().IsMatch(separator)))
+            return false;
+
+        var rowIndex = index + 2;
+        var wroteRow = false;
+        while (rowIndex < lines.Length)
+        {
+            var values = ParseTableRow(lines[rowIndex]);
+            if (values.Count != headers.Count)
+                break;
+
+            if (wroteRow)
+                output.Append('\n');
+
+            for (var column = 0; column < headers.Count; column++)
+            {
+                output.Append(column == 0 ? "• " : "  ");
+                output.Append("<b>").Append(FormatInline(headers[column])).Append(":</b> ");
+                output.Append(FormatInline(values[column]));
+                if (column < headers.Count - 1)
+                    output.Append('\n');
+            }
+
+            wroteRow = true;
+            rowIndex++;
+        }
+
+        if (!wroteRow)
+            return false;
+
+        index = rowIndex - 1;
+        return true;
+    }
+
+    private static IReadOnlyList<string> ParseTableRow(string line)
+    {
+        var trimmed = line.Trim();
+        if (!trimmed.Contains('|', StringComparison.Ordinal))
+            return [];
+
+        if (trimmed.StartsWith('|'))
+            trimmed = trimmed[1..];
+        if (trimmed.EndsWith('|'))
+            trimmed = trimmed[..^1];
+
+        return trimmed.Split('|').Select(cell => cell.Trim()).ToArray();
+    }
+
     private static string FormatInline(string markdown)
     {
         var output = new StringBuilder(markdown.Length);
@@ -77,22 +141,55 @@ internal static partial class TelegramTextFormatter
 
     private static string FormatInlineMarkup(string markdown)
     {
-        var html = WebUtility.HtmlEncode(markdown);
-        html = BoldItalic().Replace(html, "<b><i>$1</i></b>");
-        html = Bold().Replace(html, "<b>$1</b>");
-        html = Italic().Replace(html, "<i>$1</i>");
-        html = Strikethrough().Replace(html, "<s>$1</s>");
-        html = Link().Replace(html, static match =>
+        var output = new StringBuilder(markdown.Length);
+        var position = 0;
+        while (position < markdown.Length)
         {
-            var encodedUrl = match.Groups[2].Value;
-            var decodedUrl = WebUtility.HtmlDecode(encodedUrl);
-            return Uri.TryCreate(decodedUrl, UriKind.Absolute, out var url)
-                   && url.Scheme is "http" or "https"
-                ? $"<a href=\"{encodedUrl}\">{match.Groups[1].Value}</a>"
-                : match.Value;
-        });
-        return html;
+            var match = FindNextInlineMatch(markdown, position);
+            if (match is null)
+            {
+                output.Append(WebUtility.HtmlEncode(markdown[position..]));
+                break;
+            }
+
+            output.Append(WebUtility.HtmlEncode(markdown[position..match.Index]));
+            output.Append(match.Html);
+            position = match.Index + match.Length;
+        }
+
+        return output.ToString();
     }
+
+    private static InlineMatch? FindNextInlineMatch(string markdown, int position)
+    {
+        InlineMatch? best = null;
+        Consider(BoldItalic(), match => $"<b><i>{WebUtility.HtmlEncode(match.Groups[1].Value)}</i></b>");
+        Consider(Bold(), match => $"<b>{WebUtility.HtmlEncode(match.Groups[1].Value)}</b>");
+        Consider(Italic(), match => $"<i>{WebUtility.HtmlEncode(match.Groups[1].Value)}</i>");
+        Consider(Strikethrough(), match => $"<s>{WebUtility.HtmlEncode(match.Groups[1].Value)}</s>");
+        Consider(Link(), FormatLink);
+        return best;
+
+        void Consider(Regex regex, Func<Match, string> format)
+        {
+            var match = regex.Match(markdown, position);
+            if (!match.Success || best is not null && match.Index >= best.Index)
+                return;
+
+            best = new InlineMatch(match.Index, match.Length, format(match));
+        }
+    }
+
+    private static string FormatLink(Match match)
+    {
+        var urlText = match.Groups[2].Value;
+        return Uri.TryCreate(urlText, UriKind.Absolute, out var url)
+               && url.Scheme is "http" or "https"
+            ? $"<a href=\"{WebUtility.HtmlEncode(urlText)}\">{WebUtility.HtmlEncode(match.Groups[1].Value)}</a>"
+            : WebUtility.HtmlEncode(match.Value);
+    }
+
+    private sealed record InlineMatch(int Index, int Length, string Html);
 
     [GeneratedRegex(@"```(?:[^\r\n`]*)\r?\n([\s\S]*?)```", RegexOptions.CultureInvariant)]
     private static partial Regex FencedCode();
@@ -123,4 +220,7 @@ internal static partial class TelegramTextFormatter
 
     [GeneratedRegex(@"^\s*[-*+]\s+(.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex BulletListItem();
+
+    [GeneratedRegex(@"^:?-{3,}:?$", RegexOptions.CultureInvariant)]
+    private static partial Regex TableSeparator();
 }

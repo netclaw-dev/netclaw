@@ -73,4 +73,32 @@ public sealed class TelegramTextFormatterTests
 
         Assert.Equal("1. <b>First</b>\n2. <s>Second</s>", result);
     }
+
+    [Fact]
+    public void Converts_markdown_table_to_readable_list()
+    {
+        var result = TelegramTextFormatter.ToHtml(
+            "| Name | Status |\n| --- | :---: |\n| **Bot** | Ready & waiting |\n| API | Online |");
+
+        Assert.Equal(
+            "• <b>Name:</b> <b>Bot</b>\n  <b>Status:</b> Ready &amp; waiting\n"
+            + "• <b>Name:</b> API\n  <b>Status:</b> Online",
+            result);
+    }
+
+    [Fact]
+    public void Keeps_plain_text_and_quotation_marks_unchanged()
+    {
+        var result = TelegramTextFormatter.ToHtml("She said \"hello\" without markdown.");
+
+        Assert.Equal("She said &quot;hello&quot; without markdown.", result);
+    }
+
+    [Fact]
+    public void Keeps_incomplete_bold_markers_as_safe_text()
+    {
+        var result = TelegramTextFormatter.ToHtml("A **broken marker stays visible.");
+
+        Assert.Equal("A **broken marker stays visible.", result);
+    }
 }
