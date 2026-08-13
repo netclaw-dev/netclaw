@@ -990,36 +990,27 @@ public sealed class ToolApprovalGateTests
     public void Shell_relative_path_command_extracts_verb_chain_without_directory_roots()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var logs = Path.Combine(root, "logs");
-        Directory.CreateDirectory(logs);
+        const string root = "/netclaw-approval-test/workspace";
 
-        try
-        {
-            var args = ToolInput.Create(
-                "Command", "grep timeout logs/app.log | wc -l",
-                "WorkingDirectory", root);
+        var args = ToolInput.Create(
+            "Command", "grep timeout logs/app.log | wc -l",
+            "WorkingDirectory", root);
 
-            var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
-            Assert.True(decision.NeedsApproval);
-            // Pipelines stay inside one approval unit, so the candidate is
-            // the verb chain of the unit's first command (path-aware
-            // "grep <first-arg>").
-            Assert.Contains(decision.ApprovalContext!.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
-            // Button labels are fixed; Slack's 76-char and Discord's 80-char
-            // button caps make dynamic labels structurally unsafe.
-            Assert.Equal(
-                ApprovalOptionKeys.ApproveSessionLabel,
-                decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
-            Assert.Equal(
-                ApprovalOptionKeys.ApproveAlwaysLabel,
-                decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        Assert.True(decision.NeedsApproval);
+        // Pipelines stay inside one approval unit, so the candidate is
+        // the verb chain of the unit's first command (path-aware
+        // "grep <first-arg>").
+        Assert.Contains(decision.ApprovalContext!.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
+        // Button labels are fixed; Slack's 76-char and Discord's 80-char
+        // button caps make dynamic labels structurally unsafe.
+        Assert.Equal(
+            ApprovalOptionKeys.ApproveSessionLabel,
+            decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
+        Assert.Equal(
+            ApprovalOptionKeys.ApproveAlwaysLabel,
+            decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
     }
 
     [Fact]
