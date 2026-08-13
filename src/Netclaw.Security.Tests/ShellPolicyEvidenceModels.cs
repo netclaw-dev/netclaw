@@ -15,7 +15,20 @@ internal sealed record PolicyFixtureCatalog
 
     public required List<PolicyFixtureCase> Cases { get; init; }
 
+    public required List<PolicyLiveRegressionCase> LiveRegressionCases { get; init; }
+
     public required List<PolicyAdversarialCase> AdversarialCases { get; init; }
+}
+
+internal sealed record PolicyLiveRegressionCase
+{
+    public required string SourceEvidenceId { get; init; }
+
+    public required string Classification { get; init; }
+
+    public required string TargetOutcome { get; init; }
+
+    public required PolicyAdversarialCase PolicyCase { get; init; }
 }
 
 internal sealed record PolicyFixtureDefaults

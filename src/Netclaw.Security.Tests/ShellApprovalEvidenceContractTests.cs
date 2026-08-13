@@ -20,6 +20,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string PolicyFixturesFile = "netclaw-policy-fixtures.json";
     private const string PostMergeHarvestFile = "post-1890-approval-harvest.json";
     private const string PostSwapHarvestFile = "post-1925-binary-swap-approval-harvest.json";
+    private const string ExtendedPostSwapHarvestFile = "post-1925-extended-approval-harvest.json";
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
 
@@ -65,6 +66,31 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Equal("/work", fixtures.FixtureDefaults.ProjectDirectory);
         Assert.Null(fixtures.FixtureDefaults.InheritedWorkingDirectory);
         Assert.Equal(10, fixtures.Cases.Count);
+        var sourceEvidence = new[] { PostSwapHarvestFile, ExtendedPostSwapHarvestFile }
+            .SelectMany(file => JsonSerializer.Deserialize(
+                                    File.ReadAllBytes(EvidencePath(file)),
+                                    ShellApprovalEvidenceJsonContext.Default.PostMergeApprovalHarvest)!
+                                .Cases)
+            .ToDictionary(item => item.Id);
+        Assert.Equal(
+            Enumerable.Range(1, 11).Select(number => $"L{number:00}"),
+            fixtures.LiveRegressionCases.Select(item => item.PolicyCase.Id));
+        Assert.Equal(
+            ["S18", "S22", "S40", "S16", "S11", "S10", "S24", "S20", "S13", "S21", "S44"],
+            fixtures.LiveRegressionCases.Select(item => item.SourceEvidenceId));
+        Assert.All(fixtures.LiveRegressionCases, item =>
+        {
+            Assert.Contains(
+                item.Classification,
+                new[] { "ExpectedApproval", "AgentAlignmentDebt", "NetclawPolicyDebt" });
+            Assert.Contains(item.TargetOutcome, new[] { "Allow", "RequiresApproval" });
+            Assert.Equal(item.TargetOutcome, item.PolicyCase.Expected.Outcome);
+            Assert.Equal(sourceEvidence[item.SourceEvidenceId].Classification, item.Classification);
+        });
+        Assert.Equal(4, fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "Allow"));
+        Assert.Equal(
+            7,
+            fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresApproval"));
         Assert.Equal(
             Enumerable.Range(1, 12).Select(number => $"A{number:00}"),
             fixtures.AdversarialCases.Select(item => item.Id));
@@ -372,6 +398,46 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.DoesNotContain(
             harvest.Cases,
             item => item.Classification is "NetclawPolicyDebt" or "ShellSyntaxTreeFactGap");
+        Assert.All(harvest.Cases, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.CommandShape));
+            Assert.False(string.IsNullOrWhiteSpace(item.Reason));
+        });
+    }
+
+    [Fact]
+    public void Extended_post_swap_harvest_classifies_every_prompt_in_the_frozen_window()
+    {
+        var harvest = JsonSerializer.Deserialize(
+                          File.ReadAllBytes(EvidencePath(ExtendedPostSwapHarvestFile)),
+                          ShellApprovalEvidenceJsonContext.Default.PostMergeApprovalHarvest)
+                      ?? throw new InvalidDataException(
+                          $"{ExtendedPostSwapHarvestFile} has no root object.");
+
+        Assert.Equal(1, harvest.SchemaVersion);
+        Assert.Equal("0.26.0", harvest.SourceRuntime.Version);
+        Assert.Equal("ba83530", harvest.SourceRuntime.Commit);
+        Assert.Equal(140, harvest.SourceRuntime.ShellCallCount);
+        Assert.Equal(42, harvest.SourceRuntime.ApprovalPromptCount);
+        Assert.Equal(
+            Enumerable.Range(10, 42).Select(number => $"S{number:00}"),
+            harvest.Cases.Select(item => item.Id));
+        Assert.Equal(
+            harvest.Cases.Select(item => item.SourcePromptTimeUtc).Order(),
+            harvest.Cases.Select(item => item.SourcePromptTimeUtc));
+        Assert.All(harvest.Cases, item =>
+        {
+            Assert.InRange(
+                item.SourcePromptTimeUtc,
+                DateTimeOffset.Parse(harvest.SourceRuntime.WindowStartUtc),
+                DateTimeOffset.Parse(harvest.SourceRuntime.WindowEndUtc));
+        });
+        Assert.Equal(28, harvest.Cases.Count(item => item.Classification == "ExpectedApproval"));
+        Assert.Equal(9, harvest.Cases.Count(item => item.Classification == "AgentAlignmentDebt"));
+        Assert.Equal(5, harvest.Cases.Count(item => item.Classification == "NetclawPolicyDebt"));
+        Assert.DoesNotContain(
+            harvest.Cases,
+            item => item.Classification == "ShellSyntaxTreeFactGap");
         Assert.All(harvest.Cases, item =>
         {
             Assert.False(string.IsNullOrWhiteSpace(item.CommandShape));

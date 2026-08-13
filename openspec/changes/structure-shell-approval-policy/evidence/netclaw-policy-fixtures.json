@@ -410,6 +410,195 @@
       "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": ["gh pr close"], "isMessy": false, "agentCorrection": null }
     }
   ],
+  "liveRegressionCases": [
+    {
+      "sourceEvidenceId": "S18",
+      "classification": "NetclawPolicyDebt",
+      "targetOutcome": "Allow",
+      "policyCase": {
+        "id": "L01",
+        "category": "BoundedGrepAndList",
+        "command": "grep -Rni 'TypeMarker' src | head; ls src/Observability",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S22",
+      "classification": "NetclawPolicyDebt",
+      "targetOutcome": "Allow",
+      "policyCase": {
+        "id": "L02",
+        "category": "BoundedGrepPipeline",
+        "command": "grep -Rni 'TestMarker' tests | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S40",
+      "classification": "NetclawPolicyDebt",
+      "targetOutcome": "Allow",
+      "policyCase": {
+        "id": "L03",
+        "category": "BoundedMultiRootGrep",
+        "command": "grep -Rni 'PolicyMarker' src tests | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S16",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L04",
+        "category": "BroadFindDiscovery",
+        "command": "find . -maxdepth 3 -name '*.csproj'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["find"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S11",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L05",
+        "category": "DiskSummaryWithSort",
+        "command": "du -sh ./* | sort -rh | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S10",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L06",
+        "category": "RemotePullRequestCreate",
+        "command": "gh pr create --repo example/project --title 'Example' --body 'Example body'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["gh pr create"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S24",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L07",
+        "category": "RemotePullRequestMerge",
+        "command": "gh pr merge 50 --repo example/project --auto --squash",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["gh pr merge"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S20",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L08",
+        "category": "RemoteGitPush",
+        "command": "git push origin feature/example",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["git push origin"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S13",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L09",
+        "category": "RecursiveDelete",
+        "command": "rm -rf ./cache/*",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["rm"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S21",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L10",
+        "category": "DynamicDiagnosticRange",
+        "command": "dotnet test > /tmp/test.log; sed -n \"$(grep -n 'FAIL' /tmp/test.log | cut -d: -f1),+4p\" /tmp/test.log",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceId": "S44",
+      "classification": "NetclawPolicyDebt",
+      "targetOutcome": "Allow",
+      "policyCase": {
+        "id": "L11",
+        "category": "BoundedResourceGrep",
+        "command": "grep -Rni 'ResourceMarker' src | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work",
+        "projectDirectory": "/work",
+        "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
+      }
+    }
+  ],
   "adversarialCases": [
     {
       "id": "A01",

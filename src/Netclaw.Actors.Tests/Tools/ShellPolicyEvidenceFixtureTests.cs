@@ -90,46 +90,69 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
         foreach (var policyCase in catalog.AdversarialCases)
         {
-            var invocation = CreateInvocation(catalog.FixtureDefaults, policyCase);
-            var approvals = CreateApprovals(policyCase.Available);
-            await using var harness = await ShellApprovalHarness.CreateAsync(
-                policyCase.Id,
-                invocation,
-                approvals,
-                fixture.ActorSystem,
-                TestContext.Current.CancellationToken,
-                timeProvider,
-                new ShellApprovalHarnessScope(
-                    policyCase.ProjectDirectory,
-                    policyCase.SessionDirectory,
-                    catalog.FixtureDefaults.Session.SessionId,
-                    policyCase.Available.OneTimeApprovalKeys),
-                policyCase.UseBundledSafeCatalog
-                    ? null
-                    : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
-
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            TestContext.Current.TestOutputHelper?.WriteLine(
-                $"{policyCase.Id} ({policyCase.Category}): outcome={decision.Outcome}; "
-                + $"deny={decision.DenyReason}; "
-                + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
-                + $"messy={decision.ApprovalContext?.IsMessy}; "
-                + $"checks={harness.ApprovalService.CheckCount}; "
-                + $"allow={decision.AllowReason}; "
-                + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
-                + $"trace={string.Join(", ", decision.ShellPolicyTrace.Rows.Select(row => $"{row.Stage}/{row.Reason}"))}");
-
-            Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
-            Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
-            Assert.Equal(
-                policyCase.Expected.ApprovalCandidates,
-                decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(policyCase.Expected.IsMessy, decision.ApprovalContext?.IsMessy);
-            Assert.Equal(
-                policyCase.Expected.OptionKeys,
-                decision.ApprovalContext?.Options.Select(option => option.Key.Value).ToList());
-            Assert.Equal(policyCase.Expected.ActorCheckCount, harness.ApprovalService.CheckCount);
+            await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
         }
+    }
+
+    [Fact]
+    public async Task Live_regression_fixtures_pin_current_policy_outcomes()
+    {
+        var catalog = JsonSerializer.Deserialize(
+                          File.ReadAllBytes(EvidencePath()),
+                          ShellPolicyFixtureJsonContext.Default.PolicyFixtureCatalog)
+                      ?? throw new InvalidDataException("The policy fixture catalog has no root object.");
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse(
+            catalog.FixtureDefaults.ClockUtc,
+            CultureInfo.InvariantCulture));
+
+        foreach (var liveCase in catalog.LiveRegressionCases)
+        {
+            await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
+        }
+    }
+
+    private async Task AssertPolicyCaseAsync(
+        PolicyFixtureCatalog catalog,
+        FakeTimeProvider timeProvider,
+        PolicyAdversarialCase policyCase)
+    {
+        var invocation = CreateInvocation(catalog.FixtureDefaults, policyCase);
+        var approvals = CreateApprovals(policyCase.Available);
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            policyCase.Id,
+            invocation,
+            approvals,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken,
+            timeProvider,
+            new ShellApprovalHarnessScope(
+                policyCase.ProjectDirectory,
+                policyCase.SessionDirectory,
+                catalog.FixtureDefaults.Session.SessionId,
+                policyCase.Available.OneTimeApprovalKeys),
+            policyCase.UseBundledSafeCatalog
+                ? null
+                : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
+
+        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"{policyCase.Id} ({policyCase.Category}): outcome={decision.Outcome}; "
+            + $"deny={decision.DenyReason}; "
+            + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
+            + $"messy={decision.ApprovalContext?.IsMessy}; "
+            + $"checks={harness.ApprovalService.CheckCount}; "
+            + $"allow={decision.AllowReason}; "
+            + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
+            + $"trace={string.Join(", ", decision.ShellPolicyTrace.Rows.Select(row => $"{row.Stage}/{row.Reason}"))}");
+
+        Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
+        Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
+        Assert.Equal(policyCase.Expected.ApprovalCandidates, decision.ApprovalContext?.CandidateVerbs);
+        Assert.Equal(policyCase.Expected.IsMessy, decision.ApprovalContext?.IsMessy);
+        Assert.Equal(
+            policyCase.Expected.OptionKeys,
+            decision.ApprovalContext?.Options.Select(option => option.Key.Value).ToList());
+        Assert.Equal(policyCase.Expected.ActorCheckCount, harness.ApprovalService.CheckCount);
     }
 
     private static void AssertProjectedCandidates(

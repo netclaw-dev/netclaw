@@ -205,6 +205,8 @@ Done when:
   policy match handles longer parser phrases without private command grammar.
 - [x] A synthetic workload corpus covers ordinary search, read, pipeline,
   redirect, and file-change commands without production command text.
+- [x] Sanitized post-swap evidence classifies 51 prompts across 202 shell calls.
+  Eleven executable live cases pin the intended allow and prompt boundaries.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
   still requires approval.
 - [x] A prompt excludes a safe stage from the approval candidates that the user

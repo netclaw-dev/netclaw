@@ -13,6 +13,7 @@
 - [x] 1.5 Add adversarial dynamic identity, redirect, protected path, prefix
   collision, runtime loop, wrapper, provider, and unsafe-catalog cases.
 - [x] 1.6 Run the PII audit and manually inspect every command and fixture.
+- [x] 1.7 Add sanitized post-swap evidence and executable live regression cases.
 
 ## 2. Typed coordinator and actor protocol
 
