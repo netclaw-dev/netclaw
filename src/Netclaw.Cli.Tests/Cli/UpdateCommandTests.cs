@@ -20,6 +20,15 @@ namespace Netclaw.Cli.Tests.Cli;
 [Collection("Update verification")]
 public sealed class UpdateCommandTests : IDisposable
 {
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook for tests that simulate Windows
+    /// file-lock failures by revoking directory write permission. The
+    /// simulation is POSIX-only (<c>File.SetUnixFileMode</c>) and is
+    /// ineffective for root, which bypasses directory permission bits.
+    /// </summary>
+    public static bool CanSimulateFileLock =>
+        !OperatingSystem.IsWindows() && Environment.UserName != "root";
+
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Key _testSigningKey;
@@ -354,11 +363,12 @@ public sealed class UpdateCommandTests : IDisposable
         Assert.False(File.Exists(backupPath));
     }
 
-    [Fact]
+    [Fact(SkipUnless = nameof(CanSimulateFileLock), Skip = "POSIX-only permission simulation (ineffective on Windows or as root)")]
+    [SlopwatchSuppress("SW001", "Simulates Windows file locks via POSIX directory permissions, which cannot run on Windows or as root.")]
     public void SwapBinaryIntoPlace_LeavesTargetIntact_WhenStaleBackupDeleteFails()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
-            return; // permission simulation below is Unix-only and ineffective for root
+        if (OperatingSystem.IsWindows())
+            return; // SkipUnless gates the skip; this guard satisfies CA1416 for Unix-only APIs
 
         var sourcePath = Path.Combine(_dir.Path, "new.exe");
         var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
@@ -414,11 +424,12 @@ public sealed class UpdateCommandTests : IDisposable
         Assert.False(File.Exists(backupPath));
     }
 
-    [Fact]
+    [Fact(SkipUnless = nameof(CanSimulateFileLock), Skip = "POSIX-only permission simulation (ineffective on Windows or as root)")]
+    [SlopwatchSuppress("SW001", "Simulates Windows file locks via POSIX directory permissions, which cannot run on Windows or as root.")]
     public void CleanupBackupFile_DoesNotThrow_WhenDeleteFails()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
-            return; // permission simulation below is Unix-only and ineffective for root
+        if (OperatingSystem.IsWindows())
+            return; // SkipUnless gates the skip; this guard satisfies CA1416 for Unix-only APIs
 
         var backupPath = Path.Combine(_dir.Path, "netclaw.backup");
         File.WriteAllText(backupPath, "old image");
@@ -613,5 +624,15 @@ public sealed class UpdateCommandTests : IDisposable
                 : _results.Dequeue());
         }
     }
+}
 
+/// <summary>
+/// Supplies source-level Slopwatch suppressions without a runtime package dependency.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+internal sealed class SlopwatchSuppressAttribute(string ruleId, string reason) : Attribute
+{
+    public string RuleId { get; } = ruleId;
+
+    public string Reason { get; } = reason;
 }
