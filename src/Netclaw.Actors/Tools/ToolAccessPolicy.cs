@@ -189,7 +189,17 @@ public sealed class ToolAccessPolicy
             var (_, approvalArguments) = ToolCallMeta.ExtractFrom(
                 arguments,
                 key => ToolArgumentValidator.ResolveMetaField(mcp, key));
-            return CheckApprovalGate(mcpToolName, context, approvalArguments, McpApprovalMatcher.Instance);
+            var approvalMode = GetApprovalMode(
+                mcpToolName,
+                context,
+                approvalArguments,
+                McpApprovalMatcher.Instance);
+            return CheckApprovalGate(
+                mcpToolName,
+                context,
+                approvalArguments,
+                McpApprovalMatcher.Instance,
+                approvalMode);
         }
 
         var toolName = new ToolName(tool.Name);
@@ -198,7 +208,11 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellCoupledTool(tool))
-            return CheckApprovalGate(toolName, context, arguments, SelectMatcherForTool(toolName));
+        {
+            var matcher = SelectMatcherForTool(toolName);
+            var approvalMode = GetApprovalMode(toolName, context, arguments, matcher);
+            return CheckApprovalGate(toolName, context, arguments, matcher, approvalMode);
+        }
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -232,6 +246,11 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny("shell_references_protected_path");
         }
 
+        var mode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
+        var approvalModeDecision = GetApprovalModeDecision(mode);
+        if (approvalModeDecision is { Allowed: false })
+            return approvalModeDecision;
+
         // All shell policy checks use the directory that ShellTool executes.
         // The explicit tool argument can be absent while the context supplies
         // an active project, session, or inherited directory.
@@ -242,9 +261,6 @@ public sealed class ToolAccessPolicy
                 toolName,
                 analysisArguments,
                 shellAnalysis);
-
-        if (shellAnalysis is not null)
-            _authorizedShellAnalyses.Add(context, shellAnalysis);
 
         // Non-interactive channels: sandbox shell commands to trust zone paths.
         // Even if the verb-chain is pre-approved, path arguments must fall within
@@ -268,11 +284,18 @@ public sealed class ToolAccessPolicy
             }
         }
 
+        if (shellAnalysis is not null)
+            _authorizedShellAnalyses.Add(context, shellAnalysis);
+
+        if (approvalModeDecision is not null)
+            return approvalModeDecision;
+
         return CheckApprovalGate(
             toolName,
             context,
             arguments,
             _shellApprovalMatcher,
+            mode,
             shellApproval,
             shellAnalysis,
             deferReviewedSafeCoverage);
@@ -473,27 +496,14 @@ public sealed class ToolAccessPolicy
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
+        ToolApprovalMode mode,
         ShellApprovalAnalysis? shellApproval = null,
         ShellCommandAnalysis? shellAnalysis = null,
         bool deferReviewedSafeCoverage = false)
     {
-        var audience = ResolveAudience(context.Invocation);
-        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
-        var approvalPolicy = profile.ApprovalPolicy;
-        var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
-        var mode = ResolveApprovalMode(
-            approvalPolicy,
-            approvalModeKey,
-            toolName,
-            arguments,
-            audience,
-            matcher);
-
-        if (mode == ToolApprovalMode.Deny)
-            return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
-
-        if (mode == ToolApprovalMode.Auto)
-            return ToolAccessDecision.Allow(ToolAllowReason.PolicyAuto);
+        var approvalModeDecision = GetApprovalModeDecision(mode);
+        if (approvalModeDecision is not null)
+            return approvalModeDecision;
 
         // The approval policy is authoritative for every channel — there is no
         // safe-list auto-grant for non-interactive callers. A non-interactive
@@ -618,6 +628,33 @@ public sealed class ToolAccessPolicy
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
+
+    private ToolApprovalMode GetApprovalMode(
+        ToolName toolName,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments,
+        IToolApprovalMatcher matcher)
+    {
+        var audience = ResolveAudience(context.Invocation);
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
+        var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
+        return ResolveApprovalMode(
+            profile.ApprovalPolicy,
+            approvalModeKey,
+            toolName,
+            arguments,
+            audience,
+            matcher);
+    }
+
+    private static ToolAccessDecision? GetApprovalModeDecision(ToolApprovalMode mode)
+        => mode switch
+        {
+            ToolApprovalMode.Approval => null,
+            ToolApprovalMode.Auto => ToolAccessDecision.Allow(ToolAllowReason.PolicyAuto),
+            ToolApprovalMode.Deny => ToolAccessDecision.Deny("tool_denied_by_approval_policy"),
+            _ => ToolAccessDecision.Deny("internal_policy_failure")
+        };
 
     internal static ToolApprovalContext NarrowShellApprovalContext(
         ToolApprovalContext context,

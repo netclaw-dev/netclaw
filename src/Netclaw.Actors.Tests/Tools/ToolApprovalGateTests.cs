@@ -54,12 +54,14 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_deny_mode_returns_deny()
     {
         var policy = CreatePolicy(ToolApprovalMode.Deny);
+        var context = PersonalContext();
         var args = ToolInput.Create("Command", "git push");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.AuthorizeInvocation(ShellTool(), context, args);
 
         Assert.False(decision.Allowed);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
     }
 
     [Fact]
@@ -73,6 +75,84 @@ public sealed class ToolApprovalGateTests
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto)]
+    [InlineData(ToolApprovalMode.Deny)]
+    [InlineData((ToolApprovalMode)999)]
+    public void Shell_hard_deny_precedes_approval_mode(ToolApprovalMode mode)
+    {
+        var policy = CreatePolicy(mode);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "rm -rf /"));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("hard_deny_system_destructive", decision.DenyReason);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto)]
+    [InlineData(ToolApprovalMode.Deny)]
+    [InlineData((ToolApprovalMode)999)]
+    public void Shell_protected_path_precedes_approval_mode(ToolApprovalMode mode)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        const string protectedRoot = "/protected";
+        var config = CreateShellConfig(mode);
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, [protectedRoot]);
+        var policy = new ToolAccessPolicy(config, Defaults(), commandPolicy, pathPolicy);
+        var tool = new ShellTool(config, pathPolicy, commandPolicy);
+
+        var decision = policy.AuthorizeInvocation(
+            tool,
+            PersonalContext(),
+            ToolInput.Create("Command", "cat /protected/secret.txt"));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto, "shell_trust_zone_policy_not_configured")]
+    [InlineData(ToolApprovalMode.Deny, "tool_denied_by_approval_policy")]
+    public void Shell_approval_mode_preserves_noninteractive_trust_zone(
+        ToolApprovalMode mode,
+        string expectedDenyReason)
+    {
+        var policy = CreatePolicy(mode);
+        var context = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            context,
+            ToolInput.Create("Command", "cat /external/data.txt"));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(expectedDenyReason, decision.DenyReason);
+        Assert.False(decision.NeedsApproval);
+        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
+    }
+
+    [Fact]
+    public void Invalid_shell_approval_mode_fails_closed()
+    {
+        var policy = CreatePolicy((ToolApprovalMode)999);
+        var context = PersonalContext();
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            context,
+            ToolInput.Create("Command", "git status"));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
+        Assert.Null(context.Cwd);
     }
 
     [Fact]
@@ -914,6 +994,26 @@ public sealed class ToolApprovalGateTests
             toolPathPolicy: new ToolPathPolicy(environment, []),
             shellTrustZonePolicy: trustZone);
     }
+
+    private static ToolConfig CreateShellConfig(ToolApprovalMode mode)
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = mode
+            }
+        };
+        return config;
+    }
+
+    private static EffectivePolicyDefaults Defaults()
+        => new(
+            DeploymentPosture.Personal,
+            TrustAudience.Personal,
+            ShellExecutionMode.HostAllowed,
+            UsedStrictFallback: false);
 
     // Simulates a Mode.Roots audience: a path is write-authorized iff it falls
     // within one of the configured roots (the same IsWithinAnyRoot semantics the
