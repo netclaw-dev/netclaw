@@ -16,7 +16,7 @@ audience sessions cannot use scheduling tools regardless of the config flag.
 Delivery contract parameters:
 
 - `delivery_kind`: required, one of `current_session`, `channel`, `none`
-- `delivery_transport`: required when `delivery_kind=channel` (e.g. `slack`, `discord`, `mattermost`)
+- `delivery_transport`: required when `delivery_kind=channel` (e.g. `slack`, `discord`, `mattermost`, `telegram`)
 - `delivery_address`: required when `delivery_kind=channel` (`#channel`, `@user`, or canonical ID)
 - `delivery_required`: optional bool, default `true`; set `false` only for audit/cleanup tasks
 - `delivery_instructions`: optional content guidance only (never routing)
@@ -37,6 +37,8 @@ Rules:
   both snowflakes: use `channel:<channelId>` or `<#channelId>` for channel posts,
   and `dm:<userId>`, `@<userId>`, or `<@userId>` for DMs. Do not pass a bare
   Discord ID.
+- Telegram reminder targets use signed numeric IDs. A positive ID is an allowed
+  direct-message user. A negative ID is an allowed group or channel.
 - `none` runs silently (history still records execution).
 - `expires_in` is not valid for `once` reminders; omit it for one-shot schedules.
 - For recurring reminders that are permanently complete (PR merged, deploy done,

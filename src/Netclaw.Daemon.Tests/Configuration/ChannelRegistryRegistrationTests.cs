@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
@@ -193,6 +194,7 @@ public sealed class ChannelRegistryRegistrationTests
 
         Assert.True(IsRegistered<TelegramAddressResolver>(services));
         Assert.True(IsRegistered<TelegramProactiveOutboundClient>(services));
+        Assert.True(IsRegistered<IReminderTargetResolver>(services));
 
         await using var provider = BuildProvider(settings);
         var registry = provider.GetRequiredService<IChannelRegistry>();
@@ -201,6 +203,9 @@ public sealed class ChannelRegistryRegistrationTests
             ChannelAddressKind.Destination));
         Assert.IsType<TelegramProactiveOutboundClient>(registry.GetOutboundClient(
             ChannelDescriptorKey.FromChannelType(ChannelType.Telegram)));
+        Assert.Contains(
+            provider.GetServices<IReminderTargetResolver>(),
+            resolver => resolver is TelegramReminderTargetResolver && resolver.Transport == "telegram");
     }
 
     [Fact]

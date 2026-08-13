@@ -48,6 +48,7 @@ public static class ChannelIntegrationRegistrationExtensions
                 new HashSet<ChannelOutputEffectKind> { ChannelOutputEffectKind.ProcessingIndicator })
             .WithRenderer<TelegramProcessingOutputRenderer>()
             .WithResolver((_, options) => new TelegramAddressResolver(options))
+            .WithReminderResolver((_, options) => new TelegramReminderTargetResolver(options))
             .WithServices((channelServices, _) =>
                 channelServices.AddSingleton<TelegramTransport>())
             .WithProactiveSendClient((sp, options) => new TelegramProactiveOutboundClient(
