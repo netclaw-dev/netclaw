@@ -788,6 +788,40 @@ public class DispatchingToolExecutorTests
         Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
+    [Theory]
+    [InlineData("this chat", false)]
+    [InlineData("garbage anywhere", true)]
+    public async Task Authorization_evaluation_denies_malformed_persistent_actor_scope(
+        string scope,
+        bool claimsGlobalScope)
+    {
+        var coverage = claimsGlobalScope
+            ? ShellCoverageKind.PersistentGlobal
+            : ShellCoverageKind.PersistentFolder;
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates.Select(candidate =>
+                    new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        new ToolApprovalMatch(candidate.Candidate.Verb, "persistent", scope),
+                        coverage,
+                        NearMisses: [])).ToArray())));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-malformed-persistent-scope",
+            "shell_execute",
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/malformed-persistent-scope"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+    }
+
     [Fact]
     public async Task Authorization_evaluation_denies_invalid_store_failure_enum()
     {
@@ -868,7 +902,11 @@ public class DispatchingToolExecutorTests
                 new NetclawPaths(),
                 new ToolPathPolicy([]),
                 new ShellCommandPolicy());
-            var approvedMatch = new ToolApprovalMatch("git push", "persistent", approvedDirectory);
+            var approvedScope = ApprovalEntry.CreateTokenPrefix(
+                ApprovalShell.Bash,
+                ["git", "push"],
+                approvedDirectory).FormatScope();
+            var approvedMatch = new ToolApprovalMatch("git push", "persistent", approvedScope);
             var approvedCandidate = BashCandidate("git push", approvedDirectory);
             var unapprovedCandidate = BashCandidate("git push", unapprovedDirectory);
             var approvalService = new FixedApprovalService(

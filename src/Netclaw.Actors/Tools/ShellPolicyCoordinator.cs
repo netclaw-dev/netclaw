@@ -118,7 +118,12 @@ internal sealed class ShellPolicyCoordinator(
             projection,
             grantCandidates,
             cancellationToken);
-        if (!TryApplyActorResult(actorResult, grantCandidates, coverage, out var approvalMatches))
+        if (!TryApplyActorResult(
+                actorResult,
+                grantCandidates,
+                projection.ApprovalContext.Cwd,
+                coverage,
+                out var approvalMatches))
             return ToolAuthorizationDecision.Deny("internal_policy_failure");
 
         foreach (var candidate in grantCandidates.Where(candidate =>
@@ -321,6 +326,7 @@ internal sealed class ShellPolicyCoordinator(
     private static bool TryApplyActorResult(
         ShellApprovalMatchResult result,
         IReadOnlyList<ShellPolicyCandidate> candidates,
+        string? cwd,
         ShellCoverageSet coverage,
         out IReadOnlyList<ToolApprovalMatch> approvalMatches)
     {
@@ -371,7 +377,8 @@ internal sealed class ShellPolicyCoordinator(
             if (!IsConsistentActorMatch(
                     candidate.Candidate,
                     candidateMatch.Match,
-                    candidateMatch.GrantCoverage.Value))
+                    candidateMatch.GrantCoverage.Value,
+                    cwd))
             {
                 return false;
             }
@@ -397,24 +404,30 @@ internal sealed class ShellPolicyCoordinator(
     private static bool IsConsistentActorMatch(
         ApprovalCandidate candidate,
         ToolApprovalMatch match,
-        ShellCoverageKind coverage)
+        ShellCoverageKind coverage,
+        string? cwd)
     {
         if (!string.Equals(match.Pattern, candidate.Verb, StringComparison.Ordinal))
             return false;
 
-        return coverage switch
+        if (coverage == ShellCoverageKind.Session)
         {
-            ShellCoverageKind.Session =>
-                string.Equals(match.Source, "session", StringComparison.Ordinal)
-                && string.Equals(match.Scope, "this chat", StringComparison.Ordinal),
-            ShellCoverageKind.PersistentGlobal =>
-                string.Equals(match.Source, "persistent", StringComparison.Ordinal)
-                && match.Scope.EndsWith(" anywhere", StringComparison.Ordinal),
-            ShellCoverageKind.PersistentFolder =>
-                string.Equals(match.Source, "persistent", StringComparison.Ordinal)
-                && !match.Scope.EndsWith(" anywhere", StringComparison.Ordinal),
-            _ => false,
-        };
+            return string.Equals(match.Source, "session", StringComparison.Ordinal)
+                   && string.Equals(match.Scope, "this chat", StringComparison.Ordinal);
+        }
+
+        if (coverage is not
+            (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)
+            || !string.Equals(match.Source, "persistent", StringComparison.Ordinal)
+            || !ApprovalEntry.TryParseScope(match.Scope, out var entry, out _)
+            || entry.Shell != candidate.Shell
+            || entry.Match is null
+            || (coverage == ShellCoverageKind.PersistentGlobal) != (entry.Directory is null))
+        {
+            return false;
+        }
+
+        return ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, [entry]);
     }
 
     private static IReadOnlyList<ShellPolicyCandidate> GetUncoveredCandidates(
