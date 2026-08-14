@@ -61,28 +61,9 @@ internal sealed record ShellPolicyCandidatePathFacts(
     ShellPolicyResolvedPathView? Intent,
     IReadOnlyList<ShellPolicyResolvedPathView> Fallbacks);
 
-internal sealed class ShellPolicyPathFacts
+internal static class ShellPolicyPathFacts
 {
-    private readonly ShellPolicyCandidatePathFacts[] _candidates;
-
-    private ShellPolicyPathFacts(ShellPolicyCandidatePathFacts[] candidates)
-    {
-        _candidates = candidates;
-        Candidates = Array.AsReadOnly(candidates);
-    }
-
-    internal IReadOnlyList<ShellPolicyCandidatePathFacts> Candidates { get; }
-
-    internal ShellPolicyCandidatePathFacts For(ShellPolicyCandidateId candidateId)
-    {
-        var index = candidateId.Value;
-        if ((uint)index >= (uint)_candidates.Length)
-            throw new ArgumentOutOfRangeException(nameof(candidateId));
-
-        return _candidates[index];
-    }
-
-    internal static ShellPolicyPathFacts Create(
+    internal static IReadOnlyList<ShellPolicyCandidatePathFacts> Create(
         IReadOnlyList<ShellPolicyCandidate> candidates,
         ShellPathStyle pathStyle)
     {
@@ -149,7 +130,7 @@ internal sealed class ShellPolicyPathFacts
                 Array.AsReadOnly(fallbacks));
         }
 
-        return new ShellPolicyPathFacts(projected);
+        return Array.AsReadOnly(projected);
     }
 
     internal static ShellPolicyScopePathFact ResolveScope(

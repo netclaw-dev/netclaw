@@ -629,8 +629,8 @@ public sealed class ToolAccessPolicy
             if (!deferReviewedSafeCoverage)
             {
                 approvalCandidates = approvalCandidates
-                    .Where(candidate => !_safeVerbPolicy.AllShortCircuit(
-                        [candidate],
+                    .Where(candidate => !_safeVerbPolicy.ShortCircuits(
+                        candidate,
                         context.Approval.Cwd,
                         context.Invocation))
                     .ToList();

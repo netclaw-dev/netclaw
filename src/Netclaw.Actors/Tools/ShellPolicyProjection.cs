@@ -80,7 +80,7 @@ internal sealed record ShellPolicyProjection
         ToolRunScope runScope,
         ToolApprovalContext approvalContext,
         IReadOnlyList<ShellPolicyCandidate> candidates,
-        ShellPolicyPathFacts pathFacts,
+        IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
         IReadOnlySet<string> approvedOneTimeKeys,
         string? approvedOneTimeToolName)
     {
@@ -109,7 +109,7 @@ internal sealed record ShellPolicyProjection
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates { get; }
 
-    internal ShellPolicyPathFacts PathFacts { get; }
+    internal IReadOnlyList<ShellPolicyCandidatePathFacts> PathFacts { get; }
 
     internal IReadOnlySet<string> ApprovedOneTimeKeys { get; }
 

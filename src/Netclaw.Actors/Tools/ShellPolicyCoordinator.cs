@@ -287,7 +287,7 @@ internal static class ShellPolicyInitialStages
         return evaluation.Candidates.Any(candidate =>
                    candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
                    && policy.CausalIntentReferencesProtectedPath(
-                       evaluation.Projection.PathFacts.For(candidate.Id)))
+                       evaluation.Projection.PathFacts[candidate.Id.Value]))
             ? new ShellPolicyStageResult.Complete(
                 ToolAuthorizationDecision.Deny("shell_references_protected_path"))
             : new ShellPolicyStageResult.Continue();
@@ -448,7 +448,7 @@ internal static class ShellPolicyReviewedSafeStages
         {
             if (!policy.IsReviewedSafeCandidate(
                     candidate.Candidate,
-                    evaluation.Projection.PathFacts.For(candidate.Id),
+                    evaluation.Projection.PathFacts[candidate.Id.Value],
                     invocation))
             {
                 continue;
@@ -485,7 +485,7 @@ internal static class ShellPolicyReviewedSafeStages
                     !evaluation.IsCovered(prerequisite))
                 || !policy.IsReviewedSafeIntentCandidate(
                     candidate.Candidate,
-                    evaluation.Projection.PathFacts.For(candidate.Id),
+                    evaluation.Projection.PathFacts[candidate.Id.Value],
                     invocation))
             {
                 continue;

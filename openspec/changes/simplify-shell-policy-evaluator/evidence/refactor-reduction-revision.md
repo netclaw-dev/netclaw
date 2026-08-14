@@ -60,6 +60,16 @@ The slice removes another 45 production lines and eight test lines. It does not 
 
 The cumulative footprint uses 8,520 lines and 521 control-flow lines. The complete reduction gate remains open.
 
+## Unified reviewed-safe path slice
+
+This slice removes the unused aggregate reviewed-safe route. The compatibility entry now projects candidate-scoped path facts and calls the same reviewed-safe method as the coordinator.
+
+The evaluation also reuses the projection's immutable candidate snapshot, and the path-fact projection returns its immutable candidate list directly instead of wrapping a second indexed container.
+
+The slice removes another 57 production lines and four control-flow lines. It adds 19 test lines while moving the existing direct safe-policy cases onto the shared typed route.
+
+The cumulative footprint uses 8,463 lines and 517 control-flow lines. The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

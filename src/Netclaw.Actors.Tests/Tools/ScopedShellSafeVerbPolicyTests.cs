@@ -95,7 +95,19 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         string verb,
         string? cwd,
         ToolInvocationContext context) =>
-        policy.AllShortCircuit([Candidate(verb)], cwd, context);
+        AllShortCircuit(policy, [Candidate(verb)], cwd, context);
+
+    private static bool AllShortCircuit(
+        ScopedShellSafeVerbPolicy policy,
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        ToolInvocationContext context)
+    {
+        if (candidates.Count == 0)
+            return false;
+
+        return candidates.All(candidate => policy.ShortCircuits(candidate, cwd, context));
+    }
 
     private ToolInvocationContext PersonalContext(string? projectDir = null, string? sessionDir = null)
         => TestToolExecutionContext.CreateBound("session-1", sessionDir ?? _sessionDir, new TestToolExecutionContextOptions
@@ -191,7 +203,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("grep", "cat"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(Candidates("grep", "git push"), _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, Candidates("grep", "git push"), _projectDir, ctx));
     }
 
     [Fact]
@@ -200,7 +212,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("grep", "cat", "wc"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.True(policy.AllShortCircuit(Candidates("grep", "cat", "wc"), _projectDir, ctx));
+        Assert.True(AllShortCircuit(policy, Candidates("grep", "cat", "wc"), _projectDir, ctx));
     }
 
     [Fact]
@@ -209,7 +221,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("grep"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit([], _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, [], _projectDir, ctx));
     }
 
     [Fact]
@@ -244,7 +256,11 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("whoami"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(Candidates("whoami", "git push origin main"), _projectDir, ctx));
+        Assert.False(AllShortCircuit(
+            policy,
+            Candidates("whoami", "git push origin main"),
+            _projectDir,
+            ctx));
     }
 
     [Fact]
@@ -253,7 +269,8 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("git ls-tree"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.True(policy.AllShortCircuit(
+        Assert.True(AllShortCircuit(
+            policy,
             [Candidate("git ls-tree feature", _projectDir)],
             _projectDir,
             ctx));
@@ -279,7 +296,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
                 ["WorkingDirectory"] = _projectDir
             });
 
-        Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Theory]
@@ -302,7 +319,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
                 ["WorkingDirectory"] = _projectDir
             });
 
-        Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Fact]
@@ -320,7 +337,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
                 ["WorkingDirectory"] = _projectDir
             });
 
-        Assert.True(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.True(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Fact]
@@ -337,7 +354,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
                 ["WorkingDirectory"] = _projectDir
             });
 
-        Assert.True(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.True(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Fact]
@@ -361,7 +378,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
                 ["WorkingDirectory"] = _projectDir
             });
 
-        Assert.True(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.True(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Fact]
@@ -370,7 +387,8 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("git ls-tree"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(
+        Assert.False(AllShortCircuit(
+            policy,
             [Candidate("git ls-treex feature", _projectDir)],
             _projectDir,
             ctx));
@@ -383,7 +401,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var ctx = PersonalContext(projectDir: _projectDir);
         var candidate = new ApprovalCandidate("head", _projectDir);
 
-        Assert.False(policy.AllShortCircuit([candidate], _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, [candidate], _projectDir, ctx));
     }
 
     [Fact]
@@ -392,7 +410,8 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var policy = new ScopedShellSafeVerbPolicy(VerbList("Get-Content"));
         var ctx = PersonalContext(projectDir: _projectDir);
 
-        Assert.False(policy.AllShortCircuit(
+        Assert.False(AllShortCircuit(
+            policy,
             [Candidate("Get-Content", _projectDir, ApprovalShell.PowerShell)],
             _projectDir,
             ctx));
@@ -413,7 +432,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
             var ctx = PersonalContext(projectDir: _projectDir);
             var candidate = Candidate("find", link);
 
-            Assert.False(policy.AllShortCircuit([candidate], _projectDir, ctx));
+            Assert.False(AllShortCircuit(policy, [candidate], _projectDir, ctx));
         }
         finally
         {
@@ -428,7 +447,7 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
         var ctx = PersonalContext(projectDir: _projectDir);
         var candidates = new[] { Candidate("cat", _outsideDir) };
 
-        Assert.False(policy.AllShortCircuit(candidates, _projectDir, ctx));
+        Assert.False(AllShortCircuit(policy, candidates, _projectDir, ctx));
     }
 
     [Fact]

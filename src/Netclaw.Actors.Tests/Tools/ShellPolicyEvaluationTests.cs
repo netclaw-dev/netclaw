@@ -141,7 +141,7 @@ public sealed class ShellPolicyEvaluationTests
         var consumer = Assert.Single(
             evaluation.Candidates,
             static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
-        var facts = evaluation.Projection.PathFacts.For(consumer.Id);
+        var facts = evaluation.Projection.PathFacts[consumer.Id.Value];
         var source = Assert.Single(
             Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
             static fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument).Source;
@@ -167,7 +167,7 @@ public sealed class ShellPolicyEvaluationTests
         var consumer = Assert.Single(
             evaluation.Candidates,
             static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
-        var facts = evaluation.Projection.PathFacts.For(consumer.Id);
+        var facts = evaluation.Projection.PathFacts[consumer.Id.Value];
         var environment = ShellExecutionEnvironment.CreatePowerShell(
             @"C:\Program Files\PowerShell\7\pwsh.exe",
             PwshDialect.PowerShell7);
@@ -502,7 +502,7 @@ public sealed class ShellPolicyEvaluationTests
                 "; ",
                 evaluation.Candidates.Select(candidate =>
                 {
-                    var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+                    var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
                     return $"{candidate.Candidate.Verb}: "
                            + $"directory={candidate.Candidate.Directory}; "
                            + $"sourceCwd={candidate.SourceOccurrence?.WorkingDirectory}; "
@@ -519,7 +519,7 @@ public sealed class ShellPolicyEvaluationTests
             interactive: true,
             "tr");
         var candidate = Assert.Single(evaluation.Candidates);
-        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+        var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
         var real = Assert.IsType<ShellPolicyResolvedPathView>(facts.Real);
         var invalid = facts with
         {
@@ -733,7 +733,7 @@ public sealed class ShellPolicyEvaluationTests
             "head");
         var candidate = Assert.Single(evaluation.Candidates);
 
-        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+        var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
         Assert.Same(candidate.SourceOccurrence, facts.SourceOccurrence);
         Assert.Equal(ShellPolicyPathResolutionState.Known, facts.RealScope.State);
@@ -805,7 +805,7 @@ public sealed class ShellPolicyEvaluationTests
             evaluation.Candidates,
             static candidate => candidate.Candidate.Directory == "/work/sub");
 
-        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+        var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
         Assert.Equal("/work/sub", facts.RealScope.Path?.Value);
         Assert.Equal("/work", facts.Real?.ResolutionBase.Path?.Value);
@@ -825,7 +825,7 @@ public sealed class ShellPolicyEvaluationTests
             evaluation.Candidates,
             static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
 
-        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+        var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
         Assert.Equal("/tmp", facts.IntentScope?.Path?.Value);
         Assert.Contains(facts.FallbackScopes, scope => scope.Path?.Value == "/work");

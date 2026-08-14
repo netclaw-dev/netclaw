@@ -36,25 +36,6 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     /// <summary>
-    /// Returns true when each candidate has a safe verb and a safe effective
-    /// directory. The candidate directory takes precedence over the cwd.
-    /// </summary>
-    public bool AllShortCircuit(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        string? cwd,
-        ToolInvocationContext context)
-    {
-        if (candidates.Count == 0)
-            return false;
-
-        return candidates.All(candidate => ShortCircuits(
-            candidate,
-            candidate.SourceOccurrence,
-            cwd,
-            context));
-    }
-
-    /// <summary>
     /// Returns true when declaring <paramref name="cwd"/> as the project root
     /// would make every candidate eligible for the reviewed-safe short circuit.
     /// </summary>
@@ -204,33 +185,18 @@ internal sealed class ScopedShellSafeVerbPolicy
 
     internal bool ShortCircuits(
         ApprovalCandidate candidate,
-        CommandOccurrence? sourceOccurrence,
         string? cwd,
         ToolInvocationContext context)
     {
-        var safeRoots = ResolveSafeSpaceRoots(context);
-        var resolvedPaths = ResolveCompatibilityPaths(candidate, sourceOccurrence);
-        if (safeRoots.Count == 0
-            || !IsReviewedDiagnostic(candidate, sourceOccurrence, safeRoots, resolvedPaths))
-        {
-            return false;
-        }
-
-        var effectiveDirectory = candidate.Directory ?? cwd;
-        if (string.IsNullOrWhiteSpace(effectiveDirectory))
-            return false;
-
-        try
-        {
-            var fullDirectory = Path.GetFullPath(effectiveDirectory);
-            return safeRoots.Any(root => IsSafePath(fullDirectory, root));
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or NotSupportedException
-                                      or PathTooLongException)
-        {
-            return false;
-        }
+        var projected = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            candidate.Directory is null ? candidate with { Directory = cwd } : candidate,
+            candidate.SourceOccurrence);
+        var pathStyle = OperatingSystem.IsWindows()
+            ? ShellPathStyle.Windows
+            : ShellPathStyle.Posix;
+        var facts = ShellPolicyPathFacts.Create([projected], pathStyle);
+        return ShortCircuits(projected.Candidate, facts[projected.Id.Value], context);
     }
 
     internal bool ShortCircuits(

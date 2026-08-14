@@ -147,8 +147,6 @@ internal sealed record ShellPolicyAuthorization
 
 internal sealed class ShellPolicyEvaluation
 {
-    private readonly ShellPolicyCandidate[] _candidates;
-    private readonly IReadOnlyList<ShellPolicyCandidate> _candidateView;
     private readonly ShellPolicyCoverageSource[] _coverage;
     private readonly ShellPolicyDecisionTraceBuilder _trace = new();
     private ToolAuthorizationDecision? _terminalDecision;
@@ -162,19 +160,17 @@ internal sealed class ShellPolicyEvaluation
         ArgumentNullException.ThrowIfNull(projection);
 
         Projection = projection;
-        _candidates = projection.Candidates.ToArray();
-        _candidateView = Array.AsReadOnly(_candidates);
-        _coverage = new ShellPolicyCoverageSource[_candidates.Length];
+        _coverage = new ShellPolicyCoverageSource[projection.Candidates.Count];
     }
 
     internal ShellPolicyProjection Projection { get; }
 
-    internal IReadOnlyList<ShellPolicyCandidate> Candidates => _candidateView;
+    internal IReadOnlyList<ShellPolicyCandidate> Candidates => Projection.Candidates;
 
     internal bool AllCovered => !_coverage.Contains(ShellPolicyCoverageSource.Uncovered);
 
     internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates =>
-        Array.AsReadOnly(_candidates
+        Array.AsReadOnly(Projection.Candidates
             .Where((_, index) => _coverage[index] == ShellPolicyCoverageSource.Uncovered)
             .ToArray());
 
@@ -271,10 +267,10 @@ internal sealed class ShellPolicyEvaluation
             return new ShellPolicyStageResult.Complete(_terminalDecision);
 
         var index = candidate.Id.Value;
-        if ((uint)index >= (uint)_candidates.Length)
+        if ((uint)index >= (uint)Candidates.Count)
             return Fail(ShellPolicyFault.InvalidCandidateId);
 
-        if (!ReferenceEquals(candidate, _candidates[index]))
+        if (!ReferenceEquals(candidate, Projection.Candidates[index]))
             return Fail(ShellPolicyFault.CandidateFactsChanged);
 
         if (_coverage[index] != ShellPolicyCoverageSource.Uncovered)
@@ -310,7 +306,7 @@ internal sealed class ShellPolicyEvaluation
             ToolAuthorizationOutcome.Allowed => AllCovered
                                                 || allowsUncoveredOneTime
                                                 && decision.AllowReason == ToolAllowReason.OneTimeApproval,
-            ToolAuthorizationOutcome.RequiresApproval => _candidates.Length == 0 || !AllCovered,
+            ToolAuthorizationOutcome.RequiresApproval => Candidates.Count == 0 || !AllCovered,
             ToolAuthorizationOutcome.Denied => true,
             _ => false,
         };
