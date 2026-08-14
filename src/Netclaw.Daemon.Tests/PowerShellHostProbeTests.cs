@@ -158,12 +158,14 @@ public class PowerShellHostProbeTests
         timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
 
         // ProbeAsync retries once on timeout, so drive the second attempt too.
+        // The retry gets the escalated budget (ProbeRetryTimeout).
         await DrainRetryDelayAsync(second, timeProvider);
-        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryTimeout);
         var result = await pending;
 
         var failed = Assert.IsType<PowerShellHostProbeResult.Failed>(result);
         Assert.Equal(PowerShellProbeFailure.Timeout, failed.Failure);
+        Assert.True(failed.ElapsedMs > 0);
         Assert.True(first.KillTreeCalled);
         Assert.True(first.WaitedAfterKill);
         Assert.True(first.Disposed);
@@ -248,6 +250,36 @@ public class PowerShellHostProbeTests
         Assert.Equal(new Version(7, 6, 4), found.Version);
         Assert.True(slow.KillTreeCalled);
         Assert.True(healthy.Disposed);
+    }
+
+    [Fact]
+    public async Task Retry_attempt_gets_a_larger_budget_than_the_first_attempt()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var first = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var second = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var probe = new PowerShellHostProbe(
+            timeProvider,
+            new FixedExecutableLocator(),
+            new SequenceProcessFactory(first, second));
+
+        var pending = probe.ProbeAsync("pwsh.exe", TestContext.Current.CancellationToken);
+        await first.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+
+        // Attempt 2 starts after the retry delay. It must still be running at the
+        // first attempt's budget...
+        await DrainRetryDelayAsync(second, timeProvider);
+        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+        Assert.False(pending.IsCompleted);
+
+        // ...and only time out once the escalated retry budget is exhausted.
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryTimeout - PowerShellHostProbe.ProbeTimeout);
+        var result = await pending;
+
+        var failed = Assert.IsType<PowerShellHostProbeResult.Failed>(result);
+        Assert.Equal(PowerShellProbeFailure.Timeout, failed.Failure);
+        Assert.True(second.KillTreeCalled);
     }
 
     [Fact]

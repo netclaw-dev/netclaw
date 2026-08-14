@@ -94,7 +94,9 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
             PowerShellHostProbeResult.Found found =>
                 $"pwsh.exe reported unsupported version {found.Version}",
             PowerShellHostProbeResult.Failed failed =>
-                $"pwsh.exe probe failed ({failed.Failure})",
+                failed.ElapsedMs > 0
+                    ? $"pwsh.exe probe failed ({failed.Failure} after {failed.ElapsedMs}ms)"
+                    : $"pwsh.exe probe failed ({failed.Failure})",
             _ => "pwsh.exe was unavailable"
         };
         var fallbackDescription = fallback switch
@@ -103,7 +105,9 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
             PowerShellHostProbeResult.Found found =>
                 $"powershell.exe reported unsupported version {found.Version}",
             PowerShellHostProbeResult.Failed failed =>
-                $"powershell.exe probe failed ({failed.Failure})",
+                failed.ElapsedMs > 0
+                    ? $"powershell.exe probe failed ({failed.Failure} after {failed.ElapsedMs}ms)"
+                    : $"powershell.exe probe failed ({failed.Failure})",
             _ => "powershell.exe was unavailable"
         };
 

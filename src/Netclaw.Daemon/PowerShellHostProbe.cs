@@ -33,7 +33,7 @@ internal abstract record PowerShellHostProbeResult
 
     internal sealed record Found(string ExecutablePath, Version Version) : PowerShellHostProbeResult;
 
-    internal sealed record Failed(PowerShellProbeFailure Failure, int? ExitCode = null) : PowerShellHostProbeResult;
+    internal sealed record Failed(PowerShellProbeFailure Failure, int? ExitCode = null, long ElapsedMs = 0) : PowerShellHostProbeResult;
 }
 
 internal interface IPowerShellHostProbe
@@ -48,7 +48,8 @@ internal sealed class PowerShellHostProbe(
     IPowerShellExecutableLocator executableLocator,
     IPowerShellProbeProcessFactory processFactory) : IPowerShellHostProbe
 {
-    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan ProbeRetryTimeout = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan ProbeRetryDelay = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(1);
     private const int MaxOutputChars = 4096;
@@ -60,7 +61,11 @@ internal sealed class PowerShellHostProbe(
     {
         for (var attempt = 1; ; attempt++)
         {
-            var result = await ProbeOnceAsync(executableName, cancellationToken).ConfigureAwait(false);
+            // Escalate the per-attempt budget: attempt 1 covers normal spawn
+            // latency; the retry gets a much larger budget because cold starts
+            // (Defender first scan, loaded CI runner) are slow but finite.
+            var attemptTimeout = attempt == 1 ? ProbeTimeout : ProbeRetryTimeout;
+            var result = await ProbeOnceAsync(executableName, cancellationToken, attemptTimeout).ConfigureAwait(false);
             if (result is not PowerShellHostProbeResult.Failed { Failure: PowerShellProbeFailure.Timeout }
                 || attempt >= MaxProbeAttempts)
             {
@@ -75,8 +80,10 @@ internal sealed class PowerShellHostProbe(
 
     private async Task<PowerShellHostProbeResult> ProbeOnceAsync(
         string executableName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan attemptTimeout)
     {
+        var started = Stopwatch.GetTimestamp();
         var lookup = executableLocator.Locate(executableName);
         if (lookup is PowerShellExecutableLookup.NotFound)
             return new PowerShellHostProbeResult.NotFound();
@@ -103,7 +110,7 @@ internal sealed class PowerShellHostProbe(
         }
 
         using (process)
-        using (var timeout = new CancellationTokenSource(ProbeTimeout, timeProvider))
+        using (var timeout = new CancellationTokenSource(attemptTimeout, timeProvider))
         using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
                    cancellationToken,
                    timeout.Token))
@@ -118,6 +125,7 @@ internal sealed class PowerShellHostProbe(
             }
             catch (Exception ex)
             {
+                var elapsedMs = (long)((Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency);
                 var probeTimedOut = timeout.IsCancellationRequested;
                 TryCancel(timeout);
                 var terminated = await TerminateAsync(process, stdout, stderr).ConfigureAwait(false);
@@ -128,7 +136,8 @@ internal sealed class PowerShellHostProbe(
                     return new PowerShellHostProbeResult.Failed(
                         terminated
                             ? PowerShellProbeFailure.Timeout
-                            : PowerShellProbeFailure.TerminationFailed);
+                            : PowerShellProbeFailure.TerminationFailed,
+                        ElapsedMs: elapsedMs);
                 }
 
                 if (IsExpectedPostStartFailure(ex))
