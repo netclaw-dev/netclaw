@@ -57,9 +57,9 @@
 
 ## 7. Remove obsolete structure
 
-- [ ] 7.1 Remove dead coordinator branches, duplicate coverage mutation, duplicate path helpers, and duplicate prompt-scope logic.
-- [ ] 7.2 Keep the required public compatibility adapter isolated from new typed policy code.
-- [ ] 7.3 Record the separate generic approval API work that can remove the compatibility adapter.
+- [x] 7.1 Remove dead coordinator branches, duplicate coverage mutation, duplicate path helpers, and duplicate prompt-scope logic.
+- [x] 7.2 Keep the required public compatibility adapter isolated from new typed policy code.
+- [x] 7.3 Record the separate generic approval API work that can remove the compatibility adapter ([#1944](https://github.com/netclaw-dev/netclaw/issues/1944)).
 - [ ] 7.4 Verify production policy contains no new executable names or executable-private argument rules.
 - [ ] 7.5 Verify no call-local parser occurrence, command text, path, or secret crosses actor or persistence boundaries.
 - [ ] 7.6 Run API and durable-contract comparisons against the frozen baseline.

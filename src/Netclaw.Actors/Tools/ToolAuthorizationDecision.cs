@@ -253,6 +253,23 @@ internal sealed record ToolAuthorizationDecision
             [.. approvalMatches]);
     }
 
+    internal static ToolAuthorizationDecision From(
+        ToolAccessDecision decision,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        ArgumentNullException.ThrowIfNull(approvalMatches);
+
+        return decision switch
+        {
+            { NeedsApproval: true, ApprovalContext: { } context } =>
+                RequiresApproval(context, approvalMatches),
+            { Allowed: false, DenyReason: { } reason } => Deny(reason),
+            { Allowed: true, AllowReason: { } reason } => Allow(reason, approvalMatches),
+            _ => throw new InvalidOperationException("Tool access decision is incomplete.")
+        };
+    }
+
     internal ToolAuthorizationDecision WithShellPolicyTrace(ShellPolicyDecisionTrace trace)
     {
         ArgumentNullException.ThrowIfNull(trace);

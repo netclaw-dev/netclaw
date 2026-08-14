@@ -115,8 +115,20 @@ internal sealed class ShellPolicyPathFacts
             var sourceFacts = candidate.SourceOccurrence is { } occurrence
                 ? GetOrCreateSourceFacts(sourceCache, occurrence)
                 : null;
-            var realScope = ResolveRealScope(candidate, pathStyle);
-            var realBase = ResolveRealBase(candidate, pathStyle);
+            var occurrenceDirectory = candidate.SourceOccurrence?.WorkingDirectory
+                is ShellValueDomain.Exact exact
+                ? exact.Value
+                : null;
+            var realScope = ResolveScope(
+                ShellPolicyPathBaseKind.Real,
+                baseIndex: 0,
+                candidate.Candidate.Directory ?? occurrenceDirectory,
+                pathStyle);
+            var realBase = ResolveScope(
+                ShellPolicyPathBaseKind.Real,
+                baseIndex: 0,
+                occurrenceDirectory ?? candidate.Candidate.Directory,
+                pathStyle);
             var intentBase = candidate.IntentDirectory is null
                 ? null
                 : ResolveScope(
@@ -160,65 +172,25 @@ internal sealed class ShellPolicyPathFacts
         return new ShellPolicyPathFacts(projected);
     }
 
-    private static ShellPolicyScopePathFact ResolveRealBase(
-        ShellPolicyCandidate candidate,
-        ShellPathStyle pathStyle)
-    {
-        var value = candidate.SourceOccurrence?.WorkingDirectory is ShellValueDomain.Exact exact
-            ? exact.Value
-            : candidate.Candidate.Directory;
-        return ResolveScope(
-            ShellPolicyPathBaseKind.Real,
-            baseIndex: 0,
-            value,
-            pathStyle);
-    }
-
-    private static ShellPolicyScopePathFact ResolveRealScope(
-        ShellPolicyCandidate candidate,
-        ShellPathStyle pathStyle)
-    {
-        var value = candidate.Candidate.Directory
-            ?? (candidate.SourceOccurrence?.WorkingDirectory is ShellValueDomain.Exact exact
-                ? exact.Value
-                : null);
-        return ResolveScope(
-            ShellPolicyPathBaseKind.Real,
-            baseIndex: 0,
-            value,
-            pathStyle);
-    }
-
-    private static ShellPolicyScopePathFact ResolveScope(
+    internal static ShellPolicyScopePathFact ResolveScope(
         ShellPolicyPathBaseKind baseKind,
         int baseIndex,
         string? value,
         ShellPathStyle pathStyle)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return new ShellPolicyScopePathFact(
-                baseKind,
-                baseIndex,
-                value,
-                ShellPolicyPathResolutionState.UnknownDynamic,
-                Path: null);
-        }
-
-        return ShellPathRules.TryNormalize(value, pathStyle, out var normalized)
-               && CanonicalShellPath.TryCreate(normalized, pathStyle, out var path)
-            ? new ShellPolicyScopePathFact(
-                baseKind,
-                baseIndex,
-                value,
-                ShellPolicyPathResolutionState.Known,
-                path)
-            : new ShellPolicyScopePathFact(
-                baseKind,
-                baseIndex,
-                value,
-                ShellPolicyPathResolutionState.InvalidKnownValue,
-                Path: null);
+        CanonicalShellPath path = default;
+        var state = string.IsNullOrWhiteSpace(value)
+            ? ShellPolicyPathResolutionState.UnknownDynamic
+            : ShellPathRules.TryNormalize(value, pathStyle, out var normalized)
+              && CanonicalShellPath.TryCreate(normalized, pathStyle, out path)
+                ? ShellPolicyPathResolutionState.Known
+                : ShellPolicyPathResolutionState.InvalidKnownValue;
+        return new ShellPolicyScopePathFact(
+            baseKind,
+            baseIndex,
+            value,
+            state,
+            state == ShellPolicyPathResolutionState.Known ? path : null);
     }
 
     private static ShellPolicyOccurrencePathFacts GetOrCreateSourceFacts(
@@ -301,6 +273,17 @@ internal sealed class ShellPolicyOccurrencePathFacts
             resolutionBase,
             Array.AsReadOnly(resolved));
     }
+
+    internal ShellPolicyResolvedPathView Resolve(
+        string? resolutionBase,
+        ShellPathStyle pathStyle)
+        => Resolve(
+            ShellPolicyPathFacts.ResolveScope(
+                ShellPolicyPathBaseKind.Real,
+                baseIndex: 0,
+                resolutionBase,
+                pathStyle),
+            pathStyle);
 
     private static ShellPolicySourcePathFact CreateFact(
         ShellPolicyPathOrigin origin,

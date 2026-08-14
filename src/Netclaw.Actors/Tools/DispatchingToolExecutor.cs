@@ -438,27 +438,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
     private static ToolAuthorizationDecision CompleteAuthorizationDecision(
         ToolAccessDecision accessDecision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches)
-    {
-        if (accessDecision.NeedsApproval)
-        {
-            return ToolAuthorizationDecision.RequiresApproval(
-                accessDecision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context."),
-                approvalMatches);
-        }
-
-        if (!accessDecision.Allowed)
-        {
-            return ToolAuthorizationDecision.Deny(
-                accessDecision.DenyReason
-                ?? throw new InvalidOperationException("Denied decision missing a deny reason."));
-        }
-
-        return ToolAuthorizationDecision.Allow(
-            accessDecision.AllowReason
-            ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
-            approvalMatches);
-    }
+        => ToolAuthorizationDecision.From(accessDecision, approvalMatches);
 
     private static bool TryGetExactUnapprovedCandidates(
         ToolApprovalCheckResult result,

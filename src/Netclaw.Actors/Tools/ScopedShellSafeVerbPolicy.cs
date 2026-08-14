@@ -97,8 +97,18 @@ internal sealed class ScopedShellSafeVerbPolicy
             .ToArray();
         foreach (var candidate in candidates)
         {
-            if (!IsReviewedDiagnostic(candidate, candidate.SourceOccurrence, prospectiveRoots))
+            var resolvedPaths = ResolveCompatibilityPaths(
+                candidate,
+                candidate.SourceOccurrence,
+                fullCwd);
+            if (!IsReviewedDiagnostic(
+                    candidate,
+                    candidate.SourceOccurrence,
+                    prospectiveRoots,
+                    resolvedPaths))
+            {
                 return false;
+            }
 
             var effectiveDirectory = candidate.Directory ?? fullCwd;
             if (string.IsNullOrWhiteSpace(effectiveDirectory))
@@ -128,50 +138,15 @@ internal sealed class ScopedShellSafeVerbPolicy
         ApprovalCandidate candidate,
         CommandOccurrence? sourceOccurrence,
         IReadOnlyList<string> safeRoots,
-        string? workingDirectoryOverride = null)
-    {
-        if (candidate is not
-            {
-                Shell: { } shell,
-                VerbTokens: { }
-            }
-            || sourceOccurrence is null
-            || ShellRedirectPolicyFacts.HasFileWritingRedirect(sourceOccurrence)
-            || !_safeVerbs.TryMatchReviewedDiagnostic(
-                shell,
-                candidate.VerbTokens,
-                out var matchedTokenCount))
-        {
-            return false;
-        }
-
-        if (sourceOccurrence.Arguments.Any(argument =>
-                argument.Element.PrecedingVerbElementCount < matchedTokenCount))
-        {
-            return false;
-        }
-
-        return AllPossibleAuthoredPathsStayWithinRoots(
-            sourceOccurrence,
-            shell,
-            safeRoots,
-            workingDirectoryOverride);
-    }
-
-    private bool IsReviewedDiagnostic(
-        ApprovalCandidate candidate,
-        ShellPolicyCandidatePathFacts pathFacts,
-        IReadOnlyList<string> safeRoots,
         ShellPolicyResolvedPathView? resolvedPaths)
     {
-        var sourceOccurrence = pathFacts.SourceOccurrence;
         if (candidate is not
             {
                 Shell: { } shell,
                 VerbTokens: { }
             }
             || sourceOccurrence is null
-            || HasFileWritingRedirect(pathFacts)
+            || HasFileWritingRedirect(resolvedPaths)
             || !_safeVerbs.TryMatchReviewedDiagnostic(
                 shell,
                 candidate.VerbTokens,
@@ -214,7 +189,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                 ShellPathStyle.Posix)
             || !IsReviewedDiagnostic(
                 candidate,
-                pathFacts,
+                pathFacts.SourceOccurrence,
                 [intentPath.Value],
                 pathFacts.Intent))
         {
@@ -233,8 +208,9 @@ internal sealed class ScopedShellSafeVerbPolicy
         ToolInvocationContext context)
     {
         var safeRoots = ResolveSafeSpaceRoots(context);
+        var resolvedPaths = ResolveCompatibilityPaths(candidate, sourceOccurrence);
         if (safeRoots.Count == 0
-            || !IsReviewedDiagnostic(candidate, sourceOccurrence, safeRoots))
+            || !IsReviewedDiagnostic(candidate, sourceOccurrence, safeRoots, resolvedPaths))
         {
             return false;
         }
@@ -265,7 +241,7 @@ internal sealed class ScopedShellSafeVerbPolicy
         if (safeRoots.Count == 0
             || !IsReviewedDiagnostic(
                 candidate,
-                pathFacts,
+                pathFacts.SourceOccurrence,
                 safeRoots,
                 pathFacts.Real)
             || pathFacts.RealScope is not
@@ -305,8 +281,8 @@ internal sealed class ScopedShellSafeVerbPolicy
         }
     }
 
-    private static bool HasFileWritingRedirect(ShellPolicyCandidatePathFacts pathFacts)
-        => pathFacts.Real?.Facts.Any(static fact =>
+    private static bool HasFileWritingRedirect(ShellPolicyResolvedPathView? resolvedPaths)
+        => resolvedPaths?.Facts.Any(static fact =>
             fact.Source is
             {
                 Origin: ShellPolicyPathOrigin.Redirect,
@@ -391,12 +367,14 @@ internal sealed class ScopedShellSafeVerbPolicy
         return true;
     }
 
-    private static bool AllPossibleAuthoredPathsStayWithinRoots(
-        CommandOccurrence occurrence,
-        ApprovalShell shell,
-        IReadOnlyList<string> safeRoots,
-        string? workingDirectoryOverride)
+    private static ShellPolicyResolvedPathView? ResolveCompatibilityPaths(
+        ApprovalCandidate candidate,
+        CommandOccurrence? occurrence,
+        string? workingDirectoryOverride = null)
     {
+        if (candidate.Shell is not { } shell || occurrence is null)
+            return null;
+
         var workingDirectory = workingDirectoryOverride
             ?? (occurrence.WorkingDirectory is ShellValueDomain.Exact exact
                 ? exact.Value
@@ -404,43 +382,8 @@ internal sealed class ScopedShellSafeVerbPolicy
         var pathStyle = shell == ApprovalShell.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
-
-        foreach (var argument in occurrence.Arguments)
-        {
-            if (argument.AuthoredPathShape == ShellPathShape.Unknown)
-                continue;
-            if (argument.AuthoredPathShape == ShellPathShape.Posix
-                    && pathStyle != ShellPathStyle.Posix
-                || argument.AuthoredPathShape == ShellPathShape.Windows
-                    && pathStyle != ShellPathStyle.Windows)
-            {
-                return false;
-            }
-
-            IReadOnlyList<string> possiblePaths = argument.AuthoredValue switch
-            {
-                ShellValueDomain.Exact value => [value.Value],
-                ShellValueDomain.FiniteSet values => values.Values,
-                _ => []
-            };
-            if (possiblePaths.Count == 0)
-                return false;
-
-            foreach (var possiblePath in possiblePaths)
-            {
-                var resolved = ShellTokenizer.NormalizePathToken(
-                    possiblePath,
-                    workingDirectory,
-                    pathStyle);
-                if (string.IsNullOrWhiteSpace(resolved)
-                    || !safeRoots.Any(root => IsSafePath(resolved, root)))
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
+        return ShellPolicyOccurrencePathFacts.Create(occurrence)
+            .Resolve(workingDirectory, pathStyle);
     }
 
     private static bool IsSafePath(string path, string root)

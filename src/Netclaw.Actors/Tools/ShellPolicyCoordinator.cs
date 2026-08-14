@@ -187,33 +187,9 @@ internal sealed class ShellPolicyCoordinator(
         ToolAccessDecision decision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
         ShellPolicyDecisionTraceBuilder trace)
-    {
-        if (decision.NeedsApproval)
-        {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.RequiresApproval(
-                    decision.ApprovalContext
-                    ?? throw new InvalidOperationException("Approval decision missing approval context."),
-                    approvalMatches),
-                trace);
-        }
-
-        if (!decision.Allowed)
-        {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.Deny(
-                    decision.DenyReason
-                    ?? throw new InvalidOperationException("Denied decision missing a deny reason.")),
-                trace);
-        }
-
-        return CompleteWithTrace(
-            ToolAuthorizationDecision.Allow(
-                decision.AllowReason
-                ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
-                approvalMatches),
+        => CompleteWithTrace(
+            ToolAuthorizationDecision.From(decision, approvalMatches),
             trace);
-    }
 
     private static ToolAuthorizationDecision CompleteWithTrace(
         ToolAuthorizationDecision decision,
