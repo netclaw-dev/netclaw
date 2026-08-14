@@ -169,7 +169,9 @@ internal sealed class ShellPolicyCoordinator(
                     ToApprovalSessionId(context.SessionId),
                     context.Audience,
                     new ToolName(tool.Name)),
-                ShellPolicyGrantStages.ApprovalExemptSideEffects(_approvalEvidence.IsAvailable)
+                ShellPolicyGrantStages.ApprovalExemptSideEffects(_approvalEvidence.IsAvailable),
+                ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation),
+                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)
             ],
             cancellationToken);
         if (initialResult is not ShellPolicyStageResult.Continue)
@@ -184,56 +186,6 @@ internal sealed class ShellPolicyCoordinator(
 
         var grantCandidates = projection.GrantCandidates;
         var approvalMatches = evaluation.ApprovalMatches;
-
-        var canUseReviewedSafePolicy =
-            projection.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
-        foreach (var candidate in grantCandidates.Where(candidate =>
-                     canUseReviewedSafePolicy
-                     && candidate.CanUseRealReviewedSafePolicy
-                     && !evaluation.IsCovered(candidate.Id)))
-        {
-            if (policy.IsReviewedSafeCandidate(
-                    candidate.Candidate,
-                    candidate.SourceOccurrence,
-                    projection.ApprovalContext.Cwd,
-                    context.Invocation))
-            {
-                var coverageResult = evaluation.Cover(
-                    candidate,
-                    ShellCoverageKind.ReviewedSafePolicy,
-                    ShellPolicyReason.ReviewedSafePhrase,
-                    ShellScopeRelation.UnderRealRoot);
-                if (coverageResult is not ShellPolicyStageResult.Continue)
-                    return CompleteEvaluation(evaluation);
-            }
-        }
-
-        foreach (var candidate in projection.Candidates.Where(candidate =>
-                     canUseReviewedSafePolicy
-                     && candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                     && !evaluation.IsCovered(candidate.Id)))
-        {
-            if (candidate.IntentDirectory is null
-                || candidate.IntentPrerequisites.Count == 0
-                || candidate.IntentPrerequisites.Any(prerequisite =>
-                    !evaluation.IsCovered(prerequisite))
-                || !policy.IsReviewedSafeIntentCandidate(
-                    candidate.Candidate,
-                    candidate.SourceOccurrence,
-                    candidate.IntentDirectory,
-                    context.Invocation))
-            {
-                continue;
-            }
-
-            var coverageResult = evaluation.Cover(
-                candidate,
-                ShellCoverageKind.ReviewedSafePolicy,
-                ShellPolicyReason.ReviewedSafePhrase,
-                ShellScopeRelation.UnderIntentRoot);
-            if (coverageResult is not ShellPolicyStageResult.Continue)
-                return CompleteEvaluation(evaluation);
-        }
 
         var uncovered = evaluation.UncoveredCandidates;
         var oneTimeApplied = false;

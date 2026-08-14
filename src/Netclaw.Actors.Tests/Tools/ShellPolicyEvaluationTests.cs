@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -424,7 +425,7 @@ public sealed class ShellPolicyEvaluationTests
     [Fact]
     public async Task Protected_causal_path_stage_denies_before_a_later_stage()
     {
-        var (evaluation, policy) = CreateCausalEvaluation(
+        var (evaluation, policy, _) = CreateCausalEvaluation(
             "cd /tmp && inspect; head private.log",
             ["/tmp/private.log"]);
         var laterStageVisited = false;
@@ -449,7 +450,7 @@ public sealed class ShellPolicyEvaluationTests
     [Fact]
     public async Task Causal_directory_stage_continues_for_eligible_directories()
     {
-        var (evaluation, policy) = CreateCausalEvaluation(
+        var (evaluation, policy, _) = CreateCausalEvaluation(
             "cd /tmp && inspect; head result.log");
 
         var result = await ShellPolicyPipeline.RunAsync(
@@ -472,7 +473,7 @@ public sealed class ShellPolicyEvaluationTests
             var alias = Path.Combine(root.FullName, "alias");
             Directory.CreateDirectory(target);
             Directory.CreateSymbolicLink(alias, target);
-            var (evaluation, policy) = CreateCausalEvaluation(
+            var (evaluation, policy, _) = CreateCausalEvaluation(
                 $"cd {alias} && inspect; head result.log");
 
             var result = Assert.IsType<ShellPolicyStageResult.Complete>(
@@ -655,6 +656,84 @@ public sealed class ShellPolicyEvaluationTests
         Assert.Equal(
             Enum.Parse<ShellCoverageKind>(expectedCoverageName),
             evaluation.CoverageFor(candidate.Id).Kind);
+    }
+
+    [Theory]
+    [InlineData(false, nameof(ShellCoverageKind.Uncovered))]
+    [InlineData(true, nameof(ShellCoverageKind.ReviewedSafePolicy))]
+    public async Task Reviewed_safe_real_scope_stage_requires_interactive_approval(
+        bool interactive,
+        string expectedCoverageName)
+    {
+        var (evaluation, policy, context) = CreateReviewedSafeEvaluation(
+            "head README.md",
+            interactive,
+            "head");
+        var candidate = Assert.Single(evaluation.Candidates);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(
+            Enum.Parse<ShellCoverageKind>(expectedCoverageName),
+            evaluation.CoverageFor(candidate.Id).Kind);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public async Task Reviewed_safe_intent_stage_requires_real_prerequisite_coverage()
+    {
+        var (evaluation, policy, context) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log",
+            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
+        var consumer = Assert.Single(
+            evaluation.Candidates,
+            candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
+        Assert.NotEmpty(consumer.IntentPrerequisites);
+
+        var beforeCoverage = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(beforeCoverage);
+        Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(consumer.Id).Kind);
+
+        foreach (var prerequisiteId in consumer.IntentPrerequisites)
+        {
+            var prerequisite = evaluation.Candidates[prerequisiteId.Value];
+            Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+                prerequisite,
+                ShellCoverageKind.Session,
+                ShellPolicyReason.SessionGrant,
+                ShellScopeRelation.ThisChat));
+        }
+
+        var afterCoverage = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [
+                ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation),
+                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)
+            ],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(afterCoverage);
+        Assert.Equal(
+            ShellCoverageKind.ReviewedSafePolicy,
+            evaluation.CoverageFor(consumer.Id).Kind);
+        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval)));
+        Assert.Contains(
+            Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
+            row => row is
+            {
+                Stage: ShellPolicyTraceStage.ReviewedSafePolicy,
+                Reason: ShellPolicyTraceReason.ReviewedSafePhrase,
+                ScopeRelation: ShellScopeRelation.UnderIntentRoot
+            });
     }
 
     [Fact]
@@ -997,9 +1076,13 @@ public sealed class ShellPolicyEvaluationTests
         return new ShellPolicyEvaluation(projection);
     }
 
-    private static (ShellPolicyEvaluation Evaluation, ToolAccessPolicy Policy) CreateCausalEvaluation(
+    private static (
+        ShellPolicyEvaluation Evaluation,
+        ToolAccessPolicy Policy,
+        ToolExecutionContext Context) CreateCausalEvaluation(
         string command,
-        IEnumerable<string>? deniedPaths = null)
+        IEnumerable<string>? deniedPaths = null,
+        SafeVerbList? safeVerbs = null)
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
@@ -1013,7 +1096,8 @@ public sealed class ShellPolicyEvaluationTests
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
             commandPolicy,
-            pathPolicy);
+            pathPolicy,
+            safeVerbs: safeVerbs);
         var approvalContext = new ToolApprovalContext(
             ShellTool.ToolName,
             "shell command",
@@ -1040,7 +1124,71 @@ public sealed class ShellPolicyEvaluationTests
         Assert.True(created);
         Assert.NotNull(projection);
         Assert.True(projection.HasCausalIntent);
-        return (new ShellPolicyEvaluation(projection), policy);
+        return (new ShellPolicyEvaluation(projection), policy, context);
+    }
+
+    private static (
+        ShellPolicyEvaluation Evaluation,
+        ToolAccessPolicy Policy,
+        ToolExecutionContext Context) CreateReviewedSafeEvaluation(
+        string command,
+        bool interactive,
+        params string[] safeVerbs)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        var policy = new ToolAccessPolicy(
+            new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy,
+            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, safeVerbs));
+        var matcher = new ShellApprovalMatcher(environment);
+        var arguments = ToolInput.Create(
+            "Command",
+            command,
+            "WorkingDirectory",
+            "/work");
+        var execution = commandPolicy.Analyze(command, "/work");
+        var approval = matcher.AnalyzeInvocation(
+            new ToolName(ShellTool.ToolName),
+            arguments,
+            execution);
+        var approvalContext = new ToolApprovalContext(
+            ShellTool.ToolName,
+            approval.DisplayText,
+            approval.Patterns,
+            approval.Candidates.Select(static candidate => candidate.Verb).ToArray(),
+            [],
+            Cwd: "/work",
+            approval.IsMessy,
+            approval.Candidates);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/shell-policy-reviewed-safe-stage",
+            "/work/session",
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = "/work",
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
+            });
+        var created = ShellPolicyProjection.TryCreate(
+            environment,
+            matcher,
+            execution,
+            approvalContext,
+            context,
+            static _ => false,
+            out var projection);
+
+        Assert.True(created);
+        Assert.NotNull(projection);
+        return (new ShellPolicyEvaluation(projection), policy, context);
     }
 
     private static ApprovalCandidate BashCandidate(string verb) => new(verb, "/work")
