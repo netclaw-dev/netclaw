@@ -374,14 +374,8 @@ internal sealed class ShellPolicyOccurrencePathFacts
         ShellPathStyle pathStyle,
         out CanonicalShellPath path)
     {
-        var normalized = ShellTokenizer.NormalizePathToken(
-            value,
-            resolutionBase,
-            pathStyle);
-        if (CanonicalShellPath.TryCreate(normalized, pathStyle, out path))
-            return true;
-
-        if (ShellPathRules.TryNormalize(value, pathStyle, out normalized))
+        path = default;
+        if (ShellPathRules.TryNormalize(value, pathStyle, out var normalized))
             return CanonicalShellPath.TryCreate(normalized, pathStyle, out path);
 
         if (pathStyle == ShellPathStyle.Windows
