@@ -168,13 +168,15 @@ The pipeline invokes stages in this order:
 1. syntax and candidate validation;
 2. protected real and fallback paths;
 3. causal directory eligibility;
-4. approval-exempt side effects;
-5. actor grant evidence;
+4. actor grant evidence;
+5. approval-exempt side effects;
 6. reviewed-safe real-scope coverage;
 7. reviewed-safe intent coverage;
 8. exact one-time coverage;
 9. persistent-store availability;
 10. prompt or allow completion.
+
+Actor evidence stays before approval-exempt trace rows to preserve the frozen trace order. Pure side effects never enter the actor request.
 
 Synchronous preflight keeps its current order before these stages:
 

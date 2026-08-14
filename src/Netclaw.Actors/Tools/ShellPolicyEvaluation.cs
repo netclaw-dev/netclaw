@@ -17,6 +17,7 @@ internal enum ShellPolicyFault
     InvalidStageResult = 5,
     StageException = 6,
     InvalidProjection = 7,
+    InvalidActorEvidence = 8,
 }
 
 internal abstract record ShellPolicyPreflightResult
@@ -224,6 +225,7 @@ internal sealed class ShellPolicyEvaluation
     private ToolAuthorizationDecision? _terminalDecision;
     private ShellPolicyDecisionTrace? _completedTrace;
     private ShellPolicyFault? _terminalFault;
+    private ValidatedShellGrantEvidence? _grantEvidence;
 
     internal ShellPolicyEvaluation(ShellPolicyProjection projection)
     {
@@ -259,6 +261,26 @@ internal sealed class ShellPolicyEvaluation
     internal bool AllCovered => _coverage.All(static item =>
         item.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied);
 
+    internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates
+    {
+        get
+        {
+            var uncovered = new List<ShellPolicyCandidate>();
+            for (var index = 0; index < _coverage.Length; index++)
+            {
+                if (_coverage[index].Kind == ShellCoverageKind.Uncovered)
+                    uncovered.Add(_candidates[index]);
+            }
+
+            return Array.AsReadOnly(uncovered.ToArray());
+        }
+    }
+
+    internal ValidatedShellGrantEvidence? GrantEvidence => _grantEvidence;
+
+    internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
+        _grantEvidence?.ApprovalMatches ?? [];
+
     internal ToolAuthorizationDecision? TerminalDecision => _terminalDecision;
 
     internal ShellPolicyDecisionTrace? CompletedTrace => _completedTrace;
@@ -272,6 +294,49 @@ internal sealed class ShellPolicyEvaluation
             throw new ArgumentOutOfRangeException(nameof(candidateId));
 
         return _coverage[index];
+    }
+
+    internal bool IsCovered(ShellPolicyCandidateId candidateId)
+    {
+        var coverage = CoverageFor(candidateId);
+        return coverage.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied;
+    }
+
+    internal ShellPolicyStageResult ApplyActorEvidence(ValidatedShellGrantEvidence evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        if (_terminalDecision is not null)
+            return new ShellPolicyStageResult.Complete(_terminalDecision);
+
+        if (_grantEvidence is not null || !CanApplyActorEvidence(evidence))
+            return Fail(ShellPolicyFault.InvalidActorEvidence);
+
+        _grantEvidence = evidence;
+        foreach (var candidateEvidence in evidence.CandidateEvidence)
+        {
+            var actorEvidence = candidateEvidence.ActorEvidence;
+            if (actorEvidence.GrantCoverage is { } grantCoverage)
+            {
+                GetActorCoverageFacts(
+                    grantCoverage,
+                    out var reason,
+                    out var scopeRelation);
+                var result = Cover(
+                    candidateEvidence.Candidate,
+                    grantCoverage,
+                    reason,
+                    scopeRelation,
+                    actorEvidence.GrantCreatedAt);
+                if (result is not ShellPolicyStageResult.Continue)
+                    return result;
+            }
+            else
+            {
+                _trace.AddActorEvidence(candidateEvidence.Candidate, actorEvidence);
+            }
+        }
+
+        return new ShellPolicyStageResult.Continue();
     }
 
     internal ShellPolicyStageResult Cover(
@@ -406,6 +471,63 @@ internal sealed class ShellPolicyEvaluation
             (ShellCoverageKind.ReviewedSafePolicy, ShellPolicyReason.ApprovalExemptSideEffect,
                 ShellScopeRelation.None, null) => true,
             _ => false,
+        };
+    }
+
+    private bool CanApplyActorEvidence(ValidatedShellGrantEvidence evidence)
+    {
+        var grantCandidates = Projection.GrantCandidates;
+        if (evidence.CandidateEvidence.Count != grantCandidates.Count)
+            return false;
+
+        var expectedIds = grantCandidates
+            .Select(static candidate => candidate.Id)
+            .ToHashSet();
+        foreach (var candidateEvidence in evidence.CandidateEvidence)
+        {
+            var candidate = candidateEvidence.Candidate;
+            var index = candidate.Id.Value;
+            if ((uint)index >= (uint)_candidates.Length
+                || !ReferenceEquals(candidate, _candidates[index])
+                || !expectedIds.Remove(candidate.Id)
+                || candidateEvidence.ActorEvidence.CandidateId != candidate.Id)
+            {
+                return false;
+            }
+
+            if (candidateEvidence.ActorEvidence.GrantCoverage is { } coverage
+                && (_coverage[index].Kind != ShellCoverageKind.Uncovered
+                    || !IsActorCoverage(coverage)))
+            {
+                return false;
+            }
+        }
+
+        return expectedIds.Count == 0;
+    }
+
+    private static bool IsActorCoverage(ShellCoverageKind coverage)
+        => coverage is ShellCoverageKind.Session
+            or ShellCoverageKind.PersistentGlobal
+            or ShellCoverageKind.PersistentFolder;
+
+    private static void GetActorCoverageFacts(
+        ShellCoverageKind coverage,
+        out ShellPolicyReason reason,
+        out ShellScopeRelation scopeRelation)
+    {
+        (reason, scopeRelation) = coverage switch
+        {
+            ShellCoverageKind.Session => (
+                ShellPolicyReason.SessionGrant,
+                ShellScopeRelation.ThisChat),
+            ShellCoverageKind.PersistentGlobal => (
+                ShellPolicyReason.PersistentGlobalGrant,
+                ShellScopeRelation.Global),
+            ShellCoverageKind.PersistentFolder => (
+                ShellPolicyReason.PersistentFolderGrant,
+                ShellScopeRelation.UnderGrantRoot),
+            _ => throw new InvalidOperationException("Invalid actor coverage kind."),
         };
     }
 }

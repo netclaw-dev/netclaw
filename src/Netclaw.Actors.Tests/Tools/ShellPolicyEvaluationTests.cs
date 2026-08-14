@@ -491,6 +491,173 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
+    public async Task Actor_evidence_stage_applies_one_validated_batch()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+        var service = new FixedShellApprovalService(request =>
+        {
+            var requested = Assert.Single(request.Candidates);
+            Assert.Equal(candidate.Id, requested.CandidateId);
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                [
+                    new ShellGrantCandidateMatch(
+                        candidate.Id,
+                        new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
+                        ShellCoverageKind.Session,
+                        NearMisses: [])
+                ]);
+        });
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyGrantStages.ActorEvidence(
+                new ShellApprovalEvidenceAdapter(service),
+                (ToolApprovalSessionId)"signalr/shell-policy-actor-stage",
+                TrustAudience.Personal,
+                new ToolName(ShellTool.ToolName))],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(1, service.RequestCount);
+        Assert.Equal(ShellCoverageKind.Session, evaluation.CoverageFor(candidate.Id).Kind);
+        Assert.NotNull(evaluation.GrantEvidence);
+        Assert.Single(evaluation.ApprovalMatches);
+        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+            ToolAuthorizationDecision.Allow(
+                ToolAllowReason.StoredApproval,
+                evaluation.ApprovalMatches)));
+        Assert.Collection(
+            Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
+            row => Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage),
+            row => Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage));
+    }
+
+    [Fact]
+    public async Task Actor_evidence_stage_rejects_a_malformed_batch_before_later_stages()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+        var service = new FixedShellApprovalService(static _ => new ShellApprovalMatchResult(
+            new PersistentGrantStoreStatus.Ready(),
+            CandidateMatches: []));
+        var laterStageVisited = false;
+        ShellPolicyStage[] stages =
+        [
+            ShellPolicyGrantStages.ActorEvidence(
+                new ShellApprovalEvidenceAdapter(service),
+                (ToolApprovalSessionId)"signalr/shell-policy-invalid-actor-stage",
+                TrustAudience.Personal,
+                new ToolName(ShellTool.ToolName)),
+            (_, _) =>
+            {
+                laterStageVisited = true;
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            }
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                stages,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
+        Assert.Equal(1, service.RequestCount);
+        Assert.False(laterStageVisited);
+        Assert.Null(evaluation.GrantEvidence);
+        Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(candidate.Id).Kind);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
+    [Fact]
+    public async Task Actor_evidence_precedes_approval_exempt_trace_rows()
+    {
+        var evaluation = CreateEvaluation(
+            BashCandidate("git status"),
+            BashCandidate("echo") with { Directory = null });
+        var grantCandidate = evaluation.Candidates[0];
+        var sideEffect = evaluation.Candidates[1];
+        Assert.True(ApprovalPatternMatching.IsPureSideEffect(sideEffect.Candidate));
+        var service = new FixedShellApprovalService(request =>
+        {
+            Assert.Single(request.Candidates);
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                [
+                    new ShellGrantCandidateMatch(
+                        grantCandidate.Id,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: [])
+                ]);
+        });
+        var adapter = new ShellApprovalEvidenceAdapter(service);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [
+                ShellPolicyGrantStages.ActorEvidence(
+                    adapter,
+                    (ToolApprovalSessionId)"signalr/shell-policy-trace-order",
+                    TrustAudience.Personal,
+                    new ToolName(ShellTool.ToolName)),
+                ShellPolicyGrantStages.ApprovalExemptSideEffects(adapter.IsAvailable)
+            ],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(grantCandidate.Id).Kind);
+        Assert.Equal(ShellCoverageKind.ReviewedSafePolicy, evaluation.CoverageFor(sideEffect.Id).Kind);
+        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+            ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext)));
+        Assert.Collection(
+            Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
+            row => Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage),
+            row =>
+            {
+                Assert.Equal(ShellPolicyTraceStage.ReviewedSafePolicy, row.Stage);
+                Assert.Equal(ShellPolicyTraceReason.ApprovalExemptSideEffect, row.Reason);
+            },
+            row => Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage));
+    }
+
+    [Theory]
+    [InlineData(false, nameof(ShellCoverageKind.Uncovered))]
+    [InlineData(true, nameof(ShellCoverageKind.ReviewedSafePolicy))]
+    public async Task Approval_exempt_stage_follows_approval_service_availability(
+        bool serviceAvailable,
+        string expectedCoverageName)
+    {
+        var evaluation = CreateEvaluation(BashCandidate("echo") with { Directory = null });
+        var candidate = Assert.Single(evaluation.Candidates);
+        var service = new FixedShellApprovalService(static _ => new ShellApprovalMatchResult(
+            new PersistentGrantStoreStatus.Ready(),
+            CandidateMatches: []));
+        var adapter = new ShellApprovalEvidenceAdapter(serviceAvailable ? service : null);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [
+                ShellPolicyGrantStages.ActorEvidence(
+                    adapter,
+                    sessionId: null,
+                    TrustAudience.Personal,
+                    new ToolName(ShellTool.ToolName)),
+                ShellPolicyGrantStages.ApprovalExemptSideEffects(adapter.IsAvailable)
+            ],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.NotNull(evaluation.GrantEvidence);
+        Assert.Equal(0, service.RequestCount);
+        Assert.Equal(
+            Enum.Parse<ShellCoverageKind>(expectedCoverageName),
+            evaluation.CoverageFor(candidate.Id).Kind);
+    }
+
+    [Fact]
     public void Coverage_and_trace_change_together()
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
@@ -881,4 +1048,47 @@ public sealed class ShellPolicyEvaluationTests
         Shell = ApprovalShell.Bash,
         VerbTokens = Array.AsReadOnly(verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
     };
+
+    private sealed class FixedShellApprovalService(
+        Func<ShellApprovalMatchRequest, ShellApprovalMatchResult> responseFactory)
+        : IToolApprovalService, IShellApprovalMatchService
+    {
+        internal int RequestCount { get; private set; }
+
+        public Task<ShellApprovalMatchResult> MatchShellCandidatesAsync(
+            ShellApprovalMatchRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return Task.FromResult(responseFactory(request));
+        }
+
+        public Task<ToolApprovalCheckResult> CheckApprovalAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<ApprovalCandidate> candidates,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The stage must use typed actor evidence.");
+
+        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The stage must use typed actor evidence.");
+
+        public Task RecordApprovalAsync(
+            ToolApprovalSessionId sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            bool persistent,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("The stage must not record approvals.");
+    }
 }
