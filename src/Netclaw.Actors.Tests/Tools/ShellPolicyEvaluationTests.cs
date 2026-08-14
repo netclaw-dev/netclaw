@@ -804,6 +804,30 @@ public sealed class ShellPolicyEvaluationTests
                 })));
     }
 
+    [Fact]
+    public async Task Reviewed_safe_real_scope_stage_keeps_declared_windows_roots()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var (evaluation, policy, context) = CreateReviewedSafeEvaluation(
+            @"Get-Content -LiteralPath C:\work\data.txt",
+            true,
+            environment,
+            ApprovalShell.PowerShell,
+            @"C:\work",
+            "Get-Content");
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        var candidate = Assert.Single(evaluation.Candidates);
+        Assert.True(evaluation.IsCovered(candidate.Id));
+    }
+
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Reviewed_safe_intent_stage_requires_real_prerequisite_coverage()
@@ -1702,8 +1726,25 @@ public sealed class ShellPolicyEvaluationTests
         string command,
         bool interactive,
         params string[] safeVerbs)
+        => CreateReviewedSafeEvaluation(
+            command,
+            interactive,
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            ApprovalShell.Bash,
+            "/work",
+            safeVerbs);
+
+    private static (
+        ShellPolicyEvaluation Evaluation,
+        ToolAccessPolicy Policy,
+        ToolExecutionContext Context) CreateReviewedSafeEvaluation(
+        string command,
+        bool interactive,
+        ShellExecutionEnvironment environment,
+        ApprovalShell approvalShell,
+        string workingDirectory,
+        params string[] safeVerbs)
     {
-        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, []);
         var policy = new ToolAccessPolicy(
@@ -1715,14 +1756,14 @@ public sealed class ShellPolicyEvaluationTests
                 UsedStrictFallback: false),
             commandPolicy,
             pathPolicy,
-            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, safeVerbs));
+            safeVerbs: SafeVerbList.FromVerbs(approvalShell, safeVerbs));
         var matcher = new ShellApprovalMatcher(environment);
         var arguments = ToolInput.Create(
             "Command",
             command,
             "WorkingDirectory",
-            "/work");
-        var execution = commandPolicy.Analyze(command, "/work");
+            workingDirectory);
+        var execution = commandPolicy.Analyze(command, workingDirectory);
         var approval = matcher.AnalyzeInvocation(
             new ToolName(ShellTool.ToolName),
             arguments,
@@ -1733,16 +1774,18 @@ public sealed class ShellPolicyEvaluationTests
             approval.Patterns,
             approval.Candidates.Select(static candidate => candidate.Verb).ToArray(),
             [],
-            Cwd: "/work",
+            Cwd: workingDirectory,
             approval.IsMessy,
             approval.Candidates);
         var context = TestToolExecutionContext.CreateBound(
             "signalr/shell-policy-reviewed-safe-stage",
-            "/work/session",
+            environment.PathStyle == ShellPathStyle.Windows
+                ? $@"{workingDirectory}\session"
+                : $"{workingDirectory}/session",
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
-                ProjectDirectory = "/work",
+                ProjectDirectory = workingDirectory,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
             });
         var created = ShellPolicyProjection.TryCreate(

@@ -261,7 +261,7 @@ internal sealed class ScopedShellSafeVerbPolicy
         ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
     {
-        var safeRoots = ResolveSafeSpaceRoots(context);
+        var safeRoots = ResolveDeclaredSafeSpaceRoots(context);
         if (safeRoots.Count == 0
             || !IsReviewedDiagnostic(
                 candidate,
@@ -494,11 +494,20 @@ internal sealed class ScopedShellSafeVerbPolicy
     /// Public gets <c>session_dir</c> only.
     /// </summary>
     private static IReadOnlyList<string> ResolveSafeSpaceRoots(ToolInvocationContext context)
+        => ResolveSafeSpaceRoots(context, static path => PathUtility.Normalize(path));
+
+    private static IReadOnlyList<string> ResolveDeclaredSafeSpaceRoots(
+        ToolInvocationContext context)
+        => ResolveSafeSpaceRoots(context, static path => path);
+
+    private static IReadOnlyList<string> ResolveSafeSpaceRoots(
+        ToolInvocationContext context,
+        Func<string, string> mapPath)
     {
         var roots = new List<string>(2);
 
         if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
-            roots.Add(PathUtility.Normalize(context.SessionDirectory));
+            roots.Add(mapPath(context.SessionDirectory));
 
         // Public audience cannot expand its safe space via project_dir —
         // mirrors the file_read read-roots restriction enforced by
@@ -508,7 +517,7 @@ internal sealed class ScopedShellSafeVerbPolicy
         if (context.Audience != TrustAudience.Public
             && !string.IsNullOrWhiteSpace(context.ProjectDirectory))
         {
-            roots.Add(PathUtility.Normalize(context.ProjectDirectory));
+            roots.Add(mapPath(context.ProjectDirectory));
         }
 
         return roots;
