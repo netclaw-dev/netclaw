@@ -27,15 +27,10 @@ internal static class ShellPolicyTerminalStage
         var uncovered = evaluation.UncoveredCandidates;
         if (uncovered.Count > 0)
         {
-            var promptContext = projection.HasCausalIntent
-                ? projection.ApprovalContext
-                : ToolAccessPolicy.NarrowShellApprovalContext(
-                    projection.ApprovalContext,
-                    uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                    context.SessionDirectory,
-                    projection.Environment.PathStyle);
             return evaluation.Complete(
-                ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches));
+                ToolAuthorizationDecision.RequiresApproval(
+                    evaluation.GetUncoveredApprovalContext(context.SessionDirectory),
+                    approvalMatches));
         }
 
         if (!evaluation.AllCovered)

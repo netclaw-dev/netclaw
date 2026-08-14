@@ -226,6 +226,7 @@ internal sealed class ShellPolicyEvaluation
     private ShellPolicyDecisionTrace? _completedTrace;
     private ShellPolicyFault? _terminalFault;
     private ValidatedShellGrantEvidence? _grantEvidence;
+    private (string? SessionDirectory, ToolApprovalContext Context)? _uncoveredApprovalContext;
 
     internal ShellPolicyEvaluation(ShellPolicyProjection projection)
     {
@@ -283,6 +284,29 @@ internal sealed class ShellPolicyEvaluation
 
     internal bool HasOneTimeCoverage => _coverage.Any(static item =>
         item.Kind == ShellCoverageKind.OneTime);
+
+    internal ToolApprovalContext GetUncoveredApprovalContext(string? sessionDirectory)
+    {
+        var uncovered = UncoveredCandidates;
+        if (uncovered.Count == 0)
+            throw new InvalidOperationException("No uncovered shell candidates remain.");
+
+        if (_uncoveredApprovalContext is { } cached
+            && string.Equals(cached.SessionDirectory, sessionDirectory, StringComparison.Ordinal))
+        {
+            return cached.Context;
+        }
+
+        var context = Projection.HasCausalIntent
+            ? Projection.ApprovalContext
+            : ToolAccessPolicy.NarrowShellApprovalContext(
+                Projection.ApprovalContext,
+                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+                sessionDirectory,
+                Projection.Environment.PathStyle);
+        _uncoveredApprovalContext = (sessionDirectory, context);
+        return context;
+    }
 
     internal ToolAuthorizationDecision? TerminalDecision => _terminalDecision;
 
@@ -382,6 +406,7 @@ internal sealed class ShellPolicyEvaluation
             scopeRelation,
             grantTimestamp);
         _coverage[index] = new ShellCandidateCoverage(candidate.Id, coverage, reason);
+        _uncoveredApprovalContext = null;
         return new ShellPolicyStageResult.Continue();
     }
 

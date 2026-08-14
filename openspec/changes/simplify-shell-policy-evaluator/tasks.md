@@ -49,7 +49,7 @@
 
 - [ ] 6.1 Project real scopes, intent scopes, fallback scopes, redirects, and authored filesystem values once.
 - [ ] 6.2 Route every filesystem fact through current path policy without command-text rescans.
-- [ ] 6.3 Derive one uncovered-candidate context for exact one-time authority and user prompts.
+- [x] 6.3 Derive one uncovered-candidate context for exact one-time authority and user prompts.
 - [ ] 6.4 Preserve causal full-context, scratch limits, reusable phrases, directory depth, and candidate order.
 - [ ] 6.5 Centralize bounded trace completion and preserve exact redaction and row order.
 - [ ] 6.6 Add path-fact, prompt-context, one-time-key, causal-context, and trace-parity regressions.

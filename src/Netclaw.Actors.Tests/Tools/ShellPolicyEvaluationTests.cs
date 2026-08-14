@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -767,23 +768,91 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
-    public async Task Exact_one_time_stage_leaves_a_different_tool_key_uncovered()
+    public async Task Exact_one_time_and_prompt_share_one_uncovered_context()
     {
         var evaluation = CreateEvaluationWithExactOneTime(
             isMessy: false,
             BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/shell-policy-shared-context",
+            "/work/session",
+            TrustAudience.Personal);
 
         var result = await ShellPolicyPipeline.RunAsync(
             evaluation,
             [ShellPolicyGrantStages.ExactOneTime(
                 new ToolName("different_tool"),
-                "/work/session")],
+                context.SessionDirectory)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
         Assert.False(evaluation.HasOneTimeCoverage);
         Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(candidate.Id).Kind);
+
+        var oneTimeContext = evaluation.GetUncoveredApprovalContext(context.SessionDirectory);
+        var terminal = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [ShellPolicyTerminalStage.Complete(context)],
+                TestContext.Current.CancellationToken));
+
+        Assert.Same(oneTimeContext, terminal.Decision.ApprovalContext);
+    }
+
+    [Fact]
+    public void Uncovered_context_reprojects_after_candidate_coverage_changes()
+    {
+        var evaluation = CreateEvaluation(
+            BashCandidate("git status"),
+            BashCandidate("git push"));
+        var initial = evaluation.GetUncoveredApprovalContext("/work/session");
+        var candidate = evaluation.Candidates[0];
+        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+            candidate,
+            ShellCoverageKind.Session,
+            ShellPolicyReason.SessionGrant,
+            ShellScopeRelation.ThisChat));
+
+        var reprojected = evaluation.GetUncoveredApprovalContext("/work/session");
+
+        Assert.NotSame(initial, reprojected);
+        Assert.Equal([evaluation.Candidates[1].Candidate], reprojected.Candidates);
+    }
+
+    [Fact]
+    public void Uncovered_context_reprojects_when_session_directory_changes()
+    {
+        var candidate = BashCandidate("git status") with { Directory = "/work/repo" };
+        var evaluation = CreateEvaluation(
+            isMessy: false,
+            hasExactOneTimeApproval: false,
+            cwd: "/work/repo",
+            candidates: [candidate]);
+        var sessionScratch = evaluation.GetUncoveredApprovalContext("/work/repo");
+
+        var ordinaryScope = evaluation.GetUncoveredApprovalContext("/work/session");
+
+        Assert.NotSame(sessionScratch, ordinaryScope);
+        Assert.DoesNotContain(
+            sessionScratch.Options,
+            static option => option.Key == ApprovalOptionKeys.ApproveAlwaysKey);
+        Assert.Contains(
+            ordinaryScope.Options,
+            static option => option.Key == ApprovalOptionKeys.ApproveAlwaysKey);
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public void Causal_uncovered_context_retains_the_complete_approval_context()
+    {
+        var (evaluation, _, context) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log",
+            safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
+
+        var uncovered = evaluation.GetUncoveredApprovalContext(context.SessionDirectory);
+
+        Assert.Same(evaluation.Projection.ApprovalContext, uncovered);
     }
 
     [Theory]
@@ -1249,6 +1318,7 @@ public sealed class ShellPolicyEvaluationTests
     private static ShellPolicyEvaluation CreateEvaluation(
         bool isMessy,
         bool hasExactOneTimeApproval,
+        string cwd = "/work",
         params ApprovalCandidate[] candidates)
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
@@ -1258,7 +1328,7 @@ public sealed class ShellPolicyEvaluationTests
             candidates.Select(static candidate => candidate.Verb).ToArray(),
             candidates.Select(static candidate => candidate.Verb).ToArray(),
             [],
-            Cwd: "/work",
+            Cwd: cwd,
             IsMessy: isMessy,
             Candidates: candidates);
         var context = TestToolExecutionContext.CreateBound(

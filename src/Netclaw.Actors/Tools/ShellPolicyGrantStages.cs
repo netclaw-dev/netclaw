@@ -115,15 +115,8 @@ internal static class ShellPolicyGrantStages
         if (uncovered.Count == 0)
             return new ShellPolicyStageResult.Continue();
 
-        var projection = evaluation.Projection;
-        var remainingContext = projection.HasCausalIntent
-            ? projection.ApprovalContext
-            : ToolAccessPolicy.NarrowShellApprovalContext(
-                projection.ApprovalContext,
-                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                sessionDirectory,
-                projection.Environment.PathStyle);
-        if (!projection.HasExactOneTimeApproval(toolName.Value, remainingContext))
+        var remainingContext = evaluation.GetUncoveredApprovalContext(sessionDirectory);
+        if (!evaluation.Projection.HasExactOneTimeApproval(toolName.Value, remainingContext))
             return new ShellPolicyStageResult.Continue();
 
         foreach (var candidate in uncovered)
