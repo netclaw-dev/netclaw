@@ -28,6 +28,15 @@ internal static class OneTimeApprovalKeys
         return keys;
     }
 
+    public static bool Matches(
+        string? approvedToolName,
+        IReadOnlySet<string> approvedKeys,
+        string toolName,
+        ToolApprovalContext approvalContext)
+        => !string.IsNullOrEmpty(approvedToolName)
+           && string.Equals(approvedToolName, toolName, StringComparison.Ordinal)
+           && approvedKeys.SetEquals(Create(approvalContext));
+
     private static string CreateCandidateKey(ApprovalCandidate candidate, string? cwd)
     {
         var ignoreCase = candidate.Shell == ApprovalShell.PowerShell ||

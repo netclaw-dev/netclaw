@@ -124,15 +124,11 @@ internal sealed record ShellPolicyProjection
     internal bool HasExactOneTimeApproval(
         string toolName,
         ToolApprovalContext approvalContext)
-    {
-        if (string.IsNullOrEmpty(ApprovedOneTimeToolName)
-            || !string.Equals(ApprovedOneTimeToolName, toolName, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return ApprovedOneTimeKeys.SetEquals(OneTimeApprovalKeys.Create(approvalContext));
-    }
+        => OneTimeApprovalKeys.Matches(
+            ApprovedOneTimeToolName,
+            ApprovedOneTimeKeys,
+            toolName,
+            approvalContext);
 
     internal static bool TryCreate(
         ShellExecutionEnvironment environment,

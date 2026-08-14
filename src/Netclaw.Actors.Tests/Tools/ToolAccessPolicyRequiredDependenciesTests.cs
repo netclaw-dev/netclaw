@@ -112,7 +112,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
     }
 
     [Fact]
-    public void Shell_authorization_captures_one_analysis_for_execution()
+    public void Shell_preflight_returns_one_analysis_for_completion()
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
@@ -126,12 +126,12 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         var context = PersonalContext();
         var arguments = ToolInput.Create("Command", "git status");
 
-        _ = policy.AuthorizeInvocation(shellTool, context, arguments);
+        var preflight = policy.AuthorizeShellPreflight(shellTool, context, arguments);
 
-        Assert.True(policy.TryTakeAuthorizedShellAnalysis(context, out var analysis));
-        Assert.NotNull(analysis);
-        Assert.Equal("git status", analysis.Source);
-        Assert.Equal(context.ResolveShellCwd(null), analysis.WorkingDirectory);
-        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
+        var continuation = Assert.IsType<ShellPolicyPreflightResult.Continue>(preflight);
+        Assert.Equal("git status", continuation.Analysis.Source);
+        Assert.Equal(context.ResolveShellCwd(null), continuation.Analysis.WorkingDirectory);
+        Assert.Same(environment, continuation.Environment);
+        Assert.Equal(shellTool.Name, continuation.ApprovalContext.ToolName);
     }
 }

@@ -61,7 +61,6 @@ public sealed class ToolApprovalGateTests
 
         Assert.False(decision.Allowed);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
-        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
     }
 
     [Fact]
@@ -70,11 +69,38 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy(ToolApprovalMode.Auto);
         var args = ToolInput.Create("Command", "git push");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var preflight = policy.AuthorizeShellPreflight(
+            ShellTool(),
+            PersonalContext(),
+            args);
 
+        var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
+        var decision = complete.Decision;
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+        Assert.NotNull(complete.AuthorizedAnalysis);
+        Assert.Equal("git push", complete.AuthorizedAnalysis.Source);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Shell_approval_without_command_preserves_prompt(bool includeNullCommand)
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var arguments = includeNullCommand
+            ? ToolInput.Create("Command", null)
+            : ToolInput.Empty();
+
+        var preflight = policy.AuthorizeShellPreflight(
+            ShellTool(),
+            PersonalContext(),
+            arguments);
+
+        var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
+        Assert.True(complete.Decision.NeedsApproval);
+        Assert.Null(complete.AuthorizedAnalysis);
     }
 
     [Theory]
@@ -135,7 +161,6 @@ public sealed class ToolApprovalGateTests
         Assert.False(decision.Allowed);
         Assert.Equal(expectedDenyReason, decision.DenyReason);
         Assert.False(decision.NeedsApproval);
-        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
     }
 
     [Fact]
@@ -151,7 +176,6 @@ public sealed class ToolApprovalGateTests
 
         Assert.False(decision.Allowed);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
-        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
         Assert.Null(context.Cwd);
     }
 

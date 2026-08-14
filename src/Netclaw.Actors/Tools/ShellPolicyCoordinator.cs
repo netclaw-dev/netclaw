@@ -17,16 +17,25 @@ internal sealed class ShellPolicyCoordinator(
     ToolAccessPolicy policy,
     IToolApprovalService? approvalService)
 {
-    internal async Task<ToolAuthorizationDecision> EvaluateAsync(
+    internal async Task<ShellPolicyAuthorization> EvaluateAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
+        ShellPolicyPreflightResult preflight,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(preflight);
+
         var trace = new ShellPolicyDecisionTraceBuilder();
         try
         {
-            return await EvaluateCoreAsync(tool, toolCall, context, trace, cancellationToken);
+            return await EvaluateCoreAsync(
+                tool,
+                toolCall,
+                context,
+                preflight,
+                trace,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -34,48 +43,81 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                trace);
+            return new ShellPolicyAuthorization(
+                CompleteWithTrace(
+                    ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                    trace),
+                authorizedAnalysis: null);
         }
     }
 
-    private async Task<ToolAuthorizationDecision> EvaluateCoreAsync(
+    private async Task<ShellPolicyAuthorization> EvaluateCoreAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
+        ShellPolicyPreflightResult preflight,
         ShellPolicyDecisionTraceBuilder trace,
         CancellationToken cancellationToken)
     {
-        var preflight = policy.AuthorizeShellPreflight(tool, context, toolCall.Arguments);
-        if (!preflight.NeedsApproval)
-            return Complete(preflight, [], trace);
+        if (preflight is ShellPolicyPreflightResult.Complete complete)
+        {
+            var preflightDecision = complete.Decision;
+            if (preflightDecision.NeedsApproval
+                && preflightDecision.ApprovalContext is { } approvalContext
+                && OneTimeApprovalKeys.Matches(
+                    context.Approval.OneTimeApprovedToolName,
+                    context.Approval.OneTimeApprovedPatterns,
+                    toolCall.Name,
+                    approvalContext))
+            {
+                preflightDecision = ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval);
+            }
 
-        var approvalContext = preflight.ApprovalContext;
-        policy.TryGetAuthorizedShellAnalysis(context, out var execution);
-        if (approvalContext is null
+            return new ShellPolicyAuthorization(
+                Complete(preflightDecision, [], trace),
+                complete.AuthorizedAnalysis);
+        }
+
+        if (preflight is not ShellPolicyPreflightResult.Continue continuation
             || !ShellPolicyProjection.TryCreate(
-                policy.ShellEnvironment,
+                continuation.Environment,
                 policy.ShellApprovalMatcher,
-                execution,
-                approvalContext,
+                continuation.Analysis,
+                continuation.ApprovalContext,
                 context,
                 policy.IsSafePlatformTemporaryPath,
                 out var projection)
             || projection is null)
         {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                trace);
+            return new ShellPolicyAuthorization(
+                CompleteWithTrace(
+                    ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                    trace),
+                authorizedAnalysis: null);
         }
 
-        return await CompleteAsync(
+        var decision = await CompleteAsync(
             tool,
             toolCall,
             context,
             projection,
             trace,
             cancellationToken);
+        return new ShellPolicyAuthorization(
+            decision,
+            decision.Outcome == ToolAuthorizationOutcome.Allowed
+                ? continuation.Analysis
+                : null);
+    }
+
+    internal static ShellPolicyAuthorization CompleteInternalFailure()
+    {
+        var trace = new ShellPolicyDecisionTraceBuilder();
+        return new ShellPolicyAuthorization(
+            CompleteWithTrace(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                trace),
+            authorizedAnalysis: null);
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(

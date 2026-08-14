@@ -21,6 +21,8 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class DispatchingToolExecutorTests
 {
+    private const string MissingShellCommandError =
+        "Error parsing arguments for tool 'shell_execute': Required parameter 'Command' is missing.";
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly DispatchingToolExecutor _executor;
     private readonly DispatchingToolExecutor _restrictedExecutor;
@@ -1752,6 +1754,52 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Unexpected_coordinator_fault_preserves_completed_trace_rows()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var matches = request.Candidates.Select(candidate =>
+                new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    new ToolApprovalMatch(
+                        candidate.Candidate.Verb,
+                        "session",
+                        "this chat"),
+                    ShellCoverageKind.Session,
+                    NearMisses: [])).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                new ThrowAfterFirstOnSecondEnumerationList<ShellGrantCandidateMatch>(matches));
+        });
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-trace-preserved-after-fault",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status && git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/trace-preserved-after-fault"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+        Assert.Collection(
+            decision.ShellPolicyTrace.Rows,
+            row =>
+            {
+                Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage);
+                Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
+            },
+            row =>
+            {
+                Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+                Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
+                Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
+            });
+    }
+
+    [Fact]
     public async Task Authorization_evaluation_denies_uncovered_candidate_when_store_is_unavailable()
     {
         var approvalService = new FixedShellApprovalService(request =>
@@ -2957,6 +3005,251 @@ public class DispatchingToolExecutorTests
         await executor.AuthorizeAsync(toolCall, context, TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Shell_completion_returns_the_exact_preflight_analysis()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"shell-preflight-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+            config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    [ShellTool.ToolName] = ToolApprovalMode.Approval
+                }
+            };
+            var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+            var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
+            var phrase = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? "Get-Location"
+                : "pwd";
+            var shell = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? ApprovalShell.PowerShell
+                : ApprovalShell.Bash;
+            var policy = new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                commandPolicy,
+                pathPolicy,
+                safeVerbs: SafeVerbList.FromVerbs(shell, [phrase]));
+            var tool = new ShellTool(config, pathPolicy, commandPolicy);
+            var context = TestToolExecutionContext.CreateBound(
+                "signalr/exact-preflight-analysis",
+                sessionDirectory: null,
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Personal,
+                    ProjectDirectory = root,
+                    InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+                });
+            var call = new FunctionCallContent(
+                "call-exact-preflight-analysis",
+                ShellTool.ToolName,
+                ToolInput.Create("Command", phrase, "WorkingDirectory", root));
+            var preflight = policy.AuthorizeShellPreflight(tool, context, call.Arguments);
+            var continuation = Assert.IsType<ShellPolicyPreflightResult.Continue>(preflight);
+            var coordinator = new ShellPolicyCoordinator(policy, approvalService: null);
+
+            var authorization = await coordinator.EvaluateAsync(
+                tool,
+                call,
+                context,
+                preflight,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, authorization.Decision.Outcome);
+            Assert.Same(continuation.Analysis, authorization.AuthorizedAnalysis);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Authorization_only_and_each_execution_use_separate_authorizations()
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(ShellEnvironment, approvalService);
+        var context = CreateInteractivePersonalContext("signalr/authorization-only");
+        var call = new FunctionCallContent(
+            "call-authorization-only",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", TestShellEnvironment.PrintWorkingDirectoryCommand));
+
+        await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
+        _ = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        _ = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, approvalService.RequestCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Auto_shell_without_command_returns_argument_error(bool includeNullCommand)
+    {
+        var arguments = includeNullCommand
+            ? ToolInput.Create("Command", null)
+            : ToolInput.Empty();
+        var call = new FunctionCallContent(
+            $"call-missing-command-{includeNullCommand}",
+            ShellTool.ToolName,
+            arguments);
+
+        var result = await _executor.ExecuteAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/missing-shell-command"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MissingShellCommandError, result);
+    }
+
+    [Fact]
+    public async Task Auto_shell_stream_without_command_returns_argument_error()
+    {
+        var call = new FunctionCallContent(
+            "call-stream-missing-command",
+            ShellTool.ToolName,
+            ToolInput.Empty());
+
+        ToolCompletedUpdate? completed = null;
+        await foreach (var update in _executor.ExecuteStreamAsync(
+                           call,
+                           CreateInteractivePersonalContext("signalr/stream-missing-shell-command"),
+                           TestContext.Current.CancellationToken))
+        {
+            completed = update as ToolCompletedUpdate ?? completed;
+        }
+
+        Assert.NotNull(completed);
+        Assert.Equal(MissingShellCommandError, completed.Result);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Approved_shell_without_command_reaches_argument_error(bool includeNullCommand)
+    {
+        var executor = CreateApprovalGatedShellExecutor();
+        var arguments = includeNullCommand
+            ? ToolInput.Create("Command", null)
+            : ToolInput.Empty();
+        var call = new FunctionCallContent(
+            $"call-approved-missing-command-{includeNullCommand}",
+            ShellTool.ToolName,
+            arguments);
+        var context = CreateInteractivePersonalContext("signalr/approved-missing-shell-command");
+
+        var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+            executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+        context.Approval.SeedOneTimeApproval(
+            call.Name,
+            OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+
+        var result = await executor.ExecuteAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MissingShellCommandError, result);
+    }
+
+    [Fact]
+    public async Task Parallel_shell_calls_keep_their_authorized_analyses_isolated()
+    {
+        var firstRoot = Path.Combine(Path.GetTempPath(), $"shell-first-{Guid.NewGuid():N}");
+        var secondRoot = Path.Combine(Path.GetTempPath(), $"shell-second-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(firstRoot);
+        Directory.CreateDirectory(secondRoot);
+        try
+        {
+            var context = CreateInteractivePersonalContext("signalr/parallel-shell-analysis");
+            var firstCall = new FunctionCallContent(
+                "call-parallel-shell-first",
+                ShellTool.ToolName,
+                ToolInput.Create(
+                    "Command",
+                    TestShellEnvironment.PrintWorkingDirectoryCommand,
+                    "WorkingDirectory",
+                    firstRoot));
+            var secondCall = new FunctionCallContent(
+                "call-parallel-shell-second",
+                ShellTool.ToolName,
+                ToolInput.Create(
+                    "Command",
+                    TestShellEnvironment.PrintWorkingDirectoryCommand,
+                    "WorkingDirectory",
+                    secondRoot));
+
+            var results = await Task.WhenAll(
+                _executor.ExecuteAsync(firstCall, context, TestContext.Current.CancellationToken),
+                _executor.ExecuteAsync(secondCall, context, TestContext.Current.CancellationToken));
+
+            Assert.Contains(firstRoot, results[0], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(secondRoot, results[1], StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(firstRoot, recursive: true);
+            Directory.Delete(secondRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Stream_and_non_stream_shell_calls_use_explicit_authorized_analysis()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"shell-flow-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var context = CreateInteractivePersonalContext("signalr/shell-analysis-paths");
+            var nonStreamCall = new FunctionCallContent(
+                "call-shell-analysis-non-stream",
+                ShellTool.ToolName,
+                ToolInput.Create(
+                    "Command",
+                    TestShellEnvironment.PrintWorkingDirectoryCommand,
+                    "WorkingDirectory",
+                    root));
+            var streamCall = new FunctionCallContent(
+                "call-shell-analysis-stream",
+                ShellTool.ToolName,
+                ToolInput.Create(
+                    "Command",
+                    TestShellEnvironment.PrintWorkingDirectoryCommand,
+                    "WorkingDirectory",
+                    root));
+
+            var nonStreamResult = await _executor.ExecuteAsync(
+                nonStreamCall,
+                context,
+                TestContext.Current.CancellationToken);
+            ToolCompletedUpdate? completed = null;
+            await foreach (var update in _executor.ExecuteStreamAsync(
+                               streamCall,
+                               context,
+                               TestContext.Current.CancellationToken))
+            {
+                completed = update as ToolCompletedUpdate ?? completed;
+            }
+
+            Assert.Contains(root, nonStreamResult, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(completed);
+            Assert.Contains(root, completed.Result, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static DispatchingToolExecutor CreateApprovalGatedShellExecutor(
         IToolApprovalService? approvalService = null,
         ILogger<DispatchingToolExecutor>? logger = null,
@@ -3171,6 +3464,33 @@ public class DispatchingToolExecutorTests
             string? cwd,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
+    }
+
+    private sealed class ThrowAfterFirstOnSecondEnumerationList<T>(IReadOnlyList<T> items)
+        : IReadOnlyList<T>
+    {
+        private int _enumerationCount;
+
+        public int Count => items.Count;
+
+        public T this[int index] => items[index];
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            _enumerationCount++;
+            return _enumerationCount == 2
+                ? EnumerateThenThrow().GetEnumerator()
+                : items.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+
+        private IEnumerable<T> EnumerateThenThrow()
+        {
+            yield return items[0];
+            throw new InvalidOperationException("Injected coordinator fault.");
+        }
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>

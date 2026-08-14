@@ -16,14 +16,14 @@
 
 ## 3. Make preflight data flow explicit
 
-- [ ] 3.1 Return one explicit shell preflight result from `ToolAccessPolicy` with no change to gate order or decisions.
-- [ ] 3.2 Pass the successful preflight result directly into projection and asynchronous completion.
-- [ ] 3.3 Return the exact authorized analysis with the internal shell authorization result.
-- [ ] 3.4 Pass the authorized analysis directly into stream and non-stream shell execution.
-- [ ] 3.5 Preserve the decision-only internal test seam without analysis retention.
-- [ ] 3.6 Remove shell analysis cache reads and writes after all execution paths migrate.
-- [ ] 3.7 Add exact-analysis, Auto allow, consume-once, authorization-only, overlap, and cross-call isolation tests.
-- [ ] 3.8 Run exact fixture parity, focused actor tests, and adversarial review for the preflight slice.
+- [x] 3.1 Return one explicit shell preflight result from `ToolAccessPolicy` with no change to gate order or decisions.
+- [x] 3.2 Pass the successful preflight result directly into projection and asynchronous completion.
+- [x] 3.3 Return the exact authorized analysis with the internal shell authorization result.
+- [x] 3.4 Pass the authorized analysis directly into stream and non-stream shell execution.
+- [x] 3.5 Preserve the decision-only internal test seam without analysis retention.
+- [x] 3.6 Remove shell analysis cache reads and writes after all execution paths migrate.
+- [x] 3.7 Add exact-analysis, Auto allow, consume-once, authorization-only, overlap, and cross-call isolation tests.
+- [x] 3.8 Run exact fixture parity, focused actor tests, and adversarial review for the preflight slice.
 
 ## 4. Validate actor evidence once
 

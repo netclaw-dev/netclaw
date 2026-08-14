@@ -34,8 +34,6 @@ public sealed class ToolAccessPolicy
     private readonly FeatureGates _featureGates;
     private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
     private readonly PlatformTemporaryScopePolicy _platformTemporaryScopePolicy;
-    private readonly ConditionalWeakTable<ToolExecutionContext, ShellCommandAnalysis>
-        _authorizedShellAnalyses = new();
     private readonly ConditionalWeakTable<ToolExecutionContext, SessionScratchRetryMarker>
         _sessionScratchRetries = new();
 
@@ -161,21 +159,57 @@ public sealed class ToolAccessPolicy
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
-        => AuthorizeInvocationCore(tool, context, arguments, deferReviewedSafeCoverage: false);
+        => AuthorizeInvocationCore(
+            tool,
+            context,
+            arguments,
+            deferReviewedSafeCoverage: false,
+            out _);
 
-    internal ToolAccessDecision AuthorizeShellPreflight(
+    internal ShellPolicyPreflightResult AuthorizeShellPreflight(
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
-        => AuthorizeInvocationCore(tool, context, arguments, deferReviewedSafeCoverage: true);
+    {
+        var decision = AuthorizeInvocationCore(
+            tool,
+            context,
+            arguments,
+            deferReviewedSafeCoverage: true,
+            out var analysis);
+
+        if (!decision.NeedsApproval)
+        {
+            return new ShellPolicyPreflightResult.Complete(
+                decision,
+                decision.Allowed ? analysis : null);
+        }
+
+        if (analysis is null)
+        {
+            return new ShellPolicyPreflightResult.Complete(
+                decision,
+                authorizedAnalysis: null);
+        }
+
+        return decision.ApprovalContext is { } approvalContext
+            ? new ShellPolicyPreflightResult.Continue(
+                analysis,
+                approvalContext,
+                ShellEnvironment)
+            : new ShellPolicyPreflightResult.Complete(
+                ToolAccessDecision.Deny("internal_policy_failure"),
+                authorizedAnalysis: null);
+    }
 
     private ToolAccessDecision AuthorizeInvocationCore(
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        bool deferReviewedSafeCoverage)
+        bool deferReviewedSafeCoverage,
+        out ShellCommandAnalysis? authorizedAnalysis)
     {
-        _authorizedShellAnalyses.Remove(context);
+        authorizedAnalysis = null;
 
         if (tool is McpToolAdapter mcp)
         {
@@ -284,8 +318,7 @@ public sealed class ToolAccessPolicy
             }
         }
 
-        if (shellAnalysis is not null)
-            _authorizedShellAnalyses.Add(context, shellAnalysis);
+        authorizedAnalysis = shellAnalysis;
 
         if (approvalModeDecision is not null)
             return approvalModeDecision;
@@ -300,22 +333,6 @@ public sealed class ToolAccessPolicy
             shellAnalysis,
             deferReviewedSafeCoverage);
     }
-
-    internal bool TryTakeAuthorizedShellAnalysis(
-        ToolExecutionContext context,
-        out ShellCommandAnalysis? analysis)
-    {
-        if (!_authorizedShellAnalyses.TryGetValue(context, out analysis))
-            return false;
-
-        _authorizedShellAnalyses.Remove(context);
-        return true;
-    }
-
-    internal bool TryGetAuthorizedShellAnalysis(
-        ToolExecutionContext context,
-        out ShellCommandAnalysis? analysis)
-        => _authorizedShellAnalyses.TryGetValue(context, out analysis);
 
     internal void MarkSessionScratchRetry(
         ToolExecutionContext context,
