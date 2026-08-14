@@ -1,0 +1,355 @@
+// -----------------------------------------------------------------------
+// <copyright file="ShellApprovalEvidence.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using Netclaw.Configuration;
+using Netclaw.Security;
+using Netclaw.Tools;
+
+namespace Netclaw.Actors.Tools;
+
+internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approvalService)
+{
+    internal bool IsAvailable => approvalService is not null;
+
+    internal async Task<ShellApprovalMatchResult> MatchAsync(
+        ShellApprovalMatchRequest request,
+        string? cwd,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.Candidates.Count == 0 || approvalService is null)
+            return CreateEmptyResult(request.Candidates);
+
+        if (approvalService is IShellApprovalMatchService shellApprovalService)
+        {
+            return await shellApprovalService.MatchShellCandidatesAsync(
+                request,
+                cancellationToken);
+        }
+
+        var compatibilityResult = await approvalService.CheckApprovalAsync(
+            request.SessionId,
+            request.Audience,
+            request.ToolName,
+            request.Candidates.Select(static candidate => candidate.Candidate).ToArray(),
+            cwd,
+            cancellationToken);
+        return ConvertCompatibilityResult(compatibilityResult, request.Candidates);
+    }
+
+    private static ShellApprovalMatchResult ConvertCompatibilityResult(
+        ToolApprovalCheckResult result,
+        IReadOnlyList<ShellGrantCandidate> candidates)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.CandidateChecks is not { } checks)
+        {
+            var aggregateStoreStatus = result.PersistentStoreFailure is { } aggregateFailure
+                ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(aggregateFailure)
+                : new PersistentGrantStoreStatus.Ready();
+            return new ShellApprovalMatchResult(
+                aggregateStoreStatus,
+                Array.AsReadOnly(candidates
+                    .Select(static candidate => new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: []))
+                    .ToArray()));
+        }
+
+        if (checks.Count != candidates.Count)
+            throw new InvalidOperationException("The approval service returned the wrong candidate count.");
+
+        var matches = new ShellGrantCandidateMatch[checks.Count];
+        var unapprovedPatterns = new List<string>();
+        var approvedMatches = new List<ToolApprovalMatch>();
+        for (var index = 0; index < checks.Count; index++)
+        {
+            var expected = candidates[index];
+            var check = checks[index]
+                ?? throw new InvalidOperationException("The approval service returned a null candidate check.");
+            if (!HasSameCandidateFacts(check.Candidate, expected.Candidate))
+                throw new InvalidOperationException("The approval service changed candidate facts.");
+
+            ShellCoverageKind? grantCoverage = null;
+            if (check.ApprovedMatch is { } approvedMatch)
+            {
+                approvedMatches.Add(approvedMatch);
+                grantCoverage = approvedMatch.Source switch
+                {
+                    "session" => ShellCoverageKind.Session,
+                    "persistent" when approvedMatch.Scope.EndsWith(" anywhere", StringComparison.Ordinal) =>
+                        ShellCoverageKind.PersistentGlobal,
+                    "persistent" => ShellCoverageKind.PersistentFolder,
+                    _ => throw new InvalidOperationException("The approval service returned an unknown grant source."),
+                };
+            }
+            else
+            {
+                unapprovedPatterns.Add(expected.Candidate.Verb);
+            }
+
+            matches[index] = new ShellGrantCandidateMatch(
+                expected.CandidateId,
+                check.ApprovedMatch,
+                grantCoverage,
+                []);
+        }
+
+        if (!unapprovedPatterns.SequenceEqual(
+                result.UnapprovedPatterns,
+                StringComparer.OrdinalIgnoreCase)
+            || !approvedMatches.SequenceEqual(result.ApprovedMatches))
+        {
+            throw new InvalidOperationException("The approval service returned inconsistent aggregates.");
+        }
+
+        var storeStatus = result.PersistentStoreFailure is { } failure
+            ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(failure)
+            : new PersistentGrantStoreStatus.Ready();
+        return new ShellApprovalMatchResult(
+            storeStatus,
+            Array.AsReadOnly(matches));
+    }
+
+    private static ShellApprovalMatchResult CreateEmptyResult(
+        IReadOnlyList<ShellGrantCandidate> candidates)
+        => new(
+            new PersistentGrantStoreStatus.Ready(),
+            Array.AsReadOnly(candidates
+                .Select(static candidate => new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    Match: null,
+                    GrantCoverage: null,
+                    NearMisses: []))
+                .ToArray()));
+
+    private static bool HasSameCandidateFacts(
+        ApprovalCandidate first,
+        ApprovalCandidate second) =>
+        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
+        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
+        first.Shell == second.Shell &&
+        ((first.VerbTokens is null && second.VerbTokens is null) ||
+         (first.VerbTokens is not null &&
+          second.VerbTokens is not null &&
+          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
+}
+
+internal sealed class ValidatedShellGrantEvidence
+{
+    private readonly IReadOnlyList<ValidatedShellGrantCandidateEvidence> _candidateEvidence;
+    private readonly IReadOnlyList<ToolApprovalMatch> _approvalMatches;
+
+    private ValidatedShellGrantEvidence(
+        PersistentGrantStoreStatus persistentStore,
+        ValidatedShellGrantCandidateEvidence[] candidateEvidence,
+        ToolApprovalMatch[] approvalMatches)
+    {
+        PersistentStore = persistentStore;
+        _candidateEvidence = Array.AsReadOnly(candidateEvidence);
+        _approvalMatches = Array.AsReadOnly(approvalMatches);
+    }
+
+    internal PersistentGrantStoreStatus PersistentStore { get; }
+
+    internal IReadOnlyList<ValidatedShellGrantCandidateEvidence> CandidateEvidence => _candidateEvidence;
+
+    internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches => _approvalMatches;
+
+    internal static bool TryCreate(
+        ShellApprovalMatchResult result,
+        IReadOnlyList<ShellPolicyCandidate> candidates,
+        string? cwd,
+        out ValidatedShellGrantEvidence? evidence)
+    {
+        evidence = null;
+        if (result is null
+            || candidates is null
+            || !TryValidateStore(result.PersistentStore, out var storeUnavailable)
+            || result.CandidateMatches is null
+            || result.CandidateMatches.Count != candidates.Count)
+        {
+            return false;
+        }
+
+        var expectedById = candidates.ToDictionary(static candidate => candidate.Id);
+        var seenIds = new HashSet<ShellPolicyCandidateId>();
+        var validated = new ValidatedShellGrantCandidateEvidence[candidates.Count];
+        var approvalMatches = new List<ToolApprovalMatch>(candidates.Count);
+        for (var index = 0; index < result.CandidateMatches.Count; index++)
+        {
+            var candidateMatch = result.CandidateMatches[index];
+            if (candidateMatch is null
+                || !expectedById.TryGetValue(candidateMatch.CandidateId, out var candidate)
+                || !seenIds.Add(candidateMatch.CandidateId)
+                || !TryValidateCandidateEvidence(
+                    candidate,
+                    candidateMatch,
+                    cwd,
+                    storeUnavailable))
+            {
+                return false;
+            }
+
+            var candidateEvidence = CopyCandidateEvidence(candidateMatch);
+            validated[index] = new ValidatedShellGrantCandidateEvidence(candidate, candidateEvidence);
+            if (candidateEvidence.Match is { } match)
+                approvalMatches.Add(match);
+        }
+
+        evidence = new ValidatedShellGrantEvidence(
+            result.PersistentStore,
+            validated,
+            approvalMatches.ToArray());
+        return true;
+    }
+
+    private static bool TryValidateStore(
+        PersistentGrantStoreStatus persistentStore,
+        out bool unavailable)
+    {
+        unavailable = false;
+        switch (persistentStore)
+        {
+            case PersistentGrantStoreStatus.Ready:
+                return true;
+            case PersistentGrantStoreStatus.Unavailable storeUnavailable
+                when Enum.IsDefined(storeUnavailable.Failure):
+                unavailable = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryValidateCandidateEvidence(
+        ShellPolicyCandidate candidate,
+        ShellGrantCandidateMatch candidateMatch,
+        string? cwd,
+        bool storeUnavailable)
+    {
+        if (candidateMatch.NearMisses is null)
+            return false;
+
+        if (candidateMatch.Match is null)
+        {
+            return candidateMatch.GrantCoverage is null
+                   && candidateMatch.GrantCreatedAt is null
+                   && candidateMatch.NearMisses.Count <= 1
+                   && (!storeUnavailable || candidateMatch.NearMisses.Count == 0)
+                   && candidateMatch.NearMisses.All(nearMiss =>
+                       IsConsistentNearMiss(candidate.Candidate, nearMiss, cwd));
+        }
+
+        if (candidateMatch.GrantCoverage is not
+            (ShellCoverageKind.Session
+            or ShellCoverageKind.PersistentGlobal
+            or ShellCoverageKind.PersistentFolder)
+            || candidateMatch.NearMisses.Count != 0
+            || (candidateMatch.GrantCoverage == ShellCoverageKind.Session
+                && candidateMatch.GrantCreatedAt is not null)
+            || (storeUnavailable
+                && candidateMatch.GrantCoverage is
+                    (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)))
+        {
+            return false;
+        }
+
+        return IsConsistentActorMatch(
+            candidate.Candidate,
+            candidateMatch.Match,
+            candidateMatch.GrantCoverage.Value,
+            cwd);
+    }
+
+    private static ShellGrantCandidateMatch CopyCandidateEvidence(
+        ShellGrantCandidateMatch source)
+        => new(
+            source.CandidateId,
+            source.Match is null
+                ? null
+                : new ToolApprovalMatch(
+                    source.Match.Pattern,
+                    source.Match.Source,
+                    source.Match.Scope),
+            source.GrantCoverage,
+            Array.AsReadOnly(source.NearMisses
+                .Select(static nearMiss => new ShellApprovalNearMiss(
+                    nearMiss.Grant,
+                    nearMiss.Reason))
+                .ToArray()))
+        {
+            GrantCreatedAt = source.GrantCreatedAt
+        };
+
+    private static bool IsConsistentActorMatch(
+        ApprovalCandidate candidate,
+        ToolApprovalMatch match,
+        ShellCoverageKind coverage,
+        string? cwd)
+    {
+        if (match.Pattern is null
+            || match.Source is null
+            || match.Scope is null
+            || !string.Equals(match.Pattern, candidate.Verb, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (coverage == ShellCoverageKind.Session)
+        {
+            return string.Equals(match.Source, "session", StringComparison.Ordinal)
+                   && string.Equals(match.Scope, "this chat", StringComparison.Ordinal);
+        }
+
+        if (coverage is not
+            (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)
+            || !string.Equals(match.Source, "persistent", StringComparison.Ordinal)
+            || !ApprovalEntry.TryParseScope(match.Scope, out var entry, out _)
+            || entry.Shell != candidate.Shell
+            || entry.Match is null
+            || (coverage == ShellCoverageKind.PersistentGlobal) != (entry.Directory is null))
+        {
+            return false;
+        }
+
+        return ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, [entry]);
+    }
+
+    private static bool IsConsistentNearMiss(
+        ApprovalCandidate candidate,
+        ShellApprovalNearMiss nearMiss,
+        string? cwd)
+    {
+        if (nearMiss is null || !Enum.IsDefined(nearMiss.Reason) || nearMiss.Grant is null)
+            return false;
+
+        try
+        {
+            var evaluation = ApprovalPatternMatching.EvaluateShellApproval(
+                candidate,
+                cwd,
+                [nearMiss.Grant],
+                maximumNearMisses: 1);
+            return evaluation.MatchedEntry is null
+                   && evaluation.NearMisses.Count == 1
+                   && evaluation.NearMisses[0].Reason == nearMiss.Reason
+                   && ToolApprovalEntryComparer.Equals(
+                       evaluation.NearMisses[0].Grant,
+                       nearMiss.Grant);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException)
+        {
+            return false;
+        }
+    }
+}
+
+internal sealed record ValidatedShellGrantCandidateEvidence(
+    ShellPolicyCandidate Candidate,
+    ShellGrantCandidateMatch ActorEvidence);

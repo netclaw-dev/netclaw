@@ -1487,7 +1487,15 @@ public class DispatchingToolExecutorTests
 
         var decision = await executor.EvaluateAuthorizationAsync(
             call,
-            CreateInteractivePersonalContext("signalr/trace-near-miss"),
+            TestToolExecutionContext.CreateBound(
+                "signalr/trace-near-miss",
+                sessionDirectory: null,
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Personal,
+                    ProjectDirectory = "/work",
+                    InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+                }),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
@@ -1753,23 +1761,130 @@ public class DispatchingToolExecutorTests
         Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
+    [Theory]
+    [InlineData(MalformedActorEvidenceCase.InvalidCoverage)]
+    [InlineData(MalformedActorEvidenceCase.SessionTimestamp)]
+    [InlineData(MalformedActorEvidenceCase.MultipleNearMisses)]
+    [InlineData(MalformedActorEvidenceCase.InvalidNearMissReason)]
+    [InlineData(MalformedActorEvidenceCase.NearMissWithUnavailableStore)]
+    [InlineData(MalformedActorEvidenceCase.MatchWithNearMiss)]
+    [InlineData(MalformedActorEvidenceCase.CoverageWithoutMatch)]
+    [InlineData(MalformedActorEvidenceCase.NullStoreStatus)]
+    [InlineData(MalformedActorEvidenceCase.WrongCandidateCount)]
+    public async Task Authorization_evaluation_rejects_malformed_actor_evidence(
+        MalformedActorEvidenceCase malformedCase)
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+            CreateMalformedActorResult(request, malformedCase));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-malformed-actor-evidence",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/malformed-actor-evidence"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+        var row = Assert.Single(decision.ShellPolicyTrace.Rows);
+        Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+        Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
+        Assert.Equal(1, approvalService.RequestCount);
+    }
+
     [Fact]
-    public async Task Unexpected_coordinator_fault_preserves_completed_trace_rows()
+    public async Task Authorization_evaluation_preserves_mixed_actor_match_order_in_one_batch()
+    {
+        var grantTimestamp = new DateTimeOffset(2026, 8, 14, 1, 0, 0, TimeSpan.Zero);
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var sessionCandidate = request.Candidates[0];
+            var persistentCandidate = request.Candidates[1];
+            var persistentEntry = ApprovalEntry.CreateTokenPrefix(
+                Assert.IsType<ApprovalShell>(persistentCandidate.Candidate.Shell),
+                Assert.IsAssignableFrom<IReadOnlyList<string>>(
+                    persistentCandidate.Candidate.VerbTokens),
+                createdAt: grantTimestamp);
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(
+                [
+                    new ShellGrantCandidateMatch(
+                        persistentCandidate.CandidateId,
+                        new ToolApprovalMatch(
+                            persistentCandidate.Candidate.Verb,
+                            "persistent",
+                            persistentEntry.FormatScope()),
+                        ShellCoverageKind.PersistentGlobal,
+                        NearMisses: [])
+                    {
+                        GrantCreatedAt = grantTimestamp
+                    },
+                    new ShellGrantCandidateMatch(
+                        sessionCandidate.CandidateId,
+                        new ToolApprovalMatch(
+                            sessionCandidate.Candidate.Verb,
+                            "session",
+                            "this chat"),
+                        ShellCoverageKind.Session,
+                        NearMisses: [])
+                ]));
+        });
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-mixed-actor-evidence",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status && git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/mixed-actor-evidence"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
+        Assert.Equal(1, approvalService.RequestCount);
+        Assert.Equal(
+            ["git push", "git status"],
+            decision.ApprovalMatches.Select(static match => match.Pattern));
+        Assert.Collection(
+            decision.ShellPolicyTrace.Rows.Where(static row =>
+                row.Stage == ShellPolicyTraceStage.StoredGrantMatch),
+            row =>
+            {
+                Assert.Equal(ShellCoverageKind.PersistentGlobal, row.Coverage);
+                Assert.Equal(grantTimestamp, row.GrantTimestamp);
+            },
+            row => Assert.Equal(ShellCoverageKind.Session, row.Coverage));
+    }
+
+    [Fact]
+    public async Task Malformed_actor_batch_applies_no_partial_evidence()
     {
         var approvalService = new FixedShellApprovalService(request =>
         {
-            var matches = request.Candidates.Select(candidate =>
+            var first = request.Candidates[0];
+            var second = request.Candidates[1];
+            var matches = new[]
+            {
                 new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    new ToolApprovalMatch(
-                        candidate.Candidate.Verb,
-                        "session",
-                        "this chat"),
+                    first.CandidateId,
+                    new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
                     ShellCoverageKind.Session,
-                    NearMisses: [])).ToArray();
+                    NearMisses: []),
+                new ShellGrantCandidateMatch(
+                    second.CandidateId,
+                    new ToolApprovalMatch("unrelated", "session", "this chat"),
+                    ShellCoverageKind.Session,
+                    NearMisses: [])
+            };
             return new ShellApprovalMatchResult(
                 new PersistentGrantStoreStatus.Ready(),
-                new ThrowAfterFirstOnSecondEnumerationList<ShellGrantCandidateMatch>(matches));
+                Array.AsReadOnly(matches));
         });
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
@@ -1784,19 +1899,10 @@ public class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
-        Assert.Collection(
-            decision.ShellPolicyTrace.Rows,
-            row =>
-            {
-                Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage);
-                Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
-            },
-            row =>
-            {
-                Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
-                Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
-                Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
-            });
+        var row = Assert.Single(decision.ShellPolicyTrace.Rows);
+        Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+        Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
     }
 
     [Fact]
@@ -3334,6 +3440,85 @@ public class DispatchingToolExecutorTests
                 Array.AsReadOnly(matches));
         });
 
+    private static ShellApprovalMatchResult CreateMalformedActorResult(
+        ShellApprovalMatchRequest request,
+        MalformedActorEvidenceCase malformedCase)
+    {
+        var candidate = request.Candidates[0];
+        var sessionMatch = new ToolApprovalMatch(
+            candidate.Candidate.Verb,
+            "session",
+            "this chat");
+        var mismatchedGrant = ApprovalEntry.CreateTokenPrefix(
+            Assert.IsType<ApprovalShell>(candidate.Candidate.Shell),
+            ["git", "push"]);
+        var tokenNearMiss = new ShellApprovalNearMiss(
+            mismatchedGrant,
+            ShellApprovalNearMissReason.TokenMismatch);
+        var store = malformedCase switch
+        {
+            MalformedActorEvidenceCase.NullStoreStatus => null!,
+            MalformedActorEvidenceCase.NearMissWithUnavailableStore =>
+                new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
+            _ => (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Ready(),
+        };
+        var match = malformedCase switch
+        {
+            MalformedActorEvidenceCase.MultipleNearMisses => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                Match: null,
+                GrantCoverage: null,
+                NearMisses: [tokenNearMiss, tokenNearMiss]),
+            MalformedActorEvidenceCase.InvalidNearMissReason => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                Match: null,
+                GrantCoverage: null,
+                NearMisses:
+                [
+                    new ShellApprovalNearMiss(
+                        mismatchedGrant,
+                        (ShellApprovalNearMissReason)999)
+                ]),
+            MalformedActorEvidenceCase.NearMissWithUnavailableStore => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                Match: null,
+                GrantCoverage: null,
+                NearMisses: [tokenNearMiss]),
+            MalformedActorEvidenceCase.MatchWithNearMiss => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                sessionMatch,
+                ShellCoverageKind.Session,
+                NearMisses: [tokenNearMiss]),
+            MalformedActorEvidenceCase.CoverageWithoutMatch => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                Match: null,
+                GrantCoverage: ShellCoverageKind.Session,
+                NearMisses: []),
+            MalformedActorEvidenceCase.InvalidCoverage => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                sessionMatch,
+                (ShellCoverageKind)999,
+                NearMisses: []),
+            MalformedActorEvidenceCase.SessionTimestamp => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                sessionMatch,
+                ShellCoverageKind.Session,
+                NearMisses: [])
+            {
+                GrantCreatedAt = new DateTimeOffset(2026, 8, 14, 1, 0, 0, TimeSpan.Zero)
+            },
+            _ => new ShellGrantCandidateMatch(
+                candidate.CandidateId,
+                Match: null,
+                GrantCoverage: null,
+                NearMisses: []),
+        };
+        var matches = malformedCase == MalformedActorEvidenceCase.WrongCandidateCount
+            ? Array.Empty<ShellGrantCandidateMatch>()
+            : [match];
+        return new ShellApprovalMatchResult(store, Array.AsReadOnly(matches));
+    }
+
     private static ToolExecutionContext CreateInteractivePersonalContext(string sessionId)
         => TestToolExecutionContext.CreateBound(
             sessionId,
@@ -3351,6 +3536,19 @@ public class DispatchingToolExecutorTests
     }
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    public enum MalformedActorEvidenceCase
+    {
+        InvalidCoverage,
+        SessionTimestamp,
+        MultipleNearMisses,
+        InvalidNearMissReason,
+        NearMissWithUnavailableStore,
+        MatchWithNearMiss,
+        CoverageWithoutMatch,
+        NullStoreStatus,
+        WrongCandidateCount,
+    }
 
     private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
         new(verb, directory)
@@ -3466,33 +3664,6 @@ public class DispatchingToolExecutorTests
             string? cwd,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
-    }
-
-    private sealed class ThrowAfterFirstOnSecondEnumerationList<T>(IReadOnlyList<T> items)
-        : IReadOnlyList<T>
-    {
-        private int _enumerationCount;
-
-        public int Count => items.Count;
-
-        public T this[int index] => items[index];
-
-        public IEnumerator<T> GetEnumerator()
-        {
-            _enumerationCount++;
-            return _enumerationCount == 2
-                ? EnumerateThenThrow().GetEnumerator()
-                : items.GetEnumerator();
-        }
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-            => GetEnumerator();
-
-        private IEnumerable<T> EnumerateThenThrow()
-        {
-            yield return items[0];
-            throw new InvalidOperationException("Injected coordinator fault.");
-        }
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>

@@ -27,11 +27,11 @@
 
 ## 4. Validate actor evidence once
 
-- [ ] 4.1 Add the validated actor-evidence factory and bind every result field to projected candidates.
-- [ ] 4.2 Reject malformed store status, enums, candidate identity, scopes, timestamps, near misses, and unavailable-store combinations.
-- [ ] 4.3 Move session and persistent coverage behind the validated evidence boundary.
-- [ ] 4.4 Isolate shell use of public `IToolApprovalService` behind one exact, non-inferential adapter.
-- [ ] 4.5 Add malformed protocol, mixed coverage, unavailable store, and exact one-batch actor tests.
+- [x] 4.1 Add the validated actor-evidence factory and bind every result field to projected candidates.
+- [x] 4.2 Reject malformed store status, enums, candidate identity, scopes, timestamps, near misses, and unavailable-store combinations.
+- [x] 4.3 Move session and persistent coverage behind the validated evidence boundary.
+- [x] 4.4 Isolate shell use of public `IToolApprovalService` behind one exact, non-inferential adapter.
+- [x] 4.5 Add malformed protocol, mixed coverage, unavailable store, and exact one-batch actor tests.
 - [ ] 4.6 Run exact fixture parity and adversarial review for the actor-evidence slice.
 
 ## 5. Extract the ordered policy stages

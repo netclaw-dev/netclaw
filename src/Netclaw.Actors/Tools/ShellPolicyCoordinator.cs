@@ -17,6 +17,8 @@ internal sealed class ShellPolicyCoordinator(
     ToolAccessPolicy policy,
     IToolApprovalService? approvalService)
 {
+    private readonly ShellApprovalEvidenceAdapter _approvalEvidence = new(approvalService);
+
     internal async Task<ShellPolicyAuthorization> EvaluateAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
@@ -185,7 +187,7 @@ internal sealed class ShellPolicyCoordinator(
 
         var coverage = new ShellCoverageSet(projection.Candidates);
         foreach (var candidate in projection.Candidates.Where(item =>
-                     approvalService is not null
+                     _approvalEvidence.IsAvailable
                      && item.Role == ShellPolicyCandidateRole.Ordinary
                      && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
         {
@@ -196,32 +198,50 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         var grantCandidates = projection.GrantCandidates;
-        var actorResult = await MatchCandidatesAsync(
-            tool,
-            context,
-            projection,
-            grantCandidates,
+        var requestCandidates = grantCandidates
+            .Select(candidate => new ShellGrantCandidate(
+                candidate.Id,
+                candidate.Candidate,
+                projection.ApprovalContext.Cwd))
+            .ToArray();
+        var actorResult = await _approvalEvidence.MatchAsync(
+            new ShellApprovalMatchRequest(
+                ToApprovalSessionId(context.SessionId),
+                context.Audience,
+                new ToolName(tool.Name),
+                projection.Environment,
+                Array.AsReadOnly(requestCandidates)),
+            projection.ApprovalContext.Cwd,
             cancellationToken);
-        if (!TryApplyActorResult(
+        if (!ValidatedShellGrantEvidence.TryCreate(
                 actorResult,
                 grantCandidates,
                 projection.ApprovalContext.Cwd,
-                coverage,
-                out var approvalMatches))
+                out var grantEvidence)
+            || grantEvidence is null)
         {
             return CompleteWithTrace(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"),
                 trace);
         }
 
-        foreach (var actorMatch in actorResult.CandidateMatches)
+        foreach (var candidateEvidence in grantEvidence.CandidateEvidence)
         {
-            var candidate = grantCandidates.First(item => item.Id == actorMatch.CandidateId);
-            trace.AddActorEvidence(candidate, actorMatch);
+            var actorMatch = candidateEvidence.ActorEvidence;
+            if (actorMatch.GrantCoverage is { } grantCoverage)
+            {
+                coverage.Cover(
+                    candidateEvidence.Candidate.Id,
+                    grantCoverage,
+                    ToPolicyReason(grantCoverage));
+            }
+
+            trace.AddActorEvidence(candidateEvidence.Candidate, actorMatch);
         }
+        var approvalMatches = grantEvidence.ApprovalMatches;
 
         foreach (var candidate in projection.Candidates.Where(item =>
-                     approvalService is not null
+                     _approvalEvidence.IsAvailable
                      && item.Role == ShellPolicyCandidateRole.Ordinary
                      && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
         {
@@ -322,7 +342,7 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         if (uncovered.Count > 0
-            && actorResult.PersistentStore is PersistentGrantStoreStatus.Unavailable)
+            && grantEvidence.PersistentStore is PersistentGrantStoreStatus.Unavailable)
         {
             return CompleteWithTrace(
                 ToolAuthorizationDecision.Deny("approval_store_unavailable"),
@@ -383,236 +403,6 @@ internal sealed class ShellPolicyCoordinator(
             trace);
     }
 
-    private async Task<ShellApprovalMatchResult> MatchCandidatesAsync(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        ShellPolicyProjection projection,
-        IReadOnlyList<ShellPolicyCandidate> candidates,
-        CancellationToken cancellationToken)
-    {
-        if (candidates.Count == 0 || approvalService is null)
-        {
-            return CreateEmptyMatchResult(candidates);
-        }
-
-        var requestCandidates = candidates
-            .Select(candidate => new ShellGrantCandidate(
-                candidate.Id,
-                candidate.Candidate,
-                projection.ApprovalContext.Cwd))
-            .ToArray();
-        if (approvalService is IShellApprovalMatchService shellApprovalService)
-        {
-            return await shellApprovalService.MatchShellCandidatesAsync(
-                new ShellApprovalMatchRequest(
-                    ToApprovalSessionId(context.SessionId),
-                    context.Audience,
-                    new ToolName(tool.Name),
-                    projection.Environment,
-                    Array.AsReadOnly(requestCandidates)),
-                cancellationToken);
-        }
-
-        var compatibilityResult = await approvalService.CheckApprovalAsync(
-            ToApprovalSessionId(context.SessionId),
-            context.Audience,
-            new ToolName(tool.Name),
-            candidates.Select(static candidate => candidate.Candidate).ToArray(),
-            projection.ApprovalContext.Cwd,
-            cancellationToken);
-        return ConvertCompatibilityResult(compatibilityResult, candidates);
-    }
-
-    private static ShellApprovalMatchResult ConvertCompatibilityResult(
-        ToolApprovalCheckResult result,
-        IReadOnlyList<ShellPolicyCandidate> candidates)
-    {
-        if (result.CandidateChecks is not { } checks)
-        {
-            var aggregateStoreStatus = result.PersistentStoreFailure is { } aggregateFailure
-                ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(aggregateFailure)
-                : new PersistentGrantStoreStatus.Ready();
-            return new ShellApprovalMatchResult(
-                aggregateStoreStatus,
-                Array.AsReadOnly(candidates
-                    .Select(static candidate => new ShellGrantCandidateMatch(
-                        candidate.Id,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: []))
-                    .ToArray()));
-        }
-
-        if (checks.Count != candidates.Count)
-            throw new InvalidOperationException("The approval service returned the wrong candidate count.");
-
-        var matches = new ShellGrantCandidateMatch[checks.Count];
-        var unapprovedPatterns = new List<string>();
-        var approvedMatches = new List<ToolApprovalMatch>();
-        for (var index = 0; index < checks.Count; index++)
-        {
-            var expected = candidates[index];
-            var check = checks[index];
-            if (!HasSameCandidateFacts(check.Candidate, expected.Candidate))
-                throw new InvalidOperationException("The approval service changed candidate facts.");
-
-            ShellCoverageKind? grantCoverage = null;
-            if (check.ApprovedMatch is { } approvedMatch)
-            {
-                approvedMatches.Add(approvedMatch);
-                grantCoverage = approvedMatch.Source switch
-                {
-                    "session" => ShellCoverageKind.Session,
-                    "persistent" when approvedMatch.Scope.EndsWith(" anywhere", StringComparison.Ordinal) =>
-                        ShellCoverageKind.PersistentGlobal,
-                    "persistent" => ShellCoverageKind.PersistentFolder,
-                    _ => throw new InvalidOperationException("The approval service returned an unknown grant source."),
-                };
-            }
-            else
-            {
-                unapprovedPatterns.Add(expected.Candidate.Verb);
-            }
-
-            matches[index] = new ShellGrantCandidateMatch(
-                expected.Id,
-                check.ApprovedMatch,
-                grantCoverage,
-                []);
-        }
-
-        if (!unapprovedPatterns.SequenceEqual(
-                result.UnapprovedPatterns,
-                StringComparer.OrdinalIgnoreCase)
-            || !approvedMatches.SequenceEqual(result.ApprovedMatches))
-        {
-            throw new InvalidOperationException("The approval service returned inconsistent aggregates.");
-        }
-
-        var storeStatus = result.PersistentStoreFailure is { } failure
-            ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(failure)
-            : new PersistentGrantStoreStatus.Ready();
-        return new ShellApprovalMatchResult(
-            storeStatus,
-            Array.AsReadOnly(matches));
-    }
-
-    private static bool TryApplyActorResult(
-        ShellApprovalMatchResult result,
-        IReadOnlyList<ShellPolicyCandidate> candidates,
-        string? cwd,
-        ShellCoverageSet coverage,
-        out IReadOnlyList<ToolApprovalMatch> approvalMatches)
-    {
-        approvalMatches = [];
-        if (result.PersistentStore is PersistentGrantStoreStatus.Unavailable unavailable
-            && !Enum.IsDefined(unavailable.Failure))
-        {
-            return false;
-        }
-
-        if (result.PersistentStore is not PersistentGrantStoreStatus.Ready
-            && result.PersistentStore is not PersistentGrantStoreStatus.Unavailable)
-        {
-            return false;
-        }
-
-        if (result.CandidateMatches.Count != candidates.Count)
-            return false;
-
-        var expectedIds = candidates.Select(static candidate => candidate.Id).ToHashSet();
-        var seenIds = new HashSet<ShellPolicyCandidateId>();
-        var matches = new List<ToolApprovalMatch>();
-        foreach (var candidateMatch in result.CandidateMatches)
-        {
-            if (!expectedIds.Contains(candidateMatch.CandidateId)
-                || !seenIds.Add(candidateMatch.CandidateId))
-            {
-                return false;
-            }
-
-            if (candidateMatch.Match is null)
-            {
-                if (candidateMatch.GrantCoverage is not null
-                    || candidateMatch.GrantCreatedAt is not null
-                    || candidateMatch.NearMisses.Count > 1
-                    || candidateMatch.NearMisses.Any(static nearMiss =>
-                        !Enum.IsDefined(nearMiss.Reason)))
-                {
-                    return false;
-                }
-
-                continue;
-            }
-
-            if (candidateMatch.GrantCoverage is not
-                (ShellCoverageKind.Session
-                or ShellCoverageKind.PersistentGlobal
-                or ShellCoverageKind.PersistentFolder)
-                || candidateMatch.NearMisses.Count > 0
-                || (candidateMatch.GrantCoverage == ShellCoverageKind.Session
-                    && candidateMatch.GrantCreatedAt is not null))
-            {
-                return false;
-            }
-
-            var candidate = candidates.First(item => item.Id == candidateMatch.CandidateId);
-            if (!IsConsistentActorMatch(
-                    candidate.Candidate,
-                    candidateMatch.Match,
-                    candidateMatch.GrantCoverage.Value,
-                    cwd))
-            {
-                return false;
-            }
-
-            if (result.PersistentStore is PersistentGrantStoreStatus.Unavailable
-                && candidateMatch.GrantCoverage is
-                    (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder))
-            {
-                return false;
-            }
-
-            coverage.Cover(
-                candidateMatch.CandidateId,
-                candidateMatch.GrantCoverage.Value,
-                ToPolicyReason(candidateMatch.GrantCoverage.Value));
-            matches.Add(candidateMatch.Match);
-        }
-
-        approvalMatches = Array.AsReadOnly(matches.ToArray());
-        return true;
-    }
-
-    private static bool IsConsistentActorMatch(
-        ApprovalCandidate candidate,
-        ToolApprovalMatch match,
-        ShellCoverageKind coverage,
-        string? cwd)
-    {
-        if (!string.Equals(match.Pattern, candidate.Verb, StringComparison.Ordinal))
-            return false;
-
-        if (coverage == ShellCoverageKind.Session)
-        {
-            return string.Equals(match.Source, "session", StringComparison.Ordinal)
-                   && string.Equals(match.Scope, "this chat", StringComparison.Ordinal);
-        }
-
-        if (coverage is not
-            (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)
-            || !string.Equals(match.Source, "persistent", StringComparison.Ordinal)
-            || !ApprovalEntry.TryParseScope(match.Scope, out var entry, out _)
-            || entry.Shell != candidate.Shell
-            || entry.Match is null
-            || (coverage == ShellCoverageKind.PersistentGlobal) != (entry.Directory is null))
-        {
-            return false;
-        }
-
-        return ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, [entry]);
-    }
-
     private static IReadOnlyList<ShellPolicyCandidate> GetUncoveredCandidates(
         ShellPolicyProjection projection,
         ShellCoverageSet coverage)
@@ -631,18 +421,6 @@ internal sealed class ShellPolicyCoordinator(
         _ => throw new InvalidOperationException("Invalid actor coverage kind."),
     };
 
-    private static ShellApprovalMatchResult CreateEmptyMatchResult(
-        IReadOnlyList<ShellPolicyCandidate> candidates)
-        => new(
-            new PersistentGrantStoreStatus.Ready(),
-            Array.AsReadOnly(candidates
-                .Select(static candidate => new ShellGrantCandidateMatch(
-                    candidate.Id,
-                    Match: null,
-                    GrantCoverage: null,
-                    NearMisses: []))
-                .ToArray()));
-
     private static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
         string toolName,
         ShellPolicyProjection projection,
@@ -655,17 +433,6 @@ internal sealed class ShellPolicyCoordinator(
             : ToolAuthorizationDecision.RequiresApproval(approvalContext, approvalMatches);
         return CompleteWithTrace(decision, trace);
     }
-
-    private static bool HasSameCandidateFacts(
-        ApprovalCandidate first,
-        ApprovalCandidate second) =>
-        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
-        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
-        first.Shell == second.Shell &&
-        ((first.VerbTokens is null && second.VerbTokens is null) ||
-         (first.VerbTokens is not null &&
-          second.VerbTokens is not null &&
-          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 
     private static ToolAuthorizationDecision Complete(
         ToolAccessDecision decision,
