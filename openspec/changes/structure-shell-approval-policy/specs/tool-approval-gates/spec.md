@@ -648,6 +648,12 @@ Every represented authored value SHALL resolve beneath an eligible safe root.
 Unknown or unsupported domains SHALL prevent reviewed-safe coverage. A lexical
 path shape SHALL NOT create filesystem authority.
 
+An `Exact` or `FiniteSet` ShellSyntaxTree 0.3.5
+`AuthoredNonFileSystemValue` SHALL suppress weaker path interpretations for
+that argument only. It SHALL NOT grant authority. Other arguments, redirects,
+effects, and `AuthoredFileSystemValue` facts SHALL remain independent. Unknown,
+unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
+
 #### Scenario: Reviewed diagnostic in project scope is covered
 
 - **GIVEN** `head` is reviewed safe
@@ -676,6 +682,32 @@ path shape SHALL NOT create filesystem authority.
 - **AND** its possible local-path interpretation stays beneath the safe root
 - **WHEN** all stronger shell facts pass
 - **THEN** lexical path shape alone does not reject the candidate
+
+#### Scenario: Audited tr data does not create a false path scope
+
+- **GIVEN** `tr` is a reviewed diagnostic
+- **AND** ShellSyntaxTree reports `Exact("\\n")` as authored non-filesystem data
+- **WHEN** Bash evaluates `tr -d '\n'`
+- **THEN** the lexical Windows path shape does not create a `/n` scope
+- **AND** reviewed-safe policy may cover `tr` after every other guard passes
+
+#### Scenario: Unknown command keeps path-shaped data strict
+
+- **GIVEN** an unknown command receives `\n`
+- **WHEN** no positive authored non-filesystem fact exists
+- **THEN** the lexical path interpretation remains strict
+
+#### Scenario: Unproved glob semantics stay strict
+
+- **GIVEN** Bash evaluates `tr *.txt x`
+- **AND** no positive authored non-filesystem fact exists for the glob
+- **THEN** reviewed-safe policy does not cover `tr`
+
+#### Scenario: Independent redirect remains strict
+
+- **GIVEN** Bash evaluates `tr -d '\n' > /external/out`
+- **WHEN** the data argument has a positive non-filesystem fact
+- **THEN** the output redirect still prevents reviewed-safe coverage
 
 #### Scenario: Exact path scope does not declare a safe root
 

@@ -271,6 +271,9 @@ Done when:
 - [ ] A constrained executable grammar proves any future safe `sed` form. The
   `-n` option alone is not proof because a `sed` program can write files or
   execute commands.
+- [ ] Audited ShellSyntaxTree bindings prove bounded `grep` pattern operands,
+  including escaped BRE alternation, are non-filesystem data. File-bearing
+  options and unresolved patterns remain strict.
 - [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
   explicit Bash redirect facts for the existing grammar.
 - [x] Netclaw consumes ShellSyntaxTree `0.3.0` through its corrected
@@ -291,6 +294,14 @@ Done when:
 - [ ] Netclaw consumes public ShellSyntaxTree `0.3.4` for parser-owned
   working-directory effects. The causal policy does not recognize command
   names or private executable grammar. Native platform CI remains required.
+- [x] Netclaw consumes public ShellSyntaxTree `0.3.5` for positive authored
+  non-filesystem values. Only that argument's compatibility and lexical path
+  interpretations are omitted. Other arguments, redirects, effects, dynamic
+  values, and unknown commands remain strict. The sanitized live `tr -d '\\n'`
+  loop reuses its existing `gh run view` grant without creating a `/n` scope.
+- [x] The current live mixed-read chain is complex with inline `cd`. Supplying
+  the typed working directory makes the prompt reusable and exposes only the
+  unproved `sed` and escaped-`grep` pattern candidates.
 - [x] The expanded 247-test matrix covers command-substitution and PowerShell
   execution-region behavior. Known command-owned regions reuse independently
   matched host and body grants after Netclaw accounts for the parsed body.

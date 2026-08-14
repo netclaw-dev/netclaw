@@ -118,7 +118,7 @@
 - [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
   expected results.
 
-## 7. ShellSyntaxTree 0.3.1 facts through 0.3.4
+## 7. ShellSyntaxTree 0.3.1 facts through 0.3.5
 
 - [x] 7.1 Upgrade the central package to public 0.3.2, which includes the
   0.3.1 authored-source facts and keeps same-language child shells strict.
@@ -134,6 +134,9 @@
 - [x] 7.6 Pin exact D02, D10, and D14 input-to-coverage results.
 - [x] 7.7 Upgrade to public ShellSyntaxTree 0.3.4. Consume its closed
   working-directory effect without command-name parsing.
+- [x] 7.8 Upgrade to public ShellSyntaxTree 0.3.5. Consume positive authored
+  non-filesystem values without granting authority. Preserve strict behavior
+  for unknown commands, glob semantics, redirects, and contradictory domains.
 
 ## 8. Trace, guides, and behavioral evals
 

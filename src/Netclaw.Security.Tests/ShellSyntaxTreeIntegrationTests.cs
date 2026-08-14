@@ -345,6 +345,32 @@ public sealed class ShellSyntaxTreeIntegrationTests
     }
 
     [Fact]
+    public void Tr_data_exposes_a_positive_authored_non_file_value()
+    {
+        var parser = new BashParser(new BashParserOptions
+        {
+            WorkingDirectory = "/work"
+        });
+
+        var result = parser.Parse("tr -d '\\n'");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var argument = Assert.Single(
+            Assert.Single(result.Commands).Arguments,
+            static item => item.Element.Value == "\\n");
+        Assert.Equal("'\\n'", argument.Argument.Raw);
+        Assert.False(argument.Argument.IsPath);
+        Assert.Null(argument.Argument.Resolved);
+        Assert.Equal(ShellPathShape.Windows, argument.AuthoredPathShape);
+        Assert.Equal(
+            "\\n",
+            Assert.IsType<ShellValueDomain.Exact>(
+                argument.AuthoredNonFileSystemValue).Value);
+        Assert.IsType<ShellValueDomain.Unknown>(
+            argument.AuthoredFileSystemValue);
+    }
+
+    [Fact]
     public void PowerShell_all_stream_redirect_uses_closed_source_and_file_alternatives()
     {
         var parser = new PwshParser(new PwshParserOptions

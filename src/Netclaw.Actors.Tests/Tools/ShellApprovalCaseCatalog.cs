@@ -460,6 +460,42 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["gh run view"])),
 
         Case(
+            "live-finite-run-loop-with-tr-data-reuses-gh-grant",
+            Bash(
+                "for r in 100001 100002 100003 100004 100005; do "
+                + "echo -n \"$r: \"; "
+                + "gh run view $r --json headSha,headBranch,displayTitle 2>/dev/null "
+                + "| tr -d '\\n'; echo; done"),
+            Approvals.PersistentAnywhere("gh run view"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:gh run view")),
+
+        Case(
+            "live-inline-cd-mixed-read-chain-remains-complex",
+            Bash(
+                "cd /work/netclaw-worktrees/fix-probe-timeout "
+                + "&& sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; "
+                + "echo \"=== TESTS ===\"; "
+                + "ls src/Netclaw.Daemon.Tests/ | grep -i powershell; "
+                + "grep -rn \"ProbeTimeout\\|WaitForExitAsync\" "
+                + "src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null | head"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+
+        Case(
+            "live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern",
+            Bash(
+                "sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; "
+                + "echo \"=== TESTS ===\"; "
+                + "ls src/Netclaw.Daemon.Tests/ | grep -i powershell; "
+                + "grep -rn \"ProbeTimeout\\|WaitForExitAsync\" "
+                + "src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null | head"),
+            Approvals.None,
+            ExpectedApproval.Require(["sed", "grep"])),
+
+        Case(
             "native-project-path-operand-prompts-for-unproved-verb",
             Bash("git diff install-skills.sh"),
             Approvals.None,

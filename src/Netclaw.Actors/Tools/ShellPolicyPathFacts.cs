@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Security;
 using ShellSyntaxTree;
 
@@ -64,7 +65,10 @@ internal sealed record ShellPolicyScopePathFact(
 
 internal sealed record ShellPolicyResolvedPathView(
     ShellPolicyScopePathFact ResolutionBase,
-    IReadOnlyList<ShellPolicyResolvedPathFact> Facts);
+    IReadOnlyList<ShellPolicyResolvedPathFact> Facts)
+{
+    internal bool HasUnprovedNonFileSystemSemantics { get; init; }
+}
 
 internal sealed record ShellPolicyCandidatePathFacts(
     ShellPolicyCandidateId CandidateId,
@@ -146,16 +150,21 @@ internal sealed class ShellPolicyPathFacts
 
             var real = sourceFacts?.Resolve(
                 realBase,
-                pathStyle);
+                pathStyle,
+                candidate.Candidate.Shell);
             var intent = sourceFacts is not null && intentBase is { } intentScope
                 ? sourceFacts.Resolve(
                     intentScope,
-                    pathStyle)
+                    pathStyle,
+                    candidate.Candidate.Shell)
                 : null;
             var fallbacks = sourceFacts is null
                 ? []
                 : fallbackScopes
-                    .Select(path => sourceFacts.Resolve(path, pathStyle))
+                    .Select(path => sourceFacts.Resolve(
+                        path,
+                        pathStyle,
+                        candidate.Candidate.Shell))
                     .ToArray();
 
             projected[index] = new ShellPolicyCandidatePathFacts(
@@ -209,10 +218,17 @@ internal sealed class ShellPolicyPathFacts
 internal sealed class ShellPolicyOccurrencePathFacts
 {
     private readonly IReadOnlyList<ShellPolicySourcePathFact> _facts;
+    private readonly bool _hasUnprovedNonFileSystemSemantics;
+    private readonly bool _hasUnprovedBashGlobSemantics;
 
-    private ShellPolicyOccurrencePathFacts(IReadOnlyList<ShellPolicySourcePathFact> facts)
+    private ShellPolicyOccurrencePathFacts(
+        IReadOnlyList<ShellPolicySourcePathFact> facts,
+        bool hasUnprovedNonFileSystemSemantics,
+        bool hasUnprovedBashGlobSemantics)
     {
         _facts = facts;
+        _hasUnprovedNonFileSystemSemantics = hasUnprovedNonFileSystemSemantics;
+        _hasUnprovedBashGlobSemantics = hasUnprovedBashGlobSemantics;
     }
 
     internal static ShellPolicyOccurrencePathFacts Create(CommandOccurrence occurrence)
@@ -220,9 +236,33 @@ internal sealed class ShellPolicyOccurrencePathFacts
         ArgumentNullException.ThrowIfNull(occurrence);
 
         var facts = new List<ShellPolicySourcePathFact>();
+        var hasUnprovedNonFileSystemSemantics = false;
+        var hasUnprovedBashGlobSemantics = false;
         foreach (var argument in occurrence.Arguments)
         {
-            if (argument.Argument.IsPath)
+            var hasBoundedNonFileSystemValue =
+                argument.AuthoredNonFileSystemValue is
+                    ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
+            var hasBoundedFileSystemValue =
+                argument.AuthoredFileSystemValue is
+                    ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
+            if (argument.AuthoredNonFileSystemValue is not
+                (ShellValueDomain.Unknown
+                or ShellValueDomain.Exact
+                or ShellValueDomain.FiniteSet)
+                || (hasBoundedNonFileSystemValue && hasBoundedFileSystemValue))
+            {
+                hasUnprovedNonFileSystemSemantics = true;
+            }
+
+            if (!hasBoundedNonFileSystemValue
+                && !argument.Argument.IsPath
+                && argument.Argument.Kind == ArgKind.Glob)
+            {
+                hasUnprovedBashGlobSemantics = true;
+            }
+
+            if (!hasBoundedNonFileSystemValue && argument.Argument.IsPath)
             {
                 facts.Add(CreateFact(
                     ShellPolicyPathOrigin.EffectiveArgument,
@@ -230,7 +270,9 @@ internal sealed class ShellPolicyOccurrencePathFacts
                     ShellPathShape.Unknown));
             }
 
-            if (argument.AuthoredPathShape != ShellPathShape.Unknown)
+            if (!hasBoundedNonFileSystemValue
+                && (argument.AuthoredPathShape != ShellPathShape.Unknown
+                    || argument.AuthoredValue is ShellValueDomain.PathPattern))
             {
                 facts.Add(CreateFact(
                     ShellPolicyPathOrigin.AuthoredArgument,
@@ -259,31 +301,42 @@ internal sealed class ShellPolicyOccurrencePathFacts
             });
         }
 
-        return new ShellPolicyOccurrencePathFacts(Array.AsReadOnly(facts.ToArray()));
+        return new ShellPolicyOccurrencePathFacts(
+            Array.AsReadOnly(facts.ToArray()),
+            hasUnprovedNonFileSystemSemantics,
+            hasUnprovedBashGlobSemantics);
     }
 
     internal ShellPolicyResolvedPathView Resolve(
         ShellPolicyScopePathFact resolutionBase,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        ApprovalShell? shell)
     {
         var resolved = _facts
             .Select(fact => Resolve(fact, resolutionBase.AuthoredValue, pathStyle))
             .ToArray();
         return new ShellPolicyResolvedPathView(
             resolutionBase,
-            Array.AsReadOnly(resolved));
+            Array.AsReadOnly(resolved))
+        {
+            HasUnprovedNonFileSystemSemantics =
+                _hasUnprovedNonFileSystemSemantics
+                || (shell == ApprovalShell.Bash && _hasUnprovedBashGlobSemantics)
+        };
     }
 
     internal ShellPolicyResolvedPathView Resolve(
         string? resolutionBase,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        ApprovalShell? shell)
         => Resolve(
             ShellPolicyPathFacts.ResolveScope(
                 ShellPolicyPathBaseKind.Real,
                 baseIndex: 0,
                 resolutionBase,
                 pathStyle),
-            pathStyle);
+            pathStyle,
+            shell);
 
     private static ShellPolicySourcePathFact CreateFact(
         ShellPolicyPathOrigin origin,

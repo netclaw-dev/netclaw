@@ -147,6 +147,7 @@ internal sealed class ScopedShellSafeVerbPolicy
             }
             || sourceOccurrence is null
             || HasFileWritingRedirect(resolvedPaths)
+            || HasUnprovedNonFileSystemSemantics(resolvedPaths)
             || !_safeVerbs.TryMatchReviewedDiagnostic(
                 shell,
                 candidate.VerbTokens,
@@ -290,6 +291,10 @@ internal sealed class ScopedShellSafeVerbPolicy
             }
             && ShellRedirectPolicyFacts.IsFileWritingMode(mode)) == true;
 
+    private static bool HasUnprovedNonFileSystemSemantics(
+        ShellPolicyResolvedPathView? resolvedPaths)
+        => resolvedPaths?.HasUnprovedNonFileSystemSemantics == true;
+
     private static bool AllAuthoredPathsStayWithinRoots(
         ShellPolicyResolvedPathView? resolvedPaths,
         ApprovalShell shell,
@@ -383,7 +388,7 @@ internal sealed class ScopedShellSafeVerbPolicy
             ? ShellPathStyle.Windows
             : ShellPathStyle.Posix;
         return ShellPolicyOccurrencePathFacts.Create(occurrence)
-            .Resolve(workingDirectory, pathStyle);
+            .Resolve(workingDirectory, pathStyle, shell);
     }
 
     private static bool IsSafePath(string path, string root)

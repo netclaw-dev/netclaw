@@ -516,7 +516,10 @@ public sealed class ShellPolicyEvaluationTests
             CreateCanonicalPath(@"C:\work", ShellPathStyle.Windows));
         var source = Assert.Single(
             ShellPolicyOccurrencePathFacts.Create(occurrence)
-                .Resolve(resolutionBase, ShellPathStyle.Windows)
+                .Resolve(
+                    resolutionBase,
+                    ShellPathStyle.Windows,
+                    ApprovalShell.PowerShell)
                 .Facts,
             static fact => fact.Source.Origin == ShellPolicyPathOrigin.Redirect).Source;
         var unknown = new ShellPolicyResolvedPathFact(
@@ -772,6 +775,10 @@ public sealed class ShellPolicyEvaluationTests
     [Theory]
     [InlineData("grep -f ./patterns ./data.txt", true)]
     [InlineData("du -sh ./*", true)]
+    [InlineData("tr -d '\\n'", true)]
+    [InlineData("tool -d '\\n'", false)]
+    [InlineData("tr *.txt x", false)]
+    [InlineData("tr -d '\\n' > /external/out", false)]
     [InlineData("grep -f /external/patterns ./data.txt", false)]
     [InlineData("head 'C:\\temp\\file.log'", false)]
     public async Task Reviewed_safe_real_scope_stage_uses_projected_path_facts(
@@ -804,6 +811,27 @@ public sealed class ShellPolicyEvaluationTests
                            + $"real={facts.RealScope}; "
                            + $"facts=[{string.Join(", ", facts.Real?.Facts ?? [])}]";
                 })));
+    }
+
+    [Fact]
+    public void Unproved_non_file_semantics_keep_reviewed_safe_policy_strict()
+    {
+        var (evaluation, policy, context) = CreateReviewedSafeEvaluation(
+            "tr -d '\\n'",
+            interactive: true,
+            "tr");
+        var candidate = Assert.Single(evaluation.Candidates);
+        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+        var real = Assert.IsType<ShellPolicyResolvedPathView>(facts.Real);
+        var invalid = facts with
+        {
+            Real = real with { HasUnprovedNonFileSystemSemantics = true }
+        };
+
+        Assert.False(policy.IsReviewedSafeCandidate(
+            candidate.Candidate,
+            invalid,
+            context.Invocation));
     }
 
     [Fact]
@@ -1049,7 +1077,10 @@ public sealed class ShellPolicyEvaluationTests
             CreateCanonicalPath(resolutionBase, environment.PathStyle));
 
         var facts = ShellPolicyOccurrencePathFacts.Create(occurrence)
-            .Resolve(scope, environment.PathStyle);
+            .Resolve(
+                scope,
+                environment.PathStyle,
+                windowsStyle ? ApprovalShell.PowerShell : ApprovalShell.Bash);
 
         Assert.Contains(
             facts.Facts,
@@ -1132,7 +1163,10 @@ public sealed class ShellPolicyEvaluationTests
             ShellPolicyPathResolutionState.Known,
             CreateCanonicalPath(@"C:\work", ShellPathStyle.Windows));
 
-        var resolved = source.Resolve(realScope, ShellPathStyle.Windows);
+        var resolved = source.Resolve(
+            realScope,
+            ShellPathStyle.Windows,
+            ApprovalShell.PowerShell);
 
         Assert.Contains(
             resolved.Facts,
@@ -1158,7 +1192,10 @@ public sealed class ShellPolicyEvaluationTests
             ShellPolicyPathResolutionState.Known,
             CreateCanonicalPath("/work", ShellPathStyle.Posix));
 
-        var resolved = source.Resolve(realScope, ShellPathStyle.Posix);
+        var resolved = source.Resolve(
+            realScope,
+            ShellPathStyle.Posix,
+            ApprovalShell.Bash);
         var redirect = Assert.Single(
             resolved.Facts,
             static fact => fact.Source.Origin == ShellPolicyPathOrigin.Redirect);

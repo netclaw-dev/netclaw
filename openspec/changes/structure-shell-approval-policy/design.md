@@ -337,7 +337,7 @@ filesystem resolution. This rule applies to both execution and the eligibility
 probe. An invalid path returns a bounded error and cannot enter model history,
 child scope, or project-instruction lookup as a successful declaration.
 
-### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.4 explicitly
+### 7. Consume ShellSyntaxTree 0.3.1 facts through 0.3.5 explicitly
 
 Netclaw uses effective `AnalyzedArgument.Value` for runtime-sensitive checks.
 It may use `AuthoredValue` for approval matching only after the maintainer
@@ -355,6 +355,13 @@ does not infer the role from an executable's private grammar.
 ShellSyntaxTree 0.3.4 publishes each occurrence's working-directory effect.
 The causal projection consumes this closed fact directly. It never parses a
 directory command name, alias, option, or operand.
+
+ShellSyntaxTree 0.3.5 publishes positive authored non-filesystem values for
+audited Bash operands. Netclaw accepts only `Exact` and `FiniteSet`. A positive
+fact suppresses weaker path guesses for that argument only. It does not grant
+authority. Other arguments, redirects, effects, and strong filesystem facts
+remain independent. Unknown, unsupported, or contradictory domains remain
+strict.
 
 `AuthoredPathShape` is lexical shape only. It may make review stricter, but it
 never establishes that an executable treats an argument as a filesystem
