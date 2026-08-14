@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "fixtureDefaults": {
     "toolName": "shell_execute",
     "audience": "Personal",
@@ -412,6 +412,7 @@
   ],
   "liveRegressionCases": [
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S18",
       "classification": "NetclawPolicyDebt",
       "targetOutcome": "Allow",
@@ -429,6 +430,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S22",
       "classification": "NetclawPolicyDebt",
       "targetOutcome": "Allow",
@@ -446,6 +448,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S40",
       "classification": "NetclawPolicyDebt",
       "targetOutcome": "Allow",
@@ -463,6 +466,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S16",
       "classification": "AgentAlignmentDebt",
       "targetOutcome": "RequiresApproval",
@@ -480,6 +484,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S11",
       "classification": "AgentAlignmentDebt",
       "targetOutcome": "RequiresApproval",
@@ -497,6 +502,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S10",
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
@@ -514,6 +520,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S24",
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
@@ -531,6 +538,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S20",
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
@@ -548,6 +556,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S13",
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
@@ -565,6 +574,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S21",
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
@@ -582,6 +592,7 @@
       }
     },
     {
+      "sourceEvidenceFile": "post-1925-extended-approval-harvest.json",
       "sourceEvidenceId": "S44",
       "classification": "NetclawPolicyDebt",
       "targetOutcome": "Allow",
@@ -596,6 +607,321 @@
         "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
         "useBundledSafeCatalog": true,
         "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T01",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L12", "category": "RemoteCloneIntoSharedTemp",
+        "command": "mkdir -p /tmp/review-workspace; cd /tmp/review-workspace; git clone --depth 1 https://service.example.invalid/example/project.git",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T02",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L13", "category": "SharedTempLoopInspection",
+        "command": "cd /tmp/review-workspace; for project in project-a project-b; do ls -la \"$project\" | head; done",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T03",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L14", "category": "RemoteGitFetch",
+        "command": "cd /work/project; git remote -v; git fetch origin; git fetch upstream",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T04",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L15", "category": "SharedTempFindInspection",
+        "command": "cd /tmp/review-workspace; find project-a/src -type f -name '*.fs' | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T05",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L16", "category": "ContinueGitRebase",
+        "command": "cd /work/project-worktree; grep -rn 'ConflictMarker' src; git add -A; git rebase --continue",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T06",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L17", "category": "SharedTempDiffArtifacts",
+        "command": "cd /work/project-worktree; git diff --name-only origin/dev...HEAD | sort > /tmp/old-files; git diff --name-only origin/dev...feature/example | sort > /tmp/new-files; comm /tmp/old-files /tmp/new-files",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T07",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L18", "category": "InlineProjectListInspection",
+        "command": "cd /projects/project-worktree; ls src/*Tests*; ls src | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work/current", "projectDirectory": "/work/current", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T08",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L19", "category": "DynamicKnownFileInspection",
+        "command": "cd /work/project-worktree; file=$(find src -name 'KnownFile.cs' | head -1); grep -n -A 22 'KnownSymbol' \"$file\" | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T09",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L20", "category": "ShellHttpInlineInterpreter",
+        "command": "curl -s https://api.github.com/repos/example/project | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"name\"))'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["curl", "python3"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T10",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L21", "category": "InlineProjectHistoryInspection",
+        "command": "cd /projects/project; git log --oneline -15; git log --all --oneline | grep 'Marker'; grep -ri 'Marker' services",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work/current", "projectDirectory": "/work/current", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T11",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L22", "category": "SessionArtifactInlineInterpreter",
+        "command": "cd /session; python3 -c 'import json; print(json.load(open(\"response.json\"))[\"status\"])'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T12",
+      "classification": "ShellSyntaxTreeFactGap",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L23", "category": "DefaultGetGhApiPair",
+        "command": "gh api repos/example/project/commits --jq '.[].sha'; gh api repos/example/project/issues --jq '.[].number'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["gh api"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T13",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L24", "category": "ExternalCliExternalTempRedirect",
+        "command": "external-crm deals list --status won --json > /external-temp/records.json 2> /external-temp/records.err; jq 'length' /external-temp/records.json",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["external-crm deals list", "jq"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T14",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L25", "category": "RemoteSshInspection",
+        "command": "ssh -o ConnectTimeout=6 -o BatchMode=yes service.example.invalid 'uname -a' | head",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["ssh"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T15",
+      "classification": "ShellSyntaxTreeFactGap",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L26", "category": "StaticArithmeticEcho",
+        "command": "echo 'DELTA'; echo $((current - baseline)); echo 'REMAINING'; echo $((target - current))",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T16",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L27", "category": "MultiProjectDynamicLoop",
+        "command": "for repository in /projects/project-a /projects/project-b; do git -C \"$repository\" remote -v; git -C \"$repository\" branch --show-current; done",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work/current", "projectDirectory": "/work/current", "sessionDirectory": "/session",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T17",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L28", "category": "ExternalPackageCacheRead",
+        "command": "grep -rn 'PackageMarker' /work/project/src; grep -rn 'ApiMarker' /opt/packages; ls /opt/packages | grep 'example'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["grep", "ls"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T18",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L29", "category": "DockerComposeAndGitDiff",
+        "command": "cd /work/project-worktree; docker compose -f service.yml config -q; git diff --stat; git diff",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T19",
+      "classification": "AgentAlignmentDebt",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L30", "category": "CompoundKnownFileInspection",
+        "command": "cd /work/project; sed -n '40,80p' scripts/build.sh; grep -n 'TimeoutMarker' related/scripts; git show HEAD~1:scripts/build.sh | grep 'TimeoutMarker'",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T20",
+      "classification": "ExpectedApproval",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L31", "category": "RuntimeBuildLoop",
+        "command": "for run in $(seq 1 8); do dotnet test --filter 'Category=Focused'; if echo \"$output\" | grep -q FAIL; then inspect; break; fi; done",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": [], "isMessy": true, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
+      }
+    },
+    {
+      "sourceEvidenceFile": "post-1952-live-approval-harvest.json",
+      "sourceEvidenceId": "T21",
+      "classification": "ShellSyntaxTreeFactGap",
+      "targetOutcome": "RequiresApproval",
+      "policyCase": {
+        "id": "L32", "category": "PaginatedGetGhApi",
+        "command": "gh api repos/example/project/labels --paginate --jq '.[].name' | sort",
+        "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
+        "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
+        "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
+        "useBundledSafeCatalog": true,
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["gh api", "sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
       }
     }
   ],

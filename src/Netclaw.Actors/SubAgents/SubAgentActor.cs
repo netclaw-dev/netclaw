@@ -372,9 +372,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User,
                 BuildUserMessage(
                     msg.RuntimeContext,
-                    subAgentAudience == TrustAudience.Public
-                        ? string.Empty
-                        : msg.Scope.InitialWorkingSnapshot.ToContextBlock(),
+                    BuildModelContext(
+                        msg.Scope.InitialWorkingSnapshot,
+                        subAgentAudience,
+                        ToolExecutionContext.SessionDirectory),
                     msg.Task)));
 
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
@@ -1031,6 +1032,27 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             return task;
 
         return $"Context:\n{combinedContext}\n\nTask:\n{task}";
+    }
+
+    private static string BuildModelContext(
+        WorkingContextSnapshot snapshot,
+        TrustAudience audience,
+        string? sessionDirectory)
+    {
+        if (audience == TrustAudience.Public)
+            return string.Empty;
+
+        var workingContext = snapshot.ToContextBlock();
+        var sessionContext = string.IsNullOrWhiteSpace(sessionDirectory)
+                             || sessionDirectory.Any(char.IsControl)
+            ? string.Empty
+            : $"[session]\nsession_dir: {sessionDirectory}\n"
+              + "For disposable shell work, always set WorkingDirectory to session_dir unless the task explicitly requires another directory.";
+
+        return string.Join(
+            "\n\n",
+            new[] { workingContext, sessionContext }
+                .Where(part => !string.IsNullOrWhiteSpace(part)));
     }
 
     private WorkingContextDelta? BuildWorkingContextResult(bool success)

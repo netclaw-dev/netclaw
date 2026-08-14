@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -21,8 +22,11 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string PostMergeHarvestFile = "post-1890-approval-harvest.json";
     private const string PostSwapHarvestFile = "post-1925-binary-swap-approval-harvest.json";
     private const string ExtendedPostSwapHarvestFile = "post-1925-extended-approval-harvest.json";
+    private const string Post1952HarvestFile = "post-1952-live-approval-harvest.json";
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
+    private const string LiveRegressionCasesSha256 =
+        "684b89f8e01f6abc8d4b9cff49c1e1ab16d3df9cd6aaf028e2aa0822509c421a";
 
     [Fact]
     public void Approval_matrix_matches_the_locked_cross_repository_artifact()
@@ -54,7 +58,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
         var fixtures = DeserializeFixtures(File.ReadAllBytes(EvidencePath(PolicyFixturesFile)));
         var commands = matrix.Cases.ToDictionary(item => item.Id, item => item.Command);
 
-        Assert.Equal(2, fixtures.SchemaVersion);
+        Assert.Equal(3, fixtures.SchemaVersion);
         Assert.Equal("shell_execute", fixtures.FixtureDefaults.ToolName);
         Assert.Equal("Personal", fixtures.FixtureDefaults.Audience);
         Assert.Equal("Approval", fixtures.FixtureDefaults.ApprovalMode);
@@ -66,31 +70,53 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Equal("/work", fixtures.FixtureDefaults.ProjectDirectory);
         Assert.Null(fixtures.FixtureDefaults.InheritedWorkingDirectory);
         Assert.Equal(10, fixtures.Cases.Count);
-        var sourceEvidence = new[] { PostSwapHarvestFile, ExtendedPostSwapHarvestFile }
-            .SelectMany(file => JsonSerializer.Deserialize(
-                                    File.ReadAllBytes(EvidencePath(file)),
-                                    ShellApprovalEvidenceJsonContext.Default.PostMergeApprovalHarvest)!
-                                .Cases)
-            .ToDictionary(item => item.Id);
+        var sourceEvidence = LoadLiveRegressionEvidence();
         Assert.Equal(
-            Enumerable.Range(1, 11).Select(number => $"L{number:00}"),
+            Enumerable.Range(1, 32).Select(number => $"L{number:00}"),
             fixtures.LiveRegressionCases.Select(item => item.PolicyCase.Id));
         Assert.Equal(
-            ["S18", "S22", "S40", "S16", "S11", "S10", "S24", "S20", "S13", "S21", "S44"],
+            new[] { "S18", "S22", "S40", "S16", "S11", "S10", "S24", "S20", "S13", "S21", "S44" }
+                .Concat(Enumerable.Range(1, 21).Select(number => $"T{number:00}")),
             fixtures.LiveRegressionCases.Select(item => item.SourceEvidenceId));
+        Assert.Equal(
+            fixtures.LiveRegressionCases.Count,
+            fixtures.LiveRegressionCases
+                .Select(item => (item.SourceEvidenceFile, item.SourceEvidenceId))
+                .Distinct()
+                .Count());
         Assert.All(fixtures.LiveRegressionCases, item =>
         {
             Assert.Contains(
                 item.Classification,
-                new[] { "ExpectedApproval", "AgentAlignmentDebt", "NetclawPolicyDebt" });
+                new[]
+                {
+                    "ExpectedApproval",
+                    "AgentAlignmentDebt",
+                    "NetclawPolicyDebt",
+                    "ShellSyntaxTreeFactGap"
+                });
             Assert.Contains(item.TargetOutcome, new[] { "Allow", "RequiresApproval" });
             Assert.Equal(item.TargetOutcome, item.PolicyCase.Expected.Outcome);
-            Assert.Equal(sourceEvidence[item.SourceEvidenceId].Classification, item.Classification);
+            var sourceKey = (item.SourceEvidenceFile, item.SourceEvidenceId);
+            Assert.True(sourceEvidence.TryGetValue(sourceKey, out var sourceCase));
+            Assert.Equal(sourceCase.Classification, item.Classification);
         });
         Assert.Equal(4, fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "Allow"));
         Assert.Equal(
-            7,
+            28,
             fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresApproval"));
+        var post1952Cases = fixtures.LiveRegressionCases
+            .Where(item => item.SourceEvidenceFile == Post1952HarvestFile)
+            .ToList();
+        Assert.Equal(21, post1952Cases.Count);
+        Assert.All(post1952Cases, item =>
+        {
+            Assert.Equal("RequiresApproval", item.TargetOutcome);
+            Assert.DoesNotMatch("<[^>]+>", item.PolicyCase.Command);
+        });
+        Assert.Equal(8, post1952Cases.Count(item => item.Classification == "ExpectedApproval"));
+        Assert.Equal(10, post1952Cases.Count(item => item.Classification == "AgentAlignmentDebt"));
+        Assert.Equal(3, post1952Cases.Count(item => item.Classification == "ShellSyntaxTreeFactGap"));
         Assert.Equal(
             Enumerable.Range(1, 12).Select(number => $"A{number:00}"),
             fixtures.AdversarialCases.Select(item => item.Id));
@@ -135,12 +161,109 @@ public sealed partial class ShellApprovalEvidenceContractTests
     }
 
     [Fact]
+    public void Live_regression_evidence_section_matches_locked_digest()
+    {
+        var bytes = File.ReadAllBytes(EvidencePath(PolicyFixturesFile));
+
+        Assert.Equal(LiveRegressionCasesSha256, ComputeLiveRegressionDigest(bytes));
+    }
+
+    [Theory]
+    [InlineData("\"sourceEvidenceId\": \"T01\"", "\"sourceEvidenceId\": \"T99\"")]
+    [InlineData("\"classification\": \"ExpectedApproval\"", "\"classification\": \"Changed\"")]
+    [InlineData("mkdir -p /tmp/review-workspace", "mkdir -p /tmp/changed-workspace")]
+    [InlineData("\"targetOutcome\": \"RequiresApproval\"", "\"targetOutcome\": \"Allow\"")]
+    [InlineData("\"approvalCandidates\": []", "\"approvalCandidates\": [\"unexpected\"]")]
+    [InlineData("\"denyReason\": null, \"approvalCandidates\"", "\"denyReason\": null, \"agentCorrection\": \"ChangedCorrection\", \"approvalCandidates\"")]
+    [InlineData("\"actorCheckCount\": 0", "\"actorCheckCount\": 7")]
+    public void Live_regression_digest_detects_security_significant_mutation(
+        string original,
+        string replacement)
+    {
+        var json = File.ReadAllText(EvidencePath(PolicyFixturesFile));
+        var mutated = json.Replace(original, replacement, StringComparison.Ordinal);
+
+        Assert.NotEqual(json, mutated);
+        Assert.NotEqual(
+            ComputeLiveRegressionDigest(Encoding.UTF8.GetBytes(json)),
+            ComputeLiveRegressionDigest(Encoding.UTF8.GetBytes(mutated)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Live_regression_digest_detects_linked_source_mutation(bool mutateCommandShape)
+    {
+        var fixtureBytes = File.ReadAllBytes(EvidencePath(PolicyFixturesFile));
+        var sourceEvidence = LoadLiveRegressionEvidence().ToDictionary();
+        var sourceKey = (File: Post1952HarvestFile, Id: "T01");
+        var sourceCase = sourceEvidence[sourceKey];
+        sourceEvidence[sourceKey] = mutateCommandShape
+            ? sourceCase with { CommandShape = "changed source shape" }
+            : sourceCase with { Classification = "ChangedClassification" };
+
+        Assert.NotEqual(
+            ComputeLiveRegressionDigest(fixtureBytes),
+            ComputeLiveRegressionDigest(fixtureBytes, sourceEvidence));
+    }
+
+    private static IReadOnlyDictionary<(string File, string Id), PostMergeApprovalCase>
+        LoadLiveRegressionEvidence()
+    {
+        string[] evidenceFiles =
+        [
+            PostSwapHarvestFile,
+            ExtendedPostSwapHarvestFile,
+            Post1952HarvestFile
+        ];
+
+        return evidenceFiles
+            .SelectMany(file => JsonSerializer.Deserialize(
+                                    File.ReadAllBytes(EvidencePath(file)),
+                                    ShellApprovalEvidenceJsonContext.Default.PostMergeApprovalHarvest)!
+                                .Cases
+                                .Select(item => (Key: (File: file, Id: item.Id), Case: item)))
+            .ToDictionary(item => item.Key, item => item.Case);
+    }
+
+    private static string ComputeLiveRegressionDigest(byte[] fixtureBytes)
+        => ComputeLiveRegressionDigest(fixtureBytes, LoadLiveRegressionEvidence());
+
+    private static string ComputeLiveRegressionDigest(
+        byte[] fixtureBytes,
+        IReadOnlyDictionary<(string File, string Id), PostMergeApprovalCase> sourceEvidence)
+    {
+        using var document = JsonDocument.Parse(fixtureBytes);
+        var liveCasesJson = document.RootElement.GetProperty("liveRegressionCases").GetRawText();
+        var fixtures = DeserializeFixtures(fixtureBytes);
+        var lockedEvidence = new StringBuilder(liveCasesJson);
+        foreach (var item in fixtures.LiveRegressionCases)
+        {
+            var sourceKey = (item.SourceEvidenceFile, item.SourceEvidenceId);
+            if (!sourceEvidence.TryGetValue(sourceKey, out var sourceCase))
+            {
+                lockedEvidence.Append("\nmissing:").Append(item.SourceEvidenceFile)
+                    .Append(':').Append(item.SourceEvidenceId);
+                continue;
+            }
+
+            lockedEvidence.Append('\n').Append(sourceCase.CommandShape.Length).Append(':')
+                .Append(sourceCase.CommandShape).Append('\n')
+                .Append(sourceCase.Classification.Length).Append(':')
+                .Append(sourceCase.Classification);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lockedEvidence.ToString())))
+            .ToLowerInvariant();
+    }
+
+    [Fact]
     public void Policy_fixture_schema_rejects_unknown_members()
     {
         var json = File.ReadAllText(EvidencePath(PolicyFixturesFile));
         var malformed = json.Replace(
-            "\"schemaVersion\": 2,",
-            "\"schemaVersion\": 2, \"unexpected\": true,",
+            "\"schemaVersion\": 3,",
+            "\"schemaVersion\": 3, \"unexpected\": true,",
             StringComparison.Ordinal);
 
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(
@@ -438,6 +561,46 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.DoesNotContain(
             harvest.Cases,
             item => item.Classification == "ShellSyntaxTreeFactGap");
+        Assert.All(harvest.Cases, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.CommandShape));
+            Assert.False(string.IsNullOrWhiteSpace(item.Reason));
+        });
+    }
+
+    [Fact]
+    public void Post_1952_harvest_samples_every_live_approval_bucket()
+    {
+        var harvest = JsonSerializer.Deserialize(
+                          File.ReadAllBytes(EvidencePath(Post1952HarvestFile)),
+                          ShellApprovalEvidenceJsonContext.Default.PostMergeApprovalHarvest)
+                      ?? throw new InvalidDataException(
+                          $"{Post1952HarvestFile} has no root object.");
+
+        Assert.Equal(1, harvest.SchemaVersion);
+        Assert.Equal("0.26.0", harvest.SourceRuntime.Version);
+        Assert.Equal("b45bf8d", harvest.SourceRuntime.Commit);
+        Assert.Equal(285, harvest.SourceRuntime.ShellCallCount);
+        Assert.Equal(69, harvest.SourceRuntime.ApprovalPromptCount);
+        Assert.Equal(
+            Enumerable.Range(1, 21).Select(number => $"T{number:00}"),
+            harvest.Cases.Select(item => item.Id));
+        Assert.Equal(
+            harvest.Cases.Select(item => item.SourcePromptTimeUtc).Order(),
+            harvest.Cases.Select(item => item.SourcePromptTimeUtc));
+        Assert.All(harvest.Cases, item =>
+        {
+            Assert.InRange(
+                item.SourcePromptTimeUtc,
+                DateTimeOffset.Parse(harvest.SourceRuntime.WindowStartUtc),
+                DateTimeOffset.Parse(harvest.SourceRuntime.WindowEndUtc));
+        });
+        Assert.Equal(8, harvest.Cases.Count(item => item.Classification == "ExpectedApproval"));
+        Assert.Equal(10, harvest.Cases.Count(item => item.Classification == "AgentAlignmentDebt"));
+        Assert.Equal(3, harvest.Cases.Count(item => item.Classification == "ShellSyntaxTreeFactGap"));
+        Assert.DoesNotContain(
+            harvest.Cases,
+            item => item.Classification == "NetclawPolicyDebt");
         Assert.All(harvest.Cases, item =>
         {
             Assert.False(string.IsNullOrWhiteSpace(item.CommandShape));

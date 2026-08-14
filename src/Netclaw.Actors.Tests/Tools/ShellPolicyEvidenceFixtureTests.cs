@@ -94,8 +94,12 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         }
     }
 
-    [Fact]
-    public async Task Live_regression_fixtures_pin_current_policy_outcomes()
+    public static TheoryData<string> LiveRegressionCaseIds => new(
+        Enumerable.Range(1, 32).Select(number => $"L{number:00}"));
+
+    [Theory]
+    [MemberData(nameof(LiveRegressionCaseIds))]
+    public async Task Live_regression_fixtures_pin_current_policy_outcomes(string caseId)
     {
         var catalog = JsonSerializer.Deserialize(
                           File.ReadAllBytes(EvidencePath()),
@@ -105,10 +109,10 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             catalog.FixtureDefaults.ClockUtc,
             CultureInfo.InvariantCulture));
 
-        foreach (var liveCase in catalog.LiveRegressionCases)
-        {
-            await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
-        }
+        var liveCase = Assert.Single(
+            catalog.LiveRegressionCases,
+            item => item.PolicyCase.Id == caseId);
+        await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
     }
 
     private async Task AssertPolicyCaseAsync(
@@ -140,6 +144,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             + $"deny={decision.DenyReason}; "
             + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
             + $"messy={decision.ApprovalContext?.IsMessy}; "
+            + $"correction={decision.ApprovalContext?.AgentCorrection?.GetType().Name}; "
             + $"checks={harness.ApprovalService.CheckCount}; "
             + $"allow={decision.AllowReason}; "
             + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
@@ -147,6 +152,9 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
         Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
         Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
+        Assert.Equal(
+            policyCase.Expected.AgentCorrection,
+            decision.ApprovalContext?.AgentCorrection?.GetType().Name);
         Assert.Equal(policyCase.Expected.ApprovalCandidates, decision.ApprovalContext?.CandidateVerbs);
         Assert.Equal(policyCase.Expected.IsMessy, decision.ApprovalContext?.IsMessy);
         Assert.Equal(
@@ -312,20 +320,28 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             _ => throw new InvalidDataException($"Unsupported fixture environment: {policyCase.Id}.")
         };
 
-        var expectedWorkingDirectory = host == ShellApprovalHost.Bash
-            ? "/work"
-            : @"C:\work";
+        var pathStyle = host == ShellApprovalHost.Bash
+            ? ShellPathStyle.Posix
+            : ShellPathStyle.Windows;
         if (!string.Equals(
                 policyCase.InitialWorkingDirectory,
-                expectedWorkingDirectory,
-                StringComparison.Ordinal)
-            || !string.Equals(
                 policyCase.ProjectDirectory,
-                expectedWorkingDirectory,
                 StringComparison.Ordinal)
+            || !CanonicalShellPath.TryCreate(
+                policyCase.ProjectDirectory,
+                pathStyle,
+                out var normalizedProjectDirectory)
             || !string.Equals(
+                normalizedProjectDirectory.Value,
+                policyCase.ProjectDirectory,
+                StringComparison.Ordinal)
+            || !CanonicalShellPath.TryCreate(
                 policyCase.SessionDirectory,
-                expectedWorkingDirectory,
+                pathStyle,
+                out var normalizedSessionDirectory)
+            || !string.Equals(
+                normalizedSessionDirectory.Value,
+                policyCase.SessionDirectory,
                 StringComparison.Ordinal))
         {
             throw new InvalidDataException($"Unsupported fixture scope: {policyCase.Id}.");

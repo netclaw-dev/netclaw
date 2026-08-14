@@ -576,10 +576,12 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Approval_gated_tool_without_bridge_fails_subagent_without_executing_tool()
+    public async Task Session_scratch_context_does_not_authorize_headless_prompt_worthy_shell()
     {
+        using var netclawHome = new DisposableTempDir();
+        var sessionDirectory = Path.Combine(netclawHome.Path, "sessions", "example");
         var fakeTool = new FakeNetclawTool("shell_execute", "should not run");
-        var policy = CreateApprovalRequiredPolicy();
+        var policy = CreateApprovalRequiredPolicy(netclawHome.Path);
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
@@ -593,12 +595,18 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) },
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(sessionDirectory: sessionDirectory),
+                Task = "Try the shell tool",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.False(fakeTool.WasCalled);
         Assert.Contains("approval bridge", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"session_dir: {sessionDirectory}", fakeClient.LastReceivedMessages![1].Text);
     }
 
     [Fact]
@@ -749,6 +757,7 @@ public class SubAgentActorTests : TestKit
         const string declarationCallId = "call-project-scope-declare";
         const string retryCallId = "call-project-scope-retry";
         const string projectGuidance = "Project instructions: use the local test conventions.";
+        const string sessionDirectory = "/home/user/.netclaw/sessions/project-scope-child";
         var worktree = Path.GetFullPath(AppContext.BaseDirectory);
         var shell = new FakeNetclawTool(ShellTool.ToolName, "inspected");
         var setWorkingDirectory = new SetWorkingDirectoryTool(
@@ -775,7 +784,9 @@ public class SubAgentActorTests : TestKit
         var result = await actor.Ask<SubAgentResult>(
             new RunSubAgent
             {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
+                Scope = SubAgentTestScope.Create(
+                    sessionDirectory: sessionDirectory,
+                    approvalBridge: approvalBridge),
                 Task = "Declare the project and retry the exact inspection.",
                 Timeout = TimeSpan.FromSeconds(5)
             },
@@ -787,6 +798,13 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(0, approvalBridge?.RequestCount ?? 0);
         Assert.Contains(
             projectGuidance,
+            client.LastReceivedMessages!.Single(message => message.Role == ChatRole.System).Text,
+            StringComparison.Ordinal);
+        Assert.Single(
+            client.LastReceivedMessages!,
+            message => message.Text.Contains($"session_dir: {sessionDirectory}", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            sessionDirectory,
             client.LastReceivedMessages!.Single(message => message.Role == ChatRole.System).Text,
             StringComparison.Ordinal);
 
@@ -1244,7 +1262,7 @@ public class SubAgentActorTests : TestKit
         new ShellCommandPolicy(),
         new ToolPathPolicy([]));
 
-    private static ToolAccessPolicy CreateApprovalRequiredPolicy()
+    private static ToolAccessPolicy CreateApprovalRequiredPolicy(string? netclawHome = null)
     {
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -1262,7 +1280,10 @@ public class SubAgentActorTests : TestKit
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
             new ShellCommandPolicy(),
-            new ToolPathPolicy([]));
+            new ToolPathPolicy([]),
+            shellTrustZonePolicy: netclawHome is null
+                ? null
+                : new ShellTrustZonePolicy(toolConfig, new NetclawPaths(netclawHome)));
     }
 
     private static ToolAccessPolicy CreateScratchCorrectionPolicy()
@@ -1821,6 +1842,101 @@ public class SubAgentActorTests : TestKit
         Assert.Contains("Workspace is netclaw on branch feature/foo.", userText);
         Assert.Contains("Task:", userText);
         Assert.Contains("Summarize the recent commits.", userText);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    public async Task Eligible_subagent_context_announces_exact_private_session_scratch(
+        TrustAudience audience)
+    {
+        const string sessionDirectory = "/home/user/.netclaw/sessions/example";
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition(),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    audience: audience,
+                    sessionDirectory: sessionDirectory),
+                Task = "Create a disposable diagnostic artifact.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        var userMessage = fakeClient.LastReceivedMessages![1].Text;
+        Assert.Contains("[session]", userMessage);
+        Assert.Contains($"session_dir: {sessionDirectory}", userMessage);
+        Assert.Contains("For disposable shell work, always set WorkingDirectory to session_dir", userMessage);
+        Assert.Contains("explicitly requires another directory", userMessage);
+        Assert.DoesNotContain(sessionDirectory, fakeClient.LastReceivedMessages[0].Text);
+    }
+
+    [Fact]
+    public async Task Public_subagent_context_does_not_disclose_private_session_scratch()
+    {
+        const string sessionDirectory = "/home/user/.netclaw/sessions/private";
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition(),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    audience: TrustAudience.Public,
+                    sessionDirectory: sessionDirectory),
+                Task = "Create a disposable diagnostic artifact.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        var messages = Assert.IsAssignableFrom<IReadOnlyList<ChatMessage>>(
+            fakeClient.LastReceivedMessages);
+        Assert.DoesNotContain(
+            sessionDirectory,
+            string.Join("\n", messages.Select(message => message.Text)));
+        Assert.DoesNotContain("session_dir", messages[1].Text);
+        Assert.Equal("Create a disposable diagnostic artifact.", messages[1].Text);
+    }
+
+    [Theory]
+    [InlineData("\0")]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    public async Task Control_bearing_session_scratch_is_not_added_to_subagent_context(
+        string controlCharacter)
+    {
+        var sessionDirectory = $"/home/user/.netclaw/sessions/bad{controlCharacter}prompt";
+        var fakeClient = new FakeChatClient();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition(),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(sessionDirectory: sessionDirectory),
+                Task = "Create a disposable diagnostic artifact.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain("session_dir", fakeClient.LastReceivedMessages![1].Text);
+        Assert.DoesNotContain(sessionDirectory, fakeClient.LastReceivedMessages[1].Text);
     }
 
     [Fact]
