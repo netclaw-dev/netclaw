@@ -991,6 +991,52 @@ public sealed class ShellPolicyEvaluationTests
                     && fact.Paths.Any(path => path.Value == "/work/README.md"));
     }
 
+    [Theory]
+    [InlineData(false, "head /external/file.log", "/work", "/external/file.log")]
+    [InlineData(true, @"Get-Content C:\external\file.log", @"C:\work", @"C:\external\file.log")]
+    public void Path_facts_do_not_rebase_absolute_paths_beneath_the_resolution_base(
+        bool windowsStyle,
+        string command,
+        string resolutionBase,
+        string expected)
+    {
+        var environment = windowsStyle
+            ? ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7)
+            : ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var occurrence = Assert.Single(
+            new ShellCommandPolicy(environment).Analyze(command, resolutionBase).Commands);
+        var scope = new ShellPolicyScopePathFact(
+            ShellPolicyPathBaseKind.Real,
+            BaseIndex: 0,
+            resolutionBase,
+            ShellPolicyPathResolutionState.Known,
+            CreateCanonicalPath(resolutionBase, environment.PathStyle));
+
+        var facts = ShellPolicyOccurrencePathFacts.Create(occurrence)
+            .Resolve(scope, environment.PathStyle);
+
+        Assert.Contains(
+            facts.Facts,
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
+                    && fact.State == ShellPolicyPathResolutionState.Known
+                    && fact.Paths.Any(path => path.Value == expected));
+    }
+
+    [Theory]
+    [InlineData(@"\external\file.log")]
+    [InlineData(@"D:file.log")]
+    [InlineData(@"FileSystem::C:\external\file.log")]
+    public void Path_facts_keep_ambiguous_windows_root_forms_strict(string value)
+    {
+        Assert.False(ShellPolicyOccurrencePathFacts.TryResolveCanonicalPath(
+            value,
+            @"C:\work",
+            ShellPathStyle.Windows,
+            out _));
+    }
+
     [Fact]
     public void Path_facts_keep_candidate_scope_separate_from_the_command_base()
     {

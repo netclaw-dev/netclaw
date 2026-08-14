@@ -32,21 +32,7 @@ internal readonly record struct CanonicalShellPath
             return false;
         }
 
-        var isAbsolute = pathStyle switch
-        {
-            ShellPathStyle.Posix => value[0] == '/',
-            ShellPathStyle.Windows => value.StartsWith("\\\\", StringComparison.Ordinal)
-                                      || value.Length >= 3
-                                      && char.IsAsciiLetter(value[0])
-                                      && value[1] == ':'
-                                      && value[2] is '\\' or '/',
-            _ => false
-        };
-        if (!isAbsolute)
-            return false;
-
-        var normalized = ShellTokenizer.NormalizePathToken(value, null, pathStyle);
-        if (string.IsNullOrWhiteSpace(normalized))
+        if (!ShellPathRules.TryNormalize(value, pathStyle, out var normalized))
             return false;
 
         path = new CanonicalShellPath(normalized, pathStyle);

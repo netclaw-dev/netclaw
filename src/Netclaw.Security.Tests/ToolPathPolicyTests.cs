@@ -17,11 +17,25 @@ public sealed class ToolPathPolicyTests
     [InlineData("/work/line\nbreak", ShellPathStyle.Posix)]
     [InlineData("relative\\path", ShellPathStyle.Windows)]
     [InlineData("C:\\work\\line\nbreak", ShellPathStyle.Windows)]
+    [InlineData(@"C:\work", (ShellPathStyle)999)]
     public void Canonical_shell_path_rejects_invalid_values(
         string path,
         ShellPathStyle pathStyle)
     {
         Assert.False(CanonicalShellPath.TryCreate(path, pathStyle, out _));
+    }
+
+    [Theory]
+    [InlineData("/work/../external/file.txt", ShellPathStyle.Posix, "/external/file.txt")]
+    [InlineData(@"C:\work\..\external\file.txt", ShellPathStyle.Windows, @"C:\external\file.txt")]
+    [InlineData(@"\\server\share\work\..\file.txt", ShellPathStyle.Windows, @"\\server\share\file.txt")]
+    public void Canonical_shell_path_uses_declared_style_on_every_host(
+        string value,
+        ShellPathStyle pathStyle,
+        string expected)
+    {
+        Assert.True(CanonicalShellPath.TryCreate(value, pathStyle, out var path));
+        Assert.Equal(expected, path.Value);
     }
 
     [Fact]

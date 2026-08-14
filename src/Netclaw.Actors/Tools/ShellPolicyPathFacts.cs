@@ -368,7 +368,7 @@ internal sealed class ShellPolicyOccurrencePathFacts
             Array.AsReadOnly(paths));
     }
 
-    private static bool TryResolveCanonicalPath(
+    internal static bool TryResolveCanonicalPath(
         string value,
         string? resolutionBase,
         ShellPathStyle pathStyle,
@@ -381,7 +381,14 @@ internal sealed class ShellPolicyOccurrencePathFacts
         if (CanonicalShellPath.TryCreate(normalized, pathStyle, out path))
             return true;
 
-        if (value.StartsWith('~')
+        if (ShellPathRules.TryNormalize(value, pathStyle, out normalized))
+            return CanonicalShellPath.TryCreate(normalized, pathStyle, out path);
+
+        if (pathStyle == ShellPathStyle.Windows
+                && (value.StartsWith('\\')
+                    || value.StartsWith('/')
+                    || value.Contains(':', StringComparison.Ordinal))
+            || value.StartsWith('~')
             || value.StartsWith("$HOME", StringComparison.Ordinal)
             || value.StartsWith("${HOME}", StringComparison.Ordinal)
             || value.StartsWith("%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
