@@ -208,7 +208,10 @@ internal sealed class ScopedShellSafeVerbPolicy
                 State: ShellPolicyPathResolutionState.Known,
                 Path: { } intentPath
             }
-            || !IsSafePath(intentPath.Value, intentPath.Value)
+            || !IsSafePath(
+                intentPath.Value,
+                intentPath.Value,
+                ShellPathStyle.Posix)
             || !IsReviewedDiagnostic(
                 candidate,
                 pathFacts,
@@ -268,15 +271,30 @@ internal sealed class ScopedShellSafeVerbPolicy
             || pathFacts.RealScope is not
             {
                 State: ShellPolicyPathResolutionState.Known,
-                AuthoredValue: { } realPath
-            })
+                Path: { } realPath
+            } realScope)
         {
             return false;
         }
 
+        var pathStyle = candidate.Shell == ApprovalShell.Bash
+            ? ShellPathStyle.Posix
+            : ShellPathStyle.Windows;
+        if (safeRoots.All(root =>
+                ShellPathRules.TryNormalize(root, pathStyle, out _)))
+        {
+            return safeRoots.Any(root => IsSafePath(
+                realPath.Value,
+                root,
+                pathStyle));
+        }
+
+        if (string.IsNullOrWhiteSpace(realScope.AuthoredValue))
+            return false;
+
         try
         {
-            var fullDirectory = Path.GetFullPath(realPath);
+            var fullDirectory = Path.GetFullPath(realScope.AuthoredValue);
             return safeRoots.Any(root => IsSafePath(fullDirectory, root));
         }
         catch (Exception ex) when (ex is ArgumentException
@@ -319,7 +337,10 @@ internal sealed class ScopedShellSafeVerbPolicy
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path =>
-                    !safeRoots.Any(root => IsSafePath(path.Value, root))))
+                    !safeRoots.Any(root => IsSafePath(
+                        path.Value,
+                        root,
+                        pathStyle))))
             {
                 return false;
             }
@@ -342,7 +363,10 @@ internal sealed class ScopedShellSafeVerbPolicy
                     (ShellPolicyPathDomainKind.Exact or ShellPolicyPathDomainKind.FiniteSet)
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
-                || fact.Paths.Any(path => !IsSafePath(path.Value, intentDirectory)))
+                || fact.Paths.Any(path => !IsSafePath(
+                    path.Value,
+                    intentDirectory,
+                    ShellPathStyle.Posix)))
             {
                 return false;
             }
@@ -355,7 +379,10 @@ internal sealed class ScopedShellSafeVerbPolicy
                 || fact.Source.DomainKind != ShellPolicyPathDomainKind.Exact
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count != 1
-                || !IsSafePath(fact.Paths[0].Value, intentDirectory))
+                || !IsSafePath(
+                    fact.Paths[0].Value,
+                    intentDirectory,
+                    ShellPathStyle.Posix))
             {
                 return false;
             }
@@ -422,6 +449,33 @@ internal sealed class ScopedShellSafeVerbPolicy
         {
             return PathUtility.IsWithinRoot(path, root)
                    && !PathUtility.ContainsSymlinkSegment(root, path);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or UnauthorizedAccessException
+                                      or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSafePath(
+        string path,
+        string root,
+        ShellPathStyle pathStyle)
+    {
+        try
+        {
+            return ShellPathRules.TryNormalize(path, pathStyle, out var normalizedPath)
+                   && ShellPathRules.TryNormalize(root, pathStyle, out var normalizedRoot)
+                   && ShellPathRules.IsWithinRoot(
+                       normalizedPath,
+                       normalizedRoot,
+                       pathStyle)
+                   && !PathUtility.ContainsSymlinkSegment(
+                       normalizedRoot,
+                       normalizedPath);
         }
         catch (Exception ex) when (ex is ArgumentException
                                       or IOException
