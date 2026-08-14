@@ -14,6 +14,9 @@ internal enum ShellPolicyFault
     InvalidCoverage = 2,
     CoverageAlreadyAssigned = 3,
     InvalidTerminalTransition = 4,
+    InvalidStageResult = 5,
+    StageException = 6,
+    InvalidProjection = 7,
 }
 
 internal abstract record ShellPolicyPreflightResult
@@ -91,6 +94,66 @@ internal abstract record ShellPolicyStageResult
 
     internal sealed record Fault(ShellPolicyFault Reason)
         : ShellPolicyStageResult;
+}
+
+internal delegate ValueTask<ShellPolicyStageResult> ShellPolicyStage(
+    ShellPolicyEvaluation evaluation,
+    CancellationToken cancellationToken);
+
+internal static class ShellPolicyPipeline
+{
+    internal static async ValueTask<ShellPolicyStageResult> RunAsync(
+        ShellPolicyEvaluation evaluation,
+        IReadOnlyList<ShellPolicyStage> stages,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(stages);
+
+        foreach (var stage in stages)
+        {
+            if (stage is null)
+                return evaluation.Fault(ShellPolicyFault.InvalidStageResult);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ShellPolicyStageResult? result;
+            try
+            {
+                result = await stage(evaluation, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return evaluation.Fault(ShellPolicyFault.StageException);
+            }
+
+            switch (result)
+            {
+                case ShellPolicyStageResult.Continue
+                    when evaluation.TerminalDecision is null:
+                    continue;
+                case ShellPolicyStageResult.Complete complete
+                    when evaluation.TerminalDecision is null:
+                    return evaluation.Complete(complete.Decision);
+                case ShellPolicyStageResult.Complete complete
+                    when ReferenceEquals(evaluation.TerminalDecision, complete.Decision):
+                    return complete;
+                case ShellPolicyStageResult.Fault fault
+                    when evaluation.TerminalFault == fault.Reason:
+                    return fault;
+                case ShellPolicyStageResult.Fault fault
+                    when evaluation.TerminalDecision is null:
+                    return evaluation.Fault(fault.Reason);
+                default:
+                    return evaluation.Fault(ShellPolicyFault.InvalidStageResult);
+            }
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
 }
 
 internal sealed record ShellPolicyAuthorization
@@ -239,6 +302,20 @@ internal sealed class ShellPolicyEvaluation
         _completedTrace = _trace.Complete(decision);
         _terminalDecision = decision;
         return new ShellPolicyStageResult.Complete(decision);
+    }
+
+    internal ShellPolicyStageResult Fault(ShellPolicyFault reason)
+    {
+        if (!Enum.IsDefined(reason))
+            reason = ShellPolicyFault.InvalidStageResult;
+
+        if (_terminalFault is { } terminalFault)
+            return new ShellPolicyStageResult.Fault(terminalFault);
+
+        if (_terminalDecision is not null)
+            return new ShellPolicyStageResult.Complete(_terminalDecision);
+
+        return Fail(reason);
     }
 
     private ShellPolicyStageResult.Fault Fail(ShellPolicyFault reason)

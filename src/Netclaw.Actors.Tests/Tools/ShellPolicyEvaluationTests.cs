@@ -14,6 +14,187 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class ShellPolicyEvaluationTests
 {
     [Fact]
+    public async Task Pipeline_stops_after_the_first_complete_result()
+    {
+        var evaluation = CreateEvaluation();
+        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
+        var visited = new List<int>();
+        ShellPolicyStage[] stages =
+        [
+            (_, _) =>
+            {
+                visited.Add(1);
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            },
+            (_, _) =>
+            {
+                visited.Add(2);
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Complete(prompt));
+            },
+            (_, _) =>
+            {
+                visited.Add(3);
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            }
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Same(prompt, result.Decision);
+        Assert.Equal([1, 2], visited);
+        Assert.Same(prompt, evaluation.TerminalDecision);
+        Assert.NotNull(evaluation.CompletedTrace);
+        Assert.Single(evaluation.CompletedTrace.Rows);
+    }
+
+    [Fact]
+    public async Task Pipeline_stops_after_a_stage_fault()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var visited = new List<int>();
+        ShellPolicyStage[] stages =
+        [
+            (_, _) =>
+            {
+                visited.Add(1);
+                return ValueTask.FromResult<ShellPolicyStageResult>(
+                    new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidCoverage));
+            },
+            (_, _) =>
+            {
+                visited.Add(2);
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            }
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.InvalidCoverage, result.Reason);
+        Assert.Equal([1], visited);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
+        Assert.Equal(ShellPolicyFault.InvalidCoverage, evaluation.TerminalFault);
+    }
+
+    [Fact]
+    public async Task Pipeline_preserves_coverage_trace_when_a_later_stage_throws()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+        ShellPolicyStage[] stages =
+        [
+            (state, _) => ValueTask.FromResult(state.Cover(
+                candidate,
+                ShellCoverageKind.Session,
+                ShellPolicyReason.SessionGrant,
+                ShellScopeRelation.ThisChat)),
+            static (_, _) => throw new InvalidOperationException("stage failed")
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.StageException, result.Reason);
+        Assert.NotNull(evaluation.CompletedTrace);
+        Assert.Collection(
+            evaluation.CompletedTrace.Rows,
+            row => Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage),
+            row =>
+            {
+                Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+                Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
+            });
+    }
+
+    [Fact]
+    public async Task Pipeline_propagates_caller_cancellation()
+    {
+        var evaluation = CreateEvaluation();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        ShellPolicyStage[] stages =
+        [
+            static (_, _) => ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue())
+        ];
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, cancellation.Token));
+
+        Assert.Null(evaluation.TerminalDecision);
+        Assert.Null(evaluation.CompletedTrace);
+    }
+
+    [Fact]
+    public async Task Pipeline_rejects_an_invalid_fault_enum()
+    {
+        var evaluation = CreateEvaluation();
+        ShellPolicyStage[] stages =
+        [
+            static (_, _) => ValueTask.FromResult<ShellPolicyStageResult>(
+                new ShellPolicyStageResult.Fault((ShellPolicyFault)999))
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
+        Assert.Equal(ShellPolicyFault.InvalidStageResult, evaluation.TerminalFault);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
+    [Fact]
+    public async Task Syntax_stage_prompts_before_a_later_stage_for_untyped_candidates()
+    {
+        var candidate = new ApprovalCandidate("git status", "/work");
+        var evaluation = CreateEvaluation(candidate);
+        var laterStageVisited = false;
+        ShellPolicyStage[] stages =
+        [
+            ShellPolicyInitialStages.Syntax(ShellTool.ToolName),
+            (_, _) =>
+            {
+                laterStageVisited = true;
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            }
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
+        Assert.False(laterStageVisited);
+        Assert.Single(Assert.IsType<ToolApprovalContext>(result.Decision.ApprovalContext).Candidates!);
+    }
+
+    [Fact]
+    public async Task Syntax_stage_faults_before_a_later_stage_for_invalid_tokens()
+    {
+        var candidate = BashCandidate("git status") with
+        {
+            VerbTokens = Array.AsReadOnly(["git status"])
+        };
+        var evaluation = CreateEvaluation(candidate);
+        var laterStageVisited = false;
+        ShellPolicyStage[] stages =
+        [
+            ShellPolicyInitialStages.Syntax(ShellTool.ToolName),
+            (_, _) =>
+            {
+                laterStageVisited = true;
+                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+            }
+        ];
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.InvalidProjection, result.Reason);
+        Assert.False(laterStageVisited);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
+    [Fact]
     public void Coverage_and_trace_change_together()
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));

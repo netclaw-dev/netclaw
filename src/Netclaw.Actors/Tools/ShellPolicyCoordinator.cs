@@ -130,60 +130,17 @@ internal sealed class ShellPolicyCoordinator(
         ShellPolicyDecisionTraceBuilder trace,
         CancellationToken cancellationToken)
     {
-        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
-
-        if (projection.Candidates.Count == 0)
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
-
-        var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
-            ? ApprovalShell.Bash
-            : ApprovalShell.PowerShell;
-        if (projection.Candidates.Any(candidate => candidate.Candidate.Shell is null
-                                                    || candidate.Candidate.VerbTokens is null))
-        {
-            return CompleteOneTimeOrPrompt(toolCall.Name, projection, projection.ApprovalContext, [], trace);
-        }
-
-        if (projection.Candidates.Any(candidate =>
-                candidate.Candidate.Shell != expectedShell
-                || candidate.Candidate.VerbTokens!.Count == 0
-                || candidate.Candidate.VerbTokens!.Any(static token =>
-                    token.Length == 0 || token.Any(char.IsWhiteSpace))))
-        {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                trace);
-        }
-
-        if (projection.Candidates.Any(candidate =>
-                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                && candidate.IntentDirectory is { } intentDirectory
-                && candidate.SourceOccurrence is { } sourceOccurrence
-                && policy.CausalIntentReferencesProtectedPath(
-                    sourceOccurrence,
-                    intentDirectory,
-                    candidate.IntentFallbackDirectories)))
-        {
-            return CompleteWithTrace(
-                ToolAuthorizationDecision.Deny("shell_references_protected_path"),
-                trace);
-        }
-
-        if (projection.Candidates.Any(candidate =>
-                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                && candidate.IntentDirectory is { } intentDirectory
-                && !policy.AreCausalIntentDirectoriesEligible(
-                    intentDirectory,
-                    candidate.IntentFallbackDirectories)))
-        {
-            return CompleteOneTimeOrPrompt(
-                toolCall.Name,
-                projection,
-                projection.ApprovalContext,
-                [],
-                trace);
-        }
+        var evaluation = new ShellPolicyEvaluation(projection);
+        var initialResult = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [
+                ShellPolicyInitialStages.Syntax(toolCall.Name),
+                ShellPolicyInitialStages.ProtectedCausalPaths(policy),
+                ShellPolicyInitialStages.CausalDirectories(policy, toolCall.Name)
+            ],
+            cancellationToken);
+        if (initialResult is not ShellPolicyStageResult.Continue)
+            return CompleteEvaluation(evaluation);
 
         var coverage = new ShellCoverageSet(projection.Candidates);
         foreach (var candidate in projection.Candidates.Where(item =>
@@ -421,19 +378,6 @@ internal sealed class ShellPolicyCoordinator(
         _ => throw new InvalidOperationException("Invalid actor coverage kind."),
     };
 
-    private static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
-        string toolName,
-        ShellPolicyProjection projection,
-        ToolApprovalContext approvalContext,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches,
-        ShellPolicyDecisionTraceBuilder trace)
-    {
-        var decision = projection.HasExactOneTimeApproval(toolName, approvalContext)
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval, approvalMatches)
-            : ToolAuthorizationDecision.RequiresApproval(approvalContext, approvalMatches);
-        return CompleteWithTrace(decision, trace);
-    }
-
     private static ToolAuthorizationDecision Complete(
         ToolAccessDecision decision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
@@ -470,6 +414,15 @@ internal sealed class ShellPolicyCoordinator(
         ToolAuthorizationDecision decision,
         ShellPolicyDecisionTraceBuilder trace)
         => decision.WithShellPolicyTrace(trace.Complete(decision));
+
+    private static ToolAuthorizationDecision CompleteEvaluation(ShellPolicyEvaluation evaluation)
+    {
+        var decision = evaluation.TerminalDecision
+                       ?? throw new InvalidOperationException("Shell policy stage did not set a decision.");
+        var completedTrace = evaluation.CompletedTrace
+                             ?? throw new InvalidOperationException("Shell policy stage did not complete its trace.");
+        return decision.WithShellPolicyTrace(completedTrace);
+    }
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
         => string.Join(", ", matches.Select(match =>
