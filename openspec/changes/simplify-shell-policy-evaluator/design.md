@@ -229,15 +229,36 @@ Alternative: remove redundant actor fields now. Rejected because that changes th
 
 `ShellPolicyProjection` will remain the sole bridge from ShellSyntaxTree facts into policy candidates. It will not parse command-specific arguments.
 
-Add one internal `ShellPolicyPathFacts` projection. It contains resolved real scopes, intent scopes, fallback scopes, redirects, and authored filesystem values.
+Add one internal `ShellPolicyPathFacts` projection. It contains candidate-scoped real scopes, intent scopes, fallback scopes, redirects, and authored filesystem values.
 
-Policy stages consume these facts through `ToolPathPolicy`, temporary-scope policy, and reviewed-safe policy. They do not rescan command text.
+Each fact retains:
+
+- its candidate and source occurrence;
+- effective, authored, strong authored-filesystem, redirect, intent, or fallback origin;
+- exact, finite, pattern, unknown, or unsupported domain kind;
+- the real, intent, or specific fallback resolution base;
+- redirect mode and completeness when applicable;
+- known, unknown-dynamic, or invalid-known-value resolution state.
+
+Projection does not flatten values across candidates or resolution bases. An unknown domain is not equivalent to a known value that failed normalization.
+
+Known paths use an internal canonical absolute value with an explicit `ShellPathStyle`. Construction validates the value before policy can consume it.
+
+`ToolPathPolicy` receives typed projected facts, not bare trusted strings. It still applies denied-path and symlink checks and fails closed on inspection errors.
+
+The authorization preflight keeps its single raw `CommandReferencesDeniedPath(analysis)` defense scan. `ShellTool` also retains both execution-time checks.
+
+Policy stages consume these facts through `ToolPathPolicy` and reviewed-safe policy. They do not rescan command text.
+
+Temporary-scope correction remains unchanged before projection. Projection may reuse only its existing captured temporary-alias predicate for canonical path resolution.
 
 Why:
 
 - ShellSyntaxTree remains the syntax authority.
 - Netclaw remains the trust and containment authority.
 - One projection prevents path-rule drift.
+- Per-base facts preserve causal fallback behavior.
+- Typed resolution states preserve unknown and invalid outcomes.
 - Command-specific exceptions cannot hide inside completion logic.
 
 Alternative: move executable argument rules into the evaluator. Rejected by the Netclaw constitution and the approved threat model.

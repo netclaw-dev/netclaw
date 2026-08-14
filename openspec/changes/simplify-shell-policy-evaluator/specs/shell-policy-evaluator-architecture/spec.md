@@ -87,6 +87,33 @@ Netclaw policy SHALL consume those facts without an executable-private command p
 - **THEN** policy SHALL evaluate each fact through the current path rules
 - **AND** later stages SHALL reuse the projected result without command-text scans
 
+#### Scenario: Path facts retain their policy meaning
+
+- **WHEN** projection captures a filesystem fact
+- **THEN** it SHALL retain candidate identity, value origin, domain kind, redirect mode, and resolution base
+- **AND** intent and fallback resolutions SHALL remain distinct
+- **AND** facts from different candidates or bases SHALL NOT be flattened together
+
+#### Scenario: Unknown and invalid path values remain distinct
+
+- **WHEN** a policy-relevant path domain is unknown or unsupported
+- **THEN** reviewed-safe coverage SHALL remain unavailable
+- **AND** the unknown domain SHALL NOT become a protected-path match
+- **WHEN** an exact or finite causal value cannot resolve against an intent or fallback scope
+- **THEN** the causal protected-path stage SHALL retain its current deny outcome
+
+#### Scenario: Redirect facts preserve their exact boundary
+
+- **WHEN** projection captures a file redirect
+- **THEN** it SHALL retain the redirect mode, completeness, domain kind, and resolution base
+- **AND** causal reviewed-safe coverage SHALL still accept only an exact input redirect
+- **AND** file-writing redirects SHALL remain ineligible for reviewed-safe coverage
+
+#### Scenario: Execution rechecks protected paths
+
+- **WHEN** authorization reuses projected path results
+- **THEN** shell execution SHALL still re-evaluate current denied paths and symlink state before native process start
+
 #### Scenario: Executable-private argument remains outside policy
 
 - **WHEN** safety would require private grammar for one executable
