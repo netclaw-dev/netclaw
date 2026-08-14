@@ -158,9 +158,11 @@ internal static class ShellPolicyPipeline
             }
             catch (Exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 return evaluation.InvalidateStage(ShellPolicyFault.StageException);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             switch (result)
             {
                 case ShellPolicyStageResult.Continue

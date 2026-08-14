@@ -108,6 +108,14 @@ The system SHALL derive one prompt context from the current uncovered candidate 
 - **WHEN** causal intent requires prerequisite and consumer candidates as one unit
 - **THEN** the one-time key and prompt SHALL retain the complete causal context
 
+#### Scenario: Exact retry precedes candidate coverage
+
+- **WHEN** syntax or causal eligibility would prompt before candidate coverage
+- **AND** the exact one-time key matches the same complete approval context
+- **THEN** policy SHALL allow with `OneTimeApproval`
+- **AND** the trace SHALL contain only its completion row
+- **AND** no other allow reason SHALL bypass candidate coverage
+
 ### Requirement: Coverage and trace facts remain atomic
 
 Each coverage change SHALL add its bounded trace fact through the same state operation. Terminal completion SHALL add exactly one completion row.

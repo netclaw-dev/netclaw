@@ -144,6 +144,34 @@ public sealed class ShellPolicyEvaluationTests
         Assert.Null(evaluation.CompletedTrace);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Pipeline_propagates_cancellation_set_by_a_stage(bool throwsAfterCancellation)
+    {
+        var evaluation = CreateEvaluation();
+        using var cancellation = new CancellationTokenSource();
+        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
+        ShellPolicyStage[] stages =
+        [
+            (_, _) =>
+            {
+                cancellation.Cancel();
+                if (throwsAfterCancellation)
+                    throw new InvalidOperationException("stage failed after cancellation");
+
+                return ValueTask.FromResult<ShellPolicyStageResult>(
+                    new ShellPolicyStageResult.Complete(prompt));
+            }
+        ];
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await ShellPolicyPipeline.RunAsync(evaluation, stages, cancellation.Token));
+
+        Assert.Null(evaluation.TerminalDecision);
+        Assert.Null(evaluation.CompletedTrace);
+    }
+
     [Fact]
     public async Task Pipeline_does_not_invoke_stages_after_a_terminal_decision()
     {

@@ -152,6 +152,17 @@ internal abstract record ShellPolicyStageResult
 }
 ```
 
+The sketch omits constructor guards. Production exposes `Complete.ExactOneTime` as the sole uncovered allow marker.
+
+That marker requires all of these facts:
+
+- the exact one-time key matches the tool and complete approval context;
+- syntax or causal eligibility would otherwise return that context as a prompt;
+- the decision uses `OneTimeApproval`;
+- completion adds no invented candidate coverage row.
+
+No session, persistent, reviewed-safe, or other allow reason may bypass candidate coverage.
+
 The pipeline invokes stages in this order:
 
 1. syntax and candidate validation;
