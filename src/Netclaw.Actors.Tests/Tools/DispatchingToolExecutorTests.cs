@@ -3081,7 +3081,9 @@ public class DispatchingToolExecutorTests
         var call = new FunctionCallContent(
             "call-authorization-only",
             ShellTool.ToolName,
-            ToolInput.Create("Command", TestShellEnvironment.PrintWorkingDirectoryCommand));
+            ToolInput.Create(
+                "Command",
+                ShellEnvironment.Grammar == ShellGrammar.PowerShell ? "Get-Location" : "pwd"));
 
         await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
         _ = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
