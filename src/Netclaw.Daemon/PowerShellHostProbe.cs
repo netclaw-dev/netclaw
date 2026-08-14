@@ -48,7 +48,7 @@ internal sealed class PowerShellHostProbe(
     IPowerShellExecutableLocator executableLocator,
     IPowerShellProbeProcessFactory processFactory) : IPowerShellHostProbe
 {
-    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan ProbeRetryDelay = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(1);
     private const int MaxOutputChars = 4096;
