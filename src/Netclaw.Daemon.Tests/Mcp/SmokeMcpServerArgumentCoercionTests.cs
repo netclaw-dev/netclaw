@@ -21,7 +21,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// this test proves the wire: that a reconstructed argument actually serializes
 /// over JSON-RPC and is accepted by a real MCP server.
 /// </summary>
-public sealed class SmokeMcpServerArgumentCoercionTests
+public sealed class SmokeMcpServerArgumentCoercionTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task StringifiedArrayArgument_IsReconstructed_OverTheWire()
@@ -39,9 +39,10 @@ public sealed class SmokeMcpServerArgumentCoercionTests
 
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["smoke"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke"] = entry }, registry, output);
 
         await harness.Manager.StartAsync(ct);
+        harness.AssertConnected("smoke");
 
         var recordTasks = registry.GetAllRegistrations()
             .Select(r => r.Tool)
