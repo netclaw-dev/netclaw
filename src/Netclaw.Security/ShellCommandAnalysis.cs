@@ -71,7 +71,9 @@ internal sealed class ShellCommandAnalyzer
             return ShellAnalysisFailure.None;
         }
 
-        var innerCommands = PosixShellApprovalSemantics.Instance.ExtractInnerCommands(command);
+        var innerCommands = ShellApprovalSemantics.ExtractInnerCommands(
+            command,
+            ShellPathStyle.Posix);
         var unexpandedWrappers = parsed.Commands
             .Where(static occurrence => IsUnexpandedWrapperClause(occurrence.Clause))
             .ToList();
@@ -201,7 +203,7 @@ internal sealed class ShellCommandAnalyzer
     }
 
     private static bool IsShellInvokerToken(string token)
-        => PosixShellApprovalSemantics.IsPosixShellInvoker(
+        => ShellApprovalSemantics.IsPosixShellInvoker(
             ShellTokenizer.TrimShellPunctuation(token));
 
     private static bool ContainsBackgroundListOperator(string command)

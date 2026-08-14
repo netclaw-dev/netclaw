@@ -448,6 +448,36 @@ public sealed class ShellTokenizerTests
         Assert.Equal(expected, ShellTokenizer.LooksLikePath(token));
     }
 
+    [Theory]
+    [InlineData("/tmp", ShellPathStyle.Posix, true)]
+    [InlineData("/tmp", ShellPathStyle.Windows, false)]
+    [InlineData(@"C:\work", ShellPathStyle.Posix, false)]
+    [InlineData(@"C:\work", ShellPathStyle.Windows, true)]
+    [InlineData(@"folder\file", ShellPathStyle.Posix, false)]
+    [InlineData(@"folder\file", ShellPathStyle.Windows, true)]
+    public void Explicit_path_style_preserves_legacy_classification(
+        string token,
+        ShellPathStyle pathStyle,
+        bool expected)
+    {
+        Assert.Equal(expected, ShellApprovalSemantics.LooksLikePath(token, pathStyle));
+    }
+
+    [Fact]
+    public void Explicit_path_style_rejects_unknown_values_before_processing()
+    {
+        var invalid = (ShellPathStyle)999;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShellApprovalSemantics.SplitCompoundCommand(string.Empty, invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShellApprovalSemantics.ExtractInnerCommands(string.Empty, invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShellApprovalSemantics.NormalizeApprovalUnit(string.Empty, null, invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShellApprovalSemantics.NormalizePathToken(string.Empty, null, invalid));
+    }
+
     // ── IsMessyCompoundCommand ──
 
     [Theory]

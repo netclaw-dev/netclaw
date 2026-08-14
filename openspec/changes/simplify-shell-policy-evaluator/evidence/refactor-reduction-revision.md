@@ -88,6 +88,20 @@ The coordinator verifies that the outcome agrees with terminal state. Invalid en
 
 The slice removes another 42 production lines without changing the control-flow count. The cumulative footprint uses 8,386 lines and 517 control-flow lines. The complete reduction gate remains open.
 
+## Static shell-semantics slice
+
+This slice replaces one interface, one base class, and two singleton subclasses. One static implementation now takes an explicit shell path style.
+
+The public `ShellTokenizer` surface stays unchanged. Explicit POSIX and Windows tests pin anchored-path and invalid-enum behavior.
+
+The slice removes 171 production lines and 23 control-flow lines. It adds 30 test lines.
+
+The changed footprint now includes three legacy files. Its baseline is 8,972 lines and 635 control-flow lines.
+
+The current footprint uses 9,947 lines and 650 control-flow lines. The gap is 975 lines and 15 control-flow lines.
+
+The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

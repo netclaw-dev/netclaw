@@ -136,7 +136,9 @@ public static class ShellTokenizer
     {
         if (IsMessyCompoundCommand(command))
             return [];
-        return ShellApprovalSemantics.ForCommand(command).SplitCompoundCommand(command);
+        return ShellApprovalSemantics.SplitCompoundCommand(
+            command,
+            ShellApprovalSemantics.ForCommand(command));
     }
 
     private static readonly HashSet<string> BashControlFlowKeywords = new(StringComparer.Ordinal)
@@ -255,7 +257,7 @@ public static class ShellTokenizer
     /// unlimited.
     /// </summary>
     public static string ExtractVerbChain(string command, int maxDepth = int.MaxValue)
-        => ShellApprovalSemantics.ForCommand(command).ExtractVerbChain(command, maxDepth);
+        => ShellApprovalSemantics.ExtractVerbChain(command, maxDepth);
 
     /// <summary>
     /// Returns the first path-like positional argument from a single shell
@@ -271,7 +273,7 @@ public static class ShellTokenizer
     /// operation — no filesystem syscall is performed at extract time.
     /// </remarks>
     public static string? ExtractFirstPathArgument(string command)
-        => ShellApprovalSemantics.ForCommand(command).ExtractFirstPathArgument(command);
+        => ShellApprovalSemantics.ExtractFirstPathArgument(command);
 
     /// <summary>
     /// Conservative path-token classifier. Returns true when the token
@@ -318,28 +320,32 @@ public static class ShellTokenizer
     /// normalized against the working directory. Non-path tokens remain in order.
     /// </summary>
     public static string NormalizeApprovalUnit(string command, string? workingDirectory = null)
-        => ShellApprovalSemantics.ForCommand(command).NormalizeApprovalUnit(command, workingDirectory);
+        => ShellApprovalSemantics.NormalizeApprovalUnit(
+            command,
+            workingDirectory,
+            ShellApprovalSemantics.ForCommand(command));
 
     internal static string NormalizeApprovalUnit(
         string command,
         string? workingDirectory,
         ShellPathStyle pathStyle)
-        => ShellApprovalSemantics.ForPathStyle(pathStyle)
-            .NormalizeApprovalUnit(command, workingDirectory);
+        => ShellApprovalSemantics.NormalizeApprovalUnit(command, workingDirectory, pathStyle);
 
     /// <summary>
     /// Normalizes a path token using the active shell family's path semantics.
     /// Returns null when the token cannot be normalized as a local path.
     /// </summary>
     public static string? NormalizePathToken(string path, string? workingDirectory = null)
-        => ShellApprovalSemantics.ForCommand(path).NormalizePathToken(path, workingDirectory);
+        => ShellApprovalSemantics.NormalizePathToken(
+            path,
+            workingDirectory,
+            ShellApprovalSemantics.ForCommand(path));
 
     internal static string? NormalizePathToken(
         string path,
         string? workingDirectory,
         ShellPathStyle pathStyle)
-        => ShellApprovalSemantics.ForPathStyle(pathStyle)
-            .NormalizePathToken(path, workingDirectory);
+        => ShellApprovalSemantics.NormalizePathToken(path, workingDirectory, pathStyle);
 
     /// <summary>
     /// Extracts inner commands from bash -c / sh -c wrappers. Returns the
@@ -347,7 +353,9 @@ public static class ShellTokenizer
     /// if the command does not use a shell wrapper.
     /// </summary>
     public static IReadOnlyList<string> ExtractInnerCommands(string command)
-        => ShellApprovalSemantics.ForCommand(command).ExtractInnerCommands(command);
+        => ShellApprovalSemantics.ExtractInnerCommands(
+            command,
+            ShellApprovalSemantics.ForCommand(command));
 
     /// <summary>
     /// Returns all command strings that should be evaluated, including the
@@ -381,7 +389,7 @@ public static class ShellTokenizer
     /// on URIs, git refs, docker images, sed expressions, and MIME types.
     /// </summary>
     public static bool LooksLikePath(string token)
-        => ShellApprovalSemantics.ForCommand(token).LooksLikePath(token);
+        => ShellApprovalSemantics.LooksLikePath(token, ShellApprovalSemantics.ForCommand(token));
 
     /// <summary>
     /// Returns true when the pattern is a single-token shell approval for a
