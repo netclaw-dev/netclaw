@@ -1096,6 +1096,19 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), Args(command, projectDirectory)));
     }
 
+    [Fact]
+    public void ExtractCandidates_uses_declared_posix_scope_for_relative_glob()
+    {
+        var arguments = Args("du -sh ./*", "/work");
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            arguments));
+
+        Assert.Equal("du", candidate.Verb);
+        Assert.Equal("/work", candidate.Directory);
+        Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
     [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     [MemberData(nameof(UnsafeGlobScopeCases))]

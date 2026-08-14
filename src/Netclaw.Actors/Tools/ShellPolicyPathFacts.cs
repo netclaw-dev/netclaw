@@ -375,27 +375,11 @@ internal sealed class ShellPolicyOccurrencePathFacts
         out CanonicalShellPath path)
     {
         path = default;
-        if (ShellPathRules.TryNormalize(value, pathStyle, out var normalized))
-            return CanonicalShellPath.TryCreate(normalized, pathStyle, out path);
-
-        if (pathStyle == ShellPathStyle.Windows
-                && (value.StartsWith('\\')
-                    || value.StartsWith('/')
-                    || value.Contains(':', StringComparison.Ordinal))
-            || value.StartsWith('~')
-            || value.StartsWith("$HOME", StringComparison.Ordinal)
-            || value.StartsWith("${HOME}", StringComparison.Ordinal)
-            || value.StartsWith("%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
-            || !ShellPathRules.TryNormalize(resolutionBase, pathStyle, out var normalizedBase))
-        {
-            return false;
-        }
-
-        var separator = pathStyle == ShellPathStyle.Windows ? '\\' : '/';
-        var combined = normalizedBase.EndsWith(separator)
-            ? normalizedBase + value
-            : normalizedBase + separator + value;
-        return ShellPathRules.TryNormalize(combined, pathStyle, out normalized)
-               && CanonicalShellPath.TryCreate(normalized, pathStyle, out path);
+        return ShellPathRules.TryResolve(
+                   value,
+                   resolutionBase,
+                   pathStyle,
+                   out var resolved)
+               && CanonicalShellPath.TryCreate(resolved, pathStyle, out path);
     }
 }

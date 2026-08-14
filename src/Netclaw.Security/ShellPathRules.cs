@@ -38,6 +38,37 @@ internal static class ShellPathRules
         return normalized.Length > 0;
     }
 
+    internal static bool TryResolve(
+        string? path,
+        string? resolutionBase,
+        ShellPathStyle pathStyle,
+        out string resolved)
+    {
+        if (TryNormalize(path, pathStyle, out resolved))
+            return true;
+
+        resolved = string.Empty;
+        if (string.IsNullOrEmpty(path)
+            || pathStyle == ShellPathStyle.Windows
+                && (path.StartsWith('\\')
+                    || path.StartsWith('/')
+                    || path.Contains(':', StringComparison.Ordinal))
+            || path.StartsWith('~')
+            || path.StartsWith("$HOME", StringComparison.Ordinal)
+            || path.StartsWith("${HOME}", StringComparison.Ordinal)
+            || path.StartsWith("%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
+            || !TryNormalize(resolutionBase, pathStyle, out var normalizedBase))
+        {
+            return false;
+        }
+
+        var separator = pathStyle == ShellPathStyle.Windows ? '\\' : '/';
+        var combined = normalizedBase.EndsWith(separator)
+            ? normalizedBase + path
+            : normalizedBase + separator + path;
+        return TryNormalize(combined, pathStyle, out resolved);
+    }
+
     internal static bool Equals(string left, string right, ShellPathStyle pathStyle)
         => string.Equals(
             left,

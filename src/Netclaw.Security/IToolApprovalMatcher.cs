@@ -625,11 +625,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : staticPrefix.LastIndexOf('/');
         var coveringPath = CoveringPath(staticPrefix, separator, pathStyle);
 
-        var coveringDirectory = ShellTokenizer.NormalizePathToken(
-            coveringPath,
-            workingDirectory,
-            pathStyle);
-        if (coveringDirectory is null
+        if (!ShellPathRules.TryResolve(
+                coveringPath,
+                workingDirectory,
+                pathStyle,
+                out var coveringDirectory)
             || ContainsSymlinkEntry(coveringDirectory))
         {
             return null;
