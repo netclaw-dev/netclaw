@@ -22,6 +22,8 @@ internal sealed record PolicyFixtureCatalog
 
 internal sealed record PolicyLiveRegressionCase
 {
+    public required string SourceEvidenceFile { get; init; }
+
     public required string SourceEvidenceId { get; init; }
 
     public required string Classification { get; init; }
@@ -112,6 +114,8 @@ internal sealed record PolicyAdversarialExpected
     public required string Outcome { get; init; }
 
     public string? DenyReason { get; init; }
+
+    public string? AgentCorrection { get; init; }
 
     public List<string>? ApprovalCandidates { get; init; }
 

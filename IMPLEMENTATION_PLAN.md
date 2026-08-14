@@ -212,6 +212,8 @@ Done when:
   Eleven executable live cases pin the intended allow and prompt boundaries.
 - [x] Post-1952 live evidence froze 285 shell calls and 69 prompts.
   Twenty-one sanitized cases sample expected, guidance, and ShellSyntaxTree gaps.
+  The coordinator executes one identity-free regression for each sampled case.
+  Each regression locks its evidence source, approval shape, and actor contact.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
   still requires approval.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
