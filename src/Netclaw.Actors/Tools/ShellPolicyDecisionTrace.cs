@@ -160,6 +160,17 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         return _completedTrace;
     }
 
+    internal ShellPolicyDecisionTrace ReplaceCompletion(ToolAuthorizationDecision decision)
+    {
+        if (_completedTrace is not null)
+        {
+            _rows.RemoveAt(_rows.Count - 1);
+            _completedTrace = null;
+        }
+
+        return Complete(decision);
+    }
+
     internal static string SanitizeText(string value)
     {
         // A partial private-key block cannot be recognized after truncation.

@@ -1219,18 +1219,35 @@ public class DispatchingToolExecutorTests
                     $"cd {alias} && inspect; head result.log",
                     "WorkingDirectory",
                     "/work"));
+            var context = CreateInteractivePersonalContext(
+                "signalr/causal-intent-symlink-target");
 
             var decision = await executor.EvaluateAuthorizationAsync(
                 call,
-                CreateInteractivePersonalContext("signalr/causal-intent-symlink-target"),
+                context,
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
+            var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+            Assert.True(approval.IsMessy);
             Assert.Null(approvalService.LastRequest);
             Assert.DoesNotContain(
                 decision.ShellPolicyTrace.Rows,
                 row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+
+            context.OneTimeApprovedToolName = call.Name;
+            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(approval));
+            var retry = await executor.EvaluateAuthorizationAsync(
+                call,
+                context,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
+            Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
+            Assert.Null(approvalService.LastRequest);
+            var completion = Assert.Single(retry.ShellPolicyTrace.Rows);
+            Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
+            Assert.Equal(ShellPolicyTraceOutcome.Allow, completion.Outcome);
         }
         finally
         {

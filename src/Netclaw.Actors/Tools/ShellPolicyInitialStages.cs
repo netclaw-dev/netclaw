@@ -39,10 +39,10 @@ internal static class ShellPolicyInitialStages
     {
         var projection = evaluation.Projection;
         if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
-            return new ShellPolicyStageResult.Complete(CreateOneTimeOrPrompt(projection, toolName));
+            return CreateOneTimeOrPrompt(projection, toolName);
 
         if (projection.Candidates.Count == 0)
-            return new ShellPolicyStageResult.Complete(CreateOneTimeOrPrompt(projection, toolName));
+            return CreateOneTimeOrPrompt(projection, toolName);
 
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
@@ -51,7 +51,7 @@ internal static class ShellPolicyInitialStages
                 candidate.Candidate.Shell is null
                 || candidate.Candidate.VerbTokens is null))
         {
-            return new ShellPolicyStageResult.Complete(CreateOneTimeOrPrompt(projection, toolName));
+            return CreateOneTimeOrPrompt(projection, toolName);
         }
 
         if (projection.Candidates.Any(candidate =>
@@ -91,13 +91,15 @@ internal static class ShellPolicyInitialStages
             && !policy.AreCausalIntentDirectoriesEligible(
                 intentDirectory,
                 candidate.IntentFallbackDirectories))
-            ? new ShellPolicyStageResult.Complete(CreateOneTimeOrPrompt(evaluation.Projection, toolName))
+            ? CreateOneTimeOrPrompt(evaluation.Projection, toolName)
             : new ShellPolicyStageResult.Continue();
 
-    private static ToolAuthorizationDecision CreateOneTimeOrPrompt(
+    private static ShellPolicyStageResult CreateOneTimeOrPrompt(
         ShellPolicyProjection projection,
         string toolName)
         => projection.HasExactOneTimeApproval(toolName, projection.ApprovalContext)
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
-            : ToolAuthorizationDecision.RequiresApproval(projection.ApprovalContext);
+            ? ShellPolicyStageResult.Complete.ExactOneTime(
+                ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval))
+            : new ShellPolicyStageResult.Complete(
+                ToolAuthorizationDecision.RequiresApproval(projection.ApprovalContext));
 }

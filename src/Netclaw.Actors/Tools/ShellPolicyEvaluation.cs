@@ -84,12 +84,36 @@ internal abstract record ShellPolicyStageResult
     internal sealed record Complete : ShellPolicyStageResult
     {
         internal Complete(ToolAuthorizationDecision decision)
+            : this(decision, allowsUncoveredOneTime: false)
+        {
+        }
+
+        private Complete(
+            ToolAuthorizationDecision decision,
+            bool allowsUncoveredOneTime)
         {
             ArgumentNullException.ThrowIfNull(decision);
             Decision = decision;
+            AllowsUncoveredOneTime = allowsUncoveredOneTime;
         }
 
         internal ToolAuthorizationDecision Decision { get; }
+
+        internal bool AllowsUncoveredOneTime { get; }
+
+        internal static Complete ExactOneTime(ToolAuthorizationDecision decision)
+        {
+            ArgumentNullException.ThrowIfNull(decision);
+            if (decision.Outcome != ToolAuthorizationOutcome.Allowed
+                || decision.AllowReason != ToolAllowReason.OneTimeApproval)
+            {
+                throw new ArgumentException(
+                    "An uncovered completion requires an exact one-time allow.",
+                    nameof(decision));
+            }
+
+            return new Complete(decision, allowsUncoveredOneTime: true);
+        }
     }
 
     internal sealed record Fault(ShellPolicyFault Reason)
@@ -110,12 +134,19 @@ internal static class ShellPolicyPipeline
         ArgumentNullException.ThrowIfNull(evaluation);
         ArgumentNullException.ThrowIfNull(stages);
 
+        cancellationToken.ThrowIfCancellationRequested();
+        if (evaluation.TerminalFault is { } terminalFault)
+            return new ShellPolicyStageResult.Fault(terminalFault);
+
+        if (evaluation.TerminalDecision is { } terminalDecision)
+            return new ShellPolicyStageResult.Complete(terminalDecision);
+
         foreach (var stage in stages)
         {
-            if (stage is null)
-                return evaluation.Fault(ShellPolicyFault.InvalidStageResult);
-
             cancellationToken.ThrowIfCancellationRequested();
+            if (stage is null)
+                return evaluation.InvalidateStage(ShellPolicyFault.InvalidStageResult);
+
             ShellPolicyStageResult? result;
             try
             {
@@ -127,7 +158,7 @@ internal static class ShellPolicyPipeline
             }
             catch (Exception)
             {
-                return evaluation.Fault(ShellPolicyFault.StageException);
+                return evaluation.InvalidateStage(ShellPolicyFault.StageException);
             }
 
             switch (result)
@@ -137,7 +168,9 @@ internal static class ShellPolicyPipeline
                     continue;
                 case ShellPolicyStageResult.Complete complete
                     when evaluation.TerminalDecision is null:
-                    return evaluation.Complete(complete.Decision);
+                    return evaluation.Complete(
+                        complete.Decision,
+                        complete.AllowsUncoveredOneTime);
                 case ShellPolicyStageResult.Complete complete
                     when ReferenceEquals(evaluation.TerminalDecision, complete.Decision):
                     return complete;
@@ -148,7 +181,7 @@ internal static class ShellPolicyPipeline
                     when evaluation.TerminalDecision is null:
                     return evaluation.Fault(fault.Reason);
                 default:
-                    return evaluation.Fault(ShellPolicyFault.InvalidStageResult);
+                    return evaluation.InvalidateStage(ShellPolicyFault.InvalidStageResult);
             }
         }
 
@@ -282,7 +315,9 @@ internal sealed class ShellPolicyEvaluation
         return new ShellPolicyStageResult.Continue();
     }
 
-    internal ShellPolicyStageResult Complete(ToolAuthorizationDecision decision)
+    internal ShellPolicyStageResult Complete(
+        ToolAuthorizationDecision decision,
+        bool allowsUncoveredOneTime = false)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -291,7 +326,9 @@ internal sealed class ShellPolicyEvaluation
 
         var mayComplete = decision.Outcome switch
         {
-            ToolAuthorizationOutcome.Allowed => AllCovered,
+            ToolAuthorizationOutcome.Allowed => AllCovered
+                                                || allowsUncoveredOneTime
+                                                && decision.AllowReason == ToolAllowReason.OneTimeApproval,
             ToolAuthorizationOutcome.RequiresApproval => _candidates.Length == 0 || !AllCovered,
             ToolAuthorizationOutcome.Denied => true,
             _ => false,
@@ -316,6 +353,18 @@ internal sealed class ShellPolicyEvaluation
             return new ShellPolicyStageResult.Complete(_terminalDecision);
 
         return Fail(reason);
+    }
+
+    internal ShellPolicyStageResult.Fault InvalidateStage(ShellPolicyFault reason)
+    {
+        if (!Enum.IsDefined(reason))
+            reason = ShellPolicyFault.InvalidStageResult;
+
+        var decision = ToolAuthorizationDecision.Deny("internal_policy_failure");
+        _completedTrace = _trace.ReplaceCompletion(decision);
+        _terminalDecision = decision;
+        _terminalFault = reason;
+        return new ShellPolicyStageResult.Fault(reason);
     }
 
     private ShellPolicyStageResult.Fault Fail(ShellPolicyFault reason)
