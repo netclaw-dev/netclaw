@@ -30,6 +30,18 @@ The final state must satisfy both conditions:
 - The original seven files remain below 5,136 lines and 373 control-flow lines.
 - The complete changed production footprint has fewer lines and control-flow lines than the baseline.
 
+## Direct-stage reduction slice
+
+The merged corpus commit is `d2186d83e0ce2fe0d51ac67ea029eefa579abca3`.
+
+This slice removes the delegate pipeline and its stage array. The coordinator now calls the same typed stages in one fixed order.
+
+The slice removes 117 production lines and three control-flow lines. It also removes 257 stage-test lines for states that production cannot construct.
+
+The expanded changed-file footprint now uses 7,240 baseline lines and 479 baseline control-flow lines. This set includes files changed after PR #1947.
+
+The current slice uses 8,665 lines and 530 control-flow lines. The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

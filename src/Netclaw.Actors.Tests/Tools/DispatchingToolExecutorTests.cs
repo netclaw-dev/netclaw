@@ -1691,6 +1691,51 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Authorization_evaluation_propagates_preexisting_cancellation_without_actor_contact()
+    {
+        var approvalService = GrantEveryShellCandidate();
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-preexisting-cancellation",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status"));
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            executor.EvaluateAuthorizationAsync(
+                call,
+                CreateInteractivePersonalContext("signalr/preexisting-cancellation"),
+                cancellation.Token));
+
+        Assert.Equal(0, approvalService.RequestCount);
+    }
+
+    [Fact]
+    public async Task Authorization_evaluation_propagates_actor_cancellation_before_an_ordinary_failure()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var approvalService = new FixedShellApprovalService(_ =>
+        {
+            cancellation.Cancel();
+            throw new InvalidOperationException("actor failed after cancellation");
+        });
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-actor-cancellation",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            executor.EvaluateAuthorizationAsync(
+                call,
+                CreateInteractivePersonalContext("signalr/actor-cancellation"),
+                cancellation.Token));
+
+        Assert.Equal(1, approvalService.RequestCount);
+    }
+
+    [Fact]
     public async Task Authorization_evaluation_denies_mismatched_actor_match()
     {
         var approvalService = new FixedShellApprovalService(request =>
