@@ -24,7 +24,7 @@
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
     <AspireHostingVersion>13.4.6</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.4.0</CommunityToolkitAspireVersion>
-    <ModelContextProtocolVersion>2.1.0</ModelContextProtocolVersion>
+    <ModelContextProtocolVersion>2.2.0</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
@@ -76,7 +76,7 @@
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.3.5" />
-    <PackageVersion Include="Termina" Version="0.16.1" />
+    <PackageVersion Include="Termina" Version="0.16.2" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
