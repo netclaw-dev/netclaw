@@ -135,7 +135,6 @@ internal sealed class ShellPolicyCoordinator(
                 tool,
                 toolCall,
                 context,
-                projection,
                 evaluation,
                 cancellationToken);
         }
@@ -154,11 +153,10 @@ internal sealed class ShellPolicyCoordinator(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
-        ShellPolicyProjection projection,
         ShellPolicyEvaluation evaluation,
         CancellationToken cancellationToken)
     {
-        var initialResult = await ShellPolicyPipeline.RunAsync(
+        var result = await ShellPolicyPipeline.RunAsync(
             evaluation,
             [
                 ShellPolicyInitialStages.Syntax(toolCall.Name),
@@ -175,68 +173,14 @@ internal sealed class ShellPolicyCoordinator(
                 ShellPolicyGrantStages.ExactOneTime(
                     new ToolName(toolCall.Name),
                     context.SessionDirectory),
-                ShellPolicyGrantStages.PersistentStoreAvailability()
+                ShellPolicyGrantStages.PersistentStoreAvailability(),
+                ShellPolicyTerminalStage.Complete(context)
             ],
             cancellationToken);
-        if (initialResult is not ShellPolicyStageResult.Continue)
-            return CompleteEvaluation(evaluation);
+        if (result is ShellPolicyStageResult.Continue)
+            evaluation.Fault(ShellPolicyFault.InvalidStageResult);
 
-        var grantCandidates = projection.GrantCandidates;
-        var approvalMatches = evaluation.ApprovalMatches;
-
-        var uncovered = evaluation.UncoveredCandidates;
-        if (uncovered.Count > 0)
-        {
-            var promptContext = projection.HasCausalIntent
-                ? projection.ApprovalContext
-                : ToolAccessPolicy.NarrowShellApprovalContext(
-                    projection.ApprovalContext,
-                    uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                    context.SessionDirectory,
-                    projection.Environment.PathStyle);
-            return CompleteEvaluation(
-                evaluation,
-                ToolAuthorizationDecision.RequiresApproval(promptContext, approvalMatches));
-        }
-
-        if (!evaluation.AllCovered)
-        {
-            return CompleteEvaluation(
-                evaluation,
-                ToolAuthorizationDecision.Deny("internal_policy_failure"));
-        }
-
-        if (evaluation.HasOneTimeCoverage)
-        {
-            return CompleteEvaluation(
-                evaluation,
-                ToolAuthorizationDecision.Allow(
-                    ToolAllowReason.OneTimeApproval,
-                    approvalMatches));
-        }
-
-        if (approvalMatches.Count > 0)
-        {
-            if (approvalMatches.Count == grantCandidates.Count)
-            {
-                context.Approval.ApplyDecision(
-                    "PreviouslyApproved",
-                    FormatApprovalMatches(approvalMatches));
-            }
-
-            return CompleteEvaluation(
-                evaluation,
-                ToolAuthorizationDecision.Allow(
-                    ToolAllowReason.StoredApproval,
-                    approvalMatches));
-        }
-
-        return CompleteEvaluation(
-            evaluation,
-            ToolAuthorizationDecision.Allow(
-                grantCandidates.Count == 0
-                    ? ToolAllowReason.ApprovalExemptShellCandidates
-                    : ToolAllowReason.SafeVerbInTrustedScope));
+        return CompleteEvaluation(evaluation);
     }
 
     private static ToolAuthorizationDecision Complete(
@@ -284,18 +228,6 @@ internal sealed class ShellPolicyCoordinator(
                              ?? throw new InvalidOperationException("Shell policy stage did not complete its trace.");
         return decision.WithShellPolicyTrace(completedTrace);
     }
-
-    private static ToolAuthorizationDecision CompleteEvaluation(
-        ShellPolicyEvaluation evaluation,
-        ToolAuthorizationDecision decision)
-    {
-        evaluation.Complete(decision);
-        return CompleteEvaluation(evaluation);
-    }
-
-    private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
-        => string.Join(", ", matches.Select(match =>
-            $"{match.Pattern} [{match.Source}: {match.Scope}]"));
 
     private static ToolApprovalSessionId? ToApprovalSessionId(string? sessionId)
         => sessionId is null ? null : (ToolApprovalSessionId)sessionId;

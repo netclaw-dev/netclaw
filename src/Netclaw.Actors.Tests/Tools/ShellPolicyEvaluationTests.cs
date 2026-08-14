@@ -851,6 +851,101 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
+    public async Task Terminal_stage_prompts_with_only_the_uncovered_candidates()
+    {
+        var evaluation = CreateEvaluation(
+            BashCandidate("git status"),
+            BashCandidate("git push"));
+        var covered = evaluation.Candidates[0];
+        var uncovered = evaluation.Candidates[1];
+        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+            covered,
+            ShellCoverageKind.Session,
+            ShellPolicyReason.SessionGrant,
+            ShellScopeRelation.ThisChat));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/shell-policy-terminal-prompt",
+            "/work/session",
+            TrustAudience.Personal);
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [ShellPolicyTerminalStage.Complete(context)],
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
+        var prompt = Assert.IsType<ToolApprovalContext>(result.Decision.ApprovalContext);
+        Assert.Equal([uncovered.Candidate], prompt.Candidates);
+        Assert.Equal(ShellCoverageKind.Session, evaluation.CoverageFor(covered.Id).Kind);
+        Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(uncovered.Id).Kind);
+    }
+
+    [Fact]
+    public async Task Terminal_stage_preserves_one_time_allow_precedence()
+    {
+        var evaluation = CreateEvaluationWithExactOneTime(
+            isMessy: false,
+            BashCandidate("git status"));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/shell-policy-terminal-once",
+            "/work/session",
+            TrustAudience.Personal);
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [
+                    ShellPolicyGrantStages.ExactOneTime(
+                        new ToolName(ShellTool.ToolName),
+                        context.SessionDirectory),
+                    ShellPolicyTerminalStage.Complete(context)
+                ],
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, result.Decision.AllowReason);
+    }
+
+    [Fact]
+    public async Task Terminal_stage_records_a_complete_stored_match_decision()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/shell-policy-terminal-stored",
+            "/work/session",
+            TrustAudience.Personal);
+        var service = new FixedShellApprovalService(_ => new ShellApprovalMatchResult(
+            new PersistentGrantStoreStatus.Ready(),
+            [
+                new ShellGrantCandidateMatch(
+                    candidate.Id,
+                    new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
+                    ShellCoverageKind.Session,
+                    NearMisses: [])
+            ]));
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [
+                    ShellPolicyGrantStages.ActorEvidence(
+                        new ShellApprovalEvidenceAdapter(service),
+                        (ToolApprovalSessionId)"signalr/shell-policy-terminal-stored",
+                        TrustAudience.Personal,
+                        new ToolName(ShellTool.ToolName)),
+                    ShellPolicyTerminalStage.Complete(context)
+                ],
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
+        Assert.Equal(ToolAllowReason.StoredApproval, result.Decision.AllowReason);
+        Assert.Equal("PreviouslyApproved", context.Approval.AppliedDecision);
+        Assert.Equal("git status [session: this chat]", context.Approval.AppliedPattern);
+    }
+
+    [Fact]
     public void Coverage_and_trace_change_together()
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));

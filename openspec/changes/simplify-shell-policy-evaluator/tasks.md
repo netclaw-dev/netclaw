@@ -41,9 +41,9 @@
 - [x] 5.3 Extract actor-evidence and approval-exempt stages with no change to candidate order or request count.
 - [x] 5.4 Extract reviewed-safe real-scope and intent-scope stages with no change to catalog behavior.
 - [x] 5.5 Extract exact one-time and persistent-store availability stages while their authority owners stay fixed.
-- [ ] 5.6 Extract final correction, prompt, and allow completion into one terminal stage.
-- [ ] 5.7 Add stage-isolation tests and terminal-overlap tests after each extraction.
-- [ ] 5.8 Run exact fixture parity and adversarial review after each production stage slice.
+- [x] 5.6 Extract final correction, prompt, and allow completion into one terminal stage.
+- [x] 5.7 Add stage-isolation tests and terminal-overlap tests after each extraction.
+- [x] 5.8 Run exact fixture parity and adversarial review after each production stage slice.
 
 ## 6. Consolidate policy facts and prompt context
 
