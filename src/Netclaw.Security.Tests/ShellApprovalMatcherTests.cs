@@ -1109,6 +1109,49 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.False(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
     }
 
+    [Theory]
+    [InlineData(ShellPathStyle.Posix, "./bad\0/*", "/work")]
+    [InlineData(ShellPathStyle.Windows, "bad\0\\*", @"C:\work")]
+    public void Declared_path_resolution_rejects_control_characters(
+        ShellPathStyle pathStyle,
+        string path,
+        string resolutionBase)
+    {
+        Assert.False(ShellPathRules.TryResolve(
+            path,
+            resolutionBase,
+            pathStyle,
+            out _));
+    }
+
+    [Fact]
+    public void ExtractCandidates_rejects_control_character_in_relative_glob()
+    {
+        var arguments = Args("du -sh \"./bad\0/*\"", "/work");
+
+        Assert.Empty(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
+    [Fact]
+    public void PowerShell_candidates_reject_control_character_in_glob()
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7));
+        var arguments = Args(
+            "Get-ChildItem 'C:\\work\\bad\0\\*'",
+            @"C:\work");
+
+        Assert.Empty(matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            arguments));
+        Assert.True(matcher.IsMessy(new ToolName("shell_execute"), arguments));
+    }
+
     [SlopwatchSuppress("SW001", "This theory verifies Bash glob scopes, which do not apply to the Windows shell parser.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     [MemberData(nameof(UnsafeGlobScopeCases))]

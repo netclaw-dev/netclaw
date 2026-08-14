@@ -16,6 +16,7 @@ internal static class ShellPathRules
     {
         normalized = string.Empty;
         if (string.IsNullOrWhiteSpace(path)
+            || path.Any(char.IsControl)
             || pathStyle is not (ShellPathStyle.Posix or ShellPathStyle.Windows))
             return false;
 
@@ -44,12 +45,17 @@ internal static class ShellPathRules
         ShellPathStyle pathStyle,
         out string resolved)
     {
+        resolved = string.Empty;
+        if (string.IsNullOrEmpty(path)
+            || resolutionBase?.Any(char.IsControl) == true)
+        {
+            return false;
+        }
+
         if (TryNormalize(path, pathStyle, out resolved))
             return true;
 
-        resolved = string.Empty;
-        if (string.IsNullOrEmpty(path)
-            || pathStyle == ShellPathStyle.Windows
+        if (pathStyle == ShellPathStyle.Windows
                 && (path.StartsWith('\\')
                     || path.StartsWith('/')
                     || path.Contains(':', StringComparison.Ordinal))

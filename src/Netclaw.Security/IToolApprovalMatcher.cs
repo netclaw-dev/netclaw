@@ -448,7 +448,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         bool resolveUnknownPathsFromEffectiveValues)
     {
         if (!string.IsNullOrWhiteSpace(argument.Resolved))
-            return [argument.Resolved];
+            return argument.Resolved.Any(char.IsControl)
+                ? null
+                : [argument.Resolved];
+
         if (!resolveUnknownPathsFromEffectiveValues)
             return null;
 
@@ -466,11 +469,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var resolved = new List<string>(values.Count);
         foreach (var value in values)
         {
+            if (value.Any(char.IsControl))
+                return null;
+
             var path = ShellTokenizer.NormalizePathToken(
                 value,
                 workingDirectory,
                 pathStyle);
-            if (string.IsNullOrWhiteSpace(path))
+            if (string.IsNullOrWhiteSpace(path)
+                || path.Any(char.IsControl))
                 return null;
 
             resolved.Add(path);
@@ -630,7 +637,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 workingDirectory,
                 pathStyle,
                 out var coveringDirectory)
-            || ContainsSymlinkEntry(coveringDirectory))
+            || ShellPathRules.UsesHostPathStyle(pathStyle)
+            && ContainsSymlinkEntry(coveringDirectory))
         {
             return null;
         }
