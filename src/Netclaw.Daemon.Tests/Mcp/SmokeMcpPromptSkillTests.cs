@@ -11,7 +11,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
-public sealed class SmokeMcpPromptSkillTests
+public sealed class SmokeMcpPromptSkillTests(ITestOutputHelper output)
 {
     [Theory]
     [InlineData("dotnet")]
@@ -30,10 +30,15 @@ public sealed class SmokeMcpPromptSkillTests
 
         await using var harness = McpSmokeHarness.Create(
             new Dictionary<string, McpServerEntry> { ["smoke"] = entry },
-            new ToolRegistry());
+            new ToolRegistry(),
+            output);
 
         await harness.Manager.StartAsync(cts.Token);
 
+        // Fail with the manager's real connect error instead of an opaque null:
+        // StartAsync swallows TimeoutException into an Unreachable status, so a
+        // bare null-check hides whether the python stdio handshake timed out.
+        harness.AssertConnected("smoke");
         var skill = Assert.IsType<SkillEntry>(harness.SkillRegistry.GetByName(setup.SkillName));
         var source = Assert.IsType<McpPromptSkillSource>(skill.Source);
         Assert.Equal(setup.PromptArgumentNames, source.Arguments.Select(static argument => argument.Name));
