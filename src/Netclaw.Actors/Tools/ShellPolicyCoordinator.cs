@@ -144,6 +144,7 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             evaluation.InvalidateStage(ShellPolicyFault.StageException);
             return CompleteEvaluation(evaluation);
         }
@@ -156,29 +157,60 @@ internal sealed class ShellPolicyCoordinator(
         ShellPolicyEvaluation evaluation,
         CancellationToken cancellationToken)
     {
-        var result = await ShellPolicyPipeline.RunAsync(
+        bool Continue(ShellPolicyStageResult result)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return evaluation.ApplyStageResult(result);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Continue(
+                ShellPolicyInitialStages.Syntax(evaluation, toolCall.Name))
+            || !Continue(
+                ShellPolicyInitialStages.ProtectedCausalPaths(evaluation, policy))
+            || !Continue(
+                ShellPolicyInitialStages.CausalDirectories(evaluation, policy, toolCall.Name)))
+        {
+            return CompleteEvaluation(evaluation);
+        }
+
+        var actorEvidence = await ShellPolicyGrantStages.ActorEvidenceAsync(
             evaluation,
-            [
-                ShellPolicyInitialStages.Syntax(toolCall.Name),
-                ShellPolicyInitialStages.ProtectedCausalPaths(policy),
-                ShellPolicyInitialStages.CausalDirectories(policy, toolCall.Name),
-                ShellPolicyGrantStages.ActorEvidence(
-                    _approvalEvidence,
-                    ToApprovalSessionId(context.SessionId),
-                    context.Audience,
-                    new ToolName(tool.Name)),
-                ShellPolicyGrantStages.ApprovalExemptSideEffects(_approvalEvidence.IsAvailable),
-                ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation),
-                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation),
-                ShellPolicyGrantStages.ExactOneTime(
-                    new ToolName(toolCall.Name),
-                    context.SessionDirectory),
-                ShellPolicyGrantStages.PersistentStoreAvailability(),
-                ShellPolicyTerminalStage.Complete(context)
-            ],
+            _approvalEvidence,
+            ToApprovalSessionId(context.SessionId),
+            context.Audience,
+            new ToolName(tool.Name),
             cancellationToken);
-        if (result is ShellPolicyStageResult.Continue)
-            evaluation.Fault(ShellPolicyFault.InvalidStageResult);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Continue(actorEvidence)
+            || !Continue(
+                ShellPolicyGrantStages.ApprovalExemptSideEffects(
+                    evaluation,
+                    _approvalEvidence.IsAvailable))
+            || !Continue(
+                ShellPolicyReviewedSafeStages.RealScope(
+                    evaluation,
+                    policy,
+                    context.Invocation))
+            || !Continue(
+                ShellPolicyReviewedSafeStages.IntentScope(
+                    evaluation,
+                    policy,
+                    context.Invocation))
+            || !Continue(
+                ShellPolicyGrantStages.ExactOneTime(
+                    evaluation,
+                    new ToolName(toolCall.Name),
+                    context.SessionDirectory))
+            || !Continue(
+                ShellPolicyGrantStages.PersistentStoreAvailability(evaluation))
+            || !Continue(
+                ShellPolicyTerminalStage.Complete(evaluation, context)))
+        {
+            return CompleteEvaluation(evaluation);
+        }
+
+        evaluation.InvalidateStage(ShellPolicyFault.InvalidStageResult);
 
         return CompleteEvaluation(evaluation);
     }
@@ -207,4 +239,338 @@ internal sealed class ShellPolicyCoordinator(
 
     private static ToolApprovalSessionId? ToApprovalSessionId(string? sessionId)
         => sessionId is null ? null : (ToolApprovalSessionId)sessionId;
+}
+
+internal static class ShellPolicyInitialStages
+{
+    internal static ShellPolicyStageResult Syntax(
+        ShellPolicyEvaluation evaluation,
+        string toolName)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
+        var projection = evaluation.Projection;
+        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
+            return CreateOneTimeOrPrompt(projection, toolName);
+
+        if (projection.Candidates.Count == 0)
+            return CreateOneTimeOrPrompt(projection, toolName);
+
+        var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        if (projection.Candidates.Any(static candidate =>
+                candidate.Candidate.Shell is null
+                || candidate.Candidate.VerbTokens is null))
+        {
+            return CreateOneTimeOrPrompt(projection, toolName);
+        }
+
+        if (projection.Candidates.Any(candidate =>
+                candidate.Candidate.Shell != expectedShell
+                || candidate.Candidate.VerbTokens!.Count == 0
+                || candidate.Candidate.VerbTokens.Any(static token =>
+                    token.Length == 0 || token.Any(char.IsWhiteSpace))))
+        {
+            return new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidProjection);
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    internal static ShellPolicyStageResult ProtectedCausalPaths(
+        ShellPolicyEvaluation evaluation,
+        ToolAccessPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(policy);
+        return evaluation.Candidates.Any(candidate =>
+                   candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                   && policy.CausalIntentReferencesProtectedPath(
+                       evaluation.Projection.PathFacts.For(candidate.Id)))
+            ? new ShellPolicyStageResult.Complete(
+                ToolAuthorizationDecision.Deny("shell_references_protected_path"))
+            : new ShellPolicyStageResult.Continue();
+    }
+
+    internal static ShellPolicyStageResult CausalDirectories(
+        ShellPolicyEvaluation evaluation,
+        ToolAccessPolicy policy,
+        string toolName)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
+        return evaluation.Candidates.Any(candidate =>
+                   candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                   && candidate.IntentDirectory is { } intentDirectory
+                   && !policy.AreCausalIntentDirectoriesEligible(
+                       intentDirectory,
+                       candidate.IntentFallbackDirectories))
+            ? CreateOneTimeOrPrompt(evaluation.Projection, toolName)
+            : new ShellPolicyStageResult.Continue();
+    }
+
+    private static ShellPolicyStageResult CreateOneTimeOrPrompt(
+        ShellPolicyProjection projection,
+        string toolName)
+        => projection.HasExactOneTimeApproval(toolName, projection.ApprovalContext)
+            ? ShellPolicyStageResult.Complete.ExactOneTime(
+                ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval))
+            : new ShellPolicyStageResult.Complete(
+                ToolAuthorizationDecision.RequiresApproval(projection.ApprovalContext));
+}
+
+internal static class ShellPolicyGrantStages
+{
+    internal static async ValueTask<ShellPolicyStageResult> ActorEvidenceAsync(
+        ShellPolicyEvaluation evaluation,
+        ShellApprovalEvidenceAdapter approvalEvidence,
+        ToolApprovalSessionId? sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(approvalEvidence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName.Value);
+        var projection = evaluation.Projection;
+        var grantCandidates = projection.GrantCandidates;
+        var requestCandidates = grantCandidates
+            .Select(candidate => new ShellGrantCandidate(
+                candidate.Id,
+                candidate.Candidate,
+                projection.ApprovalContext.Cwd))
+            .ToArray();
+        var actorResult = await approvalEvidence.MatchAsync(
+            new ShellApprovalMatchRequest(
+                sessionId,
+                audience,
+                toolName,
+                projection.Environment,
+                Array.AsReadOnly(requestCandidates)),
+            projection.ApprovalContext.Cwd,
+            cancellationToken);
+        if (!ValidatedShellGrantEvidence.TryCreate(
+                actorResult,
+                grantCandidates,
+                projection.ApprovalContext.Cwd,
+                out var grantEvidence)
+            || grantEvidence is null)
+        {
+            return new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidActorEvidence);
+        }
+
+        return evaluation.ApplyActorEvidence(grantEvidence);
+    }
+
+    internal static ShellPolicyStageResult ApprovalExemptSideEffects(
+        ShellPolicyEvaluation evaluation,
+        bool approvalEvidenceAvailable)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        if (!approvalEvidenceAvailable)
+            return new ShellPolicyStageResult.Continue();
+
+        foreach (var candidate in evaluation.Candidates.Where(static item =>
+                     item.Role == ShellPolicyCandidateRole.Ordinary
+                     && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
+        {
+            var result = evaluation.Cover(
+                candidate,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ApprovalExemptSideEffect,
+                ShellScopeRelation.None);
+            if (result is not ShellPolicyStageResult.Continue)
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    internal static ShellPolicyStageResult ExactOneTime(
+        ShellPolicyEvaluation evaluation,
+        ToolName toolName,
+        string? sessionDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName.Value);
+        var uncovered = evaluation.UncoveredCandidates;
+        if (uncovered.Count == 0)
+            return new ShellPolicyStageResult.Continue();
+
+        var remainingContext = evaluation.GetUncoveredApprovalContext(sessionDirectory);
+        if (!evaluation.Projection.HasExactOneTimeApproval(toolName.Value, remainingContext))
+            return new ShellPolicyStageResult.Continue();
+
+        foreach (var candidate in uncovered)
+        {
+            var result = evaluation.Cover(
+                candidate,
+                ShellCoverageKind.OneTime,
+                ShellPolicyReason.OneTimeGrant,
+                ShellScopeRelation.None);
+            if (result is not ShellPolicyStageResult.Continue)
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    internal static ShellPolicyStageResult PersistentStoreAvailability(
+        ShellPolicyEvaluation evaluation)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        if (evaluation.GrantEvidence is null)
+            return new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidActorEvidence);
+
+        return evaluation.UncoveredCandidates.Count > 0
+               && evaluation.GrantEvidence.PersistentStore
+               is PersistentGrantStoreStatus.Unavailable
+            ? new ShellPolicyStageResult.Complete(
+                ToolAuthorizationDecision.Deny("approval_store_unavailable"))
+            : new ShellPolicyStageResult.Continue();
+    }
+}
+
+internal static class ShellPolicyReviewedSafeStages
+{
+    internal static ShellPolicyStageResult RealScope(
+        ShellPolicyEvaluation evaluation,
+        ToolAccessPolicy policy,
+        ToolInvocationContext invocation)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(invocation);
+        if (!CanUseReviewedSafePolicy(evaluation))
+            return new ShellPolicyStageResult.Continue();
+
+        foreach (var candidate in evaluation.Projection.GrantCandidates.Where(candidate =>
+                     candidate.CanUseRealReviewedSafePolicy
+                     && !evaluation.IsCovered(candidate.Id)))
+        {
+            if (!policy.IsReviewedSafeCandidate(
+                    candidate.Candidate,
+                    evaluation.Projection.PathFacts.For(candidate.Id),
+                    invocation))
+            {
+                continue;
+            }
+
+            var result = evaluation.Cover(
+                candidate,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderRealRoot);
+            if (result is not ShellPolicyStageResult.Continue)
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    internal static ShellPolicyStageResult IntentScope(
+        ShellPolicyEvaluation evaluation,
+        ToolAccessPolicy policy,
+        ToolInvocationContext invocation)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(invocation);
+        if (!CanUseReviewedSafePolicy(evaluation))
+            return new ShellPolicyStageResult.Continue();
+
+        foreach (var candidate in evaluation.Candidates.Where(candidate =>
+                     candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
+                     && !evaluation.IsCovered(candidate.Id)))
+        {
+            if (candidate.IntentDirectory is null
+                || candidate.IntentPrerequisites.Count == 0
+                || candidate.IntentPrerequisites.Any(prerequisite =>
+                    !evaluation.IsCovered(prerequisite))
+                || !policy.IsReviewedSafeIntentCandidate(
+                    candidate.Candidate,
+                    evaluation.Projection.PathFacts.For(candidate.Id),
+                    invocation))
+            {
+                continue;
+            }
+
+            var result = evaluation.Cover(
+                candidate,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderIntentRoot);
+            if (result is not ShellPolicyStageResult.Continue)
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    private static bool CanUseReviewedSafePolicy(ShellPolicyEvaluation evaluation)
+        => evaluation.Projection.RunScope.InteractiveApproval
+            is InteractiveApprovalCapability.Available;
+}
+
+internal static class ShellPolicyTerminalStage
+{
+    internal static ShellPolicyStageResult Complete(
+        ShellPolicyEvaluation evaluation,
+        ToolExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        ArgumentNullException.ThrowIfNull(context);
+        var projection = evaluation.Projection;
+        var approvalMatches = evaluation.ApprovalMatches;
+        var uncovered = evaluation.UncoveredCandidates;
+        if (uncovered.Count > 0)
+        {
+            return evaluation.Complete(
+                ToolAuthorizationDecision.RequiresApproval(
+                    evaluation.GetUncoveredApprovalContext(context.SessionDirectory),
+                    approvalMatches));
+        }
+
+        if (!evaluation.AllCovered)
+        {
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"));
+        }
+
+        if (evaluation.HasOneTimeCoverage)
+        {
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Allow(
+                    ToolAllowReason.OneTimeApproval,
+                    approvalMatches));
+        }
+
+        var grantCandidates = projection.GrantCandidates;
+        if (approvalMatches.Count > 0)
+        {
+            if (approvalMatches.Count == grantCandidates.Count)
+            {
+                context.Approval.ApplyDecision(
+                    "PreviouslyApproved",
+                    FormatApprovalMatches(approvalMatches));
+            }
+
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Allow(
+                    ToolAllowReason.StoredApproval,
+                    approvalMatches));
+        }
+
+        return evaluation.Complete(
+            ToolAuthorizationDecision.Allow(
+                grantCandidates.Count == 0
+                    ? ToolAllowReason.ApprovalExemptShellCandidates
+                    : ToolAllowReason.SafeVerbInTrustedScope));
+    }
+
+    private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
+        => string.Join(", ", matches.Select(match =>
+            $"{match.Pattern} [{match.Source}: {match.Scope}]"));
 }

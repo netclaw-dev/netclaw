@@ -121,77 +121,6 @@ internal abstract record ShellPolicyStageResult
         : ShellPolicyStageResult;
 }
 
-internal delegate ValueTask<ShellPolicyStageResult> ShellPolicyStage(
-    ShellPolicyEvaluation evaluation,
-    CancellationToken cancellationToken);
-
-internal static class ShellPolicyPipeline
-{
-    internal static async ValueTask<ShellPolicyStageResult> RunAsync(
-        ShellPolicyEvaluation evaluation,
-        IReadOnlyList<ShellPolicyStage> stages,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(evaluation);
-        ArgumentNullException.ThrowIfNull(stages);
-
-        cancellationToken.ThrowIfCancellationRequested();
-        if (evaluation.TerminalFault is { } terminalFault)
-            return new ShellPolicyStageResult.Fault(terminalFault);
-
-        if (evaluation.TerminalDecision is { } terminalDecision)
-            return new ShellPolicyStageResult.Complete(terminalDecision);
-
-        foreach (var stage in stages)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (stage is null)
-                return evaluation.InvalidateStage(ShellPolicyFault.InvalidStageResult);
-
-            ShellPolicyStageResult? result;
-            try
-            {
-                result = await stage(evaluation, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                return evaluation.InvalidateStage(ShellPolicyFault.StageException);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            switch (result)
-            {
-                case ShellPolicyStageResult.Continue
-                    when evaluation.TerminalDecision is null:
-                    continue;
-                case ShellPolicyStageResult.Complete complete
-                    when evaluation.TerminalDecision is null:
-                    return evaluation.Complete(
-                        complete.Decision,
-                        complete.AllowsUncoveredOneTime);
-                case ShellPolicyStageResult.Complete complete
-                    when ReferenceEquals(evaluation.TerminalDecision, complete.Decision):
-                    return complete;
-                case ShellPolicyStageResult.Fault fault
-                    when evaluation.TerminalFault == fault.Reason:
-                    return fault;
-                case ShellPolicyStageResult.Fault fault
-                    when evaluation.TerminalDecision is null:
-                    return evaluation.Fault(fault.Reason);
-                default:
-                    return evaluation.InvalidateStage(ShellPolicyFault.InvalidStageResult);
-            }
-        }
-
-        return new ShellPolicyStageResult.Continue();
-    }
-}
-
 internal sealed record ShellPolicyAuthorization
 {
     internal ShellPolicyAuthorization(
@@ -252,12 +181,6 @@ internal sealed class ShellPolicyEvaluation
     internal ShellPolicyProjection Projection { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates => _candidateView;
-
-    internal IReadOnlyList<ShellPolicyCandidateId> UncoveredIds => Array.AsReadOnly(
-        _coverage
-            .Where(static item => item.Kind == ShellCoverageKind.Uncovered)
-            .Select(static item => item.CandidateId)
-            .ToArray());
 
     internal bool AllCovered => _coverage.All(static item =>
         item.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied);
@@ -434,6 +357,29 @@ internal sealed class ShellPolicyEvaluation
         _completedTrace = _trace.Complete(decision);
         _terminalDecision = decision;
         return new ShellPolicyStageResult.Complete(decision);
+    }
+
+    internal bool ApplyStageResult(ShellPolicyStageResult? result)
+    {
+        switch (result)
+        {
+            case ShellPolicyStageResult.Continue when _terminalDecision is null:
+                return true;
+            case ShellPolicyStageResult.Complete complete when _terminalDecision is null:
+                Complete(complete.Decision, complete.AllowsUncoveredOneTime);
+                return false;
+            case ShellPolicyStageResult.Complete complete
+                when ReferenceEquals(_terminalDecision, complete.Decision):
+                return false;
+            case ShellPolicyStageResult.Fault fault when _terminalFault == fault.Reason:
+                return false;
+            case ShellPolicyStageResult.Fault fault when _terminalDecision is null:
+                Fault(fault.Reason);
+                return false;
+            default:
+                InvalidateStage(ShellPolicyFault.InvalidStageResult);
+                return false;
+        }
     }
 
     internal ShellPolicyStageResult Fault(ShellPolicyFault reason)

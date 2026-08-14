@@ -19,347 +19,14 @@ public sealed class ShellPolicyEvaluationTests
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
     [Fact]
-    public async Task Pipeline_stops_after_the_first_complete_result()
-    {
-        var evaluation = CreateEvaluation();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        var visited = new List<int>();
-        ShellPolicyStage[] stages =
-        [
-            (_, _) =>
-            {
-                visited.Add(1);
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            },
-            (_, _) =>
-            {
-                visited.Add(2);
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Complete(prompt));
-            },
-            (_, _) =>
-            {
-                visited.Add(3);
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Same(prompt, result.Decision);
-        Assert.Equal([1, 2], visited);
-        Assert.Same(prompt, evaluation.TerminalDecision);
-        Assert.NotNull(evaluation.CompletedTrace);
-        Assert.Single(evaluation.CompletedTrace.Rows);
-    }
-
-    [Fact]
-    public async Task Pipeline_stops_after_a_stage_fault()
-    {
-        var evaluation = CreateEvaluation(BashCandidate("git status"));
-        var visited = new List<int>();
-        ShellPolicyStage[] stages =
-        [
-            (_, _) =>
-            {
-                visited.Add(1);
-                return ValueTask.FromResult<ShellPolicyStageResult>(
-                    new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidCoverage));
-            },
-            (_, _) =>
-            {
-                visited.Add(2);
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidCoverage, result.Reason);
-        Assert.Equal([1], visited);
-        Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
-        Assert.Equal(ShellPolicyFault.InvalidCoverage, evaluation.TerminalFault);
-    }
-
-    [Fact]
-    public async Task Pipeline_preserves_coverage_trace_when_a_later_stage_throws()
-    {
-        var evaluation = CreateEvaluation(BashCandidate("git status"));
-        var candidate = Assert.Single(evaluation.Candidates);
-        ShellPolicyStage[] stages =
-        [
-            (state, _) => ValueTask.FromResult(state.Cover(
-                candidate,
-                ShellCoverageKind.Session,
-                ShellPolicyReason.SessionGrant,
-                ShellScopeRelation.ThisChat)),
-            static (_, _) => throw new InvalidOperationException("stage failed")
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.StageException, result.Reason);
-        Assert.NotNull(evaluation.CompletedTrace);
-        Assert.Collection(
-            evaluation.CompletedTrace.Rows,
-            row => Assert.Equal(ShellPolicyTraceStage.StoredGrantMatch, row.Stage),
-            row =>
-            {
-                Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
-                Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
-            });
-    }
-
-    [Fact]
-    public async Task Pipeline_propagates_caller_cancellation()
-    {
-        var evaluation = CreateEvaluation();
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-        ShellPolicyStage[] stages =
-        [
-            static (_, _) => ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue())
-        ];
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, cancellation.Token));
-
-        Assert.Null(evaluation.TerminalDecision);
-        Assert.Null(evaluation.CompletedTrace);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Pipeline_propagates_cancellation_before_inspecting_stages(bool hasNullStage)
-    {
-        var evaluation = CreateEvaluation();
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-        ShellPolicyStage[] stages = hasNullStage ? [null!] : [];
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, cancellation.Token));
-
-        Assert.Null(evaluation.TerminalDecision);
-        Assert.Null(evaluation.CompletedTrace);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Pipeline_propagates_cancellation_set_by_a_stage(bool throwsAfterCancellation)
-    {
-        var evaluation = CreateEvaluation();
-        using var cancellation = new CancellationTokenSource();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        ShellPolicyStage[] stages =
-        [
-            (_, _) =>
-            {
-                cancellation.Cancel();
-                if (throwsAfterCancellation)
-                    throw new InvalidOperationException("stage failed after cancellation");
-
-                return ValueTask.FromResult<ShellPolicyStageResult>(
-                    new ShellPolicyStageResult.Complete(prompt));
-            }
-        ];
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, cancellation.Token));
-
-        Assert.Null(evaluation.TerminalDecision);
-        Assert.Null(evaluation.CompletedTrace);
-    }
-
-    [Fact]
-    public async Task Pipeline_does_not_invoke_stages_after_a_terminal_decision()
-    {
-        var evaluation = CreateEvaluation();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(prompt));
-        var stageVisited = false;
-        ShellPolicyStage[] stages =
-        [
-            (_, _) =>
-            {
-                stageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Same(prompt, result.Decision);
-        Assert.False(stageVisited);
-    }
-
-    [Fact]
-    public async Task Pipeline_does_not_invoke_stages_after_a_terminal_fault()
-    {
-        var evaluation = CreateEvaluation();
-        Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Fault(ShellPolicyFault.InvalidCoverage));
-        var stageVisited = false;
-        ShellPolicyStage[] stages =
-        [
-            (_, _) =>
-            {
-                stageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidCoverage, result.Reason);
-        Assert.False(stageVisited);
-    }
-
-    [Fact]
-    public async Task Pipeline_denies_when_a_stage_completes_then_returns_continue()
-    {
-        var evaluation = CreateEvaluation();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        ShellPolicyStage[] stages =
-        [
-            (state, _) =>
-            {
-                Assert.IsType<ShellPolicyStageResult.Complete>(state.Complete(prompt));
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
-        Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-        Assert.Single(Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows);
-    }
-
-    [Fact]
-    public async Task Pipeline_denies_when_a_stage_completes_with_a_different_result()
-    {
-        var evaluation = CreateEvaluation();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        var deny = ToolAuthorizationDecision.Deny("shell_references_protected_path");
-        ShellPolicyStage[] stages =
-        [
-            (state, _) =>
-            {
-                Assert.IsType<ShellPolicyStageResult.Complete>(state.Complete(prompt));
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Complete(deny));
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-    }
-
-    [Fact]
-    public async Task Pipeline_denies_when_a_stage_faults_then_returns_continue()
-    {
-        var evaluation = CreateEvaluation();
-        ShellPolicyStage[] stages =
-        [
-            (state, _) =>
-            {
-                Assert.IsType<ShellPolicyStageResult.Fault>(state.Fault(ShellPolicyFault.InvalidCoverage));
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-    }
-
-    [Fact]
-    public async Task Pipeline_denies_when_a_stage_completes_then_throws()
-    {
-        var evaluation = CreateEvaluation();
-        var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        ShellPolicyStage[] stages =
-        [
-            (state, _) =>
-            {
-                Assert.IsType<ShellPolicyStageResult.Complete>(state.Complete(prompt));
-                throw new InvalidOperationException("stage failed");
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.StageException, result.Reason);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-    }
-
-    [Fact]
-    public async Task Pipeline_rejects_an_invalid_fault_enum()
-    {
-        var evaluation = CreateEvaluation();
-        ShellPolicyStage[] stages =
-        [
-            static (_, _) => ValueTask.FromResult<ShellPolicyStageResult>(
-                new ShellPolicyStageResult.Fault((ShellPolicyFault)999))
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, evaluation.TerminalFault);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Pipeline_rejects_null_stages_and_results_before_later_stages(bool nullStage)
-    {
-        var evaluation = CreateEvaluation();
-        var laterStageVisited = false;
-        ShellPolicyStage[] stages =
-        [
-            nullStage
-                ? null!
-                : static (_, _) => ValueTask.FromResult<ShellPolicyStageResult>(null!),
-            (_, _) =>
-            {
-                laterStageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
-            }
-        ];
-
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
-
-        Assert.Equal(ShellPolicyFault.InvalidStageResult, result.Reason);
-        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
-        Assert.False(laterStageVisited);
-    }
-
-    [Fact]
     public async Task Syntax_stage_prompts_before_a_later_stage_for_untyped_candidates()
     {
         var candidate = new ApprovalCandidate("git status", "/work");
         var evaluation = CreateEvaluation(candidate);
         var laterStageVisited = false;
-        ShellPolicyStage[] stages =
+        TestStage[] stages =
         [
-            ShellPolicyInitialStages.Syntax(ShellTool.ToolName),
+            SyntaxStage(ShellTool.ToolName),
             (_, _) =>
             {
                 laterStageVisited = true;
@@ -368,7 +35,7 @@ public sealed class ShellPolicyEvaluationTests
         ];
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
         Assert.False(laterStageVisited);
@@ -384,9 +51,9 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluationWithExactOneTime(isMessy, candidate);
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
-                [ShellPolicyInitialStages.Syntax(ShellTool.ToolName)],
+                [SyntaxStage(ShellTool.ToolName)],
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
@@ -406,9 +73,9 @@ public sealed class ShellPolicyEvaluationTests
         };
         var evaluation = CreateEvaluation(candidate);
         var laterStageVisited = false;
-        ShellPolicyStage[] stages =
+        TestStage[] stages =
         [
-            ShellPolicyInitialStages.Syntax(ShellTool.ToolName),
+            SyntaxStage(ShellTool.ToolName),
             (_, _) =>
             {
                 laterStageVisited = true;
@@ -417,7 +84,7 @@ public sealed class ShellPolicyEvaluationTests
         ];
 
         var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
 
         Assert.Equal(ShellPolicyFault.InvalidProjection, result.Reason);
         Assert.False(laterStageVisited);
@@ -431,9 +98,9 @@ public sealed class ShellPolicyEvaluationTests
             "cd /tmp && inspect; head private.log",
             ["/tmp/private.log"]);
         var laterStageVisited = false;
-        ShellPolicyStage[] stages =
+        TestStage[] stages =
         [
-            ShellPolicyInitialStages.ProtectedCausalPaths(policy),
+            ProtectedCausalPathsStage(policy),
             (_, _) =>
             {
                 laterStageVisited = true;
@@ -442,7 +109,7 @@ public sealed class ShellPolicyEvaluationTests
         ];
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(evaluation, stages, TestContext.Current.CancellationToken));
+            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
         Assert.Equal("shell_references_protected_path", result.Decision.DenyReason);
@@ -457,9 +124,9 @@ public sealed class ShellPolicyEvaluationTests
             ["/work/result.log"]);
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
-                [ShellPolicyInitialStages.ProtectedCausalPaths(policy)],
+                [ProtectedCausalPathsStage(policy)],
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
@@ -543,9 +210,9 @@ public sealed class ShellPolicyEvaluationTests
         var (evaluation, policy, _) = CreateCausalEvaluation(
             "cd /tmp && inspect; head result.log");
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyInitialStages.CausalDirectories(policy, ShellTool.ToolName)],
+            [CausalDirectoriesStage(policy, ShellTool.ToolName)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
@@ -567,9 +234,9 @@ public sealed class ShellPolicyEvaluationTests
                 $"cd {alias} && inspect; head result.log");
 
             var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-                await ShellPolicyPipeline.RunAsync(
+                await RunStagesAsync(
                     evaluation,
-                    [ShellPolicyInitialStages.CausalDirectories(policy, ShellTool.ToolName)],
+                    [CausalDirectoriesStage(policy, ShellTool.ToolName)],
                     TestContext.Current.CancellationToken));
 
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
@@ -601,9 +268,9 @@ public sealed class ShellPolicyEvaluationTests
                 ]);
         });
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyGrantStages.ActorEvidence(
+            [ActorEvidenceStage(
                 new ShellApprovalEvidenceAdapter(service),
                 (ToolApprovalSessionId)"signalr/shell-policy-actor-stage",
                 TrustAudience.Personal,
@@ -634,9 +301,9 @@ public sealed class ShellPolicyEvaluationTests
             new PersistentGrantStoreStatus.Ready(),
             CandidateMatches: []));
         var laterStageVisited = false;
-        ShellPolicyStage[] stages =
+        TestStage[] stages =
         [
-            ShellPolicyGrantStages.ActorEvidence(
+            ActorEvidenceStage(
                 new ShellApprovalEvidenceAdapter(service),
                 (ToolApprovalSessionId)"signalr/shell-policy-invalid-actor-stage",
                 TrustAudience.Personal,
@@ -649,7 +316,7 @@ public sealed class ShellPolicyEvaluationTests
         ];
 
         var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
                 stages,
                 TestContext.Current.CancellationToken));
@@ -686,15 +353,15 @@ public sealed class ShellPolicyEvaluationTests
         });
         var adapter = new ShellApprovalEvidenceAdapter(service);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
             [
-                ShellPolicyGrantStages.ActorEvidence(
+                ActorEvidenceStage(
                     adapter,
                     (ToolApprovalSessionId)"signalr/shell-policy-trace-order",
                     TrustAudience.Personal,
                     new ToolName(ShellTool.ToolName)),
-                ShellPolicyGrantStages.ApprovalExemptSideEffects(adapter.IsAvailable)
+                ApprovalExemptSideEffectsStage(adapter.IsAvailable)
             ],
             TestContext.Current.CancellationToken);
 
@@ -728,15 +395,15 @@ public sealed class ShellPolicyEvaluationTests
             CandidateMatches: []));
         var adapter = new ShellApprovalEvidenceAdapter(serviceAvailable ? service : null);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
             [
-                ShellPolicyGrantStages.ActorEvidence(
+                ActorEvidenceStage(
                     adapter,
                     sessionId: null,
                     TrustAudience.Personal,
                     new ToolName(ShellTool.ToolName)),
-                ShellPolicyGrantStages.ApprovalExemptSideEffects(adapter.IsAvailable)
+                ApprovalExemptSideEffectsStage(adapter.IsAvailable)
             ],
             TestContext.Current.CancellationToken);
 
@@ -761,9 +428,9 @@ public sealed class ShellPolicyEvaluationTests
             "head");
         var candidate = Assert.Single(evaluation.Candidates);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
@@ -791,9 +458,9 @@ public sealed class ShellPolicyEvaluationTests
             interactive: true,
             phrase);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
@@ -848,9 +515,9 @@ public sealed class ShellPolicyEvaluationTests
             @"C:\work",
             "Get-Content");
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
@@ -870,9 +537,9 @@ public sealed class ShellPolicyEvaluationTests
             candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
         Assert.NotEmpty(consumer.IntentPrerequisites);
 
-        var beforeCoverage = await ShellPolicyPipeline.RunAsync(
+        var beforeCoverage = await RunStagesAsync(
             evaluation,
-            [ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)],
+            [IntentScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(beforeCoverage);
@@ -888,11 +555,11 @@ public sealed class ShellPolicyEvaluationTests
                 ShellScopeRelation.ThisChat));
         }
 
-        var afterCoverage = await ShellPolicyPipeline.RunAsync(
+        var afterCoverage = await RunStagesAsync(
             evaluation,
             [
-                ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation),
-                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)
+                RealScopeStage(policy, context.Invocation),
+                IntentScopeStage(policy, context.Invocation)
             ],
             TestContext.Current.CancellationToken);
 
@@ -920,9 +587,9 @@ public sealed class ShellPolicyEvaluationTests
             BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyGrantStages.ExactOneTime(
+            [ExactOneTimeStage(
                 new ToolName(ShellTool.ToolName),
                 "/work/session")],
             TestContext.Current.CancellationToken);
@@ -954,9 +621,9 @@ public sealed class ShellPolicyEvaluationTests
             "/work/session",
             TrustAudience.Personal);
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
-            [ShellPolicyGrantStages.ExactOneTime(
+            [ExactOneTimeStage(
                 new ToolName("different_tool"),
                 context.SessionDirectory)],
             TestContext.Current.CancellationToken);
@@ -967,9 +634,9 @@ public sealed class ShellPolicyEvaluationTests
 
         var oneTimeContext = evaluation.GetUncoveredApprovalContext(context.SessionDirectory);
         var terminal = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
-                [ShellPolicyTerminalStage.Complete(context)],
+                [CompleteStage(context)],
                 TestContext.Current.CancellationToken));
 
         Assert.Same(oneTimeContext, terminal.Decision.ApprovalContext);
@@ -1228,15 +895,15 @@ public sealed class ShellPolicyEvaluationTests
                     NearMisses: [])
             ]));
 
-        var result = await ShellPolicyPipeline.RunAsync(
+        var result = await RunStagesAsync(
             evaluation,
             [
-                ShellPolicyGrantStages.ActorEvidence(
+                ActorEvidenceStage(
                     new ShellApprovalEvidenceAdapter(service),
                     (ToolApprovalSessionId)"signalr/shell-policy-store-stage",
                     TrustAudience.Personal,
                     new ToolName(ShellTool.ToolName)),
-                ShellPolicyGrantStages.PersistentStoreAvailability()
+                PersistentStoreAvailabilityStage()
             ],
             TestContext.Current.CancellationToken);
 
@@ -1262,9 +929,9 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluation(BashCandidate("git status"));
 
         var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
-                [ShellPolicyGrantStages.PersistentStoreAvailability()],
+                [PersistentStoreAvailabilityStage()],
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
@@ -1290,9 +957,9 @@ public sealed class ShellPolicyEvaluationTests
             TrustAudience.Personal);
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
-                [ShellPolicyTerminalStage.Complete(context)],
+                [CompleteStage(context)],
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
@@ -1314,13 +981,13 @@ public sealed class ShellPolicyEvaluationTests
             TrustAudience.Personal);
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
                 [
-                    ShellPolicyGrantStages.ExactOneTime(
+                    ExactOneTimeStage(
                         new ToolName(ShellTool.ToolName),
                         context.SessionDirectory),
-                    ShellPolicyTerminalStage.Complete(context)
+                    CompleteStage(context)
                 ],
                 TestContext.Current.CancellationToken));
 
@@ -1348,15 +1015,15 @@ public sealed class ShellPolicyEvaluationTests
             ]));
 
         var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await ShellPolicyPipeline.RunAsync(
+            await RunStagesAsync(
                 evaluation,
                 [
-                    ShellPolicyGrantStages.ActorEvidence(
+                    ActorEvidenceStage(
                         new ShellApprovalEvidenceAdapter(service),
                         (ToolApprovalSessionId)"signalr/shell-policy-terminal-stored",
                         TrustAudience.Personal,
                         new ToolName(ShellTool.ToolName)),
-                    ShellPolicyTerminalStage.Complete(context)
+                    CompleteStage(context)
                 ],
                 TestContext.Current.CancellationToken));
 
@@ -1489,7 +1156,7 @@ public sealed class ShellPolicyEvaluationTests
             ShellScopeRelation.ThisChat));
 
         Assert.Equal(ShellPolicyFault.InvalidCandidateId, result.Reason);
-        Assert.Single(evaluation.UncoveredIds);
+        Assert.Single(evaluation.UncoveredCandidates);
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
     }
 
@@ -1652,6 +1319,82 @@ public sealed class ShellPolicyEvaluationTests
             ToolAccessDecision.RequiresApproval(projection.ApprovalContext),
             analysis));
     }
+
+    private delegate ValueTask<ShellPolicyStageResult> TestStage(
+        ShellPolicyEvaluation evaluation,
+        CancellationToken cancellationToken);
+
+    private static async ValueTask<ShellPolicyStageResult> RunStagesAsync(
+        ShellPolicyEvaluation evaluation,
+        IReadOnlyList<TestStage> stages,
+        CancellationToken cancellationToken)
+    {
+        foreach (var stage in stages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await stage(evaluation, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!evaluation.ApplyStageResult(result))
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    private static TestStage SyntaxStage(string toolName)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyInitialStages.Syntax(evaluation, toolName));
+
+    private static TestStage ProtectedCausalPathsStage(ToolAccessPolicy policy)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyInitialStages.ProtectedCausalPaths(evaluation, policy));
+
+    private static TestStage CausalDirectoriesStage(ToolAccessPolicy policy, string toolName)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyInitialStages.CausalDirectories(evaluation, policy, toolName));
+
+    private static TestStage ActorEvidenceStage(
+        ShellApprovalEvidenceAdapter approvalEvidence,
+        ToolApprovalSessionId? sessionId,
+        TrustAudience audience,
+        ToolName toolName)
+        => (evaluation, cancellationToken) => ShellPolicyGrantStages.ActorEvidenceAsync(
+            evaluation,
+            approvalEvidence,
+            sessionId,
+            audience,
+            toolName,
+            cancellationToken);
+
+    private static TestStage ApprovalExemptSideEffectsStage(bool approvalEvidenceAvailable)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyGrantStages.ApprovalExemptSideEffects(
+                evaluation,
+                approvalEvidenceAvailable));
+
+    private static TestStage RealScopeStage(
+        ToolAccessPolicy policy,
+        ToolInvocationContext invocation)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyReviewedSafeStages.RealScope(evaluation, policy, invocation));
+
+    private static TestStage IntentScopeStage(
+        ToolAccessPolicy policy,
+        ToolInvocationContext invocation)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyReviewedSafeStages.IntentScope(evaluation, policy, invocation));
+
+    private static TestStage ExactOneTimeStage(ToolName toolName, string? sessionDirectory)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyGrantStages.ExactOneTime(evaluation, toolName, sessionDirectory));
+
+    private static TestStage PersistentStoreAvailabilityStage()
+        => static (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyGrantStages.PersistentStoreAvailability(evaluation));
+
+    private static TestStage CompleteStage(ToolExecutionContext context)
+        => (evaluation, _) => ValueTask.FromResult(
+            ShellPolicyTerminalStage.Complete(evaluation, context));
 
     private static ShellPolicyEvaluation CreateEvaluation(params ApprovalCandidate[] candidates)
         => CreateEvaluation(
