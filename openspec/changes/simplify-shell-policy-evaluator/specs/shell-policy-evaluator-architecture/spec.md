@@ -38,7 +38,7 @@ The state SHALL preserve candidate identity and order for the complete authoriza
 
 ### Requirement: Shell policy stages have one fixed order
 
-The system SHALL execute synchronous preflight and asynchronous completion stages in the documented order. A terminal stage result SHALL stop all later policy stages.
+The system SHALL execute synchronous preflight and asynchronous completion stages in the documented order. A terminal stage outcome SHALL stop all later policy stages.
 
 #### Scenario: Protected path precedes grant and safe policy
 

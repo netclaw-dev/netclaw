@@ -8,7 +8,7 @@
 
 ## 2. Add call-local policy state
 
-- [x] 2.1 Add internal closed result types for preflight, stage completion, and typed policy faults.
+- [x] 2.1 Add a closed preflight result, closed stage outcome, and typed policy faults.
 - [x] 2.2 Add the internal call-local evaluation state with immutable candidate identity and one coverage slot per candidate.
 - [x] 2.3 Route coverage and its bounded trace row through one atomic state operation.
 - [x] 2.4 Add tests for duplicate coverage, changed candidate facts, invalid candidate IDs, invalid transitions, and multiple terminal results.

@@ -74,51 +74,11 @@ internal abstract record ShellPolicyPreflightResult
     }
 }
 
-internal abstract record ShellPolicyStageResult
+internal enum ShellPolicyStageOutcome
 {
-    private ShellPolicyStageResult()
-    {
-    }
-
-    internal sealed record Continue : ShellPolicyStageResult;
-
-    internal sealed record Complete : ShellPolicyStageResult
-    {
-        internal Complete(ToolAuthorizationDecision decision)
-            : this(decision, allowsUncoveredOneTime: false)
-        {
-        }
-
-        private Complete(
-            ToolAuthorizationDecision decision,
-            bool allowsUncoveredOneTime)
-        {
-            ArgumentNullException.ThrowIfNull(decision);
-            Decision = decision;
-            AllowsUncoveredOneTime = allowsUncoveredOneTime;
-        }
-
-        internal ToolAuthorizationDecision Decision { get; }
-
-        internal bool AllowsUncoveredOneTime { get; }
-
-        internal static Complete ExactOneTime(ToolAuthorizationDecision decision)
-        {
-            ArgumentNullException.ThrowIfNull(decision);
-            if (decision.Outcome != ToolAuthorizationOutcome.Allowed
-                || decision.AllowReason != ToolAllowReason.OneTimeApproval)
-            {
-                throw new ArgumentException(
-                    "An uncovered completion requires an exact one-time allow.",
-                    nameof(decision));
-            }
-
-            return new Complete(decision, allowsUncoveredOneTime: true);
-        }
-    }
-
-    internal sealed record Fault(ShellPolicyFault Reason)
-        : ShellPolicyStageResult;
+    Invalid = 0,
+    Continue = 1,
+    Complete = 2,
 }
 
 internal sealed record ShellPolicyAuthorization
@@ -224,11 +184,11 @@ internal sealed class ShellPolicyEvaluation
         return CoverageFor(candidateId) != ShellPolicyCoverageSource.Uncovered;
     }
 
-    internal ShellPolicyStageResult ApplyActorEvidence(ValidatedShellGrantEvidence evidence)
+    internal ShellPolicyStageOutcome ApplyActorEvidence(ValidatedShellGrantEvidence evidence)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         if (_terminalDecision is not null)
-            return new ShellPolicyStageResult.Complete(_terminalDecision);
+            return ShellPolicyStageOutcome.Complete;
 
         if (_grantEvidence is not null
             || !ReferenceEquals(evidence.SourceCandidates, Projection.GrantCandidates))
@@ -244,7 +204,7 @@ internal sealed class ShellPolicyEvaluation
                     candidateEvidence.Candidate,
                     ToCoverageSource(grantCoverage),
                     actorEvidence.GrantCreatedAt);
-                if (result is not ShellPolicyStageResult.Continue)
+                if (result != ShellPolicyStageOutcome.Continue)
                     return result;
             }
             else
@@ -253,10 +213,10 @@ internal sealed class ShellPolicyEvaluation
             }
         }
 
-        return new ShellPolicyStageResult.Continue();
+        return ShellPolicyStageOutcome.Continue;
     }
 
-    internal ShellPolicyStageResult Cover(
+    internal ShellPolicyStageOutcome Cover(
         ShellPolicyCandidate candidate,
         ShellPolicyCoverageSource source,
         DateTimeOffset? grantTimestamp = null)
@@ -264,7 +224,7 @@ internal sealed class ShellPolicyEvaluation
         ArgumentNullException.ThrowIfNull(candidate);
 
         if (_terminalDecision is not null)
-            return new ShellPolicyStageResult.Complete(_terminalDecision);
+            return ShellPolicyStageOutcome.Complete;
 
         var index = candidate.Id.Value;
         if ((uint)index >= (uint)Candidates.Count)
@@ -289,17 +249,17 @@ internal sealed class ShellPolicyEvaluation
         _trace.AddCoverage(source, candidate, grantTimestamp);
         _coverage[index] = source;
         _uncoveredApprovalContext = null;
-        return new ShellPolicyStageResult.Continue();
+        return ShellPolicyStageOutcome.Continue;
     }
 
-    internal ShellPolicyStageResult Complete(
+    internal ShellPolicyStageOutcome Complete(
         ToolAuthorizationDecision decision,
         bool allowsUncoveredOneTime = false)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
         if (_terminalDecision is not null)
-            return new ShellPolicyStageResult.Complete(_terminalDecision);
+            return ShellPolicyStageOutcome.Complete;
 
         var mayComplete = decision.Outcome switch
         {
@@ -315,25 +275,16 @@ internal sealed class ShellPolicyEvaluation
 
         _completedTrace = _trace.Complete(decision);
         _terminalDecision = decision;
-        return new ShellPolicyStageResult.Complete(decision);
+        return ShellPolicyStageOutcome.Complete;
     }
 
-    internal bool ApplyStageResult(ShellPolicyStageResult? result)
+    internal bool ApplyStageOutcome(ShellPolicyStageOutcome outcome)
     {
-        switch (result)
+        switch (outcome)
         {
-            case ShellPolicyStageResult.Continue when _terminalDecision is null:
+            case ShellPolicyStageOutcome.Continue when _terminalDecision is null:
                 return true;
-            case ShellPolicyStageResult.Complete complete when _terminalDecision is null:
-                Complete(complete.Decision, complete.AllowsUncoveredOneTime);
-                return false;
-            case ShellPolicyStageResult.Complete complete
-                when ReferenceEquals(_terminalDecision, complete.Decision):
-                return false;
-            case ShellPolicyStageResult.Fault fault when _terminalFault == fault.Reason:
-                return false;
-            case ShellPolicyStageResult.Fault fault when _terminalDecision is null:
-                Fault(fault.Reason);
+            case ShellPolicyStageOutcome.Complete when _terminalDecision is not null:
                 return false;
             default:
                 InvalidateStage(ShellPolicyFault.InvalidStageResult);
@@ -341,26 +292,26 @@ internal sealed class ShellPolicyEvaluation
         }
     }
 
-    internal ShellPolicyStageResult Fault(ShellPolicyFault reason)
+    internal ShellPolicyStageOutcome Fault(ShellPolicyFault reason)
     {
         if (!Enum.IsDefined(reason))
             reason = ShellPolicyFault.InvalidStageResult;
 
-        if (_terminalFault is { } terminalFault)
-            return new ShellPolicyStageResult.Fault(terminalFault);
+        if (_terminalFault is not null)
+            return ShellPolicyStageOutcome.Complete;
 
         if (_terminalDecision is not null)
-            return new ShellPolicyStageResult.Complete(_terminalDecision);
+            return ShellPolicyStageOutcome.Complete;
 
         return Fail(reason);
     }
 
-    internal ShellPolicyStageResult.Fault InvalidateStage(ShellPolicyFault reason) =>
+    internal ShellPolicyStageOutcome InvalidateStage(ShellPolicyFault reason) =>
         Fail(
             Enum.IsDefined(reason) ? reason : ShellPolicyFault.InvalidStageResult,
             replaceCompletion: true);
 
-    private ShellPolicyStageResult.Fault Fail(
+    private ShellPolicyStageOutcome Fail(
         ShellPolicyFault reason,
         bool replaceCompletion = false)
     {
@@ -370,7 +321,7 @@ internal sealed class ShellPolicyEvaluation
             : _trace.Complete(decision);
         _terminalDecision = decision;
         _terminalFault = reason;
-        return new ShellPolicyStageResult.Fault(reason);
+        return ShellPolicyStageOutcome.Complete;
     }
 
     private static ShellPolicyCoverageSource ToCoverageSource(ShellCoverageKind coverage)

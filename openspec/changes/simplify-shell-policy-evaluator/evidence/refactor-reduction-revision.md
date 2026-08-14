@@ -80,6 +80,14 @@ The slice removes another 35 production lines without changing the control-flow 
 
 The cumulative footprint uses 8,428 lines and 517 control-flow lines. The complete reduction gate remains open.
 
+## Closed stage-outcome slice
+
+This slice removes the allocation-backed stage result hierarchy left behind by the deleted delegate pipeline. Stages now mutate only `ShellPolicyEvaluation` and return a closed `Continue` or `Complete` outcome.
+
+The coordinator verifies that the outcome agrees with terminal state. Invalid enums, completion without a terminal decision, and continuation after completion fail closed.
+
+The slice removes another 42 production lines without changing the control-flow count. The cumulative footprint uses 8,386 lines and 517 control-flow lines. The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

@@ -30,16 +30,17 @@ public sealed class ShellPolicyEvaluationTests
             (_, _) =>
             {
                 laterStageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+                return ValueTask.FromResult(ShellPolicyStageOutcome.Continue);
             }
         ];
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.False(laterStageVisited);
-        Assert.Single(Assert.IsType<ToolApprovalContext>(result.Decision.ApprovalContext).Candidates!);
+        Assert.Single(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).Candidates!);
     }
 
     [Theory]
@@ -50,14 +51,15 @@ public sealed class ShellPolicyEvaluationTests
         var candidate = new ApprovalCandidate("git status", "/work");
         var evaluation = CreateEvaluationWithExactOneTime(isMessy, candidate);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [SyntaxStage(ShellTool.ToolName)],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [SyntaxStage(ShellTool.ToolName)],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
-        Assert.Equal(ToolAllowReason.OneTimeApproval, result.Decision.AllowReason);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, decision.AllowReason);
         var trace = Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace);
         var completion = Assert.Single(trace.Rows);
         Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
@@ -79,14 +81,14 @@ public sealed class ShellPolicyEvaluationTests
             (_, _) =>
             {
                 laterStageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+                return ValueTask.FromResult(ShellPolicyStageOutcome.Continue);
             }
         ];
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken);
 
-        Assert.Equal(ShellPolicyFault.InvalidProjection, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidProjection, evaluation.TerminalFault);
         Assert.False(laterStageVisited);
         Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
     }
@@ -104,15 +106,16 @@ public sealed class ShellPolicyEvaluationTests
             (_, _) =>
             {
                 laterStageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+                return ValueTask.FromResult(ShellPolicyStageOutcome.Continue);
             }
         ];
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(evaluation, stages, TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
-        Assert.Equal("shell_references_protected_path", result.Decision.DenyReason);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
         Assert.False(laterStageVisited);
     }
 
@@ -123,14 +126,15 @@ public sealed class ShellPolicyEvaluationTests
             "cd /tmp && inspect; head result.log",
             ["/work/result.log"]);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [ProtectedCausalPathsStage(policy)],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [ProtectedCausalPathsStage(policy)],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
-        Assert.Equal("shell_references_protected_path", result.Decision.DenyReason);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 
     [Fact]
@@ -215,7 +219,7 @@ public sealed class ShellPolicyEvaluationTests
             [CausalDirectoriesStage(policy, ShellTool.ToolName)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.Null(evaluation.TerminalDecision);
     }
 
@@ -233,14 +237,15 @@ public sealed class ShellPolicyEvaluationTests
             var (evaluation, policy, _) = CreateCausalEvaluation(
                 $"cd {alias} && inspect; head result.log");
 
-            var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-                await RunStagesAsync(
-                    evaluation,
-                    [CausalDirectoriesStage(policy, ShellTool.ToolName)],
-                    TestContext.Current.CancellationToken));
+            var result = await RunStagesAsync(
+                evaluation,
+                [CausalDirectoriesStage(policy, ShellTool.ToolName)],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+            var decision = AssertTerminalDecision(evaluation);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
-            Assert.True(Assert.IsType<ToolApprovalContext>(result.Decision.ApprovalContext).IsMessy);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
         }
         finally
         {
@@ -277,12 +282,12 @@ public sealed class ShellPolicyEvaluationTests
                 new ToolName(ShellTool.ToolName))],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.Equal(1, service.RequestCount);
         Assert.Equal(ShellPolicyCoverageSource.Session, evaluation.CoverageFor(candidate.Id));
         Assert.NotNull(evaluation.GrantEvidence);
         Assert.Single(evaluation.ApprovalMatches);
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(
             ToolAuthorizationDecision.Allow(
                 ToolAllowReason.StoredApproval,
                 evaluation.ApprovalMatches)));
@@ -311,17 +316,17 @@ public sealed class ShellPolicyEvaluationTests
             (_, _) =>
             {
                 laterStageVisited = true;
-                return ValueTask.FromResult<ShellPolicyStageResult>(new ShellPolicyStageResult.Continue());
+                return ValueTask.FromResult(ShellPolicyStageOutcome.Continue);
             }
         ];
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await RunStagesAsync(
-                evaluation,
-                stages,
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            stages,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, evaluation.TerminalFault);
         Assert.Equal(1, service.RequestCount);
         Assert.False(laterStageVisited);
         Assert.Null(evaluation.GrantEvidence);
@@ -350,10 +355,10 @@ public sealed class ShellPolicyEvaluationTests
             source.Projection.ApprovalContext.Cwd,
             out var evidence));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            target.ApplyActorEvidence(Assert.IsType<ValidatedShellGrantEvidence>(evidence)));
+        var result = target.ApplyActorEvidence(Assert.IsType<ValidatedShellGrantEvidence>(evidence));
 
-        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, target.TerminalFault);
         Assert.Equal("internal_policy_failure", target.TerminalDecision?.DenyReason);
         Assert.Equal(
             ShellPolicyCoverageSource.Uncovered,
@@ -396,12 +401,12 @@ public sealed class ShellPolicyEvaluationTests
             ],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(grantCandidate.Id));
         Assert.Equal(
             ShellPolicyCoverageSource.ApprovalExemptSideEffect,
             evaluation.CoverageFor(sideEffect.Id));
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(
             ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext)));
         Assert.Collection(
             Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
@@ -440,7 +445,7 @@ public sealed class ShellPolicyEvaluationTests
             ],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.NotNull(evaluation.GrantEvidence);
         Assert.Equal(0, service.RequestCount);
         Assert.Equal(
@@ -466,7 +471,7 @@ public sealed class ShellPolicyEvaluationTests
             [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.Equal(
             Enum.Parse<ShellPolicyCoverageSource>(expectedCoverageName),
             evaluation.CoverageFor(candidate.Id));
@@ -496,7 +501,7 @@ public sealed class ShellPolicyEvaluationTests
             [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         var actual = evaluation.Candidates.All(candidate => evaluation.IsCovered(candidate.Id));
         Assert.True(
             actual == allCovered,
@@ -552,7 +557,7 @@ public sealed class ShellPolicyEvaluationTests
             [RealScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         var candidate = Assert.Single(evaluation.Candidates);
         Assert.True(evaluation.IsCovered(candidate.Id));
     }
@@ -574,13 +579,13 @@ public sealed class ShellPolicyEvaluationTests
             [IntentScopeStage(policy, context.Invocation)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(beforeCoverage);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, beforeCoverage);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(consumer.Id));
 
         foreach (var prerequisiteId in consumer.IntentPrerequisites)
         {
             var prerequisite = evaluation.Candidates[prerequisiteId.Value];
-            Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+            Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
                 prerequisite,
                 ShellPolicyCoverageSource.Session));
         }
@@ -593,11 +598,11 @@ public sealed class ShellPolicyEvaluationTests
             ],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(afterCoverage);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, afterCoverage);
         Assert.Equal(
             ShellPolicyCoverageSource.ReviewedSafeIntent,
             evaluation.CoverageFor(consumer.Id));
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval)));
         Assert.Contains(
             Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
@@ -624,10 +629,10 @@ public sealed class ShellPolicyEvaluationTests
                 "/work/session")],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.True(evaluation.HasOneTimeCoverage);
         Assert.Equal(ShellPolicyCoverageSource.OneTime, evaluation.CoverageFor(candidate.Id));
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)));
         Assert.Collection(
             Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
@@ -658,18 +663,18 @@ public sealed class ShellPolicyEvaluationTests
                 context.SessionDirectory)],
             TestContext.Current.CancellationToken);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.False(evaluation.HasOneTimeCoverage);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
 
         var oneTimeContext = evaluation.GetUncoveredApprovalContext(context.SessionDirectory);
-        var terminal = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [CompleteStage(context)],
-                TestContext.Current.CancellationToken));
+        var terminal = await RunStagesAsync(
+            evaluation,
+            [CompleteStage(context)],
+            TestContext.Current.CancellationToken);
 
-        Assert.Same(oneTimeContext, terminal.Decision.ApprovalContext);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, terminal);
+        Assert.Same(oneTimeContext, AssertTerminalDecision(evaluation).ApprovalContext);
     }
 
     [Fact]
@@ -680,7 +685,7 @@ public sealed class ShellPolicyEvaluationTests
             BashCandidate("git push"));
         var initial = evaluation.GetUncoveredApprovalContext("/work/session");
         var candidate = evaluation.Candidates[0];
-        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+        Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
             candidate,
             ShellPolicyCoverageSource.Session));
 
@@ -930,15 +935,16 @@ public sealed class ShellPolicyEvaluationTests
         Assert.Equal(1, service.RequestCount);
         if (!expectsDeny)
         {
-            Assert.IsType<ShellPolicyStageResult.Continue>(result);
+            Assert.Equal(ShellPolicyStageOutcome.Continue, result);
             Assert.Null(evaluation.TerminalDecision);
             Assert.Equal(ShellPolicyCoverageSource.Session, evaluation.CoverageFor(candidate.Id));
         }
         else
         {
-            var complete = Assert.IsType<ShellPolicyStageResult.Complete>(result);
-            Assert.Equal(ToolAuthorizationOutcome.Denied, complete.Decision.Outcome);
-            Assert.Equal("approval_store_unavailable", complete.Decision.DenyReason);
+            Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+            var decision = AssertTerminalDecision(evaluation);
+            Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+            Assert.Equal("approval_store_unavailable", decision.DenyReason);
             Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
         }
     }
@@ -948,13 +954,13 @@ public sealed class ShellPolicyEvaluationTests
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
-            await RunStagesAsync(
-                evaluation,
-                [PersistentStoreAvailabilityStage()],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [PersistentStoreAvailabilityStage()],
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, evaluation.TerminalFault);
         Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
     }
 
@@ -966,7 +972,7 @@ public sealed class ShellPolicyEvaluationTests
             BashCandidate("git push"));
         var covered = evaluation.Candidates[0];
         var uncovered = evaluation.Candidates[1];
-        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+        Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
             covered,
             ShellPolicyCoverageSource.Session));
         var context = TestToolExecutionContext.CreateBound(
@@ -974,14 +980,15 @@ public sealed class ShellPolicyEvaluationTests
             "/work/session",
             TrustAudience.Personal);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [CompleteStage(context)],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [CompleteStage(context)],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, result.Decision.Outcome);
-        var prompt = Assert.IsType<ToolApprovalContext>(result.Decision.ApprovalContext);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+        var prompt = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
         Assert.Equal([uncovered.Candidate], prompt.Candidates);
         Assert.Equal(ShellPolicyCoverageSource.Session, evaluation.CoverageFor(covered.Id));
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(uncovered.Id));
@@ -998,19 +1005,20 @@ public sealed class ShellPolicyEvaluationTests
             "/work/session",
             TrustAudience.Personal);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [
-                    ExactOneTimeStage(
-                        new ToolName(ShellTool.ToolName),
-                        context.SessionDirectory),
-                    CompleteStage(context)
-                ],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [
+                ExactOneTimeStage(
+                    new ToolName(ShellTool.ToolName),
+                    context.SessionDirectory),
+                CompleteStage(context)
+            ],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
-        Assert.Equal(ToolAllowReason.OneTimeApproval, result.Decision.AllowReason);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, decision.AllowReason);
     }
 
     [Fact]
@@ -1032,21 +1040,22 @@ public sealed class ShellPolicyEvaluationTests
                     NearMisses: [])
             ]));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
-            await RunStagesAsync(
-                evaluation,
-                [
-                    ActorEvidenceStage(
-                        new ShellApprovalEvidenceAdapter(service),
-                        (ToolApprovalSessionId)"signalr/shell-policy-terminal-stored",
-                        TrustAudience.Personal,
-                        new ToolName(ShellTool.ToolName)),
-                    CompleteStage(context)
-                ],
-                TestContext.Current.CancellationToken));
+        var result = await RunStagesAsync(
+            evaluation,
+            [
+                ActorEvidenceStage(
+                    new ShellApprovalEvidenceAdapter(service),
+                    (ToolApprovalSessionId)"signalr/shell-policy-terminal-stored",
+                    TrustAudience.Personal,
+                    new ToolName(ShellTool.ToolName)),
+                CompleteStage(context)
+            ],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        var decision = AssertTerminalDecision(evaluation);
 
-        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Decision.Outcome);
-        Assert.Equal(ToolAllowReason.StoredApproval, result.Decision.AllowReason);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
         Assert.Equal("PreviouslyApproved", context.Approval.AppliedDecision);
         Assert.Equal("git status [session: this chat]", context.Approval.AppliedPattern);
     }
@@ -1063,11 +1072,11 @@ public sealed class ShellPolicyEvaluationTests
             ShellPolicyCoverageSource.PersistentGlobal,
             grantTimestamp);
 
-        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(ShellPolicyStageOutcome.Continue, result);
         Assert.Equal(ShellPolicyCoverageSource.PersistentGlobal, evaluation.CoverageFor(candidate.Id));
 
         var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(decision));
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(decision));
         Assert.NotNull(evaluation.CompletedTrace);
         var rows = evaluation.CompletedTrace.Rows;
         Assert.Collection(
@@ -1103,15 +1112,15 @@ public sealed class ShellPolicyEvaluationTests
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
-        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+        Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
             candidate,
             ShellPolicyCoverageSource.Session));
 
-        var duplicate = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Cover(
+        var duplicate = evaluation.Cover(
             candidate,
-            ShellPolicyCoverageSource.PersistentGlobal));
+            ShellPolicyCoverageSource.PersistentGlobal);
 
-        Assert.Equal(ShellPolicyFault.CoverageAlreadyAssigned, duplicate.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, duplicate);
         Assert.Equal(ShellPolicyCoverageSource.Session, evaluation.CoverageFor(candidate.Id));
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
         Assert.Equal(ShellPolicyFault.CoverageAlreadyAssigned, evaluation.TerminalFault);
@@ -1130,21 +1139,21 @@ public sealed class ShellPolicyEvaluationTests
             Candidate = BashCandidate("git push")
         };
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Cover(
+        var result = evaluation.Cover(
             changed,
-            ShellPolicyCoverageSource.Session));
+            ShellPolicyCoverageSource.Session);
 
-        Assert.Equal(ShellPolicyFault.CandidateFactsChanged, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
         Assert.Equal(ShellPolicyFault.CandidateFactsChanged, evaluation.TerminalFault);
         Assert.NotNull(evaluation.CompletedTrace);
         Assert.Single(evaluation.CompletedTrace.Rows);
 
-        var later = Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Cover(
+        var later = evaluation.Cover(
             candidate,
-            ShellPolicyCoverageSource.Session));
-        Assert.Same(evaluation.TerminalDecision, later.Decision);
+            ShellPolicyCoverageSource.Session);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, later);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
     }
 
@@ -1157,11 +1166,12 @@ public sealed class ShellPolicyEvaluationTests
             Id = new ShellPolicyCandidateId(7)
         };
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Cover(
+        var result = evaluation.Cover(
             changed,
-            ShellPolicyCoverageSource.Session));
+            ShellPolicyCoverageSource.Session);
 
-        Assert.Equal(ShellPolicyFault.InvalidCandidateId, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidCandidateId, evaluation.TerminalFault);
         Assert.Single(evaluation.UncoveredCandidates);
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
     }
@@ -1172,11 +1182,12 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluation(BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Cover(
+        var result = evaluation.Cover(
             candidate,
-            (ShellPolicyCoverageSource)999));
+            (ShellPolicyCoverageSource)999);
 
-        Assert.Equal(ShellPolicyFault.InvalidCoverage, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidCoverage, evaluation.TerminalFault);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
         Assert.NotNull(evaluation.CompletedTrace);
@@ -1189,12 +1200,13 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluation(BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Cover(
+        var result = evaluation.Cover(
             candidate,
             ShellPolicyCoverageSource.Session,
-            new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero)));
+            new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero));
 
-        Assert.Equal(ShellPolicyFault.InvalidCoverage, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
+        Assert.Equal(ShellPolicyFault.InvalidCoverage, evaluation.TerminalFault);
         Assert.Equal(ShellPolicyCoverageSource.Uncovered, evaluation.CoverageFor(candidate.Id));
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
         Assert.NotNull(evaluation.CompletedTrace);
@@ -1208,14 +1220,14 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluation(
             BashCandidate("git status"),
             BashCandidate("git diff"));
-        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+        Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
             evaluation.Candidates[0],
             ShellPolicyCoverageSource.Session));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Fault>(evaluation.Complete(
-            ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval)));
+        var result = evaluation.Complete(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval));
 
-        Assert.Equal(ShellPolicyFault.InvalidTerminalTransition, result.Reason);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
         Assert.Equal(ToolAuthorizationOutcome.Denied, evaluation.TerminalDecision?.Outcome);
         Assert.Equal(ShellPolicyFault.InvalidTerminalTransition, evaluation.TerminalFault);
         Assert.NotNull(evaluation.CompletedTrace);
@@ -1224,17 +1236,53 @@ public sealed class ShellPolicyEvaluationTests
         Assert.Equal(ShellPolicyTraceOutcome.Deny, evaluation.CompletedTrace.Rows[1].Outcome);
     }
 
+    [Theory]
+    [InlineData(nameof(ShellPolicyStageOutcome.Invalid))]
+    [InlineData("Unknown")]
+    public void Invalid_stage_outcome_fails_closed(string outcomeName)
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var outcome = outcomeName == nameof(ShellPolicyStageOutcome.Invalid)
+            ? ShellPolicyStageOutcome.Invalid
+            : (ShellPolicyStageOutcome)999;
+
+        Assert.False(evaluation.ApplyStageOutcome(outcome));
+        Assert.Equal(ShellPolicyFault.InvalidStageResult, evaluation.TerminalFault);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
+    [Theory]
+    [InlineData(nameof(ShellPolicyStageOutcome.Continue), true)]
+    [InlineData(nameof(ShellPolicyStageOutcome.Complete), false)]
+    public void Stage_outcome_must_match_terminal_state(
+        string outcomeName,
+        bool precomplete)
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        if (precomplete)
+        {
+            evaluation.Complete(
+                ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext));
+        }
+
+        var outcome = Enum.Parse<ShellPolicyStageOutcome>(outcomeName);
+
+        Assert.False(evaluation.ApplyStageOutcome(outcome));
+        Assert.Equal(ShellPolicyFault.InvalidStageResult, evaluation.TerminalFault);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
     [Fact]
     public void Multiple_terminal_results_return_the_first_terminal_result()
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
         var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(prompt));
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(prompt));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
-            ToolAuthorizationDecision.Deny("internal_policy_failure")));
+        var result = evaluation.Complete(
+            ToolAuthorizationDecision.Deny("internal_policy_failure"));
 
-        Assert.Same(prompt, result.Decision);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
         Assert.Same(prompt, evaluation.TerminalDecision);
         Assert.NotNull(evaluation.CompletedTrace);
         Assert.Single(evaluation.CompletedTrace.Rows);
@@ -1245,17 +1293,17 @@ public sealed class ShellPolicyEvaluationTests
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
         var candidate = Assert.Single(evaluation.Candidates);
-        Assert.IsType<ShellPolicyStageResult.Continue>(evaluation.Cover(
+        Assert.Equal(ShellPolicyStageOutcome.Continue, evaluation.Cover(
             candidate,
             ShellPolicyCoverageSource.Session));
         var allow = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(allow));
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(allow));
 
-        var result = Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Cover(
+        var result = evaluation.Cover(
             candidate,
-            ShellPolicyCoverageSource.PersistentGlobal));
+            ShellPolicyCoverageSource.PersistentGlobal);
 
-        Assert.Same(allow, result.Decision);
+        Assert.Equal(ShellPolicyStageOutcome.Complete, result);
         Assert.Same(allow, evaluation.TerminalDecision);
         Assert.Equal(ShellPolicyCoverageSource.Session, evaluation.CoverageFor(candidate.Id));
         Assert.NotNull(evaluation.CompletedTrace);
@@ -1269,7 +1317,7 @@ public sealed class ShellPolicyEvaluationTests
         var evaluation = CreateEvaluation();
         var prompt = ToolAuthorizationDecision.RequiresApproval(evaluation.Projection.ApprovalContext);
 
-        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(prompt));
+        Assert.Equal(ShellPolicyStageOutcome.Complete, evaluation.Complete(prompt));
         Assert.Same(prompt, evaluation.TerminalDecision);
         Assert.NotNull(evaluation.CompletedTrace);
         Assert.Equal(ShellPolicyTraceOutcome.RequiresApproval, evaluation.CompletedTrace.Rows[^1].Outcome);
@@ -1289,11 +1337,11 @@ public sealed class ShellPolicyEvaluationTests
             analysis));
     }
 
-    private delegate ValueTask<ShellPolicyStageResult> TestStage(
+    private delegate ValueTask<ShellPolicyStageOutcome> TestStage(
         ShellPolicyEvaluation evaluation,
         CancellationToken cancellationToken);
 
-    private static async ValueTask<ShellPolicyStageResult> RunStagesAsync(
+    private static async ValueTask<ShellPolicyStageOutcome> RunStagesAsync(
         ShellPolicyEvaluation evaluation,
         IReadOnlyList<TestStage> stages,
         CancellationToken cancellationToken)
@@ -1303,12 +1351,16 @@ public sealed class ShellPolicyEvaluationTests
             cancellationToken.ThrowIfCancellationRequested();
             var result = await stage(evaluation, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (!evaluation.ApplyStageResult(result))
+            if (!evaluation.ApplyStageOutcome(result))
                 return result;
         }
 
-        return new ShellPolicyStageResult.Continue();
+        return ShellPolicyStageOutcome.Continue;
     }
+
+    private static ToolAuthorizationDecision AssertTerminalDecision(
+        ShellPolicyEvaluation evaluation)
+        => Assert.IsType<ToolAuthorizationDecision>(evaluation.TerminalDecision);
 
     private static TestStage SyntaxStage(string toolName)
         => (evaluation, _) => ValueTask.FromResult(

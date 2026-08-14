@@ -135,24 +135,22 @@ Why:
 
 Alternative: return a new immutable state after every stage. Rejected because it adds allocation and code without stronger call-local safety.
 
-### 3. Ordered stages return one closed result family
+### 3. Ordered stages return one closed outcome
 
-Each stage returns `ShellPolicyStageResult`:
+Each stage changes state only through `ShellPolicyEvaluation`, then returns a closed outcome:
 
 ```csharp
-internal abstract record ShellPolicyStageResult
+internal enum ShellPolicyStageOutcome
 {
-    internal sealed record Continue : ShellPolicyStageResult;
-
-    internal sealed record Complete(ToolAuthorizationDecision Decision)
-        : ShellPolicyStageResult;
-
-    internal sealed record Fault(ShellPolicyFault Reason)
-        : ShellPolicyStageResult;
+    Invalid = 0,
+    Continue = 1,
+    Complete = 2,
 }
 ```
 
-The sketch omits constructor guards. Production exposes `Complete.ExactOneTime` as the sole uncovered allow marker.
+Coverage, terminal decisions, and typed faults remain owned by the evaluation state. The coordinator verifies that `Continue` has no terminal decision and `Complete` has one. An invalid enum or mismatched outcome fails closed.
+
+The early syntax and causal helpers are the sole callers that may complete an uncovered exact one-time allow.
 
 That marker requires all of these facts:
 
@@ -187,7 +185,7 @@ Synchronous preflight keeps its current order before these stages:
 5. candidate construction;
 6. noninteractive trust zones.
 
-A terminal result stops the pipeline. A later stage cannot revise an earlier deny or prompt.
+A terminal outcome stops the pipeline. A later stage cannot revise an earlier deny or prompt.
 
 Why:
 
