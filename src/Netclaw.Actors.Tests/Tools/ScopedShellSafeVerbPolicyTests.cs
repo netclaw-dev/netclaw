@@ -7,6 +7,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -333,6 +334,30 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
             new Dictionary<string, object?>
             {
                 ["Command"] = "gh run list --repo example/project",
+                ["WorkingDirectory"] = _projectDir
+            });
+
+        Assert.True(policy.AllShortCircuit(candidates, _projectDir, ctx));
+    }
+
+    [Fact]
+    public void PowerShell_compatibility_paths_use_posix_host_roots()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var policy = new ScopedShellSafeVerbPolicy(
+            SafeVerbList.FromVerbs(ApprovalShell.PowerShell, ["Get-ChildItem"]));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreatePowerShell(
+                "C:\\PowerShell\\pwsh.exe",
+                PwshDialect.PowerShell7));
+        var candidates = matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "Get-ChildItem -LiteralPath .\\data.txt",
                 ["WorkingDirectory"] = _projectDir
             });
 

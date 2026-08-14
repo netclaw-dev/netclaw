@@ -316,7 +316,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                     !safeRoots.Any(root => IsSafePath(
                         path.Value,
                         root,
-                        pathStyle))))
+                        path.PathStyle))))
             {
                 return false;
             }
@@ -379,9 +379,9 @@ internal sealed class ScopedShellSafeVerbPolicy
             ?? (occurrence.WorkingDirectory is ShellValueDomain.Exact exact
                 ? exact.Value
                 : null);
-        var pathStyle = shell == ApprovalShell.Bash
-            ? ShellPathStyle.Posix
-            : ShellPathStyle.Windows;
+        var pathStyle = OperatingSystem.IsWindows()
+            ? ShellPathStyle.Windows
+            : ShellPathStyle.Posix;
         return ShellPolicyOccurrencePathFacts.Create(occurrence)
             .Resolve(workingDirectory, pathStyle);
     }
