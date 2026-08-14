@@ -11,7 +11,28 @@ namespace Netclaw.Actors.Tests;
 
 internal static class TestShellEnvironment
 {
-    public static ShellExecutionEnvironment Current { get; } = CreateCurrent();
+    private static readonly object Gate = new();
+    private static ShellExecutionEnvironment? _current;
+
+    // Cache success only. The CLR caches a failed static initializer for the
+    // process lifetime, so a transient PowerShell host probe timeout would
+    // otherwise convert one slow spawn into hundreds of cached
+    // TypeInitializationException failures. By re-resolving on each touch after
+    // a failure, a slow-but-healthy host self-heals on the next consumer
+    // instead of poisoning the whole test process.
+    public static ShellExecutionEnvironment Current
+    {
+        get
+        {
+            var current = _current;
+            if (current is not null)
+                return current;
+            lock (Gate)
+            {
+                return _current ??= ResolveEnvironment();
+            }
+        }
+    }
 
     public static string PrintWorkingDirectoryCommand =>
         Current.Grammar == ShellGrammar.PowerShell
@@ -65,23 +86,6 @@ internal static class TestShellEnvironment
         return ShellExecutionEnvironment.CreatePowerShell(
             executablePath,
             PwshDialect.WindowsPowerShell51);
-    }
-
-    private static ShellExecutionEnvironment CreateCurrent()
-    {
-        // The CLR caches a failed static initializer for the life of the process.
-        // A transient PowerShell host probe timeout (cold start, Defender scan,
-        // loaded CI runner) would otherwise convert one slow spawn into hundreds
-        // of cached TypeInitializationException failures. Retry once inside the
-        // initializer so a slow-but-healthy host still resolves.
-        try
-        {
-            return ResolveEnvironment();
-        }
-        catch (InvalidOperationException) when (Environment.OSVersion.Platform == PlatformID.Win32NT)
-        {
-            return ResolveEnvironment();
-        }
     }
 
     private static ShellExecutionEnvironment ResolveEnvironment()
