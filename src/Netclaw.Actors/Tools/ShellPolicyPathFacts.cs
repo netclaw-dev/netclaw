@@ -52,12 +52,8 @@ internal sealed record ShellPolicyResolvedPathView(
 }
 
 internal sealed record ShellPolicyCandidatePathFacts(
-    ShellPolicyCandidateId CandidateId,
-    CommandOccurrence? SourceOccurrence,
     ShellPolicyScopePathFact RealScope,
-    ShellPolicyScopePathFact? IntentScope,
-    IReadOnlyList<ShellPolicyScopePathFact> FallbackScopes,
-    ShellPolicyResolvedPathView? Real,
+    ShellPolicyResolvedPathView Real,
     ShellPolicyResolvedPathView? Intent,
     IReadOnlyList<ShellPolicyResolvedPathView> Fallbacks);
 
@@ -80,7 +76,7 @@ internal static class ShellPolicyPathFacts
 
             var sourceFacts = candidate.SourceOccurrence is { } occurrence
                 ? GetOrCreateSourceFacts(sourceCache, occurrence)
-                : null;
+                : ShellPolicyOccurrencePathFacts.Empty;
             var occurrenceDirectory = candidate.SourceOccurrence?.WorkingDirectory
                 is ShellValueDomain.Exact exact
                 ? exact.Value
@@ -96,35 +92,25 @@ internal static class ShellPolicyPathFacts
                 : ResolveScope(
                     candidate.IntentDirectory,
                     pathStyle);
-            var fallbackScopes = candidate.IntentFallbackDirectories
-                .Select(path => ResolveScope(path, pathStyle))
-                .ToArray();
-
-            var real = sourceFacts?.Resolve(
+            var real = sourceFacts.Resolve(
                 realBase,
                 pathStyle,
                 candidate.Candidate.Shell);
-            var intent = sourceFacts is not null && intentBase is { } intentScope
+            var intent = intentBase is { } intentScope
                 ? sourceFacts.Resolve(
                     intentScope,
                     pathStyle,
                     candidate.Candidate.Shell)
                 : null;
-            var fallbacks = sourceFacts is null
-                ? []
-                : fallbackScopes
-                    .Select(path => sourceFacts.Resolve(
-                        path,
-                        pathStyle,
-                        candidate.Candidate.Shell))
-                    .ToArray();
+            var fallbacks = candidate.IntentFallbackDirectories
+                .Select(path => sourceFacts.Resolve(
+                    ResolveScope(path, pathStyle),
+                    pathStyle,
+                    candidate.Candidate.Shell))
+                .ToArray();
 
             projected[index] = new ShellPolicyCandidatePathFacts(
-                candidate.Id,
-                candidate.SourceOccurrence,
                 realScope,
-                intentBase,
-                Array.AsReadOnly(fallbackScopes),
                 real,
                 intent,
                 Array.AsReadOnly(fallbacks));
@@ -165,6 +151,8 @@ internal static class ShellPolicyPathFacts
 
 internal sealed class ShellPolicyOccurrencePathFacts
 {
+    internal static ShellPolicyOccurrencePathFacts Empty { get; } = new([], false, false);
+
     private readonly IReadOnlyList<ShellPolicySourcePathFact> _facts;
     private readonly bool _hasUnprovedNonFileSystemSemantics;
     private readonly bool _hasUnprovedBashGlobSemantics;

@@ -150,17 +150,18 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     internal bool ShortCircuitsCausalIntent(
-        ApprovalCandidate candidate,
+        ShellPolicyCandidate projected,
         ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
     {
+        var candidate = projected.Candidate;
         if (context.Audience != TrustAudience.Personal
             || candidate is not
             {
                 Shell: ApprovalShell.Bash,
                 VerbTokens: { }
             }
-            || pathFacts.IntentScope is not
+            || pathFacts.Intent?.ResolutionBase is not
             {
                 State: ShellPolicyPathResolutionState.Known,
                 Path: { } intentPath
@@ -171,7 +172,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                 ShellPathStyle.Posix)
             || !IsReviewedDiagnostic(
                 candidate,
-                pathFacts.SourceOccurrence,
+                projected.SourceOccurrence,
                 [intentPath.Value],
                 pathFacts.Intent))
         {
@@ -196,19 +197,20 @@ internal sealed class ScopedShellSafeVerbPolicy
             ? ShellPathStyle.Windows
             : ShellPathStyle.Posix;
         var facts = ShellPolicyPathFacts.Create([projected], pathStyle);
-        return ShortCircuits(projected.Candidate, facts[projected.Id.Value], context);
+        return ShortCircuits(projected, facts[projected.Id.Value], context);
     }
 
     internal bool ShortCircuits(
-        ApprovalCandidate candidate,
+        ShellPolicyCandidate projected,
         ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
     {
+        var candidate = projected.Candidate;
         var safeRoots = ResolveDeclaredSafeSpaceRoots(context);
         if (safeRoots.Count == 0
             || !IsReviewedDiagnostic(
                 candidate,
-                pathFacts.SourceOccurrence,
+                projected.SourceOccurrence,
                 safeRoots,
                 pathFacts.Real)
             || pathFacts.RealScope is not

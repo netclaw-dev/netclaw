@@ -152,7 +152,7 @@ public sealed class ShellPolicyEvaluationTests
         var invalidFacts = facts with
         {
             Intent = new ShellPolicyResolvedPathView(
-                Assert.IsType<ShellPolicyScopePathFact>(facts.IntentScope),
+                Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).ResolutionBase,
                 [invalid])
         };
 
@@ -194,9 +194,11 @@ public sealed class ShellPolicyEvaluationTests
         var unknownFacts = facts with
         {
             Intent = new ShellPolicyResolvedPathView(
-                Assert.IsType<ShellPolicyScopePathFact>(facts.IntentScope),
+                Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).ResolutionBase,
                 [unknown]),
-            Fallbacks = []
+            Fallbacks = facts.Fallbacks
+                .Select(static view => view with { Facts = [] })
+                .ToArray()
         };
 
         Assert.False(policy.CausalIntentReferencesProtectedPath(unknownFacts));
@@ -507,7 +509,7 @@ public sealed class ShellPolicyEvaluationTests
                            + $"directory={candidate.Candidate.Directory}; "
                            + $"sourceCwd={candidate.SourceOccurrence?.WorkingDirectory}; "
                            + $"real={facts.RealScope}; "
-                           + $"facts=[{string.Join(", ", facts.Real?.Facts ?? [])}]";
+                           + $"facts=[{string.Join(", ", facts.Real.Facts)}]";
                 })));
     }
 
@@ -520,14 +522,13 @@ public sealed class ShellPolicyEvaluationTests
             "tr");
         var candidate = Assert.Single(evaluation.Candidates);
         var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
-        var real = Assert.IsType<ShellPolicyResolvedPathView>(facts.Real);
         var invalid = facts with
         {
-            Real = real with { HasUnprovedNonFileSystemSemantics = true }
+            Real = facts.Real with { HasUnprovedNonFileSystemSemantics = true }
         };
 
         Assert.False(policy.IsReviewedSafeCandidate(
-            candidate.Candidate,
+            candidate,
             invalid,
             context.Invocation));
     }
@@ -725,7 +726,7 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
-    public void Path_facts_preserve_candidate_and_real_scope_identity()
+    public void Path_facts_preserve_real_scope_and_source_resolution()
     {
         var (evaluation, _, _) = CreateReviewedSafeEvaluation(
             "head README.md",
@@ -735,10 +736,8 @@ public sealed class ShellPolicyEvaluationTests
 
         var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
-        Assert.Same(candidate.SourceOccurrence, facts.SourceOccurrence);
         Assert.Equal(ShellPolicyPathResolutionState.Known, facts.RealScope.State);
         Assert.Equal("/work", facts.RealScope.Path?.Value);
-        Assert.NotNull(facts.Real);
         Assert.Contains(
             facts.Real.Facts,
             fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
@@ -808,9 +807,9 @@ public sealed class ShellPolicyEvaluationTests
         var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
         Assert.Equal("/work/sub", facts.RealScope.Path?.Value);
-        Assert.Equal("/work", facts.Real?.ResolutionBase.Path?.Value);
+        Assert.Equal("/work", facts.Real.ResolutionBase.Path?.Value);
         Assert.Contains(
-            Assert.IsType<ShellPolicyResolvedPathView>(facts.Real).Facts,
+            facts.Real.Facts,
             fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
                     && fact.Paths.Any(path => path.Value == "/work/sub/file.txt"));
     }
@@ -827,8 +826,8 @@ public sealed class ShellPolicyEvaluationTests
 
         var facts = evaluation.Projection.PathFacts[candidate.Id.Value];
 
-        Assert.Equal("/tmp", facts.IntentScope?.Path?.Value);
-        Assert.Contains(facts.FallbackScopes, scope => scope.Path?.Value == "/work");
+        Assert.Equal("/tmp", facts.Intent?.ResolutionBase.Path?.Value);
+        Assert.Contains(facts.Fallbacks, view => view.ResolutionBase.Path?.Value == "/work");
         Assert.Contains(
             Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
             fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument

@@ -344,7 +344,7 @@ public sealed class ToolAccessPolicy
     }
 
     internal bool IsReviewedSafeCandidate(
-        ApprovalCandidate candidate,
+        ShellPolicyCandidate candidate,
         ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
         => _safeVerbPolicy is not null
@@ -354,7 +354,7 @@ public sealed class ToolAccessPolicy
                context);
 
     internal bool IsReviewedSafeIntentCandidate(
-        ApprovalCandidate candidate,
+        ShellPolicyCandidate candidate,
         ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
         => _safeVerbPolicy is not null
@@ -367,15 +367,16 @@ public sealed class ToolAccessPolicy
         ShellPolicyCandidatePathFacts facts)
     {
         ArgumentNullException.ThrowIfNull(facts);
-        if (facts.IntentScope is not { } intent
+        if (facts.Intent?.ResolutionBase is not { } intent
             || string.IsNullOrWhiteSpace(intent.AuthoredValue)
-            || facts.FallbackScopes.Count == 0)
+            || facts.Fallbacks.Count == 0)
         {
             return true;
         }
 
         if (ScopeReferencesProtectedPath(intent)
-            || facts.FallbackScopes.Any(ScopeReferencesProtectedPath))
+            || facts.Fallbacks.Any(fallback =>
+                ScopeReferencesProtectedPath(fallback.ResolutionBase)))
         {
             return true;
         }

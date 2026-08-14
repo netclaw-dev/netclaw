@@ -447,7 +447,7 @@ internal static class ShellPolicyReviewedSafeStages
                      && !evaluation.IsCovered(candidate.Id)))
         {
             if (!policy.IsReviewedSafeCandidate(
-                    candidate.Candidate,
+                    candidate,
                     evaluation.Projection.PathFacts[candidate.Id.Value],
                     invocation))
             {
@@ -484,7 +484,7 @@ internal static class ShellPolicyReviewedSafeStages
                 || candidate.IntentPrerequisites.Any(prerequisite =>
                     !evaluation.IsCovered(prerequisite))
                 || !policy.IsReviewedSafeIntentCandidate(
-                    candidate.Candidate,
+                    candidate,
                     evaluation.Projection.PathFacts[candidate.Id.Value],
                     invocation))
             {

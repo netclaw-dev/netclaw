@@ -21,7 +21,9 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
         ArgumentNullException.ThrowIfNull(request);
 
         if (request.Candidates.Count == 0 || approvalService is null)
-            return CreateEmptyResult(request.Candidates);
+            return CreateEmptyResult(
+                request.Candidates,
+                new PersistentGrantStoreStatus.Ready());
 
         if (approvalService is IShellApprovalMatchService shellApprovalService)
         {
@@ -50,15 +52,7 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
             var aggregateStoreStatus = result.PersistentStoreFailure is { } aggregateFailure
                 ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(aggregateFailure)
                 : new PersistentGrantStoreStatus.Ready();
-            return new ShellApprovalMatchResult(
-                aggregateStoreStatus,
-                Array.AsReadOnly(candidates
-                    .Select(static candidate => new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: []))
-                    .ToArray()));
+            return CreateEmptyResult(candidates, aggregateStoreStatus);
         }
 
         if (checks.Count != candidates.Count)
@@ -117,9 +111,10 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
     }
 
     private static ShellApprovalMatchResult CreateEmptyResult(
-        IReadOnlyList<ShellGrantCandidate> candidates)
+        IReadOnlyList<ShellGrantCandidate> candidates,
+        PersistentGrantStoreStatus storeStatus)
         => new(
-            new PersistentGrantStoreStatus.Ready(),
+            storeStatus,
             Array.AsReadOnly(candidates
                 .Select(static candidate => new ShellGrantCandidateMatch(
                     candidate.CandidateId,
@@ -142,9 +137,6 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
 
 internal sealed class ValidatedShellGrantEvidence
 {
-    private readonly IReadOnlyList<ValidatedShellGrantCandidateEvidence> _candidateEvidence;
-    private readonly IReadOnlyList<ToolApprovalMatch> _approvalMatches;
-
     private ValidatedShellGrantEvidence(
         PersistentGrantStoreStatus persistentStore,
         IReadOnlyList<ShellPolicyCandidate> sourceCandidates,
@@ -153,17 +145,17 @@ internal sealed class ValidatedShellGrantEvidence
     {
         PersistentStore = persistentStore;
         SourceCandidates = sourceCandidates;
-        _candidateEvidence = Array.AsReadOnly(candidateEvidence);
-        _approvalMatches = Array.AsReadOnly(approvalMatches);
+        CandidateEvidence = Array.AsReadOnly(candidateEvidence);
+        ApprovalMatches = Array.AsReadOnly(approvalMatches);
     }
 
     internal PersistentGrantStoreStatus PersistentStore { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> SourceCandidates { get; }
 
-    internal IReadOnlyList<ValidatedShellGrantCandidateEvidence> CandidateEvidence => _candidateEvidence;
+    internal IReadOnlyList<ValidatedShellGrantCandidateEvidence> CandidateEvidence { get; }
 
-    internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches => _approvalMatches;
+    internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches { get; }
 
     internal static bool TryCreate(
         ShellApprovalMatchResult result,
@@ -185,7 +177,6 @@ internal sealed class ValidatedShellGrantEvidence
             return false;
 
         var expectedById = candidates.ToDictionary(static candidate => candidate.Id);
-        var seenIds = new HashSet<ShellPolicyCandidateId>();
         var validated = new ValidatedShellGrantCandidateEvidence[candidates.Count];
         var approvalMatches = new List<ToolApprovalMatch>(candidates.Count);
         for (var index = 0; index < candidateMatches.Length; index++)
@@ -193,8 +184,7 @@ internal sealed class ValidatedShellGrantEvidence
             var candidateMatch = candidateMatches[index];
             if (!TryCopyCandidateEvidence(candidateMatch, out var candidateEvidence)
                 || candidateEvidence is null
-                || !expectedById.TryGetValue(candidateEvidence.CandidateId, out var candidate)
-                || !seenIds.Add(candidateEvidence.CandidateId)
+                || !expectedById.Remove(candidateEvidence.CandidateId, out var candidate)
                 || !TryValidateCandidateEvidence(
                     candidate,
                     candidateEvidence,
@@ -287,23 +277,7 @@ internal sealed class ValidatedShellGrantEvidence
         if (nearMisses.Any(static nearMiss => nearMiss is null))
             return false;
 
-        snapshot = new ShellGrantCandidateMatch(
-            source.CandidateId,
-            source.Match is null
-                ? null
-                : new ToolApprovalMatch(
-                    source.Match.Pattern,
-                    source.Match.Source,
-                    source.Match.Scope),
-            source.GrantCoverage,
-            Array.AsReadOnly(nearMisses
-                .Select(static nearMiss => new ShellApprovalNearMiss(
-                    nearMiss.Grant,
-                    nearMiss.Reason))
-                .ToArray()))
-        {
-            GrantCreatedAt = source.GrantCreatedAt
-        };
+        snapshot = source with { NearMisses = Array.AsReadOnly(nearMisses) };
         return true;
     }
 

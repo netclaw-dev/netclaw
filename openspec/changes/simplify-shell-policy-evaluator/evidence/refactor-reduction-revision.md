@@ -70,6 +70,16 @@ The slice removes another 57 production lines and four control-flow lines. It ad
 
 The cumulative footprint uses 8,463 lines and 517 control-flow lines. The complete reduction gate remains open.
 
+## Consolidated path and actor snapshot slice
+
+This slice removes candidate identity and causal scope copies from path facts. Each intent and fallback view now owns its resolution base, while the candidate remains the sole owner of its ID and parser occurrence.
+
+The actor adapter also reuses one empty-result constructor. Validation snapshots the candidate and near-miss collections without cloning their sealed immutable elements.
+
+The slice removes another 35 production lines without changing the control-flow count. It removes one test line while preserving the mutable-list, malformed-evidence, path-base, and causal-fallback regressions.
+
+The cumulative footprint uses 8,428 lines and 517 control-flow lines. The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.
