@@ -386,61 +386,20 @@ internal sealed class ValidatedShellGrantEvidence
 
     private static bool IsCanonicalShellEntry(ApprovalEntry entry)
     {
-        if (entry.Shell is not { } shell
-            || !Enum.IsDefined(shell)
-            || entry.Match is not { } match
-            || !Enum.IsDefined(match))
+        if (entry.Shell is null || entry.Match is null)
         {
             return false;
         }
 
-        if (entry.Directory is { } directory)
+        try
         {
-            var pathStyle = shell == ApprovalShell.PowerShell
-                ? ShellPathStyle.Windows
-                : ShellPathStyle.Posix;
-            if (HasInvalidPersistedCharacter(directory)
-                || !ShellPathRules.TryGetRootRelativeDepth(directory, pathStyle, out _))
-            {
-                return false;
-            }
+            ApprovalEntryValidation.ValidateVersion3(entry);
+            return true;
         }
-
-        return match switch
+        catch (System.Text.Json.JsonException)
         {
-            ApprovalMatchKind.TokenPrefix =>
-                entry.VerbTokens is { Count: > 0 } tokens
-                && string.Equals(entry.Verb, string.Join(" ", tokens), StringComparison.Ordinal),
-            ApprovalMatchKind.LegacyExact => entry.VerbTokens is null,
-            _ => false,
-        };
-    }
-
-    private static bool HasInvalidPersistedCharacter(string value)
-    {
-        for (var index = 0; index < value.Length; index++)
-        {
-            var character = value[index];
-            if (char.IsHighSurrogate(character))
-            {
-                if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
-                    return true;
-
-                index++;
-                continue;
-            }
-
-            if (char.IsLowSurrogate(character)
-                || char.IsControl(character)
-                || character is '\u061c' or '\u200e' or '\u200f'
-                    or >= '\u202a' and <= '\u202e'
-                    or >= '\u2066' and <= '\u2069')
-            {
-                return true;
-            }
+            return false;
         }
-
-        return false;
     }
 }
 

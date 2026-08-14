@@ -12,6 +12,44 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class ShellApprovalEvidenceTests
 {
     [Theory]
+    [InlineData(ApprovalShell.Bash, "/")]
+    [InlineData(ApprovalShell.Bash, "/work/repo")]
+    [InlineData(ApprovalShell.PowerShell, "C:\\")]
+    [InlineData(ApprovalShell.PowerShell, "C:\\work\\repo")]
+    [InlineData(ApprovalShell.PowerShell, "\\\\server\\share")]
+    [InlineData(ApprovalShell.PowerShell, "\\\\server\\share\\repo")]
+    [InlineData(ApprovalShell.PowerShell, "\\\\?\\C:\\repo")]
+    public void Canonical_persistent_scope_remains_valid(
+        ApprovalShell shell,
+        string directory)
+    {
+        var verb = shell == ApprovalShell.Bash ? "git status" : "Get-Location";
+        var candidate = CreateCandidate(0, shell, verb, directory);
+        var entry = ApprovalEntry.CreateTokenPrefix(
+            shell,
+            Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens),
+            directory);
+        var result = new ShellApprovalMatchResult(
+            new PersistentGrantStoreStatus.Ready(),
+            [
+                new ShellGrantCandidateMatch(
+                    candidate.Id,
+                    new ToolApprovalMatch(verb, "persistent", entry.FormatScope()),
+                    ShellCoverageKind.PersistentFolder,
+                    NearMisses: [])
+            ]);
+
+        var valid = ValidatedShellGrantEvidence.TryCreate(
+            result,
+            [candidate],
+            directory,
+            out var evidence);
+
+        Assert.True(valid);
+        Assert.NotNull(evidence);
+    }
+
+    [Theory]
     [InlineData(
         ApprovalShell.Bash,
         "git status",
