@@ -1479,6 +1479,69 @@ assert_subagent_project_scope_declaration() {
         && "$shell_line" -lt "$shell_result_line" ]]
 }
 
+setup_subagent_session_scratch_disposable() {
+    local run="$1"
+    SUBAGENT_SCRATCH_LOG_MARKER="$TMPDIR_EVAL/subagent-scratch-$run.marker"
+    touch "$SUBAGENT_SCRATCH_LOG_MARKER"
+}
+
+assert_subagent_session_scratch_disposable() {
+    stdout_json_tool_called 'spawn_agent' || return 1
+    stdout_response_contains 'git version' || return 1
+
+    local spawn_call child_task child_log
+    spawn_call=$(stdout_json_tool_call_arguments 'spawn_agent' | head -1)
+    child_task=$(jq -r '.Task // .task // ""' <<<"$spawn_call")
+    jq -e '(.Agent // .agent) == "disposable-diagnostic"' <<<"$spawn_call" >/dev/null || return 1
+    [[ -n "$child_task" ]] || return 1
+    ! grep -Eiq 'session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^[:alpha:]])cwd([^[:alpha:]]|$)' \
+        <<<"$child_task" || return 1
+
+    child_log=$(find "$EVAL_HOME/logs/sessions" -type f \
+        -path '*_subagent_disposable-diagnostic_*/session.log' \
+        -newer "$SUBAGENT_SCRATCH_LOG_MARKER" 2>/dev/null | head -1)
+    [[ -n "$child_log" ]] || return 1
+    grep -aq \
+        'SubAgent \[disposable-diagnostic\] completed (success=True, outcome=Completed' \
+        "$child_log" || return 1
+
+    local session_id session_segment expected_session_dir
+    session_id=$(jq -r '.sessionId' "$STDOUT_FILE")
+    [[ -n "$session_id" && "$session_id" != "null" ]] || return 1
+    session_segment=$(LC_ALL=C sed 's/[^[:alnum:]-]/_/g' <<<"$session_id")
+    expected_session_dir="/home/netclaw/.netclaw/sessions/$session_segment"
+
+    local shell_count shell_result_count
+    shell_count=$(grep -ac \
+        'SubAgent \[disposable-diagnostic\] tool start .* name=shell_execute' \
+        "$child_log")
+    shell_result_count=$(grep -ac \
+        'SubAgent \[disposable-diagnostic\] tool \[shell_execute\] result: Exit code: 0' \
+        "$child_log")
+
+    [[ "$shell_count" -eq 2 ]] || return 1
+    [[ "$shell_result_count" -eq 2 ]] || return 1
+
+    local -a call_previews
+    mapfile -t call_previews < <(grep -aEo \
+        'shell_execute#[^(]+\([^)]*\)' \
+        "$child_log")
+    [[ "${#call_previews[@]}" -eq 2 ]] || return 1
+
+    local version_suffix config_suffix
+    [[ "${call_previews[0]}" == *"Command=git --version,"* ]] || return 1
+    [[ "${call_previews[1]}" == *"Command=git config --list,"* ]] || return 1
+    version_suffix=${call_previews[0]#*"WorkingDirectory=$expected_session_dir"}
+    config_suffix=${call_previews[1]#*"WorkingDirectory=$expected_session_dir"}
+    [[ "$version_suffix" != "${call_previews[0]}" \
+        && ( "$version_suffix" == ,* || "$version_suffix" == \)* ) ]] || return 1
+    [[ "$config_suffix" != "${call_previews[1]}" \
+        && ( "$config_suffix" == ,* || "$config_suffix" == \)* ) ]] || return 1
+    ! grep -aEiq 'Command=[^,]*(/tmp|\\Temp\\)|WorkingDirectory=(/tmp|[^,]*\\Temp\\)' \
+        "$child_log" || return 1
+
+}
+
 setup_coding_context_worktree_handoff() {
     local run="$1"
     if (( run % 2 == 1 )); then
@@ -1772,15 +1835,20 @@ assert_approval_set_working_directory_retry() {
 # This headless case measures model guidance. It does not exercise an approval prompt.
 assert_approval_session_scratch_disposable() {
     local shell_call
+    local -a shell_calls
     stdout_json_envelope_valid || return 1
-    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+    mapfile -t shell_calls < <(stdout_json_tool_call_arguments 'shell_execute')
+    [[ "${#shell_calls[@]}" -ge 1 ]] || return 1
 
-    jq -e '
-        (.WorkingDirectory | type == "string")
-        and (.WorkingDirectory | contains("/.netclaw/sessions/"))
-        and (.WorkingDirectory != "/tmp")
-    ' <<<"$shell_call" >/dev/null && \
-        ! stdout_json_tool_called 'set_working_directory'
+    for shell_call in "${shell_calls[@]}"; do
+        jq -e '
+            ((.WorkingDirectory // "") == ""
+                or (.WorkingDirectory | contains("/.netclaw/sessions/")))
+            and ((.Command // "") | contains("/tmp") | not)
+        ' <<<"$shell_call" >/dev/null || return 1
+    done
+
+    ! stdout_json_tool_called 'set_working_directory'
 }
 
 # Schedule pre-approval: user asks to schedule an unattended task that
@@ -2170,6 +2238,9 @@ run_all() {
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
 
+    run_case --json subagent_session_scratch_disposable "subagent chooses private session scratch for disposable shell work" \
+        "Use spawn_agent with agent disposable-diagnostic. Ask it to complete its assigned diagnostic and return the exact marker. Do not include a Context argument."
+
     PROMPT_TIMEOUT="$previous_timeout"
 
     end_category
@@ -2291,7 +2362,7 @@ run_all() {
         "Test project recovery: first call set_working_directory with /home/netclaw/.netclaw/workspaces/missing-project. Then use /home/netclaw/.netclaw/workspaces, and only after that run pwd."
 
     run_case --json approval_session_scratch_disposable "uses session scratch for ordinary disposable output" \
-        "Run a diagnostic command that writes a disposable result.log file. Use the private session scratch directory announced in context. Do not use /tmp and do not declare a project."
+        "Run a diagnostic command that writes and then reads a disposable result.log file. Return its exact contents."
 
     run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
         "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."

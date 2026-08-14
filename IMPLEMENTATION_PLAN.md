@@ -269,6 +269,26 @@ Done when:
 - [x] The session-scratch model-guidance eval passed 4/5 against the configured
   `deepseek-v4-flash-dspark` endpoint. This measures headless path preference;
   deterministic actor tests own interactive correction and approval proof.
+- [x] Post-0.26.0 live evidence in
+  `openspec/changes/structure-shell-approval-policy/evidence/post-1952-live-approval-harvest.json`
+  classifies 69 prompts across 285 shell calls. The largest avoidable cluster
+  is 15 read-heavy prompts from one headless subagent working beneath shared
+  platform temp even though its execution scope already owns private session
+  scratch.
+- [x] Personal and Team subagents now receive the exact bound `session_dir` in
+  their volatile working context before the first model call. Public context
+  remains redacted, and prompt-worthy headless shell work remains denied
+  without explicit authority. The first delegated eval result was invalidated:
+  all 5/5 runs omitted `WorkingDirectory` and passed through the existing shell
+  fallback. After the exact assertion and guidance were corrected, the fresh
+  `a1077feb-6bd7-413c-8a90-c651aa5a03df` run passed 4/5 against
+  `deepseek-v4-flash-dspark`. Four children passed the exact bound session
+  directory on both Git diagnostics; one omitted it and failed as intended.
+- [x] Removing the prescribed answer from the existing parent-only disposable
+  output eval produced 3/5 path-aligned runs. All five completed through the
+  private session directory, and all recovered from denied shell writes with
+  first-party file tools, but two first attempted `/tmp` or `mktemp`. This is
+  retained as alignment evidence rather than reported as a passing gate.
 - [x] Explicit `WorkingDirectory=/tmp` and deliberate inline `cd /tmp` evals
   remain in the corpus so a platform-temp requirement is not rewritten.
 - [x] Eligible interactive Personal shell work at the shared platform-temp root

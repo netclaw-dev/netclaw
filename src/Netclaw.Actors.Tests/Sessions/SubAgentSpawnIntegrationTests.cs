@@ -595,7 +595,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
         Assert.Contains(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && string.Equals(m.Text, "check scheduled health", StringComparison.Ordinal));
+            && m.Text.Contains("[session]\nsession_dir:", StringComparison.Ordinal)
+            && m.Text.EndsWith("Task:\ncheck scheduled health", StringComparison.Ordinal));
     }
 
     [Fact]
