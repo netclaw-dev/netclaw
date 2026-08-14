@@ -68,6 +68,23 @@ internal static class TestShellEnvironment
     }
 
     private static ShellExecutionEnvironment CreateCurrent()
+    {
+        // The CLR caches a failed static initializer for the life of the process.
+        // A transient PowerShell host probe timeout (cold start, Defender scan,
+        // loaded CI runner) would otherwise convert one slow spawn into hundreds
+        // of cached TypeInitializationException failures. Retry once inside the
+        // initializer so a slow-but-healthy host still resolves.
+        try
+        {
+            return ResolveEnvironment();
+        }
+        catch (InvalidOperationException) when (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        {
+            return ResolveEnvironment();
+        }
+    }
+
+    private static ShellExecutionEnvironment ResolveEnvironment()
         => ShellExecutionEnvironmentResolver
             .CreateDefault(TimeProvider.System)
             .ResolveAsync(ShellExecutionEnvironmentResolver.DetectCurrentPlatform())
