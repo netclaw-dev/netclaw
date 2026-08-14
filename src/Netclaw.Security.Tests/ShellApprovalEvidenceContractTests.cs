@@ -26,7 +26,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
     private const string LiveRegressionCasesSha256 =
-        "2997a8c1c2d8fe602aae50a75b11272b44367499e555f43d5d3a492e7d864c86";
+        "684b89f8e01f6abc8d4b9cff49c1e1ab16d3df9cd6aaf028e2aa0822509c421a";
 
     [Fact]
     public void Approval_matrix_matches_the_locked_cross_repository_artifact()

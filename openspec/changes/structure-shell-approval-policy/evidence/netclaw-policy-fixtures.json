@@ -795,8 +795,8 @@
       "classification": "ExpectedApproval",
       "targetOutcome": "RequiresApproval",
       "policyCase": {
-        "id": "L24", "category": "ExternalCliSharedTempRedirect",
-        "command": "external-crm deals list --status won --json > /tmp/records.json 2> /tmp/records.err; jq 'length' /tmp/records.json",
+        "id": "L24", "category": "ExternalCliExternalTempRedirect",
+        "command": "external-crm deals list --status won --json > /external-temp/records.json 2> /external-temp/records.err; jq 'length' /external-temp/records.json",
         "environment": { "platform": "Linux", "executablePath": "/bin/bash", "commandArguments": ["-c"], "grammar": "Bash", "pathStyle": "Posix", "powerShellDialect": null },
         "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
         "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
