@@ -344,36 +344,68 @@ public sealed class ToolAccessPolicy
 
     internal bool IsReviewedSafeCandidate(
         ApprovalCandidate candidate,
-        ShellSyntaxTree.CommandOccurrence? sourceOccurrence,
-        string? cwd,
+        ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
         => _safeVerbPolicy is not null
            && _safeVerbPolicy.ShortCircuits(
                candidate,
-               sourceOccurrence,
-               cwd,
+               pathFacts,
                context);
 
     internal bool IsReviewedSafeIntentCandidate(
         ApprovalCandidate candidate,
-        ShellSyntaxTree.CommandOccurrence? sourceOccurrence,
-        string intentDirectory,
+        ShellPolicyCandidatePathFacts pathFacts,
         ToolInvocationContext context)
         => _safeVerbPolicy is not null
            && _safeVerbPolicy.ShortCircuitsCausalIntent(
                candidate,
-               sourceOccurrence,
-               intentDirectory,
+               pathFacts,
                context);
 
     internal bool CausalIntentReferencesProtectedPath(
-        ShellSyntaxTree.CommandOccurrence sourceOccurrence,
-        string intentDirectory,
-        IReadOnlyList<string> fallbackDirectories)
-        => _toolPathPolicy.CausalIntentReferencesDeniedPath(
-            sourceOccurrence,
-            intentDirectory,
-            fallbackDirectories);
+        ShellPolicyCandidatePathFacts facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        if (facts.IntentScope is not { } intent
+            || string.IsNullOrWhiteSpace(intent.AuthoredValue)
+            || facts.FallbackScopes.Count == 0)
+        {
+            return true;
+        }
+
+        if (ScopeReferencesProtectedPath(intent)
+            || facts.FallbackScopes.Any(ScopeReferencesProtectedPath))
+        {
+            return true;
+        }
+
+        if (facts.Intent is { } intentPaths
+            && ViewReferencesProtectedPath(intentPaths))
+        {
+            return true;
+        }
+
+        return facts.Fallbacks.Any(ViewReferencesProtectedPath);
+    }
+
+    private bool ScopeReferencesProtectedPath(ShellPolicyScopePathFact scope)
+        => scope is
+        {
+            State: ShellPolicyPathResolutionState.Known,
+            Path: { } path
+        }
+           && _toolPathPolicy.IsShellDeniedProjectedPath(path);
+
+    private bool ViewReferencesProtectedPath(ShellPolicyResolvedPathView view)
+        => view.Facts.Any(fact =>
+            fact.Source.Origin is ShellPolicyPathOrigin.EffectiveArgument
+                or ShellPolicyPathOrigin.AuthoredArgument
+                or ShellPolicyPathOrigin.Redirect
+            && fact.Source.DomainKind is ShellPolicyPathDomainKind.Exact
+                or ShellPolicyPathDomainKind.FiniteSet
+            && (fact.State == ShellPolicyPathResolutionState.InvalidKnownValue
+                || fact.Paths.Any(path =>
+                    _toolPathPolicy.IsShellDeniedProjectedPath(path))));
 
     internal bool IsCausalIntentDirectoryEligible(string intentDirectory)
     {

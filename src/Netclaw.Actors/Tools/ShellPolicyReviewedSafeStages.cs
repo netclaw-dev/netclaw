@@ -43,8 +43,7 @@ internal static class ShellPolicyReviewedSafeStages
         {
             if (!policy.IsReviewedSafeCandidate(
                     candidate.Candidate,
-                    candidate.SourceOccurrence,
-                    evaluation.Projection.ApprovalContext.Cwd,
+                    evaluation.Projection.PathFacts.For(candidate.Id),
                     invocation))
             {
                 continue;
@@ -80,8 +79,7 @@ internal static class ShellPolicyReviewedSafeStages
                     !evaluation.IsCovered(prerequisite))
                 || !policy.IsReviewedSafeIntentCandidate(
                     candidate.Candidate,
-                    candidate.SourceOccurrence,
-                    candidate.IntentDirectory,
+                    evaluation.Projection.PathFacts.For(candidate.Id),
                     invocation))
             {
                 continue;

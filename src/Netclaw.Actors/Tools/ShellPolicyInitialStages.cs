@@ -71,12 +71,8 @@ internal static class ShellPolicyInitialStages
         ToolAccessPolicy policy)
         => evaluation.Candidates.Any(candidate =>
             candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-            && candidate.IntentDirectory is { } intentDirectory
-            && candidate.SourceOccurrence is { } sourceOccurrence
             && policy.CausalIntentReferencesProtectedPath(
-                sourceOccurrence,
-                intentDirectory,
-                candidate.IntentFallbackDirectories))
+                evaluation.Projection.PathFacts.For(candidate.Id)))
             ? new ShellPolicyStageResult.Complete(
                 ToolAuthorizationDecision.Deny("shell_references_protected_path"))
             : new ShellPolicyStageResult.Continue();

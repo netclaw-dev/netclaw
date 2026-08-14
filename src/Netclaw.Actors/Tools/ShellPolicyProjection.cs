@@ -84,6 +84,7 @@ internal sealed record ShellPolicyProjection
         ToolRunScope runScope,
         ToolApprovalContext approvalContext,
         IReadOnlyList<ShellPolicyCandidate> candidates,
+        ShellPolicyPathFacts pathFacts,
         IReadOnlySet<string> approvedOneTimeKeys,
         string? approvedOneTimeToolName)
     {
@@ -92,6 +93,7 @@ internal sealed record ShellPolicyProjection
         RunScope = runScope;
         ApprovalContext = approvalContext;
         Candidates = candidates;
+        PathFacts = pathFacts;
         ApprovedOneTimeKeys = approvedOneTimeKeys;
         ApprovedOneTimeToolName = approvedOneTimeToolName;
     }
@@ -105,6 +107,8 @@ internal sealed record ShellPolicyProjection
     internal ToolApprovalContext ApprovalContext { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates { get; }
+
+    internal ShellPolicyPathFacts PathFacts { get; }
 
     internal IReadOnlySet<string> ApprovedOneTimeKeys { get; }
 
@@ -201,12 +205,14 @@ internal sealed record ShellPolicyProjection
         {
             RecentFiles = Array.AsReadOnly(context.RunScope.RecentFiles.ToArray())
         };
+        var candidateView = Array.AsReadOnly(candidates);
         projection = new ShellPolicyProjection(
             environment,
             execution,
             runScopeCopy,
             contextCopy,
-            Array.AsReadOnly(candidates),
+            candidateView,
+            ShellPolicyPathFacts.Create(candidateView, environment.PathStyle),
             context.Approval.OneTimeApprovedPatterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
             context.Approval.OneTimeApprovedToolName);
         return true;
@@ -263,12 +269,14 @@ internal sealed record ShellPolicyProjection
         {
             RecentFiles = Array.AsReadOnly(context.RunScope.RecentFiles.ToArray())
         };
+        var candidateView = Array.AsReadOnly(candidates);
         projection = new ShellPolicyProjection(
             environment,
             execution,
             runScopeCopy,
             contextCopy,
-            Array.AsReadOnly(candidates),
+            candidateView,
+            ShellPolicyPathFacts.Create(candidateView, environment.PathStyle),
             context.Approval.OneTimeApprovedPatterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
             context.Approval.OneTimeApprovedToolName);
         return true;

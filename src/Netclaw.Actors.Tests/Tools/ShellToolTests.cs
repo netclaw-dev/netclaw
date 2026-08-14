@@ -19,6 +19,8 @@ public class ShellToolTests
 
     public static bool IsWindows => OperatingSystem.IsWindows();
 
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private static ShellTool CreateTool(ToolConfig? config = null)
     {
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
@@ -529,5 +531,47 @@ public class ShellToolTests
         Assert.DoesNotContain("hard deny policy", result);
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Authorized_execution_rechecks_current_symbolic_link_state()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-shell-recheck-");
+        try
+        {
+            var deniedDirectory = Directory.CreateDirectory(Path.Combine(root.FullName, "denied"));
+            var deniedFile = Path.Combine(deniedDirectory.FullName, "secret.txt");
+            await File.WriteAllTextAsync(
+                deniedFile,
+                "secret",
+                TestContext.Current.CancellationToken);
+            var link = Path.Combine(root.FullName, "late-link");
+            var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+            var pathPolicy = new ToolPathPolicy(environment, [deniedDirectory.FullName]);
+            var commandPolicy = new ShellCommandPolicy(environment);
+            var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
+            var command = $"cat {link}";
+            var analysis = commandPolicy.Analyze(command, root.FullName);
+            Assert.False(pathPolicy.CommandReferencesDeniedPath(analysis));
+
+            File.CreateSymbolicLink(link, deniedFile);
+            var result = await tool.ExecuteAuthorizedAsync(
+                ToolInput.Create(
+                    "Command",
+                    command,
+                    "WorkingDirectory",
+                    root.FullName),
+                TestToolExecutionContext.CreateUnbound().Invocation,
+                analysis,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("protected file path", result);
+            Assert.Contains("Access denied", result);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 }

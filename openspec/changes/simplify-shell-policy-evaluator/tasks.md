@@ -47,12 +47,12 @@
 
 ## 6. Consolidate policy facts and prompt context
 
-- [ ] 6.1 Project candidate-scoped real, intent, fallback, redirect, and authored filesystem facts with origin, domain, base, and resolution state.
-- [ ] 6.2 Route typed facts through current denied-path, symlink, and reviewed-safe rules without later command-text rescans.
+- [x] 6.1 Project candidate-scoped real, intent, fallback, redirect, and authored filesystem facts with origin, domain, base, and resolution state.
+- [x] 6.2 Route typed facts through current denied-path, symlink, and reviewed-safe rules without later command-text rescans.
 - [x] 6.3 Derive one uncovered-candidate context for exact one-time authority and user prompts.
-- [ ] 6.4 Preserve causal full-context, scratch limits, reusable phrases, directory depth, and candidate order.
-- [ ] 6.5 Centralize bounded trace completion and preserve exact redaction and row order.
-- [ ] 6.6 Add path origin/domain/base, redirect-mode, runtime recheck, prompt-context, one-time-key, causal-context, and trace-parity regressions.
+- [x] 6.4 Preserve causal full-context, scratch limits, reusable phrases, directory depth, and candidate order.
+- [x] 6.5 Centralize bounded trace completion and preserve exact redaction and row order.
+- [x] 6.6 Add path origin/domain/base, redirect-mode, runtime recheck, prompt-context, one-time-key, causal-context, and trace-parity regressions.
 - [ ] 6.7 Run exact fixture parity and adversarial review for the consolidation slice.
 
 ## 7. Remove obsolete structure

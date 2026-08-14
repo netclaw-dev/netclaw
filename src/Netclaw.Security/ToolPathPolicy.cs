@@ -8,6 +8,52 @@ using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
+internal readonly record struct CanonicalShellPath
+{
+    private CanonicalShellPath(string value, ShellPathStyle pathStyle)
+    {
+        Value = value;
+        PathStyle = pathStyle;
+    }
+
+    internal string Value { get; }
+
+    internal ShellPathStyle PathStyle { get; }
+
+    internal static bool TryCreate(
+        string? value,
+        ShellPathStyle pathStyle,
+        out CanonicalShellPath path)
+    {
+        path = default;
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Any(char.IsControl))
+        {
+            return false;
+        }
+
+        var isAbsolute = pathStyle switch
+        {
+            ShellPathStyle.Posix => value[0] == '/',
+            ShellPathStyle.Windows => value.StartsWith("\\\\", StringComparison.Ordinal)
+                                      || value.Length >= 3
+                                      && char.IsAsciiLetter(value[0])
+                                      && value[1] == ':'
+                                      && value[2] is '\\' or '/',
+            _ => false
+        };
+        if (!isAbsolute)
+            return false;
+
+        var normalized = ShellTokenizer.NormalizePathToken(value, null, pathStyle);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+
+        path = new CanonicalShellPath(normalized, pathStyle);
+        return true;
+    }
+}
+
 /// <summary>
 /// Evaluates whether a file path is denied for agent tool access.
 /// </summary>
@@ -157,68 +203,10 @@ public sealed class ToolPathPolicy
     public bool IsReadDenied(string path)
         => IsDeniedAgainst(path, _readDeniedPaths) || IsDeniedAgainst(path, _shellDeniedPaths);
 
-    internal bool CausalIntentReferencesDeniedPath(
-        CommandOccurrence occurrence,
-        string intentDirectory,
-        IReadOnlyList<string> fallbackDirectories)
-    {
-        ArgumentNullException.ThrowIfNull(occurrence);
-        ArgumentNullException.ThrowIfNull(fallbackDirectories);
-        if (string.IsNullOrWhiteSpace(intentDirectory)
-            || IsShellDenied(intentDirectory)
-            || fallbackDirectories.Count == 0
-            || fallbackDirectories.Any(IsShellDenied))
-        {
-            return true;
-        }
-
-        var possibleDirectories = fallbackDirectories
-            .Append(intentDirectory)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        foreach (var argument in occurrence.Arguments)
-        {
-            if (argument.Argument.IsPath
-                && possibleDirectories.Any(directory =>
-                    DomainReferencesDeniedPath(argument.Value, directory)))
-            {
-                return true;
-            }
-
-            if (argument.AuthoredPathShape != ShellPathShape.Unknown
-                && possibleDirectories.Any(directory =>
-                    DomainReferencesDeniedPath(argument.AuthoredValue, directory)))
-            {
-                return true;
-            }
-        }
-
-        return occurrence.Redirects
-            .OfType<FileRedirectAnalysis>()
-            .Any(redirect => possibleDirectories.Any(directory =>
-                DomainReferencesDeniedPath(redirect.Target, directory)));
-    }
-
-    private bool DomainReferencesDeniedPath(
-        ShellValueDomain domain,
-        string workingDirectory)
-    {
-        IReadOnlyList<string> values = domain switch
-        {
-            ShellValueDomain.Exact exact => [exact.Value],
-            ShellValueDomain.FiniteSet finite => finite.Values,
-            _ => []
-        };
-
-        return values.Any(value =>
-        {
-            var resolved = ShellTokenizer.NormalizePathToken(
-                value,
-                workingDirectory,
-                Environment.PathStyle);
-            return string.IsNullOrWhiteSpace(resolved) || IsShellDenied(resolved);
-        });
-    }
+    internal bool IsShellDeniedProjectedPath(
+        CanonicalShellPath path)
+        => path.PathStyle != Environment.PathStyle
+           || IsShellDenied(path.Value);
 
     private bool IsShellDenied(string path)
         => IsDeniedAgainst(path, _shellDeniedPaths);

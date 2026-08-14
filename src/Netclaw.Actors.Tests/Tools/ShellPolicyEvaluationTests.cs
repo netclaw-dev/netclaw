@@ -9,6 +9,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -449,6 +450,91 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
+    public async Task Protected_causal_path_stage_checks_each_fallback_base()
+    {
+        var (evaluation, policy, _) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log",
+            ["/work/result.log"]);
+
+        var result = Assert.IsType<ShellPolicyStageResult.Complete>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [ShellPolicyInitialStages.ProtectedCausalPaths(policy)],
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
+        Assert.Equal("shell_references_protected_path", result.Decision.DenyReason);
+    }
+
+    [Fact]
+    public void Causal_protected_path_check_denies_an_invalid_known_value()
+    {
+        var (evaluation, policy, _) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log");
+        var consumer = Assert.Single(
+            evaluation.Candidates,
+            static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
+        var facts = evaluation.Projection.PathFacts.For(consumer.Id);
+        var source = Assert.Single(
+            Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
+            static fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument).Source;
+        var invalid = new ShellPolicyResolvedPathFact(
+            source,
+            ShellPolicyPathResolutionState.InvalidKnownValue,
+            []);
+        var invalidFacts = facts with
+        {
+            Intent = new ShellPolicyResolvedPathView(
+                Assert.IsType<ShellPolicyScopePathFact>(facts.IntentScope),
+                [invalid])
+        };
+
+        Assert.True(policy.CausalIntentReferencesProtectedPath(invalidFacts));
+    }
+
+    [Fact]
+    public void Causal_protected_path_check_does_not_treat_unknown_as_a_denied_path()
+    {
+        var (evaluation, policy, _) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log");
+        var consumer = Assert.Single(
+            evaluation.Candidates,
+            static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
+        var facts = evaluation.Projection.PathFacts.For(consumer.Id);
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var occurrence = Assert.Single(
+            new ShellCommandPolicy(environment)
+                .Analyze("Get-Date > $name", @"C:\work")
+                .Commands);
+        var resolutionBase = new ShellPolicyScopePathFact(
+            ShellPolicyPathBaseKind.Real,
+            BaseIndex: 0,
+            @"C:\work",
+            ShellPolicyPathResolutionState.Known,
+            CreateCanonicalPath(@"C:\work", ShellPathStyle.Windows));
+        var source = Assert.Single(
+            ShellPolicyOccurrencePathFacts.Create(occurrence)
+                .Resolve(resolutionBase, ShellPathStyle.Windows)
+                .Facts,
+            static fact => fact.Source.Origin == ShellPolicyPathOrigin.Redirect).Source;
+        var unknown = new ShellPolicyResolvedPathFact(
+            source,
+            ShellPolicyPathResolutionState.UnknownDynamic,
+            []);
+        var unknownFacts = facts with
+        {
+            Intent = new ShellPolicyResolvedPathView(
+                Assert.IsType<ShellPolicyScopePathFact>(facts.IntentScope),
+                [unknown]),
+            Fallbacks = []
+        };
+
+        Assert.False(policy.CausalIntentReferencesProtectedPath(unknownFacts));
+    }
+
+    [Fact]
     public async Task Causal_directory_stage_continues_for_eligible_directories()
     {
         var (evaluation, policy, _) = CreateCausalEvaluation(
@@ -683,6 +769,33 @@ public sealed class ShellPolicyEvaluationTests
             evaluation.CoverageFor(candidate.Id).Kind);
     }
 
+    [Theory]
+    [InlineData("grep -f ./patterns ./data.txt", true)]
+    [InlineData("grep -f /external/patterns ./data.txt", false)]
+    [InlineData("head 'C:\\temp\\file.log'", false)]
+    public async Task Reviewed_safe_real_scope_stage_uses_projected_path_facts(
+        string command,
+        bool allCovered)
+    {
+        var phrase = command.StartsWith("grep", StringComparison.Ordinal)
+            ? "grep"
+            : "head";
+        var (evaluation, policy, context) = CreateReviewedSafeEvaluation(
+            command,
+            interactive: true,
+            phrase);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation)],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.Equal(
+            allCovered,
+            evaluation.Candidates.All(candidate => evaluation.IsCovered(candidate.Id)));
+    }
+
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Reviewed_safe_intent_stage_requires_real_prerequisite_coverage()
@@ -853,6 +966,128 @@ public sealed class ShellPolicyEvaluationTests
         var uncovered = evaluation.GetUncoveredApprovalContext(context.SessionDirectory);
 
         Assert.Same(evaluation.Projection.ApprovalContext, uncovered);
+    }
+
+    [Fact]
+    public void Path_facts_preserve_candidate_and_real_scope_identity()
+    {
+        var (evaluation, _, _) = CreateReviewedSafeEvaluation(
+            "head README.md",
+            interactive: true,
+            "head");
+        var candidate = Assert.Single(evaluation.Candidates);
+
+        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+
+        Assert.Same(candidate.SourceOccurrence, facts.SourceOccurrence);
+        Assert.Equal(ShellPolicyPathResolutionState.Known, facts.RealScope.State);
+        Assert.Equal("/work", facts.RealScope.Path?.Value);
+        Assert.NotNull(facts.Real);
+        Assert.Contains(
+            facts.Real.Facts,
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
+                    && fact.Source.DomainKind == ShellPolicyPathDomainKind.Exact
+                    && fact.State == ShellPolicyPathResolutionState.Known
+                    && fact.Paths.Any(path => path.Value == "/work/README.md"));
+    }
+
+    [Fact]
+    public void Path_facts_keep_candidate_scope_separate_from_the_command_base()
+    {
+        var (evaluation, _, _) = CreateReviewedSafeEvaluation(
+            "cat /work/sub/file.txt",
+            interactive: true,
+            "cat");
+        var candidate = Assert.Single(
+            evaluation.Candidates,
+            static candidate => candidate.Candidate.Directory == "/work/sub");
+
+        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+
+        Assert.Equal("/work/sub", facts.RealScope.Path?.Value);
+        Assert.Equal("/work", facts.Real?.ResolutionBase.Path?.Value);
+        Assert.Contains(
+            Assert.IsType<ShellPolicyResolvedPathView>(facts.Real).Facts,
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
+                    && fact.Paths.Any(path => path.Value == "/work/sub/file.txt"));
+    }
+
+    [SlopwatchSuppress("SW001", "This test pins Bash causal path facts on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
+    public void Causal_path_facts_keep_intent_and_fallback_resolutions_distinct()
+    {
+        var (evaluation, _, _) = CreateCausalEvaluation(
+            "cd /tmp && inspect; head result.log");
+        var candidate = Assert.Single(
+            evaluation.Candidates,
+            static candidate => candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer);
+
+        var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+
+        Assert.Equal("/tmp", facts.IntentScope?.Path?.Value);
+        Assert.Contains(facts.FallbackScopes, scope => scope.Path?.Value == "/work");
+        Assert.Contains(
+            Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
+                    && fact.Paths.Any(path => path.Value == "/tmp/result.log"));
+        Assert.Contains(
+            facts.Fallbacks.SelectMany(static view => view.Facts),
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument
+                    && fact.Paths.Any(path => path.Value == "/work/result.log"));
+    }
+
+    [Fact]
+    public void Path_facts_distinguish_unknown_values_from_invalid_known_values()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var policy = new ShellCommandPolicy(environment);
+        var occurrence = Assert.Single(policy.Analyze("Get-Date > $name", @"C:\work").Commands);
+        var source = ShellPolicyOccurrencePathFacts.Create(occurrence);
+        var realScope = new ShellPolicyScopePathFact(
+            ShellPolicyPathBaseKind.Real,
+            BaseIndex: 0,
+            "C:/work",
+            ShellPolicyPathResolutionState.Known,
+            CreateCanonicalPath(@"C:\work", ShellPathStyle.Windows));
+
+        var resolved = source.Resolve(realScope, ShellPathStyle.Windows);
+
+        Assert.Contains(
+            resolved.Facts,
+            fact => fact.Source.Origin == ShellPolicyPathOrigin.Redirect
+                    && fact.Source.DomainKind == ShellPolicyPathDomainKind.Unknown
+                    && fact.State == ShellPolicyPathResolutionState.UnknownDynamic);
+        Assert.DoesNotContain(
+            resolved.Facts,
+            static fact => fact.State == ShellPolicyPathResolutionState.InvalidKnownValue);
+    }
+
+    [Fact]
+    public void Path_facts_retain_redirect_mode_and_domain_kind()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var policy = new ShellCommandPolicy(environment);
+        var occurrence = Assert.Single(policy.Analyze("cat input.txt > output.txt", "/work").Commands);
+        var source = ShellPolicyOccurrencePathFacts.Create(occurrence);
+        var realScope = new ShellPolicyScopePathFact(
+            ShellPolicyPathBaseKind.Real,
+            BaseIndex: 0,
+            "/work",
+            ShellPolicyPathResolutionState.Known,
+            CreateCanonicalPath("/work", ShellPathStyle.Posix));
+
+        var resolved = source.Resolve(realScope, ShellPathStyle.Posix);
+        var redirect = Assert.Single(
+            resolved.Facts,
+            static fact => fact.Source.Origin == ShellPolicyPathOrigin.Redirect);
+
+        Assert.Equal(FileRedirectMode.Output, redirect.Source.RedirectMode);
+        Assert.True(redirect.Source.RedirectIsComplete);
+        Assert.Equal(ShellPolicyPathDomainKind.Exact, redirect.Source.DomainKind);
+        Assert.Equal(ShellPolicyPathResolutionState.Known, redirect.State);
+        Assert.Equal("/work/output.txt", Assert.Single(redirect.Paths).Value);
     }
 
     [Theory]
@@ -1475,6 +1710,14 @@ public sealed class ShellPolicyEvaluationTests
         Shell = ApprovalShell.Bash,
         VerbTokens = Array.AsReadOnly(verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
     };
+
+    private static CanonicalShellPath CreateCanonicalPath(
+        string value,
+        ShellPathStyle pathStyle)
+    {
+        Assert.True(CanonicalShellPath.TryCreate(value, pathStyle, out var path));
+        return path;
+    }
 
     private sealed class FixedShellApprovalService(
         Func<ShellApprovalMatchRequest, ShellApprovalMatchResult> responseFactory)
