@@ -1329,6 +1329,86 @@ public class ReminderManagerActorTests : TestKit
             a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id.Value);
     }
 
+    /// <summary>
+    /// Regression test for the duplicate-ack over-alert: when the same occurrence
+    /// is delivered and settled twice (e.g. redelivered after the first ack),
+    /// the second <c>AckAsync</c> returns <c>NotFound</c> because the occurrence
+    /// is no longer awaiting ack. That is an idempotent no-op — it must NOT emit
+    /// a <c>reminder.settlement.failed</c> alert.
+    /// </summary>
+    [Fact]
+    public async Task Duplicate_ack_of_already_settled_occurrence_does_not_emit_settlement_failed_alert()
+    {
+        var manager = await GetManagerAsync();
+
+        var gatewayProbe = CreateTestProbe("dup-settlement-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-dup-settlement-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        // Interval schedule so the definition survives the first successful
+        // settlement (OneShot definitions are deleted on success). Using the
+        // shared helper with deliveryRequired: false so the execution actor
+        // settles on CommandAck without waiting for a delivery result.
+        var now = _timeProvider.GetUtcNow();
+        var definition = CreateCurrentSessionDefinition("dup-settlement", deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                FireAt = now.AddMinutes(5),
+                IntervalTicks = TimeSpan.FromMinutes(5).Ticks
+            }
+        };
+        _definitionStore.Save(definition);
+
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id.Value),
+            dueTimeUtc: now,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = definition.Id });
+
+        // First delivery settles normally: the occurrence is awaiting ack and
+        // AckAsync returns Success.
+        manager.Tell(envelope);
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Wait until the first settlement is fully complete (the manager's
+        // AckAsync has returned, so the scheduler no longer awaits an ack for
+        // this occurrence). Health shows zero active executions once the
+        // settlement's finally block has run.
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Replay the exact same occurrence. The scheduler has already settled it,
+        // so the second AckAsync returns NotFound. This must not raise an alert.
+        // Advance the fake clock so the second execution actor gets a unique name
+        // (StartExecution derives the actor name from startedAt).
+        _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        manager.Tell(envelope);
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderExecutionFailed
+            && a.Source == definition.Id.Value
+            && a.Summary.Contains("settlement", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task Unsafe_acknowledgement_lease_does_not_start_execution()
     {

@@ -662,7 +662,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             if (nack)
             {
                 var response = await _client!.NackAsync(envelope, reason);
-                if (response.ResponseCode is ReminderNackResponseCode.Error or ReminderNackResponseCode.NotFound)
+                // NotFound means the occurrence is no longer awaiting ack (already
+                // settled by another client or a timeout). That is an idempotent
+                // no-op, not a settlement failure — only Error is a real failure.
+                if (response.ResponseCode is ReminderNackResponseCode.Error)
                 {
                     EmitSettlementFailure(
                         definition,
@@ -673,7 +676,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
 
             var ack = await _client!.AckAsync(envelope);
-            if (ack.ResponseCode != ReminderAckResponseCode.Success)
+            // NotFound is a duplicate ack of an already-settled occurrence —
+            // idempotent no-op, not a failure.
+            if (ack.ResponseCode is ReminderAckResponseCode.Error)
             {
                 EmitSettlementFailure(
                     definition,
@@ -847,7 +852,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        if (ack.ResponseCode != ReminderAckResponseCode.Success)
+        if (ack.ResponseCode is ReminderAckResponseCode.Error)
         {
             if (definition is not null)
             {
@@ -909,7 +914,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         var occurrenceTerminal = nack?.ResponseCode is ReminderNackResponseCode.Failed
             or ReminderNackResponseCode.Expired;
-        if (nack?.ResponseCode is ReminderNackResponseCode.Error or ReminderNackResponseCode.NotFound)
+        if (nack?.ResponseCode is ReminderNackResponseCode.Error)
         {
             if (definition is not null)
             {
