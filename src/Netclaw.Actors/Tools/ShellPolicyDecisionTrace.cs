@@ -133,21 +133,59 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     }
 
     internal void AddCoverage(
-        ShellPolicyTraceStage stage,
+        ShellPolicyCoverageSource source,
         ShellPolicyCandidate candidate,
-        ShellCoverageKind coverage,
-        ShellPolicyReason reason,
-        ShellScopeRelation scopeRelation,
         DateTimeOffset? grantTimestamp = null)
-        => AddDetail(new ShellPolicyTraceRow(
+    {
+        var (stage, coverage, reason, scope) = source switch
+        {
+            ShellPolicyCoverageSource.OneTime => (
+                ShellPolicyTraceStage.OneTimeApproval,
+                ShellCoverageKind.OneTime,
+                ShellPolicyTraceReason.OneTimeGrant,
+                ShellScopeRelation.None),
+            ShellPolicyCoverageSource.Session => (
+                ShellPolicyTraceStage.StoredGrantMatch,
+                ShellCoverageKind.Session,
+                ShellPolicyTraceReason.SessionGrant,
+                ShellScopeRelation.ThisChat),
+            ShellPolicyCoverageSource.PersistentGlobal => (
+                ShellPolicyTraceStage.StoredGrantMatch,
+                ShellCoverageKind.PersistentGlobal,
+                ShellPolicyTraceReason.PersistentGlobalGrant,
+                ShellScopeRelation.Global),
+            ShellPolicyCoverageSource.PersistentFolder => (
+                ShellPolicyTraceStage.StoredGrantMatch,
+                ShellCoverageKind.PersistentFolder,
+                ShellPolicyTraceReason.PersistentFolderGrant,
+                ShellScopeRelation.UnderGrantRoot),
+            ShellPolicyCoverageSource.ReviewedSafeReal => (
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderRealRoot),
+            ShellPolicyCoverageSource.ReviewedSafeIntent => (
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceReason.ReviewedSafePhrase,
+                ShellScopeRelation.UnderIntentRoot),
+            ShellPolicyCoverageSource.ApprovalExemptSideEffect => (
+                ShellPolicyTraceStage.ReviewedSafePolicy,
+                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceReason.ApprovalExemptSideEffect,
+                ShellScopeRelation.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(source))
+        };
+        AddDetail(new ShellPolicyTraceRow(
             stage,
             ShellPolicyTraceOutcome.Covered,
-            ToTraceReason(reason),
+            reason,
             candidate.Id,
             GetExecutableBasename(candidate.Candidate),
             coverage,
-            scopeRelation,
+            scope,
             grantTimestamp));
+    }
 
     internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)
     {
@@ -283,17 +321,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellCoverageKind.Session => ShellPolicyTraceReason.SessionGrant,
         ShellCoverageKind.PersistentGlobal => ShellPolicyTraceReason.PersistentGlobalGrant,
         ShellCoverageKind.PersistentFolder => ShellPolicyTraceReason.PersistentFolderGrant,
-        _ => ShellPolicyTraceReason.None,
-    };
-
-    private static ShellPolicyTraceReason ToTraceReason(ShellPolicyReason reason) => reason switch
-    {
-        ShellPolicyReason.OneTimeGrant => ShellPolicyTraceReason.OneTimeGrant,
-        ShellPolicyReason.SessionGrant => ShellPolicyTraceReason.SessionGrant,
-        ShellPolicyReason.PersistentGlobalGrant => ShellPolicyTraceReason.PersistentGlobalGrant,
-        ShellPolicyReason.PersistentFolderGrant => ShellPolicyTraceReason.PersistentFolderGrant,
-        ShellPolicyReason.ReviewedSafePhrase => ShellPolicyTraceReason.ReviewedSafePhrase,
-        ShellPolicyReason.ApprovalExemptSideEffect => ShellPolicyTraceReason.ApprovalExemptSideEffect,
         _ => ShellPolicyTraceReason.None,
     };
 

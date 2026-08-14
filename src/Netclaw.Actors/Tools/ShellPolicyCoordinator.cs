@@ -378,9 +378,7 @@ internal static class ShellPolicyGrantStages
         {
             var result = evaluation.Cover(
                 candidate,
-                ShellCoverageKind.ReviewedSafePolicy,
-                ShellPolicyReason.ApprovalExemptSideEffect,
-                ShellScopeRelation.None);
+                ShellPolicyCoverageSource.ApprovalExemptSideEffect);
             if (result is not ShellPolicyStageResult.Continue)
                 return result;
         }
@@ -407,9 +405,7 @@ internal static class ShellPolicyGrantStages
         {
             var result = evaluation.Cover(
                 candidate,
-                ShellCoverageKind.OneTime,
-                ShellPolicyReason.OneTimeGrant,
-                ShellScopeRelation.None);
+                ShellPolicyCoverageSource.OneTime);
             if (result is not ShellPolicyStageResult.Continue)
                 return result;
         }
@@ -460,9 +456,7 @@ internal static class ShellPolicyReviewedSafeStages
 
             var result = evaluation.Cover(
                 candidate,
-                ShellCoverageKind.ReviewedSafePolicy,
-                ShellPolicyReason.ReviewedSafePhrase,
-                ShellScopeRelation.UnderRealRoot);
+                ShellPolicyCoverageSource.ReviewedSafeReal);
             if (result is not ShellPolicyStageResult.Continue)
                 return result;
         }
@@ -499,9 +493,7 @@ internal static class ShellPolicyReviewedSafeStages
 
             var result = evaluation.Cover(
                 candidate,
-                ShellCoverageKind.ReviewedSafePolicy,
-                ShellPolicyReason.ReviewedSafePhrase,
-                ShellScopeRelation.UnderIntentRoot);
+                ShellPolicyCoverageSource.ReviewedSafeIntent);
             if (result is not ShellPolicyStageResult.Continue)
                 return result;
         }

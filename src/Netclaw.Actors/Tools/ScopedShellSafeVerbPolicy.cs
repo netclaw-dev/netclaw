@@ -313,8 +313,8 @@ internal sealed class ScopedShellSafeVerbPolicy
                     && pathStyle != ShellPathStyle.Posix
                 || fact.Source.AuthoredPathShape == ShellPathShape.Windows
                     && pathStyle != ShellPathStyle.Windows
-                || fact.Source.DomainKind is not
-                    (ShellPolicyPathDomainKind.Exact or ShellPolicyPathDomainKind.FiniteSet)
+                || fact.Source.Domain is not
+                    (ShellValueDomain.Exact or ShellValueDomain.FiniteSet)
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path =>
@@ -340,8 +340,8 @@ internal sealed class ScopedShellSafeVerbPolicy
         foreach (var fact in resolvedPaths.Facts.Where(static fact =>
                      fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument))
         {
-            if (fact.Source.DomainKind is not
-                    (ShellPolicyPathDomainKind.Exact or ShellPolicyPathDomainKind.FiniteSet)
+            if (fact.Source.Domain is not
+                    (ShellValueDomain.Exact or ShellValueDomain.FiniteSet)
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path => !IsSafePath(
@@ -357,7 +357,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                      fact.Source.Origin == ShellPolicyPathOrigin.Redirect))
         {
             if (fact.Source.RedirectMode != FileRedirectMode.Input
-                || fact.Source.DomainKind != ShellPolicyPathDomainKind.Exact
+                || fact.Source.Domain is not ShellValueDomain.Exact
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count != 1
                 || !IsSafePath(

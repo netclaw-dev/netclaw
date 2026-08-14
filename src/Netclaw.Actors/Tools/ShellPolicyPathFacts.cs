@@ -17,15 +17,6 @@ internal enum ShellPolicyPathOrigin
     Redirect = 3,
 }
 
-internal enum ShellPolicyPathDomainKind
-{
-    Unknown = 0,
-    Exact = 1,
-    FiniteSet = 2,
-    PathPattern = 3,
-    Unsupported = 4,
-}
-
 internal enum ShellPolicyPathResolutionState
 {
     Known = 0,
@@ -33,16 +24,8 @@ internal enum ShellPolicyPathResolutionState
     InvalidKnownValue = 2,
 }
 
-internal enum ShellPolicyPathBaseKind
-{
-    Real = 0,
-    Intent = 1,
-    Fallback = 2,
-}
-
 internal sealed record ShellPolicySourcePathFact(
     ShellPolicyPathOrigin Origin,
-    ShellPolicyPathDomainKind DomainKind,
     ShellValueDomain Domain,
     ShellPathShape AuthoredPathShape)
 {
@@ -57,8 +40,6 @@ internal sealed record ShellPolicyResolvedPathFact(
     IReadOnlyList<CanonicalShellPath> Paths);
 
 internal sealed record ShellPolicyScopePathFact(
-    ShellPolicyPathBaseKind BaseKind,
-    int BaseIndex,
     string? AuthoredValue,
     ShellPolicyPathResolutionState State,
     CanonicalShellPath? Path);
@@ -124,28 +105,18 @@ internal sealed class ShellPolicyPathFacts
                 ? exact.Value
                 : null;
             var realScope = ResolveScope(
-                ShellPolicyPathBaseKind.Real,
-                baseIndex: 0,
                 candidate.Candidate.Directory ?? occurrenceDirectory,
                 pathStyle);
             var realBase = ResolveScope(
-                ShellPolicyPathBaseKind.Real,
-                baseIndex: 0,
                 occurrenceDirectory ?? candidate.Candidate.Directory,
                 pathStyle);
             var intentBase = candidate.IntentDirectory is null
                 ? null
                 : ResolveScope(
-                    ShellPolicyPathBaseKind.Intent,
-                    baseIndex: 0,
                     candidate.IntentDirectory,
                     pathStyle);
             var fallbackScopes = candidate.IntentFallbackDirectories
-                .Select((path, fallbackIndex) => ResolveScope(
-                    ShellPolicyPathBaseKind.Fallback,
-                    fallbackIndex,
-                    path,
-                    pathStyle))
+                .Select(path => ResolveScope(path, pathStyle))
                 .ToArray();
 
             var real = sourceFacts?.Resolve(
@@ -182,8 +153,6 @@ internal sealed class ShellPolicyPathFacts
     }
 
     internal static ShellPolicyScopePathFact ResolveScope(
-        ShellPolicyPathBaseKind baseKind,
-        int baseIndex,
         string? value,
         ShellPathStyle pathStyle)
     {
@@ -195,8 +164,6 @@ internal sealed class ShellPolicyPathFacts
                 ? ShellPolicyPathResolutionState.Known
                 : ShellPolicyPathResolutionState.InvalidKnownValue;
         return new ShellPolicyScopePathFact(
-            baseKind,
-            baseIndex,
             value,
             state,
             state == ShellPolicyPathResolutionState.Known ? path : null);
@@ -331,8 +298,6 @@ internal sealed class ShellPolicyOccurrencePathFacts
         ApprovalShell? shell)
         => Resolve(
             ShellPolicyPathFacts.ResolveScope(
-                ShellPolicyPathBaseKind.Real,
-                baseIndex: 0,
                 resolutionBase,
                 pathStyle),
             pathStyle,
@@ -342,17 +307,7 @@ internal sealed class ShellPolicyOccurrencePathFacts
         ShellPolicyPathOrigin origin,
         ShellValueDomain domain,
         ShellPathShape authoredPathShape)
-        => new(origin, ToDomainKind(domain), domain, authoredPathShape);
-
-    private static ShellPolicyPathDomainKind ToDomainKind(ShellValueDomain domain)
-        => domain switch
-        {
-            ShellValueDomain.Unknown => ShellPolicyPathDomainKind.Unknown,
-            ShellValueDomain.Exact => ShellPolicyPathDomainKind.Exact,
-            ShellValueDomain.FiniteSet => ShellPolicyPathDomainKind.FiniteSet,
-            ShellValueDomain.PathPattern => ShellPolicyPathDomainKind.PathPattern,
-            _ => ShellPolicyPathDomainKind.Unsupported
-        };
+        => new(origin, domain, authoredPathShape);
 
     private static ShellPolicyResolvedPathFact Resolve(
         ShellPolicySourcePathFact fact,

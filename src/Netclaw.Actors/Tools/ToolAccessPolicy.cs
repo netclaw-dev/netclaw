@@ -11,6 +11,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
 
@@ -401,8 +402,7 @@ public sealed class ToolAccessPolicy
             fact.Source.Origin is ShellPolicyPathOrigin.EffectiveArgument
                 or ShellPolicyPathOrigin.AuthoredArgument
                 or ShellPolicyPathOrigin.Redirect
-            && fact.Source.DomainKind is ShellPolicyPathDomainKind.Exact
-                or ShellPolicyPathDomainKind.FiniteSet
+            && fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
             && (fact.State == ShellPolicyPathResolutionState.InvalidKnownValue
                 || fact.Paths.Any(path =>
                     _toolPathPolicy.IsShellDeniedProjectedPath(path))));

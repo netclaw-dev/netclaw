@@ -42,6 +42,24 @@ The expanded changed-file footprint now uses 7,240 baseline lines and 479 baseli
 
 The current slice uses 8,665 lines and 530 control-flow lines. The complete reduction gate remains open.
 
+## Closed coverage-source slice
+
+This slice replaces the coverage-kind, reason, and scope tuple with one closed internal source. Trace fields now derive from that source once.
+
+Validated actor evidence is bound to its originating candidate snapshot. The evaluation no longer revalidates the same actor batch after the boundary accepts it.
+
+The slice removes another 100 production lines and nine control-flow lines. It also removes 28 redundant state-test lines.
+
+The cumulative footprint uses 8,565 lines and 521 control-flow lines. The complete reduction gate remains open.
+
+## Derived path-metadata slice
+
+This slice removes path-domain tags already expressed by the closed domain type. It also removes base tags already expressed by separate real, intent, and fallback views.
+
+The slice removes another 45 production lines and eight test lines. It does not change the control-flow count.
+
+The cumulative footprint uses 8,520 lines and 521 control-flow lines. The complete reduction gate remains open.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

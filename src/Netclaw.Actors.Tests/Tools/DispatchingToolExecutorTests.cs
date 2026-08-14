@@ -1546,14 +1546,11 @@ public class DispatchingToolExecutorTests
         for (var index = 0; index < 300; index++)
         {
             builder.AddCoverage(
-                ShellPolicyTraceStage.ReviewedSafePolicy,
+                ShellPolicyCoverageSource.ReviewedSafeReal,
                 new ShellPolicyCandidate(
                     new ShellPolicyCandidateId(index),
                     BashCandidate($"/usr/bin/tool-{index}"),
-                    SourceOccurrence: null),
-                ShellCoverageKind.ReviewedSafePolicy,
-                ShellPolicyReason.ReviewedSafePhrase,
-                ShellScopeRelation.UnderRealRoot);
+                    SourceOccurrence: null));
         }
 
         var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope);
@@ -1605,14 +1602,11 @@ public class DispatchingToolExecutorTests
         var executor = CreateApprovalGatedShellExecutor(logger: logger);
         var builder = new ShellPolicyDecisionTraceBuilder();
         builder.AddCoverage(
-            ShellPolicyTraceStage.ReviewedSafePolicy,
+                ShellPolicyCoverageSource.ReviewedSafeReal,
             new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(0),
                 BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
-                SourceOccurrence: null),
-            ShellCoverageKind.ReviewedSafePolicy,
-            ShellPolicyReason.ReviewedSafePhrase,
-            ShellScopeRelation.UnderRealRoot);
+                SourceOccurrence: null));
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope));
 

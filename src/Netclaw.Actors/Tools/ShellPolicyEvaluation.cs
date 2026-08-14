@@ -149,7 +149,7 @@ internal sealed class ShellPolicyEvaluation
 {
     private readonly ShellPolicyCandidate[] _candidates;
     private readonly IReadOnlyList<ShellPolicyCandidate> _candidateView;
-    private readonly ShellCandidateCoverage[] _coverage;
+    private readonly ShellPolicyCoverageSource[] _coverage;
     private readonly ShellPolicyDecisionTraceBuilder _trace = new();
     private ToolAuthorizationDecision? _terminalDecision;
     private ShellPolicyDecisionTrace? _completedTrace;
@@ -164,49 +164,26 @@ internal sealed class ShellPolicyEvaluation
         Projection = projection;
         _candidates = projection.Candidates.ToArray();
         _candidateView = Array.AsReadOnly(_candidates);
-        _coverage = new ShellCandidateCoverage[_candidates.Length];
-        for (var index = 0; index < _candidates.Length; index++)
-        {
-            var candidate = _candidates[index];
-            if (candidate.Id.Value != index)
-                throw new InvalidOperationException("Shell candidate IDs must match projection order.");
-
-            _coverage[index] = new ShellCandidateCoverage(
-                candidate.Id,
-                ShellCoverageKind.Uncovered,
-                ShellPolicyReason.None);
-        }
+        _coverage = new ShellPolicyCoverageSource[_candidates.Length];
     }
 
     internal ShellPolicyProjection Projection { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates => _candidateView;
 
-    internal bool AllCovered => _coverage.All(static item =>
-        item.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied);
+    internal bool AllCovered => !_coverage.Contains(ShellPolicyCoverageSource.Uncovered);
 
-    internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates
-    {
-        get
-        {
-            var uncovered = new List<ShellPolicyCandidate>();
-            for (var index = 0; index < _coverage.Length; index++)
-            {
-                if (_coverage[index].Kind == ShellCoverageKind.Uncovered)
-                    uncovered.Add(_candidates[index]);
-            }
-
-            return Array.AsReadOnly(uncovered.ToArray());
-        }
-    }
+    internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates =>
+        Array.AsReadOnly(_candidates
+            .Where((_, index) => _coverage[index] == ShellPolicyCoverageSource.Uncovered)
+            .ToArray());
 
     internal ValidatedShellGrantEvidence? GrantEvidence => _grantEvidence;
 
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
         _grantEvidence?.ApprovalMatches ?? [];
 
-    internal bool HasOneTimeCoverage => _coverage.Any(static item =>
-        item.Kind == ShellCoverageKind.OneTime);
+    internal bool HasOneTimeCoverage => _coverage.Contains(ShellPolicyCoverageSource.OneTime);
 
     internal ToolApprovalContext GetUncoveredApprovalContext(string? sessionDirectory)
     {
@@ -237,7 +214,7 @@ internal sealed class ShellPolicyEvaluation
 
     internal ShellPolicyFault? TerminalFault => _terminalFault;
 
-    internal ShellCandidateCoverage CoverageFor(ShellPolicyCandidateId candidateId)
+    internal ShellPolicyCoverageSource CoverageFor(ShellPolicyCandidateId candidateId)
     {
         var index = candidateId.Value;
         if ((uint)index >= (uint)_coverage.Length)
@@ -248,8 +225,7 @@ internal sealed class ShellPolicyEvaluation
 
     internal bool IsCovered(ShellPolicyCandidateId candidateId)
     {
-        var coverage = CoverageFor(candidateId);
-        return coverage.Kind is not ShellCoverageKind.Uncovered and not ShellCoverageKind.Denied;
+        return CoverageFor(candidateId) != ShellPolicyCoverageSource.Uncovered;
     }
 
     internal ShellPolicyStageResult ApplyActorEvidence(ValidatedShellGrantEvidence evidence)
@@ -258,7 +234,8 @@ internal sealed class ShellPolicyEvaluation
         if (_terminalDecision is not null)
             return new ShellPolicyStageResult.Complete(_terminalDecision);
 
-        if (_grantEvidence is not null || !CanApplyActorEvidence(evidence))
+        if (_grantEvidence is not null
+            || !ReferenceEquals(evidence.SourceCandidates, Projection.GrantCandidates))
             return Fail(ShellPolicyFault.InvalidActorEvidence);
 
         _grantEvidence = evidence;
@@ -267,15 +244,9 @@ internal sealed class ShellPolicyEvaluation
             var actorEvidence = candidateEvidence.ActorEvidence;
             if (actorEvidence.GrantCoverage is { } grantCoverage)
             {
-                GetActorCoverageFacts(
-                    grantCoverage,
-                    out var reason,
-                    out var scopeRelation);
                 var result = Cover(
                     candidateEvidence.Candidate,
-                    grantCoverage,
-                    reason,
-                    scopeRelation,
+                    ToCoverageSource(grantCoverage),
                     actorEvidence.GrantCreatedAt);
                 if (result is not ShellPolicyStageResult.Continue)
                     return result;
@@ -291,9 +262,7 @@ internal sealed class ShellPolicyEvaluation
 
     internal ShellPolicyStageResult Cover(
         ShellPolicyCandidate candidate,
-        ShellCoverageKind coverage,
-        ShellPolicyReason reason,
-        ShellScopeRelation scopeRelation,
+        ShellPolicyCoverageSource source,
         DateTimeOffset? grantTimestamp = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -308,27 +277,21 @@ internal sealed class ShellPolicyEvaluation
         if (!ReferenceEquals(candidate, _candidates[index]))
             return Fail(ShellPolicyFault.CandidateFactsChanged);
 
-        if (_coverage[index].Kind != ShellCoverageKind.Uncovered)
+        if (_coverage[index] != ShellPolicyCoverageSource.Uncovered)
             return Fail(ShellPolicyFault.CoverageAlreadyAssigned);
 
-        if (!TryGetTraceStage(
-                coverage,
-                reason,
-                scopeRelation,
-                grantTimestamp,
-                out var traceStage))
+        if (!Enum.IsDefined(source)
+            || source == ShellPolicyCoverageSource.Uncovered
+            || grantTimestamp is not null
+            && source is not
+                (ShellPolicyCoverageSource.PersistentGlobal
+                or ShellPolicyCoverageSource.PersistentFolder))
         {
             return Fail(ShellPolicyFault.InvalidCoverage);
         }
 
-        _trace.AddCoverage(
-            traceStage,
-            candidate,
-            coverage,
-            reason,
-            scopeRelation,
-            grantTimestamp);
-        _coverage[index] = new ShellCandidateCoverage(candidate.Id, coverage, reason);
+        _trace.AddCoverage(source, candidate, grantTimestamp);
+        _coverage[index] = source;
         _uncoveredApprovalContext = null;
         return new ShellPolicyStageResult.Continue();
     }
@@ -396,112 +359,30 @@ internal sealed class ShellPolicyEvaluation
         return Fail(reason);
     }
 
-    internal ShellPolicyStageResult.Fault InvalidateStage(ShellPolicyFault reason)
-    {
-        if (!Enum.IsDefined(reason))
-            reason = ShellPolicyFault.InvalidStageResult;
+    internal ShellPolicyStageResult.Fault InvalidateStage(ShellPolicyFault reason) =>
+        Fail(
+            Enum.IsDefined(reason) ? reason : ShellPolicyFault.InvalidStageResult,
+            replaceCompletion: true);
 
+    private ShellPolicyStageResult.Fault Fail(
+        ShellPolicyFault reason,
+        bool replaceCompletion = false)
+    {
         var decision = ToolAuthorizationDecision.Deny("internal_policy_failure");
-        _completedTrace = _trace.ReplaceCompletion(decision);
+        _completedTrace = replaceCompletion
+            ? _trace.ReplaceCompletion(decision)
+            : _trace.Complete(decision);
         _terminalDecision = decision;
         _terminalFault = reason;
         return new ShellPolicyStageResult.Fault(reason);
     }
 
-    private ShellPolicyStageResult.Fault Fail(ShellPolicyFault reason)
-    {
-        var decision = ToolAuthorizationDecision.Deny("internal_policy_failure");
-        _completedTrace = _trace.Complete(decision);
-        _terminalDecision = decision;
-        _terminalFault = reason;
-        return new ShellPolicyStageResult.Fault(reason);
-    }
-
-    private static bool TryGetTraceStage(
-        ShellCoverageKind coverage,
-        ShellPolicyReason reason,
-        ShellScopeRelation scopeRelation,
-        DateTimeOffset? grantTimestamp,
-        out ShellPolicyTraceStage traceStage)
-    {
-        traceStage = coverage switch
+    private static ShellPolicyCoverageSource ToCoverageSource(ShellCoverageKind coverage)
+        => coverage switch
         {
-            ShellCoverageKind.OneTime => ShellPolicyTraceStage.OneTimeApproval,
-            ShellCoverageKind.Session or
-                ShellCoverageKind.PersistentGlobal or
-                ShellCoverageKind.PersistentFolder => ShellPolicyTraceStage.StoredGrantMatch,
-            ShellCoverageKind.ReviewedSafePolicy => ShellPolicyTraceStage.ReviewedSafePolicy,
-            _ => default,
-        };
-
-        return (coverage, reason, scopeRelation, grantTimestamp) switch
-        {
-            (ShellCoverageKind.OneTime, ShellPolicyReason.OneTimeGrant, ShellScopeRelation.None, null) => true,
-            (ShellCoverageKind.Session, ShellPolicyReason.SessionGrant, ShellScopeRelation.ThisChat, null) => true,
-            (ShellCoverageKind.PersistentGlobal, ShellPolicyReason.PersistentGlobalGrant, ShellScopeRelation.Global, _) => true,
-            (ShellCoverageKind.PersistentFolder, ShellPolicyReason.PersistentFolderGrant, ShellScopeRelation.UnderGrantRoot, _) => true,
-            (ShellCoverageKind.ReviewedSafePolicy, ShellPolicyReason.ReviewedSafePhrase,
-                ShellScopeRelation.UnderRealRoot or ShellScopeRelation.UnderIntentRoot, null) => true,
-            (ShellCoverageKind.ReviewedSafePolicy, ShellPolicyReason.ApprovalExemptSideEffect,
-                ShellScopeRelation.None, null) => true,
-            _ => false,
-        };
-    }
-
-    private bool CanApplyActorEvidence(ValidatedShellGrantEvidence evidence)
-    {
-        var grantCandidates = Projection.GrantCandidates;
-        if (evidence.CandidateEvidence.Count != grantCandidates.Count)
-            return false;
-
-        var expectedIds = grantCandidates
-            .Select(static candidate => candidate.Id)
-            .ToHashSet();
-        foreach (var candidateEvidence in evidence.CandidateEvidence)
-        {
-            var candidate = candidateEvidence.Candidate;
-            var index = candidate.Id.Value;
-            if ((uint)index >= (uint)_candidates.Length
-                || !ReferenceEquals(candidate, _candidates[index])
-                || !expectedIds.Remove(candidate.Id)
-                || candidateEvidence.ActorEvidence.CandidateId != candidate.Id)
-            {
-                return false;
-            }
-
-            if (candidateEvidence.ActorEvidence.GrantCoverage is { } coverage
-                && (_coverage[index].Kind != ShellCoverageKind.Uncovered
-                    || !IsActorCoverage(coverage)))
-            {
-                return false;
-            }
-        }
-
-        return expectedIds.Count == 0;
-    }
-
-    private static bool IsActorCoverage(ShellCoverageKind coverage)
-        => coverage is ShellCoverageKind.Session
-            or ShellCoverageKind.PersistentGlobal
-            or ShellCoverageKind.PersistentFolder;
-
-    private static void GetActorCoverageFacts(
-        ShellCoverageKind coverage,
-        out ShellPolicyReason reason,
-        out ShellScopeRelation scopeRelation)
-    {
-        (reason, scopeRelation) = coverage switch
-        {
-            ShellCoverageKind.Session => (
-                ShellPolicyReason.SessionGrant,
-                ShellScopeRelation.ThisChat),
-            ShellCoverageKind.PersistentGlobal => (
-                ShellPolicyReason.PersistentGlobalGrant,
-                ShellScopeRelation.Global),
-            ShellCoverageKind.PersistentFolder => (
-                ShellPolicyReason.PersistentFolderGrant,
-                ShellScopeRelation.UnderGrantRoot),
+            ShellCoverageKind.Session => ShellPolicyCoverageSource.Session,
+            ShellCoverageKind.PersistentGlobal => ShellPolicyCoverageSource.PersistentGlobal,
+            ShellCoverageKind.PersistentFolder => ShellPolicyCoverageSource.PersistentFolder,
             _ => throw new InvalidOperationException("Invalid actor coverage kind."),
         };
-    }
 }

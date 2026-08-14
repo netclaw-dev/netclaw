@@ -147,15 +147,19 @@ internal sealed class ValidatedShellGrantEvidence
 
     private ValidatedShellGrantEvidence(
         PersistentGrantStoreStatus persistentStore,
+        IReadOnlyList<ShellPolicyCandidate> sourceCandidates,
         ValidatedShellGrantCandidateEvidence[] candidateEvidence,
         ToolApprovalMatch[] approvalMatches)
     {
         PersistentStore = persistentStore;
+        SourceCandidates = sourceCandidates;
         _candidateEvidence = Array.AsReadOnly(candidateEvidence);
         _approvalMatches = Array.AsReadOnly(approvalMatches);
     }
 
     internal PersistentGrantStoreStatus PersistentStore { get; }
+
+    internal IReadOnlyList<ShellPolicyCandidate> SourceCandidates { get; }
 
     internal IReadOnlyList<ValidatedShellGrantCandidateEvidence> CandidateEvidence => _candidateEvidence;
 
@@ -207,6 +211,7 @@ internal sealed class ValidatedShellGrantEvidence
 
         evidence = new ValidatedShellGrantEvidence(
             result.PersistentStore,
+            candidates,
             validated,
             approvalMatches.ToArray());
         return true;
