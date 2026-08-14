@@ -23,5 +23,5 @@
 
 - [x] 4.1 Run focused Security evidence-contract and Actors coordinator-fixture suites.
 - [x] 4.2 Run OpenSpec, JSON, headers, diff, formatting, Slopwatch, and PII gates.
-- [ ] 4.3 Complete an adversarial review of fixture truthfulness, parser fidelity, and authority neutrality.
-- [ ] 4.4 Rebase, rerun interaction gates, deliver the pull request, and enable auto-merge.
+- [x] 4.3 Complete an adversarial review of fixture truthfulness, parser fidelity, and authority neutrality.
+- [x] 4.4 Rebase, rerun interaction gates, deliver the pull request, and enable auto-merge.
