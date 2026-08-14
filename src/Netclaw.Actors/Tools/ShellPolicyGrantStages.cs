@@ -32,6 +32,19 @@ internal static class ShellPolicyGrantStages
         => (evaluation, _) => ValueTask.FromResult(
             EvaluateApprovalExemptSideEffects(evaluation, approvalEvidenceAvailable));
 
+    internal static ShellPolicyStage ExactOneTime(
+        ToolName toolName,
+        string? sessionDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName.Value);
+        return (evaluation, _) => ValueTask.FromResult(
+            EvaluateExactOneTime(evaluation, toolName, sessionDirectory));
+    }
+
+    internal static ShellPolicyStage PersistentStoreAvailability()
+        => static (evaluation, _) => ValueTask.FromResult(
+            EvaluatePersistentStoreAvailability(evaluation));
+
     private static async ValueTask<ShellPolicyStageResult> EvaluateActorEvidenceAsync(
         ShellPolicyEvaluation evaluation,
         ShellApprovalEvidenceAdapter approvalEvidence,
@@ -91,5 +104,53 @@ internal static class ShellPolicyGrantStages
         }
 
         return new ShellPolicyStageResult.Continue();
+    }
+
+    private static ShellPolicyStageResult EvaluateExactOneTime(
+        ShellPolicyEvaluation evaluation,
+        ToolName toolName,
+        string? sessionDirectory)
+    {
+        var uncovered = evaluation.UncoveredCandidates;
+        if (uncovered.Count == 0)
+            return new ShellPolicyStageResult.Continue();
+
+        var projection = evaluation.Projection;
+        var remainingContext = projection.HasCausalIntent
+            ? projection.ApprovalContext
+            : ToolAccessPolicy.NarrowShellApprovalContext(
+                projection.ApprovalContext,
+                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+                sessionDirectory,
+                projection.Environment.PathStyle);
+        if (!projection.HasExactOneTimeApproval(toolName.Value, remainingContext))
+            return new ShellPolicyStageResult.Continue();
+
+        foreach (var candidate in uncovered)
+        {
+            var result = evaluation.Cover(
+                candidate,
+                ShellCoverageKind.OneTime,
+                ShellPolicyReason.OneTimeGrant,
+                ShellScopeRelation.None);
+            if (result is not ShellPolicyStageResult.Continue)
+                return result;
+        }
+
+        return new ShellPolicyStageResult.Continue();
+    }
+
+    private static ShellPolicyStageResult EvaluatePersistentStoreAvailability(
+        ShellPolicyEvaluation evaluation)
+    {
+        if (evaluation.GrantEvidence is null)
+            return new ShellPolicyStageResult.Fault(ShellPolicyFault.InvalidActorEvidence);
+
+        return evaluation.UncoveredCandidates.Count > 0
+               && evaluation.GrantEvidence.PersistentStore
+               is PersistentGrantStoreStatus.Unavailable
+            ? new ShellPolicyStageResult.Complete(
+                ToolAuthorizationDecision.Deny("approval_store_unavailable"))
+            : new ShellPolicyStageResult.Continue();
     }
 }

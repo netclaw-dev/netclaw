@@ -171,59 +171,20 @@ internal sealed class ShellPolicyCoordinator(
                     new ToolName(tool.Name)),
                 ShellPolicyGrantStages.ApprovalExemptSideEffects(_approvalEvidence.IsAvailable),
                 ShellPolicyReviewedSafeStages.RealScope(policy, context.Invocation),
-                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation)
+                ShellPolicyReviewedSafeStages.IntentScope(policy, context.Invocation),
+                ShellPolicyGrantStages.ExactOneTime(
+                    new ToolName(toolCall.Name),
+                    context.SessionDirectory),
+                ShellPolicyGrantStages.PersistentStoreAvailability()
             ],
             cancellationToken);
         if (initialResult is not ShellPolicyStageResult.Continue)
             return CompleteEvaluation(evaluation);
 
-        var grantEvidence = evaluation.GrantEvidence;
-        if (grantEvidence is null)
-        {
-            evaluation.Fault(ShellPolicyFault.InvalidActorEvidence);
-            return CompleteEvaluation(evaluation);
-        }
-
         var grantCandidates = projection.GrantCandidates;
         var approvalMatches = evaluation.ApprovalMatches;
 
         var uncovered = evaluation.UncoveredCandidates;
-        var oneTimeApplied = false;
-        if (uncovered.Count > 0)
-        {
-            var remainingContext = projection.HasCausalIntent
-                ? projection.ApprovalContext
-                : ToolAccessPolicy.NarrowShellApprovalContext(
-                    projection.ApprovalContext,
-                    uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                    context.SessionDirectory,
-                    projection.Environment.PathStyle);
-            if (projection.HasExactOneTimeApproval(toolCall.Name, remainingContext))
-            {
-                foreach (var candidate in uncovered)
-                {
-                    var coverageResult = evaluation.Cover(
-                        candidate,
-                        ShellCoverageKind.OneTime,
-                        ShellPolicyReason.OneTimeGrant,
-                        ShellScopeRelation.None);
-                    if (coverageResult is not ShellPolicyStageResult.Continue)
-                        return CompleteEvaluation(evaluation);
-                }
-
-                uncovered = [];
-                oneTimeApplied = true;
-            }
-        }
-
-        if (uncovered.Count > 0
-            && grantEvidence.PersistentStore is PersistentGrantStoreStatus.Unavailable)
-        {
-            return CompleteEvaluation(
-                evaluation,
-                ToolAuthorizationDecision.Deny("approval_store_unavailable"));
-        }
-
         if (uncovered.Count > 0)
         {
             var promptContext = projection.HasCausalIntent
@@ -245,7 +206,7 @@ internal sealed class ShellPolicyCoordinator(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"));
         }
 
-        if (oneTimeApplied)
+        if (evaluation.HasOneTimeCoverage)
         {
             return CompleteEvaluation(
                 evaluation,

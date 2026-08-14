@@ -281,6 +281,9 @@ internal sealed class ShellPolicyEvaluation
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
         _grantEvidence?.ApprovalMatches ?? [];
 
+    internal bool HasOneTimeCoverage => _coverage.Any(static item =>
+        item.Kind == ShellCoverageKind.OneTime);
+
     internal ToolAuthorizationDecision? TerminalDecision => _terminalDecision;
 
     internal ShellPolicyDecisionTrace? CompletedTrace => _completedTrace;

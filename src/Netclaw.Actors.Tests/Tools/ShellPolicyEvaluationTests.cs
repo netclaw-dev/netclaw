@@ -737,6 +737,120 @@ public sealed class ShellPolicyEvaluationTests
     }
 
     [Fact]
+    public async Task Exact_one_time_stage_covers_the_remaining_candidate_set()
+    {
+        var evaluation = CreateEvaluationWithExactOneTime(
+            isMessy: false,
+            BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyGrantStages.ExactOneTime(
+                new ToolName(ShellTool.ToolName),
+                "/work/session")],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.True(evaluation.HasOneTimeCoverage);
+        Assert.Equal(ShellCoverageKind.OneTime, evaluation.CoverageFor(candidate.Id).Kind);
+        Assert.IsType<ShellPolicyStageResult.Complete>(evaluation.Complete(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)));
+        Assert.Collection(
+            Assert.IsType<ShellPolicyDecisionTrace>(evaluation.CompletedTrace).Rows,
+            row =>
+            {
+                Assert.Equal(ShellPolicyTraceStage.OneTimeApproval, row.Stage);
+                Assert.Equal(ShellPolicyTraceReason.OneTimeGrant, row.Reason);
+            },
+            row => Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage));
+    }
+
+    [Fact]
+    public async Task Exact_one_time_stage_leaves_a_different_tool_key_uncovered()
+    {
+        var evaluation = CreateEvaluationWithExactOneTime(
+            isMessy: false,
+            BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [ShellPolicyGrantStages.ExactOneTime(
+                new ToolName("different_tool"),
+                "/work/session")],
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<ShellPolicyStageResult.Continue>(result);
+        Assert.False(evaluation.HasOneTimeCoverage);
+        Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(candidate.Id).Kind);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Persistent_store_stage_denies_only_uncovered_candidates(
+        bool coveredBySession,
+        bool expectsDeny)
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+        var candidate = Assert.Single(evaluation.Candidates);
+        var service = new FixedShellApprovalService(_ => new ShellApprovalMatchResult(
+            new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.IoFailure),
+            [
+                new ShellGrantCandidateMatch(
+                    candidate.Id,
+                    coveredBySession
+                        ? new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat")
+                        : null,
+                    coveredBySession ? ShellCoverageKind.Session : null,
+                    NearMisses: [])
+            ]));
+
+        var result = await ShellPolicyPipeline.RunAsync(
+            evaluation,
+            [
+                ShellPolicyGrantStages.ActorEvidence(
+                    new ShellApprovalEvidenceAdapter(service),
+                    (ToolApprovalSessionId)"signalr/shell-policy-store-stage",
+                    TrustAudience.Personal,
+                    new ToolName(ShellTool.ToolName)),
+                ShellPolicyGrantStages.PersistentStoreAvailability()
+            ],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, service.RequestCount);
+        if (!expectsDeny)
+        {
+            Assert.IsType<ShellPolicyStageResult.Continue>(result);
+            Assert.Null(evaluation.TerminalDecision);
+            Assert.Equal(ShellCoverageKind.Session, evaluation.CoverageFor(candidate.Id).Kind);
+        }
+        else
+        {
+            var complete = Assert.IsType<ShellPolicyStageResult.Complete>(result);
+            Assert.Equal(ToolAuthorizationOutcome.Denied, complete.Decision.Outcome);
+            Assert.Equal("approval_store_unavailable", complete.Decision.DenyReason);
+            Assert.Equal(ShellCoverageKind.Uncovered, evaluation.CoverageFor(candidate.Id).Kind);
+        }
+    }
+
+    [Fact]
+    public async Task Persistent_store_stage_rejects_missing_actor_evidence()
+    {
+        var evaluation = CreateEvaluation(BashCandidate("git status"));
+
+        var result = Assert.IsType<ShellPolicyStageResult.Fault>(
+            await ShellPolicyPipeline.RunAsync(
+                evaluation,
+                [ShellPolicyGrantStages.PersistentStoreAvailability()],
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ShellPolicyFault.InvalidActorEvidence, result.Reason);
+        Assert.Equal("internal_policy_failure", evaluation.TerminalDecision?.DenyReason);
+    }
+
+    [Fact]
     public void Coverage_and_trace_change_together()
     {
         var evaluation = CreateEvaluation(BashCandidate("git status"));
