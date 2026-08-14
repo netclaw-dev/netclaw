@@ -32,7 +32,7 @@
 - [x] 4.3 Move session and persistent coverage behind the validated evidence boundary.
 - [x] 4.4 Isolate shell use of public `IToolApprovalService` behind one exact, non-inferential adapter.
 - [x] 4.5 Add malformed protocol, mixed coverage, unavailable store, and exact one-batch actor tests.
-- [ ] 4.6 Run exact fixture parity and adversarial review for the actor-evidence slice.
+- [x] 4.6 Run exact fixture parity and adversarial review for the actor-evidence slice.
 
 ## 5. Extract the ordered policy stages
 
