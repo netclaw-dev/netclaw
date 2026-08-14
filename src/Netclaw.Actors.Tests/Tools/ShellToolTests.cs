@@ -45,8 +45,11 @@ public class ShellToolTests
     }
 
     [Fact]
-    public void Working_directory_schema_prefers_the_typed_argument_to_inline_cd()
+    public void Shell_schema_prefers_file_tools_and_typed_working_directory()
     {
+        Assert.Contains("shell semantics", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not use for known file reads", _tool.Description, StringComparison.Ordinal);
+
         var commandDescription = _tool.ParameterSchema
             .GetProperty("properties")
             .GetProperty("Command")

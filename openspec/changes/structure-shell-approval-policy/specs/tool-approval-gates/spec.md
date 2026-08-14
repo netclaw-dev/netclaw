@@ -709,6 +709,39 @@ unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
 - **WHEN** the data argument has a positive non-filesystem fact
 - **THEN** the output redirect still prevents reviewed-safe coverage
 
+### Requirement: Guidance distinguishes file operations from shell semantics
+
+Team and Personal guidance SHALL prefer first-party file tools for known file
+reads, directory listings, and edits. It SHALL avoid shell for those operations
+unless shell behavior is requested. Shell guidance SHALL retain
+`shell_execute` for local repository search, builds, tests, VCS, and process
+semantics. External discovery SHALL use built-in `web_search`. Page retrieval
+SHALL use built-in `web_fetch`, not a shell HTTP client.
+
+#### Scenario: Known file content avoids shell approval
+
+- **GIVEN** the agent knows the target file or directory
+- **WHEN** it needs content, a listing, or an edit
+- **THEN** guidance prefers the matching first-party file tool
+- **AND** it does not teach the agent to compose `cat`, `sed`, or `ls` chains
+- **AND** deliberate shell-behavior requests remain shell work
+
+#### Scenario: Shell workflows retain their execution tool
+
+- **GIVEN** the task requires local repository search, build, test, VCS, or process semantics
+- **WHEN** the agent selects a tool
+- **THEN** guidance retains `shell_execute` for that work
+- **AND** no approval-policy exception is added
+
+#### Scenario: External search avoids the local shell
+
+- **GIVEN** the task requires information from external sources
+- **WHEN** the agent selects a search tool
+- **THEN** guidance prefers built-in `web_search`
+- **AND** page retrieval uses built-in `web_fetch`
+- **AND** shell HTTP clients are not used for either operation
+- **AND** it does not classify web search as local shell work
+
 #### Scenario: Exact path scope does not declare a safe root
 
 - **GIVEN** an agent has no declared project root for a user-named project

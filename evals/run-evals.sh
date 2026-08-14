@@ -417,6 +417,18 @@ start_eval_daemon() {
     awk 'BEGIN{x=1;for(i=1;i<=30000;i++){x=(x*48271)%2147483647;print x}}' \
         > "$EVAL_HOME/data/workspaces/netclaw-eval-largefile.txt"
 
+    # Seed deterministic local files for unaided file-vs-shell selection evals.
+    # The prompts name goals and paths, never tool names.
+    local selection_root="$EVAL_HOME/data/workspaces/file-tool-selection"
+    mkdir -p "$selection_root/search-target/nested"
+    printf 'first\nexpected-file-read-line\nthird\n' > "$selection_root/read-target.txt"
+    printf 'initial-content\n' > "$selection_root/edit-target.txt"
+    local i
+    for ((i = 1; i <= 20; i++)); do
+        printf 'ordinary-%s\n' "$i" > "$selection_root/search-target/file-$i.txt"
+    done
+    printf 'local-search-eval-token\n' > "$selection_root/search-target/nested/match.txt"
+
     # The eval container runs as the non-root `netclaw` user and needs write
     # access to the bind-mounted identity, logs, skills, and data trees.
     chmod -R ugo+rwX "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/skills"
@@ -1252,7 +1264,8 @@ assert_tool_shell() {
 }
 
 assert_tool_web_search() {
-    stdout_contains '\[tool:call\] web_search'
+    stdout_tool_called 'web_search' \
+        && ! stdout_tool_called 'shell_execute'
 }
 
 assert_tool_cli_invoke() {
@@ -1260,7 +1273,38 @@ assert_tool_cli_invoke() {
 }
 
 assert_tool_file_list() {
-    stdout_contains '\[tool:call\] file_list'
+    stdout_tool_called 'file_list'
+}
+
+assert_tool_known_file_read() {
+    stdout_tool_called 'file_read' \
+        && ! stdout_tool_called 'shell_execute' \
+        && stdout_response_contains 'expected-file-read-line'
+}
+
+assert_tool_known_directory_list() {
+    stdout_tool_called 'file_list' \
+        && ! stdout_tool_called 'shell_execute' \
+        && stdout_response_contains 'read-target.txt' \
+        && stdout_response_contains 'edit-target.txt'
+}
+
+setup_tool_known_file_edit() {
+    printf 'initial-content\n' \
+        > "$EVAL_HOME/data/workspaces/file-tool-selection/edit-target.txt"
+}
+
+assert_tool_known_file_edit() {
+    (stdout_tool_called 'file_edit' || stdout_tool_called 'file_write') \
+        && ! stdout_tool_called 'shell_execute' \
+        && grep -qx 'edited-content' \
+            "$EVAL_HOME/data/workspaces/file-tool-selection/edit-target.txt"
+}
+
+assert_tool_local_repository_search() {
+    stdout_tool_called 'shell_execute' \
+        && ! stdout_tool_called 'web_search' \
+        && stdout_response_contains 'match.txt'
 }
 
 assert_tool_timestamped_webhook() {
@@ -1823,6 +1867,11 @@ run_case() {
         local prompt
         prompt=$(pick_variant "${prompts[@]}")
 
+        local setup_fn="setup_${case_name}"
+        if declare -f "$setup_fn" >/dev/null 2>&1; then
+            "$setup_fn" "$run"
+        fi
+
         run_prompt "$prompt" "$output_format"
 
         local passed=0
@@ -2028,14 +2077,26 @@ run_all() {
     run_case tool_shell "shell_execute called" \
         "Run 'echo hello' in the shell"
 
-    run_case tool_web_search "web_search called" \
+    run_case tool_web_search "web_search called without shell" \
         "Search the web for today's weather in Columbus Ohio"
 
     run_case tool_cli_invoke "list_reminders called" \
         "List my active reminders"
 
-    run_case tool_file_list "file_list called" \
+    run_case tool_file_list "file_list called without shell" \
         "What files are in my session directory?"
+
+    run_case tool_known_file_read "known file content uses file_read without shell" \
+        "Read line 2 of /home/netclaw/.netclaw/workspaces/file-tool-selection/read-target.txt and tell me its exact value."
+
+    run_case tool_known_directory_list "known directory listing uses file_list without shell" \
+        "List the entries in /home/netclaw/.netclaw/workspaces/file-tool-selection and tell me their names."
+
+    run_case tool_known_file_edit "known file edit uses a file tool without shell" \
+        "Replace initial-content with edited-content in /home/netclaw/.netclaw/workspaces/file-tool-selection/edit-target.txt, then report completion."
+
+    run_case tool_local_repository_search "local repository search uses shell, not web_search" \
+        "Search recursively under /home/netclaw/.netclaw/workspaces/file-tool-selection/search-target for the exact text local-search-eval-token and tell me which file contains it."
 
     run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
         "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."

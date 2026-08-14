@@ -234,6 +234,12 @@ Done when:
   root from one-command `WorkingDirectory` scope, prevent redundant project
   switches, and preserve `cd` when directory mutation is the requested shell
   behavior.
+- [x] Always-loaded guidance, shell metadata, and the operations skill prefer
+  first-party file tools for known reads, listings, and edits. Local repository
+  search, builds, tests, VCS, and process workflows remain shell use cases.
+  External discovery and retrieval remain routed through built-in `web_search`
+  and `web_fetch`. Five-run unaided evals passed 5/5 for read, listing, edit,
+  and local search. Web search passed 4/5 at the required 0.80 threshold.
 - [x] Reviewed-safe shell work beneath an undeclared cwd returns the same
   `set_working_directory` correction in parent sessions and subagents before
   any user prompt. The original tool call remains unchanged. The registered

@@ -17,6 +17,15 @@
   without attempting at least one fallback.
 - Never say "you can visit..." or "you can call..." — look it up yourself.
 
+## File and Shell Selection
+
+- Prefer file tools for known file reads, directory listings, and edits.
+- Do not use shell for those operations unless shell behavior is requested.
+- Never use `cat`, `sed`, or `ls` when a file tool can perform the requested operation.
+- Use `shell_execute` for local repository search, builds, tests, VCS, or process semantics.
+- Use built-in `web_search` for external discovery and `web_fetch` for page retrieval.
+- Do not use shell HTTP clients for external search or retrieval.
+
 ## Declaring Project Scope (load-bearing for approvals)
 
 Path arguments give the approval gate an exact candidate scope. They do not

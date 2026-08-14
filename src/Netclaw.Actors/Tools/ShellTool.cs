@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tools;
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
-    "Execute a shell command and return stdout/stderr output with exit code",
+    "Execute commands requiring shell semantics. Do not use for known file reads, directory listings, or edits unless shell behavior is requested.",
     Grant = "shell")]
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {

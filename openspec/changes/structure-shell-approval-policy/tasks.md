@@ -153,6 +153,13 @@
   subagent eval that proves a different user-named project is declared before
   the child's first shell inspection.
 - [x] 8.6 Update `IMPLEMENTATION_PLAN.md` and canonical OpenSpec requirements.
+- [x] 8.7 Prefer first-party file tools for known reads, listings, and edits in
+  always-loaded guidance, shell metadata, and the operations skill. Retain shell
+  use for local repository search, builds, tests, VCS, and process semantics.
+  Route external discovery through built-in `web_search` and retrieval through
+  `web_fetch`. Add unaided behavioral evals for each tool-selection boundary.
+  Five-run results were 5/5 for read, listing, edit, and local search, and 4/5
+  for web search at the required 0.80 threshold.
 
 ## 9. Validation and staged delivery
 
