@@ -49,11 +49,18 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [Fact]
     public Task Interactive_reviewed_safe_candidate_uses_reviewed_policy()
-        => AssertApprovalContract(new ShellApprovalCase(
+    {
+        var invocation = OperatingSystem.IsWindows()
+            ? new ShellApprovalInvocation(
+                "Get-Date",
+                Host: ShellApprovalHost.PowerShell7)
+            : new ShellApprovalInvocation("git status");
+        return AssertApprovalContract(new ShellApprovalCase(
             "interactive-reviewed-safe-allows",
-            new ShellApprovalInvocation("git status"),
+            invocation,
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)));
+    }
 
     [Fact]
     public Task Noninteractive_reviewed_safe_candidate_stays_uncovered()

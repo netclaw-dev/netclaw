@@ -711,9 +711,7 @@ public class SubAgentActorTests : TestKit
         var preservedCall = scenario.Client.LastReceivedMessages!
             .SelectMany(message => message.Contents.OfType<FunctionCallContent>())
             .Single(call => call.CallId == callId);
-        Assert.Equal(
-            "grep -rn 'Metric' tests src; cat tests/project.csproj",
-            preservedCall.Arguments!["Command"]);
+        Assert.Equal(ProjectScopeCommand, preservedCall.Arguments!["Command"]);
     }
 
     [Theory]
@@ -1371,7 +1369,13 @@ public class SubAgentActorTests : TestKit
                 [ShellTool.ToolName] = ToolApprovalMode.Approval
             }
         };
-        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var environment = TestShellEnvironment.Current;
+        var approvalShell = environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        var safeVerbs = environment.Grammar == ShellGrammar.Bash
+            ? new[] { "pwd", "whoami" }
+            : ["Get-Location", "Get-Date"];
         return new ToolAccessPolicy(
             toolConfig,
             new EffectivePolicyDefaults(
@@ -1384,9 +1388,7 @@ public class SubAgentActorTests : TestKit
             shellTrustZonePolicy: new ShellTrustZonePolicy(
                 toolConfig,
                 new NetclawPaths(workspacesDirectory, workspacesDirectory)),
-            safeVerbs: SafeVerbList.FromVerbs(
-                ApprovalShell.Bash,
-                ["grep", "cat"]));
+            safeVerbs: SafeVerbList.FromVerbs(approvalShell, safeVerbs));
     }
 
     private static FunctionCallContent ScratchCall(string callId)
@@ -1399,9 +1401,14 @@ public class SubAgentActorTests : TestKit
     private static FunctionCallContent ProjectScopeCall(string callId, string workingDirectory)
         => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
-            ["Command"] = "grep -rn 'Metric' tests src; cat tests/project.csproj",
+            ["Command"] = ProjectScopeCommand,
             ["WorkingDirectory"] = workingDirectory
         });
+
+    private static string ProjectScopeCommand =>
+        TestShellEnvironment.Current.Grammar == ShellGrammar.Bash
+            ? "pwd; whoami"
+            : "Get-Location; Get-Date";
 
     private static string? GetLastToolResult(FakeChatClient fakeClient, string callId)
     {

@@ -349,11 +349,11 @@ internal sealed class ShellPolicyOccurrencePathFacts
         var paths = new CanonicalShellPath[values.Count];
         for (var index = 0; index < values.Count; index++)
         {
-            var normalized = ShellTokenizer.NormalizePathToken(
-                values[index],
-                resolutionBase,
-                pathStyle);
-            if (!CanonicalShellPath.TryCreate(normalized, pathStyle, out paths[index]))
+            if (!TryResolveCanonicalPath(
+                    values[index],
+                    resolutionBase,
+                    pathStyle,
+                    out paths[index]))
             {
                 return new ShellPolicyResolvedPathFact(
                     fact,
@@ -366,5 +366,35 @@ internal sealed class ShellPolicyOccurrencePathFacts
             fact,
             ShellPolicyPathResolutionState.Known,
             Array.AsReadOnly(paths));
+    }
+
+    private static bool TryResolveCanonicalPath(
+        string value,
+        string? resolutionBase,
+        ShellPathStyle pathStyle,
+        out CanonicalShellPath path)
+    {
+        var normalized = ShellTokenizer.NormalizePathToken(
+            value,
+            resolutionBase,
+            pathStyle);
+        if (CanonicalShellPath.TryCreate(normalized, pathStyle, out path))
+            return true;
+
+        if (value.StartsWith('~')
+            || value.StartsWith("$HOME", StringComparison.Ordinal)
+            || value.StartsWith("${HOME}", StringComparison.Ordinal)
+            || value.StartsWith("%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
+            || !ShellPathRules.TryNormalize(resolutionBase, pathStyle, out var normalizedBase))
+        {
+            return false;
+        }
+
+        var separator = pathStyle == ShellPathStyle.Windows ? '\\' : '/';
+        var combined = normalizedBase.EndsWith(separator)
+            ? normalizedBase + value
+            : normalizedBase + separator + value;
+        return ShellPathRules.TryNormalize(combined, pathStyle, out normalized)
+               && CanonicalShellPath.TryCreate(normalized, pathStyle, out path);
     }
 }
