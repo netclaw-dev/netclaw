@@ -63,6 +63,9 @@
 - [ ] 7.4 Verify production policy contains no new executable names or executable-private argument rules.
 - [ ] 7.5 Verify no call-local parser occurrence, command text, path, or secret crosses actor or persistence boundaries.
 - [ ] 7.6 Run API and durable-contract comparisons against the frozen baseline.
+- [x] 7.7 Audit the complete changed production footprint and revise the reduction gate when file moves hide growth.
+- [ ] 7.8 Remove the displaced production lines and control flow until the complete footprint is below baseline.
+- [ ] 7.9 Run exact parity and adversarial review after each additional reduction slice.
 
 ## 8. Prove equivalence and reduction
 
@@ -72,6 +75,6 @@
 - [ ] 8.4 Confirm channel, reminder, webhook, headless, recovery, and subagent outcomes remain unchanged.
 - [ ] 8.5 Compare public APIs and persisted wire bytes against the frozen baseline.
 - [ ] 8.6 Report final lines, control-flow lines, method complexity, coverage risk, files, largest methods, and duplicate helpers beside the baseline.
-- [ ] 8.7 Require aggregate lines and control-flow lines below 5,136 and 373 while all required checks remain.
+- [ ] 8.7 Require the original-file and complete-footprint reduction gates while all required checks remain.
 - [ ] 8.8 Obtain final adversarial review of authority, precedence, compatibility, test sufficiency, and code reduction.
-- [ ] 8.9 Stop and revise this change if any expected outcome, trace row, authority boundary, or compatibility contract differs.
+- [ ] 8.9 Stop and revise this change if any outcome, trace row, authority boundary, compatibility contract, or reduction gate differs.

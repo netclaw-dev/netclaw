@@ -182,6 +182,9 @@ Done when:
 - [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
   and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
   authorize, create candidates, or widen scope.
+  The preliminary complete-footprint audit after PR #1947 found 1,484 added
+  production lines and 52 added control-flow lines. The simplification remains
+  incomplete until the complete footprint is below its frozen baseline.
 - [x] Shell calls pass through one coordinator. It snapshots immutable parser
   and run-scope facts, requests one typed actor batch, and composes grant and
   reviewed-safe coverage per candidate before one final result.

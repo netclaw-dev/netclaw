@@ -187,6 +187,8 @@ It SHALL not add a public API, durable schema, command parser, or duplicate poli
 - **WHEN** all refactor slices are complete
 - **THEN** the task evidence SHALL report before and after production line and control-flow counts
 - **AND** the after counts SHALL be lower than 5,136 lines and 373 control-flow lines
+- **AND** the complete changed production footprint SHALL have fewer lines and control-flow lines than the frozen corpus commit
+- **AND** an added production file SHALL contribute zero lines to the baseline count
 - **AND** the evidence SHALL report method complexity, coverage, and CRAP risk with a versioned command
 
 #### Scenario: Public and durable compatibility

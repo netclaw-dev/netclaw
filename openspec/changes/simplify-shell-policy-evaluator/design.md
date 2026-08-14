@@ -310,6 +310,19 @@ This change will not remove the public compatibility interface. A later generic 
 
 The final change must reduce aggregate lines and control-flow lines below 5,136 and 373. The task report will include both counts.
 
+That original-file measure does not count code that moves into a new file. The final audit must also count the complete production footprint.
+
+The complete footprint uses corpus commit `8b4108aa92a229f4727377299d9dd2ed19f70e07` as its baseline. It includes every changed production C# file in these roots:
+
+- `src/Netclaw.Actors/Tools/`
+- `src/Netclaw.Security/`
+
+An added file has zero baseline lines. A removed file has zero final lines. The complete footprint must have fewer final lines and control-flow lines.
+
+The preliminary audit after PR #1947 found a failed reduction gate. The complete footprint changed from 6,680 to 8,164 lines.
+
+It also changed from 452 to 504 control-flow lines. The next slices must remove this displacement before the final audit can pass.
+
 The report will also include method complexity, line coverage, branch coverage, and CRAP risk. It will state the exact tool version and command.
 
 The final review will also inspect:
