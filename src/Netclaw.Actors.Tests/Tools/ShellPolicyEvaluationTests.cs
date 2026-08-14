@@ -771,15 +771,14 @@ public sealed class ShellPolicyEvaluationTests
 
     [Theory]
     [InlineData("grep -f ./patterns ./data.txt", true)]
+    [InlineData("du -sh ./*", true)]
     [InlineData("grep -f /external/patterns ./data.txt", false)]
     [InlineData("head 'C:\\temp\\file.log'", false)]
     public async Task Reviewed_safe_real_scope_stage_uses_projected_path_facts(
         string command,
         bool allCovered)
     {
-        var phrase = command.StartsWith("grep", StringComparison.Ordinal)
-            ? "grep"
-            : "head";
+        var phrase = command.Split(' ', 2)[0];
         var (evaluation, policy, context) = CreateReviewedSafeEvaluation(
             command,
             interactive: true,
@@ -799,7 +798,10 @@ public sealed class ShellPolicyEvaluationTests
                 evaluation.Candidates.Select(candidate =>
                 {
                     var facts = evaluation.Projection.PathFacts.For(candidate.Id);
-                    return $"{candidate.Candidate.Verb}: real={facts.RealScope}; "
+                    return $"{candidate.Candidate.Verb}: "
+                           + $"directory={candidate.Candidate.Directory}; "
+                           + $"sourceCwd={candidate.SourceOccurrence?.WorkingDirectory}; "
+                           + $"real={facts.RealScope}; "
                            + $"facts=[{string.Join(", ", facts.Real?.Facts ?? [])}]";
                 })));
     }
