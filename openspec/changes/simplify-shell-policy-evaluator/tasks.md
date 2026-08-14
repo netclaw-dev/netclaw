@@ -53,7 +53,7 @@
 - [x] 6.4 Preserve causal full-context, scratch limits, reusable phrases, directory depth, and candidate order.
 - [x] 6.5 Centralize bounded trace completion and preserve exact redaction and row order.
 - [x] 6.6 Add path origin/domain/base, redirect-mode, runtime recheck, prompt-context, one-time-key, causal-context, and trace-parity regressions.
-- [ ] 6.7 Run exact fixture parity and adversarial review for the consolidation slice.
+- [x] 6.7 Run exact fixture parity and adversarial review for the consolidation slice.
 
 ## 7. Remove obsolete structure
 
