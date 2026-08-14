@@ -791,9 +791,17 @@ public sealed class ShellPolicyEvaluationTests
             TestContext.Current.CancellationToken);
 
         Assert.IsType<ShellPolicyStageResult.Continue>(result);
-        Assert.Equal(
-            allCovered,
-            evaluation.Candidates.All(candidate => evaluation.IsCovered(candidate.Id)));
+        var actual = evaluation.Candidates.All(candidate => evaluation.IsCovered(candidate.Id));
+        Assert.True(
+            actual == allCovered,
+            string.Join(
+                "; ",
+                evaluation.Candidates.Select(candidate =>
+                {
+                    var facts = evaluation.Projection.PathFacts.For(candidate.Id);
+                    return $"{candidate.Candidate.Verb}: real={facts.RealScope}; "
+                           + $"facts=[{string.Join(", ", facts.Real?.Facts ?? [])}]";
+                })));
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
