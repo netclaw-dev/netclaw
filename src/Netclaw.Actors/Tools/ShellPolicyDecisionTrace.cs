@@ -137,7 +137,8 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellPolicyCandidate candidate,
         ShellCoverageKind coverage,
         ShellPolicyReason reason,
-        ShellScopeRelation scopeRelation)
+        ShellScopeRelation scopeRelation,
+        DateTimeOffset? grantTimestamp = null)
         => AddDetail(new ShellPolicyTraceRow(
             stage,
             ShellPolicyTraceOutcome.Covered,
@@ -146,7 +147,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             GetExecutableBasename(candidate.Candidate),
             coverage,
             scopeRelation,
-            GrantTimestamp: null));
+            grantTimestamp));
 
     internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)
     {

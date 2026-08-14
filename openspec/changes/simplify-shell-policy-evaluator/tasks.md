@@ -1,18 +1,18 @@
 ## 1. Freeze the behavior contract
 
-- [ ] 1.1 Rebase onto the merged live-regression corpus and record its exact commit and fixture hashes.
-- [ ] 1.2 Pin terminal-precedence overlaps for protected paths, invalid evidence, unavailable persistence, corrections, one-time authority, prompts, and allows.
-- [ ] 1.3 Record the baseline files, lines, control-flow lines, method complexity, coverage risk, coordinator size, helper duplication, and callers.
-- [ ] 1.4 Record public API, approval-store, actor-event, snapshot, session-history, configuration, prompt, and trace compatibility baselines.
-- [ ] 1.5 Run the D-case, adversarial, live-regression, and full disposition suites before production edits.
+- [x] 1.1 Rebase onto the merged live-regression corpus and record its exact commit and fixture hashes.
+- [x] 1.2 Pin terminal-precedence overlaps for protected paths, invalid evidence, unavailable persistence, corrections, one-time authority, prompts, and allows.
+- [x] 1.3 Record the baseline files, lines, control-flow lines, method complexity, coverage risk, coordinator size, helper duplication, and callers.
+- [x] 1.4 Record public API, approval-store, actor-event, snapshot, session-history, configuration, prompt, and trace compatibility baselines.
+- [x] 1.5 Run the D-case, adversarial, live-regression, and full disposition suites before production edits.
 
 ## 2. Add call-local policy state
 
-- [ ] 2.1 Add internal closed result types for preflight, stage completion, and typed policy faults.
-- [ ] 2.2 Add the internal call-local evaluation state with immutable candidate identity and one coverage slot per candidate.
-- [ ] 2.3 Route coverage and its bounded trace row through one atomic state operation.
-- [ ] 2.4 Add tests for duplicate coverage, changed candidate facts, invalid candidate IDs, invalid transitions, and multiple terminal results.
-- [ ] 2.5 Run exact fixture parity and adversarial review before production decisions use the new state.
+- [x] 2.1 Add internal closed result types for preflight, stage completion, and typed policy faults.
+- [x] 2.2 Add the internal call-local evaluation state with immutable candidate identity and one coverage slot per candidate.
+- [x] 2.3 Route coverage and its bounded trace row through one atomic state operation.
+- [x] 2.4 Add tests for duplicate coverage, changed candidate facts, invalid candidate IDs, invalid transitions, and multiple terminal results.
+- [x] 2.5 Run exact fixture parity and adversarial review before production decisions use the new state.
 
 ## 3. Make preflight data flow explicit
 
