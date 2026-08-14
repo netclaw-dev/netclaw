@@ -36,8 +36,8 @@
 
 ## 5. Extract the ordered policy stages
 
-- [ ] 5.1 Add one pipeline runner that stops on the first complete or fault result.
-- [ ] 5.2 Extract syntax, protected-path, causal-path, and causal-directory stages with no change to precedence.
+- [x] 5.1 Add one pipeline runner that stops on the first complete or fault result.
+- [x] 5.2 Extract syntax, protected-path, causal-path, and causal-directory stages with no change to precedence.
 - [ ] 5.3 Extract approval-exempt and actor-evidence stages with no change to candidate order or request count.
 - [ ] 5.4 Extract reviewed-safe real-scope and intent-scope stages with no change to catalog behavior.
 - [ ] 5.5 Extract exact one-time and persistent-store availability stages while their authority owners stay fixed.
