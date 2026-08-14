@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "sourceRuntime": {
+    "version": "0.26.0",
+    "commit": "b45bf8d",
+    "windowStartUtc": "2026-08-14T15:08:11Z",
+    "windowEndUtc": "2026-08-14T17:50:00Z",
+    "shellCallCount": 285,
+    "approvalPromptCount": 69
+  },
+  "sanitization": {
+    "home": "/home/user",
+    "repositoryRoot": "/work/project",
+    "worktreeRoot": "/work/project-worktree",
+    "sessionScratch": "/home/user/.netclaw/sessions/example",
+    "temporaryWorkspace": "/tmp/review-workspace",
+    "remoteRepository": "example/project",
+    "internalHost": "service.example.invalid",
+    "privateRecords": "People, deal identifiers, titles, branch names, and repository identities were replaced by semantic placeholders.",
+    "selection": "The source counts cover the full frozen window. Cases retain representative shapes from every observed prompt bucket."
+  },
+  "cases": [
+    {
+      "id": "T01",
+      "sourcePromptTimeUtc": "2026-08-14T16:04:52.553Z",
+      "commandShape": "mkdir -p /tmp/review-workspace; cd /tmp/review-workspace; git clone --depth 1 https://service.example.invalid/example/project.git",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a shared-temporary workspace, contacts a remote, and writes a repository checkout."
+    },
+    {
+      "id": "T02",
+      "sourcePromptTimeUtc": "2026-08-14T16:05:19.643Z",
+      "commandShape": "cd /tmp/review-workspace; for project in project-a project-b; do ls -la \"$project\" | head; done",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent repeated disposable reads under shared temp instead of creating the workspace in its private session scratch."
+    },
+    {
+      "id": "T03",
+      "sourcePromptTimeUtc": "2026-08-14T16:06:17.545Z",
+      "commandShape": "cd /work/project; git remote -v; git fetch origin; git fetch upstream",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The fetch operations contact remotes and update repository metadata."
+    },
+    {
+      "id": "T04",
+      "sourcePromptTimeUtc": "2026-08-14T16:08:41.288Z",
+      "commandShape": "cd /tmp/review-workspace; find project-a/src -type f -name '*.fs' | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent continued shell inspection in shared temp without moving disposable work into private session scratch."
+    },
+    {
+      "id": "T05",
+      "sourcePromptTimeUtc": "2026-08-14T16:10:21.802Z",
+      "commandShape": "cd /work/project-worktree; grep -rn '<conflict marker>' src; git add -A; git rebase --continue",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call stages files and continues a history-changing rebase."
+    },
+    {
+      "id": "T06",
+      "sourcePromptTimeUtc": "2026-08-14T16:12:10.255Z",
+      "commandShape": "cd /work/project-worktree; git diff --name-only <old-range> | sort > /tmp/old-files; git diff --name-only <new-range> | sort > /tmp/new-files; comm /tmp/old-files /tmp/new-files",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The diagnostic used shared-temp files instead of private session scratch or an in-memory comparison."
+    },
+    {
+      "id": "T07",
+      "sourcePromptTimeUtc": "2026-08-14T16:12:16.421Z",
+      "commandShape": "cd /work/project-worktree; ls src/*Tests*; ls src | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used an inline directory transition for repeated project inspection instead of declaring the project or using WorkingDirectory."
+    },
+    {
+      "id": "T08",
+      "sourcePromptTimeUtc": "2026-08-14T16:44:00.493Z",
+      "commandShape": "cd /work/project-worktree; file=$(find src -name '<known-file>' | head -1); grep -n -A 22 '<known-symbol>' \"$file\" | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used dynamic shell discovery for a known source file that file search and file read tools could inspect directly."
+    },
+    {
+      "id": "T09",
+      "sourcePromptTimeUtc": "2026-08-14T17:03:09.740Z",
+      "commandShape": "curl -s https://api.github.com/repos/example/project | python3 -c '<response parser>'",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent used shell HTTP and an inline interpreter instead of the built-in web retrieval path."
+    },
+    {
+      "id": "T10",
+      "sourcePromptTimeUtc": "2026-08-14T17:09:57.308Z",
+      "commandShape": "cd /work/project; git log --oneline -15; git log --all --oneline | grep '<marker>'; grep -ri '<marker>' services",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent issued repeated repository reads through an inline cd instead of declaring the project scope."
+    },
+    {
+      "id": "T11",
+      "sourcePromptTimeUtc": "2026-08-14T17:11:24.889Z",
+      "commandShape": "cd /home/user/.netclaw/sessions/example; python3 -c '<parse previously fetched JSON artifact>'",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used an inline interpreter for bounded inspection of an already downloaded session artifact."
+    },
+    {
+      "id": "T12",
+      "sourcePromptTimeUtc": "2026-08-14T17:12:22.499Z",
+      "commandShape": "gh api repos/example/project/commits --jq '<read projection>'; gh api repos/example/project/issues --jq '<read projection>'",
+      "observedResponse": "Session",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTree",
+      "reason": "The exact calls are default GET requests, but policy lacks a parser-owned fact that distinguishes them from authored gh api mutation methods."
+    },
+    {
+      "id": "T13",
+      "sourcePromptTimeUtc": "2026-08-14T17:15:45.679Z",
+      "commandShape": "external-crm deals list --status won --json > /tmp/records.json 2> /tmp/records.err; jq '<count>' /tmp/records.json",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The external CLI contacts a private service and writes shared-temporary output files."
+    },
+    {
+      "id": "T14",
+      "sourcePromptTimeUtc": "2026-08-14T17:18:24.025Z",
+      "commandShape": "ssh -o ConnectTimeout=6 -o BatchMode=yes service.example.invalid '<remote inspection>' | head",
+      "observedResponse": "Deny",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call opens a remote shell and executes caller-authored commands on another host."
+    },
+    {
+      "id": "T15",
+      "sourcePromptTimeUtc": "2026-08-14T17:19:51.631Z",
+      "commandShape": "echo 'DELTA'; echo $((current - baseline)); echo 'REMAINING'; echo $((target - current))",
+      "observedResponse": "Once",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTree",
+      "reason": "Static arithmetic used only as echo data still makes the subagent shell call promptable."
+    },
+    {
+      "id": "T16",
+      "sourcePromptTimeUtc": "2026-08-14T17:23:17.439Z",
+      "commandShape": "for repository in /work/project-a /work/project-b; do git -C \"$repository\" remote -v; git -C \"$repository\" branch --show-current; done",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent combined reads across two undeclared projects instead of inspecting one declared scope at a time."
+    },
+    {
+      "id": "T17",
+      "sourcePromptTimeUtc": "2026-08-14T17:26:08.485Z",
+      "commandShape": "grep -rn '<package marker>' /work/project/src; grep -rn '<api marker>' /home/user/.nuget/packages; ls /home/user/.nuget/packages | grep '<package>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call crosses from the project into a package-cache path that is not a declared safe-space root."
+    },
+    {
+      "id": "T18",
+      "sourcePromptTimeUtc": "2026-08-14T17:31:42.170Z",
+      "commandShape": "cd /work/project-worktree; docker compose -f service.yml config -q; git diff --stat; git diff",
+      "observedResponse": "Deny",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Shell syntax cannot prove the behavior of the generic Docker invocation or its configuration hooks."
+    },
+    {
+      "id": "T19",
+      "sourcePromptTimeUtc": "2026-08-14T17:40:16.979Z",
+      "commandShape": "cd /work/project; sed -n '<range>p' path/to/script.sh; grep -n '<marker>' related/scripts; git show <ref>:path/to/script.sh | grep '<marker>'",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used a compound shell pipeline for known-file reads that file and repository tools could perform directly."
+    },
+    {
+      "id": "T20",
+      "sourcePromptTimeUtc": "2026-08-14T17:42:14.081Z",
+      "commandShape": "for run in $(seq 1 8); do dotnet test <focused-filter>; if echo \"$output\" | grep -q FAIL; then inspect; break; fi; done",
+      "observedResponse": "Pending",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The loop repeatedly runs a build tool and uses runtime output to control later shell behavior."
+    },
+    {
+      "id": "T21",
+      "sourcePromptTimeUtc": "2026-08-14T17:43:48.356Z",
+      "commandShape": "gh api repos/example/project/labels --paginate --jq '<label names>' | sort",
+      "observedResponse": "Pending",
+      "classification": "ShellSyntaxTreeFactGap",
+      "owner": "ShellSyntaxTree",
+      "reason": "The exact call is a paginated GET, but policy lacks a parser-owned operation fact that excludes authored mutation methods."
+    }
+  ]
+}

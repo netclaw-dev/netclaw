@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-11
+Last updated: 2026-08-14
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -207,6 +207,8 @@ Done when:
   redirect, and file-change commands without production command text.
 - [x] Sanitized post-swap evidence classifies 51 prompts across 202 shell calls.
   Eleven executable live cases pin the intended allow and prompt boundaries.
+- [x] Post-1952 live evidence froze 285 shell calls and 69 prompts.
+  Twenty-one sanitized cases sample expected, guidance, and ShellSyntaxTree gaps.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
   still requires approval.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
