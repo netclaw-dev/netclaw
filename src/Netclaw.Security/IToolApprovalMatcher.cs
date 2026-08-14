@@ -506,7 +506,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             if (string.IsNullOrWhiteSpace(path)
                 || !IsRootedForPathStyle(path, pathStyle)
-                || UsesHostPathStyle(pathStyle)
+                || ShellPathRules.UsesHostPathStyle(pathStyle)
                 && HasUnsafeHostPath(path)
                 && isAllowedHostPath?.Invoke(path) != true)
             {
@@ -827,7 +827,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrWhiteSpace(target))
                 return null;
 
-            if (UsesHostPathStyle(pathStyle)
+            if (ShellPathRules.UsesHostPathStyle(pathStyle)
                 && HasUnsafeHostPath(target)
                 && isAllowedHostPath?.Invoke(target) != true)
                 return null;
@@ -886,11 +886,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                                           && path[1] is '/' or '\\'),
             _ => false
         };
-
-    private static bool UsesHostPathStyle(ShellPathStyle pathStyle)
-        => pathStyle == ShellPathStyle.Windows
-            ? OperatingSystem.IsWindows()
-            : !OperatingSystem.IsWindows();
 
     private static bool HasUnsafeHostPath(string target)
     {

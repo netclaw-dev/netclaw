@@ -373,7 +373,7 @@ internal sealed class HostPlatformTemporaryPathInspector : IPlatformTemporaryPat
     public bool TryResolveRoot(string path, ShellPathStyle pathStyle, out string resolvedRoot)
     {
         resolvedRoot = string.Empty;
-        if (!UsesHostPathStyle(pathStyle)
+        if (!ShellPathRules.UsesHostPathStyle(pathStyle)
             || !ShellPathRules.TryNormalize(path, pathStyle, out var normalized)
             || !Directory.Exists(normalized))
         {
@@ -416,14 +416,9 @@ internal sealed class HostPlatformTemporaryPathInspector : IPlatformTemporaryPat
     }
 
     public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
-        => UsesHostPathStyle(pathStyle)
+        => ShellPathRules.UsesHostPathStyle(pathStyle)
            && !PathUtility.ContainsSymlinkSegment(root, path);
 
     public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
-        => !UsesHostPathStyle(pathStyle);
-
-    private static bool UsesHostPathStyle(ShellPathStyle pathStyle)
-        => pathStyle == ShellPathStyle.Windows
-            ? OperatingSystem.IsWindows()
-            : !OperatingSystem.IsWindows();
+        => !ShellPathRules.UsesHostPathStyle(pathStyle);
 }

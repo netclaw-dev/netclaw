@@ -473,9 +473,10 @@ internal sealed class ScopedShellSafeVerbPolicy
                        normalizedPath,
                        normalizedRoot,
                        pathStyle)
-                   && !PathUtility.ContainsSymlinkSegment(
-                       normalizedRoot,
-                       normalizedPath);
+                   && (!ShellPathRules.UsesHostPathStyle(pathStyle)
+                       || !PathUtility.ContainsSymlinkSegment(
+                           normalizedRoot,
+                           normalizedPath));
         }
         catch (Exception ex) when (ex is ArgumentException
                                       or IOException

@@ -63,6 +63,14 @@ internal static class ShellPathRules
                 : StringComparison.Ordinal);
     }
 
+    internal static bool UsesHostPathStyle(ShellPathStyle pathStyle)
+        => pathStyle switch
+        {
+            ShellPathStyle.Posix => !OperatingSystem.IsWindows(),
+            ShellPathStyle.Windows => OperatingSystem.IsWindows(),
+            _ => false
+        };
+
     internal static bool TryGetRootRelativeDepth(
         string? path,
         ShellPathStyle pathStyle,
