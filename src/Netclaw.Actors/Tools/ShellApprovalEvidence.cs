@@ -171,32 +171,35 @@ internal sealed class ValidatedShellGrantEvidence
         if (result is null
             || candidates is null
             || !TryValidateStore(result.PersistentStore, out var storeUnavailable)
-            || result.CandidateMatches is null
-            || result.CandidateMatches.Count != candidates.Count)
+            || result.CandidateMatches is null)
         {
             return false;
         }
+
+        var candidateMatches = result.CandidateMatches.ToArray();
+        if (candidateMatches.Length != candidates.Count)
+            return false;
 
         var expectedById = candidates.ToDictionary(static candidate => candidate.Id);
         var seenIds = new HashSet<ShellPolicyCandidateId>();
         var validated = new ValidatedShellGrantCandidateEvidence[candidates.Count];
         var approvalMatches = new List<ToolApprovalMatch>(candidates.Count);
-        for (var index = 0; index < result.CandidateMatches.Count; index++)
+        for (var index = 0; index < candidateMatches.Length; index++)
         {
-            var candidateMatch = result.CandidateMatches[index];
-            if (candidateMatch is null
-                || !expectedById.TryGetValue(candidateMatch.CandidateId, out var candidate)
-                || !seenIds.Add(candidateMatch.CandidateId)
+            var candidateMatch = candidateMatches[index];
+            if (!TryCopyCandidateEvidence(candidateMatch, out var candidateEvidence)
+                || candidateEvidence is null
+                || !expectedById.TryGetValue(candidateEvidence.CandidateId, out var candidate)
+                || !seenIds.Add(candidateEvidence.CandidateId)
                 || !TryValidateCandidateEvidence(
                     candidate,
-                    candidateMatch,
+                    candidateEvidence,
                     cwd,
                     storeUnavailable))
             {
                 return false;
             }
 
-            var candidateEvidence = CopyCandidateEvidence(candidateMatch);
             validated[index] = new ValidatedShellGrantCandidateEvidence(candidate, candidateEvidence);
             if (candidateEvidence.Match is { } match)
                 approvalMatches.Add(match);
@@ -267,9 +270,19 @@ internal sealed class ValidatedShellGrantEvidence
             cwd);
     }
 
-    private static ShellGrantCandidateMatch CopyCandidateEvidence(
-        ShellGrantCandidateMatch source)
-        => new(
+    private static bool TryCopyCandidateEvidence(
+        ShellGrantCandidateMatch? source,
+        out ShellGrantCandidateMatch? snapshot)
+    {
+        snapshot = null;
+        if (source?.NearMisses is null)
+            return false;
+
+        var nearMisses = source.NearMisses.ToArray();
+        if (nearMisses.Any(static nearMiss => nearMiss is null))
+            return false;
+
+        snapshot = new ShellGrantCandidateMatch(
             source.CandidateId,
             source.Match is null
                 ? null
@@ -278,7 +291,7 @@ internal sealed class ValidatedShellGrantEvidence
                     source.Match.Source,
                     source.Match.Scope),
             source.GrantCoverage,
-            Array.AsReadOnly(source.NearMisses
+            Array.AsReadOnly(nearMisses
                 .Select(static nearMiss => new ShellApprovalNearMiss(
                     nearMiss.Grant,
                     nearMiss.Reason))
@@ -286,6 +299,8 @@ internal sealed class ValidatedShellGrantEvidence
         {
             GrantCreatedAt = source.GrantCreatedAt
         };
+        return true;
+    }
 
     private static bool IsConsistentActorMatch(
         ApprovalCandidate candidate,
@@ -311,6 +326,8 @@ internal sealed class ValidatedShellGrantEvidence
             (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)
             || !string.Equals(match.Source, "persistent", StringComparison.Ordinal)
             || !ApprovalEntry.TryParseScope(match.Scope, out var entry, out _)
+            || !string.Equals(entry.FormatScope(), match.Scope, StringComparison.Ordinal)
+            || !IsCanonicalShellEntry(entry)
             || entry.Shell != candidate.Shell
             || entry.Match is null
             || (coverage == ShellCoverageKind.PersistentGlobal) != (entry.Directory is null))
@@ -331,6 +348,14 @@ internal sealed class ValidatedShellGrantEvidence
 
         try
         {
+            var scope = nearMiss.Grant.FormatScope();
+            if (!ApprovalEntry.TryParseScope(scope, out var canonicalGrant, out _)
+                || !HasSameEntryFacts(nearMiss.Grant, canonicalGrant)
+                || !IsCanonicalShellEntry(canonicalGrant))
+            {
+                return false;
+            }
+
             var evaluation = ApprovalPatternMatching.EvaluateShellApproval(
                 candidate,
                 cwd,
@@ -347,6 +372,75 @@ internal sealed class ValidatedShellGrantEvidence
         {
             return false;
         }
+    }
+
+    private static bool HasSameEntryFacts(ApprovalEntry first, ApprovalEntry second)
+        => string.Equals(first.Verb, second.Verb, StringComparison.Ordinal)
+           && string.Equals(first.Directory, second.Directory, StringComparison.Ordinal)
+           && first.Shell == second.Shell
+           && first.Match == second.Match
+           && ((first.VerbTokens is null && second.VerbTokens is null)
+               || (first.VerbTokens is not null
+                   && second.VerbTokens is not null
+                   && first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
+
+    private static bool IsCanonicalShellEntry(ApprovalEntry entry)
+    {
+        if (entry.Shell is not { } shell
+            || !Enum.IsDefined(shell)
+            || entry.Match is not { } match
+            || !Enum.IsDefined(match))
+        {
+            return false;
+        }
+
+        if (entry.Directory is { } directory)
+        {
+            var pathStyle = shell == ApprovalShell.PowerShell
+                ? ShellPathStyle.Windows
+                : ShellPathStyle.Posix;
+            if (HasInvalidPersistedCharacter(directory)
+                || !ShellPathRules.TryGetRootRelativeDepth(directory, pathStyle, out _))
+            {
+                return false;
+            }
+        }
+
+        return match switch
+        {
+            ApprovalMatchKind.TokenPrefix =>
+                entry.VerbTokens is { Count: > 0 } tokens
+                && string.Equals(entry.Verb, string.Join(" ", tokens), StringComparison.Ordinal),
+            ApprovalMatchKind.LegacyExact => entry.VerbTokens is null,
+            _ => false,
+        };
+    }
+
+    private static bool HasInvalidPersistedCharacter(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (char.IsHighSurrogate(character))
+            {
+                if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
+                    return true;
+
+                index++;
+                continue;
+            }
+
+            if (char.IsLowSurrogate(character)
+                || char.IsControl(character)
+                || character is '\u061c' or '\u200e' or '\u200f'
+                    or >= '\u202a' and <= '\u202e'
+                    or >= '\u2066' and <= '\u2069')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 

@@ -1906,6 +1906,48 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Changing_actor_batch_applies_no_partial_evidence()
+    {
+        var approvalService = new FixedShellApprovalService(request =>
+        {
+            var first = request.Candidates[0];
+            var second = request.Candidates[1];
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                new ShrinkingCandidateMatchList(
+                [
+                    new ShellGrantCandidateMatch(
+                        first.CandidateId,
+                        new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
+                        ShellCoverageKind.Session,
+                        NearMisses: []),
+                    new ShellGrantCandidateMatch(
+                        second.CandidateId,
+                        new ToolApprovalMatch("unrelated", "session", "this chat"),
+                        ShellCoverageKind.Session,
+                        NearMisses: [])
+                ]));
+        });
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = new FunctionCallContent(
+            "call-changing-actor-batch",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "git status && git push"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/changing-actor-batch"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+        var row = Assert.Single(decision.ShellPolicyTrace.Rows);
+        Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
+        Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
+    }
+
+    [Fact]
     public async Task Authorization_evaluation_denies_uncovered_candidate_when_store_is_unavailable()
     {
         var approvalService = new FixedShellApprovalService(request =>
@@ -3664,6 +3706,24 @@ public class DispatchingToolExecutorTests
             string? cwd,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
+    }
+
+    private sealed class ShrinkingCandidateMatchList(
+        ShellGrantCandidateMatch[] items) : IReadOnlyList<ShellGrantCandidateMatch>
+    {
+        private int _countReads;
+
+        public int Count => Interlocked.Increment(ref _countReads) == 1
+            ? items.Length
+            : 1;
+
+        public ShellGrantCandidateMatch this[int index] => items[index];
+
+        public IEnumerator<ShellGrantCandidateMatch> GetEnumerator()
+            => ((IEnumerable<ShellGrantCandidateMatch>)items).GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => items.GetEnumerator();
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>
