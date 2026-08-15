@@ -357,7 +357,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
             if (IsAuthFailure(ex))
             {
-                MarkAwaitingAuthorization(lifecycle, current, ex);
+                MarkAwaitingAuthorization(lifecycle, current, ex, entry.Url);
                 return McpCatalogRefreshResult.Failed;
             }
 
@@ -843,6 +843,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     hasOAuthRuntimeHints,
                     now);
             lifecycle.Publish(WithFailureStatus(current, failureStatus));
+            if (IsAuthFailure(ex))
+                LogOAuthRefreshFailureDiagnostics(current.Name.Value, entry.Url);
             if (current.IsConnected)
             {
                 _logger.LogWarning(ex,
@@ -1498,7 +1500,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private void MarkAwaitingAuthorization(
         McpServerLifecycle lifecycle,
         McpServerSnapshot current,
-        Exception ex)
+        Exception ex,
+        string? resourceUrl)
     {
         var status = CreateAwaitingAuthStatus(current.Name, _timeProvider.GetUtcNow())
             with { ToolCount = current.ToolFunctions.Count };
@@ -1506,9 +1509,76 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _logger.LogWarning(ex,
             "MCP server '{Name}' lost OAuth authorization during catalog refresh; marked AwaitingAuth",
             current.Name.Value);
+        LogOAuthRefreshFailureDiagnostics(current.Name.Value, resourceUrl);
         EmitAuthAlert(current.Name,
             $"MCP server '{current.Name.Value}' lost OAuth authorization. Run: netclaw mcp auth {current.Name.Value}",
             "authorization_expired");
+    }
+
+    /// <summary>
+    /// When a stored OAuth record can no longer produce a working access token, the SDK
+    /// 2.0 refresh path fails silently: a refresh is only attempted when the cached token
+    /// container matches the live provider on all four binding fields — AuthorizationServer,
+    /// ClientId, ClientSecret, and TokenEndpointAuthMethod — and even then the actual
+    /// refresh HTTP response is swallowed (returned as a null access token, surfaced as a
+    /// generic "null authorization result" failure). This method makes the failure
+    /// diagnosable by reporting exactly which binding field is missing or mismatched and
+    /// whether a refresh token existed to redeem at all.
+    /// </summary>
+    private void LogOAuthRefreshFailureDiagnostics(string serverName, string? resourceUrl)
+    {
+        try
+        {
+            if (resourceUrl is null)
+                return;
+
+            var record = _credentialStore.GetBoundActive(new McpServerName(serverName), resourceUrl);
+            if (record is null)
+            {
+                _logger.LogWarning(
+                    "OAuth failure diagnostics for MCP server '{Name}': no bound credential record found for resource '{Url}'. " +
+                    "The SDK had no refresh token to redeem, so the only remedy is a fresh authorization.",
+                    serverName,
+                    resourceUrl);
+                return;
+            }
+
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(record.AuthorizationServer))
+                missing.Add("AuthorizationServer");
+            if (string.IsNullOrWhiteSpace(record.ClientId))
+                missing.Add("ClientId");
+            if (record.ClientSecret is null)
+                missing.Add("ClientSecret");
+            if (string.IsNullOrWhiteSpace(record.TokenEndpointAuthMethod))
+                missing.Add("TokenEndpointAuthMethod");
+
+            var hasRefreshToken = record.RefreshToken is not null;
+            var hasAccessToken = record.AccessToken is not null;
+            var expiresAt = record.ExpiresAt;
+
+            _logger.LogWarning(
+                "OAuth refresh failure diagnostics for MCP server '{Name}': stored record has refreshToken={HasRefresh}, " +
+                "accessToken={HasAccess}, expiresAt={ExpiresAt:o}, dynamicClientRegistration={Dcr}, " +
+                "bindingFieldsMissing=[{Missing}], authorizationServer={AuthServer}. " +
+                "The SDK 2.0 refresh gate requires AuthorizationServer, ClientId, ClientSecret, and " +
+                "TokenEndpointAuthMethod to all match the live provider; missing fields mean refresh is " +
+                "never attempted and every expiration falls through to interactive auth (the 'null " +
+                "authorization result' symptom).",
+                serverName,
+                hasRefreshToken,
+                hasAccessToken,
+                expiresAt,
+                record.DynamicClientRegistration,
+                string.Join(", ", missing),
+                record.AuthorizationServer ?? "<null>");
+        }
+        catch (Exception diagEx)
+        {
+            _logger.LogDebug(diagEx,
+                "Failed to produce OAuth refresh diagnostics for MCP server '{Name}'",
+                serverName);
+        }
     }
 
     private static bool IsAuthFailure(Exception ex)
