@@ -140,11 +140,21 @@ internal sealed class McpOAuthCredentialStore
             {
                 identity = new McpOAuthClientIdentity(configuredClientId, null, false);
             }
+            else if (active is { ClientId: not null })
+            {
+                // Rebuild the provider identity from the persisted record whenever a client
+                // id exists, regardless of the DCR flag. Records written when the SDK ran its
+                // own dynamic registration persist the SDK-resolved client id without the DCR
+                // marker; discarding it on restart made SDK 2.0 skip the refresh path
+                // entirely ("null authorization result" on every later expiry).
+                identity = new McpOAuthClientIdentity(
+                    active.ClientId,
+                    active.ClientSecret?.Value,
+                    active.DynamicClientRegistration);
+            }
             else
             {
-                identity = active is { DynamicClientRegistration: true, ClientId: not null }
-                    ? new McpOAuthClientIdentity(active.ClientId, active.ClientSecret?.Value, true)
-                    : new McpOAuthClientIdentity(null, null, false);
+                identity = new McpOAuthClientIdentity(null, null, false);
             }
 
             return new McpOAuthTokenCache(
@@ -361,6 +371,20 @@ internal sealed class McpOAuthCredentialStore
         string canonicalResource)
     {
         var obtainedAt = tokens.ObtainedAt == default ? _timeProvider.GetUtcNow() : tokens.ObtainedAt;
+
+        // Netclaw's own registered identity wins when present. But when it is absent —
+        // e.g. the SDK performed its own dynamic client registration because Netclaw's
+        // registrar returned null (server does not advertise RFC 7591 support) or a
+        // client-metadata document supplied the id — the SDK's TokenContainer carries
+        // the client id/secret precisely so a durable cache survives a restart. Persisting
+        // a null client identity here made every cold-start refresh fall through to a
+        // new interactive authorization (the "null authorization result" loop observed on
+        // the Atlassian MCP nightly runs).
+        var clientId = identity.ClientId ?? tokens.ClientId;
+        var clientSecret = identity.ClientSecret ?? tokens.ClientSecret;
+        var dynamicRegistration = identity.DynamicClientRegistration
+            || identity.ClientId is null && !string.IsNullOrWhiteSpace(tokens.ClientId);
+
         var replacement = new McpOAuthTokenSet
         {
             AccessToken = new SensitiveString(tokens.AccessToken),
@@ -370,9 +394,9 @@ internal sealed class McpOAuthCredentialStore
             TokenType = string.IsNullOrWhiteSpace(tokens.TokenType) ? "Bearer" : tokens.TokenType,
             Scope = tokens.Scope,
             ObtainedAt = obtainedAt,
-            ClientId = identity.ClientId,
-            ClientSecret = identity.ClientSecret is null ? null : new SensitiveString(identity.ClientSecret),
-            DynamicClientRegistration = identity.DynamicClientRegistration,
+            ClientId = clientId,
+            ClientSecret = clientSecret is null ? null : new SensitiveString(clientSecret),
+            DynamicClientRegistration = dynamicRegistration,
             ResourceIdentity = canonicalResource,
 
             // Prefer what the SDK just reported; fall back to the identity we registered
