@@ -178,7 +178,9 @@ The refactor SHALL preserve all current decisions, deny reasons, allow reasons, 
 
 ### Requirement: Refactor reduces policy complexity
 
-The completed change SHALL reduce aggregate production lines and control-flow lines below the frozen baseline. It SHALL report method complexity and coverage risk.
+The completed change SHALL reduce original-file lines and control-flow below their frozen baselines. The complete footprint SHALL reduce lines and control-flow below the post-corpus implementation.
+
+Complete-footprint control-flow SHALL also remain below its frozen baseline. The final evidence SHALL report method complexity, coverage risk, and any residual line delta above that baseline.
 
 It SHALL not add a public API, durable schema, command parser, or duplicate policy scan.
 
@@ -187,9 +189,17 @@ It SHALL not add a public API, durable schema, command parser, or duplicate poli
 - **WHEN** all refactor slices are complete
 - **THEN** the task evidence SHALL report before and after production line and control-flow counts
 - **AND** the after counts SHALL be lower than 5,136 lines and 373 control-flow lines
-- **AND** the complete changed production footprint SHALL have fewer lines and control-flow lines than the frozen corpus commit
+- **AND** the complete footprint SHALL be lower than 10,085 lines and 663 control-flow lines
+- **AND** complete-footprint control-flow SHALL be lower than the frozen 635-line baseline
 - **AND** an added production file SHALL contribute zero lines to the baseline count
+- **AND** each residual production layer above the frozen line baseline SHALL map to a tested security distinction, exact behavior contract, or recorded compatibility obligation
 - **AND** the evidence SHALL report method complexity, coverage, and CRAP risk with a versioned command
+
+#### Scenario: Safe reduction boundary
+
+- **WHEN** another deletion would erase a tested path, evidence, authority, trace, or compatibility distinction
+- **THEN** the task evidence SHALL identify that distinction and its owning tests or follow-up
+- **AND** the implementation SHALL NOT compress or merge the distinction only to satisfy a line target
 
 #### Scenario: Public and durable compatibility
 

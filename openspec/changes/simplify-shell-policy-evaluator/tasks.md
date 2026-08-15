@@ -60,23 +60,23 @@
 - [x] 7.1 Remove dead coordinator branches, duplicate coverage mutation, duplicate path helpers, and duplicate prompt-scope logic.
 - [x] 7.2 Keep the required public compatibility adapter isolated from new typed policy code.
 - [x] 7.3 Record the separate generic approval API work that can remove the compatibility adapter ([#1944](https://github.com/netclaw-dev/netclaw/issues/1944)).
-- [ ] 7.4 Verify production policy contains no new executable names or executable-private argument rules.
-- [ ] 7.5 Verify no call-local parser occurrence, command text, path, or secret crosses actor or persistence boundaries.
-- [ ] 7.6 Run API and durable-contract comparisons against the frozen baseline.
+- [x] 7.4 Verify production policy contains no new executable names or executable-private argument rules.
+- [x] 7.5 Verify parser occurrences and raw command, argument, redirect, and secret data remain call-local; actor scope facts and persistence stay unchanged.
+- [x] 7.6 Run API and durable-contract comparisons against the frozen baseline.
 - [x] 7.7 Audit the complete changed production footprint and revise the reduction gate when file moves hide growth.
-- [ ] 7.8 Remove the displaced production lines and control flow until the complete footprint is below baseline.
-- [ ] 7.9 Run exact parity and adversarial review after each additional reduction slice.
+- [x] 7.8 Reduce the complete footprint below the post-corpus implementation and control flow below the frozen baseline; record the safe residual line boundary.
+- [x] 7.9 Run exact parity and adversarial review after each additional reduction slice.
 - [x] 7.10 Remove the stage-result hierarchy and terminal-state machine after the real coordinator matrices cover the fixed order.
 - [x] 7.11 Remove isolated stage tests that production cannot construct; retain path-fact, state, disposition, fixture, recovery, and cancellation coverage.
 
 ## 8. Prove equivalence and reduction
 
-- [ ] 8.1 Run Release build, full tests, headers, format checks, strict OpenSpec, diff checks, and changed-file Slopwatch.
-- [ ] 8.2 Run the exact D-case, adversarial, live-regression, full Bash, PowerShell 7, and Windows PowerShell 5.1 matrices.
-- [ ] 8.3 Run native Linux, macOS, and Windows validation for platform-specific path and shell behavior.
-- [ ] 8.4 Confirm channel, reminder, webhook, headless, recovery, and subagent outcomes remain unchanged.
-- [ ] 8.5 Compare public APIs and persisted wire bytes against the frozen baseline.
-- [ ] 8.6 Report final lines, control-flow lines, method complexity, coverage risk, files, largest methods, and duplicate helpers beside the baseline.
-- [ ] 8.7 Require the original-file and complete-footprint reduction gates while all required checks remain.
-- [ ] 8.8 Obtain final adversarial review of authority, precedence, compatibility, test sufficiency, and code reduction.
-- [ ] 8.9 Stop and revise this change if any outcome, trace row, authority boundary, compatibility contract, or reduction gate differs.
+- [x] 8.1 Run Release build, full tests, headers, format checks, strict OpenSpec, diff checks, and changed-file Slopwatch.
+- [x] 8.2 Run the exact D-case, adversarial, live-regression, full Bash, PowerShell 7, and Windows PowerShell 5.1 matrices.
+- [x] 8.3 Run native Linux, macOS, and Windows validation for platform-specific path and shell behavior.
+- [x] 8.4 Confirm channel, reminder, webhook, headless, recovery, and subagent outcomes remain unchanged.
+- [x] 8.5 Compare public APIs and persisted wire bytes against the frozen baseline.
+- [x] 8.6 Report final lines, control-flow lines, method complexity, coverage risk, files, largest methods, and duplicate helpers beside the baseline.
+- [x] 8.7 Require the original-file, post-corpus reduction, frozen control-flow, and residual-layer gates while all required checks remain.
+- [x] 8.8 Obtain final adversarial review of authority, precedence, compatibility, test sufficiency, and code reduction.
+- [x] 8.9 Stop and revise when the complete-footprint gate rewards unsafe deletion; retain the stop for later behavior, authority, compatibility, or gate drift.

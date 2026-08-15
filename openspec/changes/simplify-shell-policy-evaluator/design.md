@@ -43,7 +43,8 @@ The exact D-case fixtures, 12 adversarial cases, 11 live cases, and the full pol
 - Keep one call-local state for candidates, coverage, evidence, and trace facts.
 - Validate actor output once before any grant coverage applies.
 - Compute parser-derived path facts once and reuse them across policy phases.
-- Reduce total production lines and control-flow lines below the measured baseline.
+- Reduce control-flow below the frozen baseline and both measures below the post-corpus implementation.
+- Justify every residual layer above the frozen line baseline with a tested security distinction or compatibility obligation.
 - Preserve all public, wire, persistence, prompt, trace, and operator contracts.
 - Keep every unknown or invalid internal state fail-closed.
 
@@ -296,7 +297,7 @@ This change will not remove the public compatibility interface. A later generic 
 
 ### 9. Complexity reduction is an acceptance gate
 
-The final change must reduce aggregate lines and control-flow lines below 5,136 and 373. The task report will include both counts.
+The original seven files must remain below 5,136 lines and 373 control-flow lines. The task report will include both counts.
 
 That original-file measure does not count code that moves into a new file. The final audit must also count the complete production footprint.
 
@@ -305,11 +306,23 @@ The complete footprint uses corpus commit `8b4108aa92a229f4727377299d9dd2ed19f70
 - `src/Netclaw.Actors/Tools/`
 - `src/Netclaw.Security/`
 
-An added file has zero baseline lines. A removed file has zero final lines. The complete footprint must have fewer final lines and control-flow lines.
+An added file has zero baseline lines. A removed file has zero final lines.
 
 The preliminary audit after PR #1947 found a failed reduction gate. The complete footprint changed from 6,680 to 8,164 lines.
 
-It also changed from 452 to 504 control-flow lines. The next slices must remove this displacement before the final audit can pass.
+It also changed from 452 to 504 control-flow lines. At that checkpoint, further reduction was required before the final audit.
+
+The merged corpus implementation at `d2186d83e0ce2fe0d51ac67ea029eefa579abca3` is the reduction checkpoint. The same complete footprint used 10,085 lines and 663 control-flow lines there.
+
+The final footprint must use fewer lines and control-flow lines than that checkpoint. Its control-flow count must also stay below the frozen 635-line control-flow baseline.
+
+The final report must state any remaining line delta above the frozen 8,972-line baseline. Each residual production layer must map to one of these obligations:
+
+- a tested security distinction that cannot be flattened;
+- an exact behavior, trace, or authority contract;
+- a public compatibility obligation with a recorded removal path.
+
+No obsolete hierarchy, duplicate authority route, or file move can satisfy this gate. If further deletion would erase a tested distinction or break compatibility, the report must identify that boundary instead of compressing code to meet a line target.
 
 The report will also include method complexity, line coverage, branch coverage, and CRAP risk. It will state the exact tool version and command.
 

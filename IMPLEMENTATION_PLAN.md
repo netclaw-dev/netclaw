@@ -183,8 +183,11 @@ Done when:
   and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
   authorize, create candidates, or widen scope.
   The preliminary complete-footprint audit after PR #1947 found 1,484 added
-  production lines and 52 added control-flow lines. The simplification remains
-  incomplete until the complete footprint is below its frozen baseline.
+  production lines and 52 added control-flow lines. Later slices reduced the
+  post-corpus footprint from 10,085 lines and 663 control-flow lines to 9,693
+  and 634. Control-flow is now below the frozen 635-line baseline. The final
+  audit must justify the remaining 721-line delta through tested security or
+  compatibility obligations instead of deleting required distinctions.
 - [x] Shell calls pass through one coordinator. It snapshots immutable parser
   and run-scope facts, requests one typed actor batch, and composes grant and
   reviewed-safe coverage per candidate before one final result.

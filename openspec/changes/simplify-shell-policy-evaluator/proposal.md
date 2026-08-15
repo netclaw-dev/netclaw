@@ -1,6 +1,6 @@
 ## Why
 
-PRD-002 and PRD-006 require shell authorization to remain fail-closed, explainable, and practical for routine agent work. The current policy now behaves correctly, but seven core files contain 5,136 lines and about 373 branch points.
+PRD-002 and PRD-006 require fail-closed, explainable shell authorization. Before this refactor, seven core files contained 5,136 lines and about 373 branch points.
 
 The live corpus now supplies a stable contract for a behavior-compatible refactor. This change reduces policy complexity before more exceptions make the evaluator harder to audit.
 
@@ -14,6 +14,7 @@ The live corpus now supplies a stable contract for a behavior-compatible refacto
 - Preserve every current allow, prompt, deny, correction, trace, and grant outcome.
 - Use the exact D-case, adversarial, and live regression fixtures as equivalence tests.
 - Deliver the refactor as small dependency-ordered production slices.
+- Report the frozen baseline, post-corpus peak, and safe final footprint without hiding new files.
 
 In scope:
 

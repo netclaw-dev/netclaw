@@ -119,28 +119,172 @@ The complete changed footprint now uses 9,693 lines and 634 control-flow
 lines. The frozen baseline uses 8,972 lines and 635 control-flow lines. The
 control-flow gate now passes. The line gate remains open by 721 lines.
 
+## Safe reduction boundary
+
+The merged corpus implementation at `d2186d83e0ce2fe0d51ac67ea029eefa579abca3`
+used 10,085 lines and 663 control-flow lines across the same 20-file footprint.
+The direct evaluator uses 392 fewer lines and 29 fewer control-flow lines.
+
+The original seven files now use 4,754 lines and 322 control-flow lines. Their
+frozen values were 5,136 and 373.
+
+The complete control-flow count is one line below its frozen baseline. The
+remaining 721-line delta is not hidden or declared removed. Four added files
+own the residual responsibilities:
+
+| File | Lines | Required distinction |
+| --- | ---: | --- |
+| `ShellApprovalEvidence.cs` | 387 | Snapshots and validates complete actor evidence before authority applies; includes the public compatibility adapter tracked by #1944. |
+| `ShellPolicyEvaluation.cs` | 250 | Owns candidate coverage, exact one-time context, and atomic bounded trace changes. |
+| `ShellPolicyPathFacts.cs` | 345 | Retains candidate origin, value domain, redirect mode, and distinct real, intent, and fallback bases. |
+| `ShellPathRules.cs` | 242 | Applies declared POSIX or Windows path semantics without host-dependent authority. |
+
+Existing production files shed 503 net lines while these four files added
+1,224. The bounded audit found no further 721-line deletion that preserves
+all tested security facts and the compatibility contract. The latter has a
+separate versioned migration in issue #1944.
+
+Owning regressions live in `ShellApprovalEvidenceTests`,
+`ShellPolicyPathFactsTests`, and `ShellApprovalMatcherTests`. The fixture and
+disposition matrices exercise the composed authority path.
+
+The final gate therefore requires:
+
+- the original-file counts to remain below their frozen values;
+- the complete footprint to remain below the post-corpus implementation;
+- complete-footprint control-flow to remain below its frozen value;
+- each residual layer to retain an owning regression or compatibility removal path;
+- no obsolete hierarchy, duplicate authority route, or hidden file move.
+
+## Public and durable compatibility
+
+`dotnet-inspect` 0.18.0 compared Release assemblies from frozen commit
+`8b4108aa92a229f4727377299d9dd2ed19f70e07` with the direct evaluator. It
+reported no public API changes in `Netclaw.Actors` or `Netclaw.Security`.
+
+Both assembly builds completed with zero warnings and errors. The temporary
+baseline worktree was removed after the comparison.
+
+The approval serialization, recovery, store, and wire-codec files are unchanged
+from the frozen commit. Their focused suites passed:
+
+- actor serialization and approval rehydration: 58 of 58;
+- approval store and entry wire codec: 99 of 99.
+
+## Equivalence replay
+
+The cumulative direct evaluator passed these focused behavior contracts:
+
+- coordinator, D-case, adversarial, live, and disposition replay: 420 of 420;
+- security evidence contract: 26 of 26;
+- channel prompts, recovery, headless gates, and subagents: 279 of 279.
+
+These runs supplement the full Actors and Security suites. They do not replace
+the required native Linux, macOS, and Windows checks.
+
+## Final delivery gates
+
+PR #1965 merged as `bbecae3901fcc8c3eb6b02e2f6891b5ed46030a6`.
+All required checks passed.
+
+The final local Release validation passed:
+
+- Security: 946 of 946;
+- Actors: 3,396 of 3,396, with one expected Windows-only skip;
+- coordinator, D-case, adversarial, live, and disposition replay: 420 of 420;
+- security evidence: 26 of 26;
+- channel, recovery, headless, and subagent contracts: 279 of 279;
+- the full Actors suite retained reminder and webhook coverage;
+- strict validation for both active OpenSpec changes;
+- copyright headers, changed-file formatting, diff checks, and changed-file Slopwatch.
+
+The PR validation matrix passed on Ubuntu, macOS, and Windows. Windows ran the
+native PowerShell host tests. Linux and macOS native smoke jobs passed. The
+Linux screenshot regression, Docker build, install smokes, CodeQL, and
+auto-format checks also passed.
+
+The final adversarial audit found no changed authority route, precedence
+change, public API drift, durable-schema drift, or executable-private parser.
+Every residual production layer has an owning regression or issue #1944.
+
+## Production boundary audit
+
+The refactor-only production diff adds no executable name. Comparing literal
+command checks with the merged corpus found only the `s/` shell-token form; it
+is syntax classification, not an executable branch. Existing shell-invoker
+names retain their prior behavior.
+
+Parser `SourceOccurrence` references remain inside call-local projection and
+reviewed-safe evaluation. Projection clears them before building the actor
+candidate snapshot. The actor still receives the canonical phrase and directory
+facts required for exact, folder, and global grant matching.
+
+Trace and persistence receive no raw command, argument, redirect, environment,
+or secret value. The approval serialization and persistence surfaces are
+unchanged from the frozen commit.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.
 
-The actor suite passed 3,411 cases with one expected Windows-only skip. It reported 68.81% line coverage and 45.54% branch coverage.
+The direct-evaluator actor suite passed 3,396 cases with one expected Windows-only skip. It reported 68.57% line coverage and 45.30% branch coverage.
 
-The security suite passed 927 cases. It reported 62.04% line coverage and 51.99% branch coverage.
+The security suite passed 946 cases. It reported 62.42% line coverage and 52.36% branch coverage.
 
 The largest new risk values came from these methods:
 
 | File | Method | Complexity | Coverage | CRAP |
 | --- | --- | ---: | ---: | ---: |
-| `ShellPolicyEvaluation.cs` | `RunAsync` | 12 | 0.00%* | 156.00 |
+| `ShellPolicyCoordinator.cs` | `EvaluatePolicyAsync` | 27 | 0.00%* | 756.00 |
 | `ShellPathRules.cs` | `TryGetWindowsDepth` | 12 | 0.00% | 156.00 |
 | `ShellPolicyCoordinator.cs` | `EvaluateCoreAsync` | 9 | 0.00%* | 90.00 |
 | `ShellPolicyPathFacts.cs` | `Resolve` | 8 | 0.00% | 72.00 |
 
-`crap4dotnet` does not map async state-machine coverage to the source method. The zero values remain repeatable comparison data.
+`crap4dotnet` does not map async state-machine coverage to the source method.
+The zero values remain repeatable comparison data, not evidence that the
+coordinator path lacks tests. The full actor suite exercises that path.
+
+`ShellPolicyEvaluation` has no method above CRAP 9.0. Its highest-complexity
+methods, `Complete` and `Cover`, have 75% and 100% mapped coverage.
 
 ## Commands
 
 ```bash
+dotnet tool install dotnet-inspect --version 0.18.0 --tool-path "$TOOL_DIR"
+"$TOOL_DIR/dotnet-inspect" diff --library \
+  BASELINE/Netclaw.Actors.dll..CURRENT/Netclaw.Actors.dll --oneline
+"$TOOL_DIR/dotnet-inspect" diff --library \
+  BASELINE/Netclaw.Security.dll..CURRENT/Netclaw.Security.dll --oneline
+
+dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj \
+  -c Release --no-build --no-restore \
+  --filter 'FullyQualifiedName~SerializationRoundTripTests|FullyQualifiedName~ApprovalRehydrationTests'
+dotnet test src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj \
+  -c Release --no-restore \
+  --filter 'FullyQualifiedName~ToolApprovalStoreTests|FullyQualifiedName~ApprovalEntryWireCodecTests'
+
+baseline=8b4108aa92a229f4727377299d9dd2ed19f70e07
+corpus=d2186d83e0ce2fe0d51ac67ea029eefa579abca3
+mapfile -t files < <(
+  git diff --name-only "$baseline"..HEAD -- \
+    'src/Netclaw.Actors/Tools/*.cs' 'src/Netclaw.Security/*.cs'
+)
+for revision in "$baseline" "$corpus" HEAD; do
+  lines=0
+  control_flow=0
+  for file in "${files[@]}"; do
+    git cat-file -e "$revision:$file" 2>/dev/null || continue
+    source=$(git show "$revision:$file")
+    lines=$((lines + $(printf '%s\n' "$source" | wc -l)))
+    control_flow=$((control_flow + $(
+      printf '%s\n' "$source" \
+        | rg -c '^\s*(if|for|foreach|while|switch)\b' || true
+    )))
+  done
+  printf '%s files=%s lines=%s control=%s\n' \
+    "$revision" "${#files[@]}" "$lines" "$control_flow"
+done
+
 dotnet-coverage collect 'dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj -c Release --no-build --no-restore' \
   -f cobertura -o /tmp/netclaw-final-actors.cobertura.xml
 dotnet-coverage collect 'dotnet test src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj -c Release --no-build --no-restore' \
