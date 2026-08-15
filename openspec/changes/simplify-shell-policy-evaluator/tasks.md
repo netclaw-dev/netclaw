@@ -66,6 +66,8 @@
 - [x] 7.7 Audit the complete changed production footprint and revise the reduction gate when file moves hide growth.
 - [ ] 7.8 Remove the displaced production lines and control flow until the complete footprint is below baseline.
 - [ ] 7.9 Run exact parity and adversarial review after each additional reduction slice.
+- [x] 7.10 Remove the stage-result hierarchy and terminal-state machine after the real coordinator matrices cover the fixed order.
+- [x] 7.11 Remove isolated stage tests that production cannot construct; retain path-fact, state, disposition, fixture, recovery, and cancellation coverage.
 
 ## 8. Prove equivalence and reduction
 

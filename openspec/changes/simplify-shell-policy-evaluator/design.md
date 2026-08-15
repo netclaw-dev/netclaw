@@ -39,10 +39,10 @@ The exact D-case fixtures, 12 adversarial cases, 11 live cases, and the full pol
 **Goals:**
 
 - Replace the context analysis cache with one explicit preflight result.
-- Give each ordered policy stage one clear owner.
-- Keep one call-local state for candidates, coverage, evidence, trace facts, and terminal status.
+- Keep the ordered policy phases in one direct evaluator.
+- Keep one call-local state for candidates, coverage, evidence, and trace facts.
 - Validate actor output once before any grant coverage applies.
-- Compute parser-derived path facts once and reuse them across policy stages.
+- Compute parser-derived path facts once and reuse them across policy phases.
 - Reduce total production lines and control-flow lines below the measured baseline.
 - Preserve all public, wire, persistence, prompt, trace, and operator contracts.
 - Keep every unknown or invalid internal state fail-closed.
@@ -115,42 +115,32 @@ Add one internal `ShellPolicyEvaluation` class. It exists for one authorization 
 
 It owns:
 
-- the preflight result and `ShellPolicyProjection`;
+- the `ShellPolicyProjection`;
 - candidate IDs and immutable candidate facts;
 - one coverage slot per candidate;
 - validated actor evidence;
 - approval matches;
 - persistent-store status;
-- the trace builder;
-- the terminal decision, when present.
+- the trace builder.
 
-Only methods on this type may change coverage. A stage cannot replace candidate facts or IDs.
+Only methods on this type may change coverage. The evaluator cannot replace candidate facts or IDs.
 
 Why:
 
 - Mutation stays local and auditable.
-- Stages no longer pass parallel lists and maps.
+- Policy phases no longer pass parallel lists and maps.
 - Coverage and trace updates can occur through one atomic method.
-- The class avoids a new immutable array allocation after each stage.
+- The class avoids a new immutable array allocation after each phase.
 
-Alternative: return a new immutable state after every stage. Rejected because it adds allocation and code without stronger call-local safety.
+Alternative: return a new immutable state after every phase. Rejected because it adds allocation and code without stronger call-local safety.
 
-### 3. Ordered stages return one closed outcome
+### 3. One direct evaluator owns the fixed order
 
-Each stage changes state only through `ShellPolicyEvaluation`, then returns a closed outcome:
+The coordinator executes each policy phase in one method. A terminal decision returns immediately. Coverage changes still pass through `ShellPolicyEvaluation`, while the decision remains a local return value.
 
-```csharp
-internal enum ShellPolicyStageOutcome
-{
-    Invalid = 0,
-    Continue = 1,
-    Complete = 2,
-}
-```
+Unexpected exceptions enter one catch boundary. That boundary preserves accumulated trace rows, appends the terminal internal-failure row, and denies. Caller cancellation still propagates.
 
-Coverage, terminal decisions, and typed faults remain owned by the evaluation state. The coordinator verifies that `Continue` has no terminal decision and `Complete` has one. An invalid enum or mismatched outcome fails closed.
-
-The early syntax and causal helpers are the sole callers that may complete an uncovered exact one-time allow.
+The early syntax and causal phases are the sole paths that may complete an uncovered exact one-time allow.
 
 That marker requires all of these facts:
 
@@ -161,7 +151,7 @@ That marker requires all of these facts:
 
 No session, persistent, reviewed-safe, or other allow reason may bypass candidate coverage.
 
-The pipeline invokes stages in this order:
+The evaluator invokes phases in this order:
 
 1. syntax and candidate validation;
 2. protected real and fallback paths;
@@ -176,7 +166,7 @@ The pipeline invokes stages in this order:
 
 Actor evidence stays before approval-exempt trace rows to preserve the frozen trace order. Pure side effects never enter the actor request.
 
-Synchronous preflight keeps its current order before these stages:
+Synchronous preflight keeps its current order before these phases:
 
 1. parse validation;
 2. hard deny;
@@ -185,16 +175,16 @@ Synchronous preflight keeps its current order before these stages:
 5. candidate construction;
 6. noninteractive trust zones.
 
-A terminal outcome stops the pipeline. A later stage cannot revise an earlier deny or prompt.
+A terminal outcome returns from the evaluator. A later phase cannot revise an earlier deny or prompt.
 
 Why:
 
-- Order becomes data, not incidental control flow.
-- Each stage has a narrow test surface.
+- Order is visible in one compact method.
+- Behavior tests exercise the real coordinator instead of isolated stage machinery.
 - Terminal precedence is visible.
 - Internal faults map through one fail-closed path.
 
-Alternative: retain one large method with regions. Rejected because regions do not enforce ownership or terminal precedence.
+The earlier stage-result hierarchy was removed. It added terminal state, fault state, transition validation, factories, and 1,664 lines of implementation-shaped tests without changing observable policy.
 
 ### 4. Actor evidence has one validation boundary
 
@@ -211,7 +201,7 @@ The factory validates:
 - near-miss count and enum values;
 - the unavailable-store restrictions.
 
-No grant enters coverage before this factory succeeds. The coordinator receives only validated evidence or a typed fault.
+No grant enters coverage before this factory succeeds. The coordinator receives validated evidence or fails closed.
 
 Why:
 
@@ -246,7 +236,7 @@ Known paths use an internal canonical absolute value with an explicit `ShellPath
 
 The authorization preflight keeps its single raw `CommandReferencesDeniedPath(analysis)` defense scan. `ShellTool` also retains both execution-time checks.
 
-Policy stages consume these facts through `ToolPathPolicy` and reviewed-safe policy. They do not rescan command text.
+Policy phases consume these facts through `ToolPathPolicy` and reviewed-safe policy. They do not rescan command text.
 
 Temporary-scope correction remains unchanged before projection. Projection may reuse only its existing captured temporary-alias predicate for canonical path resolution.
 
@@ -274,7 +264,7 @@ This method owns:
 - causal full-context retention;
 - exact one-time key input.
 
-The one-time stage and prompt stage call the same method. They cannot derive different candidate sets.
+The one-time and prompt phases call the same method. They cannot derive different candidate sets.
 
 Alternative: keep two calls to `NarrowShellApprovalContext`. Rejected because future edits can create one-time and prompt drift.
 
@@ -282,7 +272,7 @@ Alternative: keep two calls to `NarrowShellApprovalContext`. Rejected because fu
 
 Coverage changes will add their trace row through the same state method. Terminal completion will append exactly one completion row.
 
-The trace builder remains bounded and redacted. Stages cannot write raw commands, arguments, paths, session values, or secrets.
+The trace builder remains bounded and redacted. Policy phases cannot write raw commands, arguments, paths, session values, or secrets.
 
 Why:
 
@@ -290,7 +280,7 @@ Why:
 - Tests can compare state transitions with trace rows.
 - Redaction remains centralized.
 
-Alternative: let each stage write trace rows directly. Rejected because coverage and trace can diverge.
+Alternative: let each phase write trace rows directly. Rejected because coverage and trace can diverge.
 
 ### 8. Compatibility code remains an isolated adapter
 
@@ -349,7 +339,7 @@ The compatibility adapter is process-local. It creates no durable state.
 | Failure | Required result |
 | --- | --- |
 | Parser or projection fault | `internal_policy_failure` deny |
-| Invalid stage transition | `internal_policy_failure` deny |
+| Invalid call-local invariant | `internal_policy_failure` deny |
 | Invalid actor result | `internal_policy_failure` deny |
 | Required persistent state unavailable | `approval_store_unavailable` deny |
 | Expected unresolved shell input | one-time or deny prompt only |
@@ -361,9 +351,9 @@ No failure path creates session or persistent authority. No rollback needs data 
 
 ## Risks / Trade-offs
 
-- **Risk: stage extraction changes precedence** → Lock each terminal overlap with exact matrix cases before code moves.
+- **Risk: direct evaluation changes precedence** → Lock each terminal overlap with exact matrix cases before code moves.
 - **Risk: a new state class hides mutation** → Keep mutation methods narrow and expose immutable candidate views.
-- **Risk: metric goals reward compressed code** → Require readable stages, corpus parity, and adversarial review.
+- **Risk: metric goals reward compressed code** → Require readable phases, corpus parity, and adversarial review.
 - **Risk: the compatibility adapter survives indefinitely** → Add a removal inventory and make new callers depend on typed evidence.
 - **Risk: path facts lose source provenance** → Carry parser occurrence identity only inside call-local projection types.
 - **Risk: a broad slice becomes hard to review** → Deliver dependency-ordered slices with full parity after each slice.
@@ -371,10 +361,10 @@ No failure path creates session or persistent authority. No rollback needs data 
 ## Migration Plan
 
 1. Merge the live corpus before production refactor code.
-2. Add stage-state types and parity tests with no route changes.
+2. Add call-local state and parity tests with no route changes.
 3. Replace the context analysis cache with explicit preflight data.
 4. Move actor-result validation behind the typed evidence boundary.
-5. Route reviewed-safe, one-time, store, and completion logic through stages.
+5. Route reviewed-safe, one-time, store, and completion logic through one ordered evaluator.
 6. Consolidate path and prompt-context helpers.
 7. Remove dead compatibility branches and duplicate helpers.
 8. Run full local, Linux, macOS, and native Windows gates after each production slice.

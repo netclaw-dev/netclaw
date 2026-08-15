@@ -102,6 +102,23 @@ The current footprint uses 9,947 lines and 650 control-flow lines. The gap is 97
 
 The complete reduction gate remains open.
 
+## Direct evaluation slice
+
+This slice removes the stage-outcome hierarchy, terminal-state machine,
+typed stage faults, and separate stage-owner classes. One direct coordinator
+method keeps the same ten phases in the same order. Coverage and trace rows
+still change atomically through the call-local evaluation state.
+
+The slice removes 254 production lines and 16 control-flow lines. It replaces
+the 1,664-line isolated-stage test file with 295 lines of path-fact and atomic
+state tests. It also adds one end-to-end cancellation regression. The actor,
+disposition, fixture, evidence, recovery, and executor suites exercise the real
+coordinator path.
+
+The complete changed footprint now uses 9,693 lines and 634 control-flow
+lines. The frozen baseline uses 8,972 lines and 635 control-flow lines. The
+control-flow gate now passes. The line gate remains open by 721 lines.
+
 ## Preliminary coverage and risk
 
 The audit used `dotnet-coverage` 18.10.0 and `crap4dotnet` 0.1.1.

@@ -7,7 +7,7 @@ The live corpus now supplies a stable contract for a behavior-compatible refacto
 ## What Changes
 
 - Introduce one typed evaluation state for candidates, coverage, actor evidence, trace facts, and the persistent-store result.
-- Give each ordered policy stage one input and one typed result.
+- Make one direct evaluator own the documented policy order.
 - Move actor-result validation behind one protocol boundary.
 - Consolidate repeated prompt-context, path-fact, coverage, and terminal-decision logic.
 - Shrink shell-specific branches inside `ToolAccessPolicy` and `ShellApprovalMatcher`.
@@ -35,7 +35,7 @@ Out of scope:
 
 ### New Capabilities
 
-- `shell-policy-evaluator-architecture`: Defines the typed stage model, ownership boundaries, equivalence contract, and fail-closed internal protocol.
+- `shell-policy-evaluator-architecture`: Defines the direct evaluator, ownership boundaries, equivalence contract, and fail-closed internal protocol.
 
 ### Modified Capabilities
 
@@ -45,6 +45,6 @@ None. The refactor preserves current `tool-approval-gates` behavior.
 
 The change affects internal code in `Netclaw.Actors` and `Netclaw.Security`. Public tool APIs, persisted events, configuration, approval entries, prompts, and traces retain their current contracts.
 
-Security impact is neutral by design. Unknown facts, invalid stage results, internal faults, protected paths, and unavailable required authority remain terminal deny or prompt under the current contract.
+Security impact is neutral by design. Unknown facts, invalid call-local invariants, internal faults, protected paths, and unavailable required authority remain terminal deny or prompt under the current contract.
 
 Operational impact is limited to ordinary binary rollout. No configuration edit, approval-store reset, database migration, or session migration is required.

@@ -2,7 +2,7 @@
 
 ### Requirement: Shell policy uses one explicit evaluation state
 
-The system SHALL use one call-local shell policy state for projected candidates, coverage, grant evidence, trace facts, and terminal status.
+The system SHALL use one call-local shell policy state for projected candidates, coverage, grant evidence, and trace facts.
 
 The state SHALL preserve candidate identity and order for the complete authorization call. No state instance SHALL cross an actor, persistence, or session boundary.
 
@@ -14,9 +14,9 @@ The state SHALL preserve candidate identity and order for the complete authoriza
 
 #### Scenario: Candidate identity cannot change
 
-- **WHEN** any stage returns a candidate ID or fact that differs from projection
+- **WHEN** any policy phase observes a candidate ID or fact that differs from projection
 - **THEN** policy SHALL deny with `internal_policy_failure`
-- **AND** no later stage SHALL apply authority
+- **AND** no later phase SHALL apply authority
 
 #### Scenario: Allowed analysis reaches execution
 
@@ -24,7 +24,7 @@ The state SHALL preserve candidate identity and order for the complete authoriza
 - **THEN** the executor SHALL receive the exact analysis that policy authorized
 - **AND** no analysis SHALL pass through a context cache
 
-#### Scenario: Preflight allows without completion stages
+#### Scenario: Preflight allows without asynchronous completion
 
 - **WHEN** preflight allows a parsed shell call through Auto mode or another terminal rule
 - **THEN** its terminal result SHALL carry the exact authorized analysis
@@ -36,9 +36,9 @@ The state SHALL preserve candidate identity and order for the complete authoriza
 - **THEN** policy SHALL return the current decision
 - **AND** policy SHALL retain no analysis for a later call
 
-### Requirement: Shell policy stages have one fixed order
+### Requirement: Shell policy phases have one fixed order
 
-The system SHALL execute synchronous preflight and asynchronous completion stages in the documented order. A terminal stage outcome SHALL stop all later policy stages.
+The system SHALL execute synchronous preflight and asynchronous completion phases in the documented order. A terminal decision SHALL stop all later policy phases.
 
 #### Scenario: Protected path precedes grant and safe policy
 
@@ -51,9 +51,9 @@ The system SHALL execute synchronous preflight and asynchronous completion stage
 - **THEN** policy SHALL preserve the current allow result
 - **AND** policy SHALL deny when an uncovered candidate still depends on persistent state
 
-#### Scenario: Invalid stage result fails closed
+#### Scenario: Invalid call-local invariant fails closed
 
-- **WHEN** a stage returns an unknown result, invalid enum, or impossible transition
+- **WHEN** evaluation observes an invalid enum, changed candidate, duplicate coverage, or impossible terminal decision
 - **THEN** policy SHALL deny with `internal_policy_failure`
 - **AND** policy SHALL not open an approval prompt
 
@@ -85,7 +85,7 @@ Netclaw policy SHALL consume those facts without an executable-private command p
 
 - **WHEN** projection contains exact or finite filesystem facts
 - **THEN** policy SHALL evaluate each fact through the current path rules
-- **AND** later stages SHALL reuse the projected result without command-text scans
+- **AND** later phases SHALL reuse the projected result without command-text scans
 
 #### Scenario: Path facts retain their policy meaning
 
@@ -100,7 +100,7 @@ Netclaw policy SHALL consume those facts without an executable-private command p
 - **THEN** reviewed-safe coverage SHALL remain unavailable
 - **AND** the unknown domain SHALL NOT become a protected-path match
 - **WHEN** an exact or finite causal value cannot resolve against an intent or fallback scope
-- **THEN** the causal protected-path stage SHALL retain its current deny outcome
+- **THEN** the causal protected-path phase SHALL retain its current deny outcome
 
 #### Scenario: Redirect facts preserve their exact boundary
 
@@ -154,7 +154,7 @@ Each coverage change SHALL add its bounded trace fact through the same state ope
 
 #### Scenario: Trace data remains redacted
 
-- **WHEN** any stage emits trace evidence
+- **WHEN** any policy phase emits trace evidence
 - **THEN** trace data SHALL exclude raw commands, arguments, paths, prompts, session values, and secrets
 
 ### Requirement: Refactor preserves observable policy behavior
@@ -206,9 +206,9 @@ It SHALL not add a public API, durable schema, command parser, or duplicate poli
 
 The system SHALL map unexpected internal faults to `internal_policy_failure`. Caller cancellation SHALL still propagate without conversion to a policy result.
 
-#### Scenario: Stage throws an internal exception
+#### Scenario: Evaluation throws an internal exception
 
-- **WHEN** a policy stage throws outside caller cancellation
+- **WHEN** a policy phase throws outside caller cancellation
 - **THEN** the call SHALL deny with `internal_policy_failure`
 - **AND** the failure SHALL create no approval authority
 
