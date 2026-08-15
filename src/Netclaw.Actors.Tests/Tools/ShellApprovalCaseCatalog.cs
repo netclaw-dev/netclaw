@@ -775,6 +775,11 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("Get-Content", "Set-Location", "Get-Location"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
+            "powershell7-directory-change-does-not-create-causal-scope",
+            PowerShell7(@"Set-Location C:\Temp; Get-Content result.log"),
+            Approvals.PersistentAnywhere("Set-Location", "Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
             "powershell7-subexpression-call-operator-fails-closed",
             PowerShell7("& $(Write-Output Get-Date)"),
             Approvals.PersistentAnywhere("Write-Output", "Get-Date"),
@@ -922,6 +927,11 @@ public static class ShellApprovalCases
             WindowsPowerShell51("Get-ChildItem"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+        Case(
+            "powershell51-directory-change-does-not-create-causal-scope",
+            WindowsPowerShell51(@"Set-Location C:\Temp; Get-Content result.log"),
+            Approvals.PersistentAnywhere("Set-Location", "Get-Content"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "powershell51-foreach-inherited-state-prompts",
             WindowsPowerShell51("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
