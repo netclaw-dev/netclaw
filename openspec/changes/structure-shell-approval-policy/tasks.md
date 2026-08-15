@@ -115,7 +115,7 @@
   session prerequisites, and real-scope folder grants. Use parser effects for
   temporary-scope transitions. Keep protected fallback denial terminal before
   symlink eligibility.
-- [ ] 6.5 Keep native PowerShell causal scope strict and record native Windows
+- [x] 6.5 Keep native PowerShell causal scope strict and record native Windows
   expected results.
 
 ## 7. ShellSyntaxTree 0.3.1 facts through 0.3.5
@@ -166,11 +166,11 @@
 - [x] 9.1 Run strict OpenSpec validation before implementation and delivery.
 - [x] 9.2 Run focused `Netclaw.Security`, `Netclaw.Actors`, persistence, CLI,
   recovery, and eval tests.
-- [ ] 9.3 Run the complete Linux approval matrix and native Windows PowerShell
+- [x] 9.3 Run the complete Linux approval matrix and native Windows PowerShell
   matrix.
 - [x] 9.4 Run Release build, repository tests, header verification, and
   Slopwatch.
 - [x] 9.5 Obtain adversarial review of every vertical slice and resolve all
   findings.
-- [ ] 9.6 Rebase each slice on `upstream/dev` and deliver dependency-ordered PRs
+- [x] 9.6 Rebase each slice on `upstream/dev` and deliver dependency-ordered PRs
   with observed CI status.
