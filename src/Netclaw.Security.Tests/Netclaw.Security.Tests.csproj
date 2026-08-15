@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="../../openspec/changes/structure-shell-approval-policy/evidence/*.json"
+    <None Include="../../openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/*.json"
           Link="ApprovalEvidence/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

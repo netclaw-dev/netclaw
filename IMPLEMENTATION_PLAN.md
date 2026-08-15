@@ -160,7 +160,7 @@ Done when:
 
 - [x] The sanitized v0.26.0-beta.3 approval window has 18 classified cases in
   the linked ShellSyntaxTree and Netclaw OpenSpec changes.
-- [x] `openspec/changes/structure-shell-approval-policy/` defines the typed
+- [x] `openspec/changes/archive/2026-08-15-structure-shell-approval-policy/` defines the typed
   coordinator and actor protocol, per-candidate coverage, real and intent
   scopes, token-boundary grants, reviewed policy catalog, bounded trace,
   migration, and validation tasks.
@@ -278,7 +278,7 @@ Done when:
   `deepseek-v4-flash-dspark` endpoint. This measures headless path preference;
   deterministic actor tests own interactive correction and approval proof.
 - [x] Post-0.26.0 live evidence in
-  `openspec/changes/structure-shell-approval-policy/evidence/post-1952-live-approval-harvest.json`
+  `openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/post-1952-live-approval-harvest.json`
   classifies 69 prompts across 285 shell calls. The largest avoidable cluster
   is 15 read-heavy prompts from one headless subagent working beneath shared
   platform temp even though its execution scope already owns private session
