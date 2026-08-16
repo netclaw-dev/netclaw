@@ -12,6 +12,7 @@ using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
+using Netclaw.Providers.Zai;
 
 namespace Netclaw.Providers;
 
@@ -54,6 +55,7 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().DeepSeek);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Zai);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
@@ -63,6 +65,7 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().VeniceAi);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().DeepSeek);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Zai);
 
         services.AddSingleton(sp =>
             new ProviderDescriptorRegistry(sp.GetRequiredService<ProviderDescriptorCatalog>().All));

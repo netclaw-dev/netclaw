@@ -37,7 +37,7 @@ Wait+Screen@5s /8\. Venice\.ai/
 Screenshot "/tmp/shot-wizard-provider-picker.png"
 
 # Provider list ordering is alphabetical by TypeKey:
-#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai
+#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai, zai
 # Anthropic is the default; three Downs land on Ollama. Two Downs land on
 # github-copilot, whose OAuth flow would stop this capture-only tape.
 Down 3

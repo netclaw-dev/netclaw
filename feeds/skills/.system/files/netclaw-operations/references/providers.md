@@ -28,6 +28,7 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 | `veniceai` | API key | OpenAI-compatible at `https://api.venice.ai/api/v1`. Suppresses Venice's prepended system prompt by default; opt in via `VendorOptions.IncludeVeniceSystemPrompt = true` |
 | `deepseek` | API key | DeepSeek hosted API at `https://api.deepseek.com/v1`. Current model ids: `deepseek-v4-flash` and `deepseek-v4-pro` |
+| `zai` | API key | Z.ai GLM Coding Plan at `https://api.z.ai/api/coding/paas/v4`. Current models: `glm-5.3`, `glm-5-turbo`, `glm-4.7`; requests for `glm-5.2`/`glm-5.1` are server-routed to `glm-5.3`. For the pay-as-you-go platform, set `--endpoint https://api.z.ai/api/paas/v4` |
 
 Provider-specific behavior toggles belong under
 `Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
