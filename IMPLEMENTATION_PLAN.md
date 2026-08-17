@@ -267,6 +267,12 @@ Done when:
   redirects stay strict.
 - [x] Sanitized behavioral eval cases cover early project declaration,
   one-command typed scope, failed-path recovery, and deliberate inline `cd`.
+- [x] Two naturalistic cases now test a child checkout beneath a declared
+  parent project. The prompts do not name a tool, `WorkingDirectory`, or `cd`.
+  Against `deepseek-v4-flash-dspark`, the worktree status baseline passed 1/5.
+  Three failures used `git -C`, and one failure used inline `cd`. The source
+  inspection baseline passed 0/5. Each run read the named file, then tried
+  shell search before `file_list`.
 - [x] A sanitized subagent eval proves that a different user-named project is
   declared before the child's first multi-command shell inspection. Absolute
   path operands remain exact scopes, but do not create a safe-space root. The

@@ -81,10 +81,13 @@ EVAL_HOME=""
 DAEMON_LOG=""
 RESULTS_DIR=""
 RESULTS_DB=""
+NATURALISTIC_PROJECT_ROOT="/home/netclaw/.netclaw/workspaces/netclaw"
+NATURALISTIC_CWD_ROOT="$NATURALISTIC_PROJECT_ROOT/netclaw-worktrees/fix-pwsh-probe-timeout"
 
 # Per-prompt state (set by run_prompt, read by assertion helpers)
 STDOUT_FILE=""
 STDERR_FILE=""
+LAST_TURN_STDOUT_FILE=""
 DAEMON_LOG_LINES_BEFORE=0
 
 # ─── Prerequisites ────────────────────────────────────────────────────────────
@@ -429,6 +432,34 @@ start_eval_daemon() {
     done
     printf 'local-search-eval-token\n' > "$selection_root/search-target/nested/match.txt"
 
+    # Seed a worktree-like repository for natural directory-scope evals.
+    local naturalistic_root="$EVAL_HOME/data/workspaces/netclaw/netclaw-worktrees/fix-pwsh-probe-timeout"
+    mkdir -p "$naturalistic_root/src/Netclaw.Daemon" \
+        "$naturalistic_root/src/Netclaw.Daemon.Tests"
+    printf '%s\n' \
+        'internal static class PowerShellHostProbe' \
+        '{' \
+        '    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);' \
+        '    internal static Task WaitAsync(Process process, CancellationToken cancellationToken)' \
+        '        => process.WaitForExitAsync(cancellationToken);' \
+        '}' \
+        > "$naturalistic_root/src/Netclaw.Daemon/PowerShellHostProbe.cs"
+    git -C "$naturalistic_root" init -q -b main
+    git -C "$naturalistic_root" config user.name "Netclaw Eval"
+    git -C "$naturalistic_root" config user.email "eval@netclaw.dev"
+    git -C "$naturalistic_root" add src/Netclaw.Daemon/PowerShellHostProbe.cs
+    git -C "$naturalistic_root" commit -q -m seed
+    sed 's/FromSeconds(10)/FromSeconds(15)/' \
+        "$naturalistic_root/src/Netclaw.Daemon/PowerShellHostProbe.cs" \
+        > "$naturalistic_root/src/Netclaw.Daemon/PowerShellHostProbe.cs.changed"
+    mv "$naturalistic_root/src/Netclaw.Daemon/PowerShellHostProbe.cs.changed" \
+        "$naturalistic_root/src/Netclaw.Daemon/PowerShellHostProbe.cs"
+    printf '%s\n' \
+        'internal sealed class PowerShellHostProbeTests' \
+        '{' \
+        '    // ProbeTimeout and WaitForExitAsync define the timeout boundary.' \
+        '}' \
+        > "$naturalistic_root/src/Netclaw.Daemon.Tests/PowerShellHostProbeTests.cs"
     # The eval container runs as the non-root `netclaw` user and needs write
     # access to the bind-mounted identity, logs, skills, and data trees.
     chmod -R ugo+rwX "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/skills"
@@ -821,10 +852,11 @@ run_prompt() {
 ## assertion helpers (stdout_contains, etc.) see the full concatenated output.
 ## Stderr is captured the same way, into a separate shared STDERR_FILE, so
 ## stdout stays pure for assertions (see run_prompt for why that matters).
-## Args: session_id, prompt
+## Args: session_id, prompt, [output_format]
 run_prompt_resume() {
     local session_id="$1"
     local prompt="$2"
+    local output_format="${3:-text}"
     local ts
     ts="$(date +%s%N)"
     local turn_file="$TMPDIR_EVAL/stdout_${ts}_turn.txt"
@@ -854,9 +886,15 @@ run_prompt_resume() {
         DAEMON_LOG_LINES_BEFORE=0
     fi
 
+    local -a output_args=()
+    if [[ "$output_format" == "json" ]]; then
+        output_args+=(--json)
+    fi
+
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p --resume "$session_id" "$prompt" \
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p --resume "$session_id" \
+        "${output_args[@]}" "$prompt" \
         > "$turn_file" 2> "$turn_stderr_file" || true
 
     # Append this turn's output to the shared files so assertions see all turns.
@@ -864,7 +902,16 @@ run_prompt_resume() {
     cat "$turn_stderr_file" >> "$STDERR_FILE"
 
     # Per-turn metrics — read the usage line from this turn's file only.
-    LAST_TURN_USAGE_LINE=$(grep -ao '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
+    LAST_TURN_STDOUT_FILE="$turn_file"
+    if [[ "$output_format" == "json" ]]; then
+        LAST_TURN_USAGE_LINE=$(jq -r '
+            if .usage == null then ""
+            else "[usage] in=\(.usage.inputTokens // 0) out=\(.usage.outputTokens // 0) total=\(.usage.totalTokens // 0) cached=\(.usage.cachedInputTokens // 0) prompt_ms=\(.usage.promptMs // 0) tok_s=\(.usage.predictedPerSecond // 0)"
+            end
+        ' "$turn_file" 2>/dev/null || echo "")
+    else
+        LAST_TURN_USAGE_LINE=$(grep -ao '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
+    fi
 
     sleep 2
 }
@@ -872,8 +919,13 @@ run_prompt_resume() {
 ## Runs a named multi-turn case. Each prompt is sent via --resume against
 ## a dedicated session. Metrics are captured per turn. The assertion function
 ## is called once against the concatenated output of all turns.
-## Args: case_name, description, prompt1, prompt2, ... promptN
+## Args: [--json], case_name, description, prompt1, prompt2, ... promptN
 run_multi_turn_case() {
+    local output_format="text"
+    if [[ "${1:-}" == "--json" ]]; then
+        output_format="json"
+        shift
+    fi
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
@@ -911,7 +963,7 @@ run_multi_turn_case() {
             rendered_prompt="${rendered_prompt//\{\{SECOND_WORKTREE\}\}/${CODING_CONTEXT_SECOND_WORKTREE:-}}"
             rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/${CODING_CONTEXT_TARGET_BRANCH:-}}"
             rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/${CODING_CONTEXT_TARGET_FILE:-}}"
-            run_prompt_resume "$session_id" "$rendered_prompt"
+            run_prompt_resume "$session_id" "$rendered_prompt" "$output_format"
             store_metrics "$case_name" "$run" "$turn" "$LAST_TURN_USAGE_LINE"
             turn=$((turn + 1))
         done
@@ -1830,6 +1882,60 @@ assert_approval_shell_working_directory_argument() {
         <<<"$shell_call" >/dev/null
 }
 
+shell_calls_use_naturalistic_working_directory() {
+    local require_shell="$1"
+    local shell_call
+    local -a shell_calls
+    mapfile -t shell_calls < <(stdout_json_tool_call_arguments 'shell_execute')
+
+    if [[ "$require_shell" == "true" && "${#shell_calls[@]}" -eq 0 ]]; then
+        return 1
+    fi
+
+    for shell_call in "${shell_calls[@]}"; do
+        jq -e --arg expected "$NATURALISTIC_CWD_ROOT" '
+            .WorkingDirectory == $expected
+            and (.Command | type == "string" and length > 0)
+            and ((.Command | test("(^|[;&|])[[:space:]]*(cd|chdir)[[:space:]]"; "i")) | not)
+        ' <<<"$shell_call" >/dev/null || return 1
+    done
+
+    ! stdout_json_tool_called 'set_working_directory'
+}
+
+# A natural repository check must select its directory through the typed field.
+assert_approval_naturalistic_worktree_status() {
+    local saved_stdout="$STDOUT_FILE"
+    STDOUT_FILE="$LAST_TURN_STDOUT_FILE"
+    stdout_json_envelope_valid || { STDOUT_FILE="$saved_stdout"; return 1; }
+    stdout_json_tool_called 'shell_execute' || { STDOUT_FILE="$saved_stdout"; return 1; }
+    shell_calls_use_naturalistic_working_directory true || { STDOUT_FILE="$saved_stdout"; return 1; }
+    jq -e '
+        (.response | test("main"; "i"))
+        and (.response | test("PowerShellHostProbe\\.cs"; "i"))
+        and (.response | test("Netclaw\\.Daemon\\.Tests"; "i"))
+    ' "$STDOUT_FILE" >/dev/null
+    local result=$?
+    STDOUT_FILE="$saved_stdout"
+    return "$result"
+}
+
+# Known source inspection should use file tools. Any shell fallback keeps typed scope.
+assert_approval_naturalistic_source_inspection() {
+    local saved_stdout="$STDOUT_FILE"
+    STDOUT_FILE="$LAST_TURN_STDOUT_FILE"
+    stdout_json_envelope_valid || { STDOUT_FILE="$saved_stdout"; return 1; }
+    stdout_json_tool_called 'file_read' || { STDOUT_FILE="$saved_stdout"; return 1; }
+    shell_calls_use_naturalistic_working_directory false || { STDOUT_FILE="$saved_stdout"; return 1; }
+    jq -e '
+        (.response | test("WaitForExitAsync"; "i"))
+        and (.response | test("ProbeTimeout"; "i"))
+    ' "$STDOUT_FILE" >/dev/null
+    local result=$?
+    STDOUT_FILE="$saved_stdout"
+    return "$result"
+}
+
 # Preserve inline cd when directory mutation is the behavior under test.
 assert_approval_inline_cd_semantics() {
     local shell_call
@@ -2385,6 +2491,14 @@ run_all() {
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
         "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."
+
+    run_multi_turn_case --json approval_naturalistic_worktree_status "uses typed scope for an unaided repository status check" \
+        "Use $NATURALISTIC_PROJECT_ROOT as the current project for this session. Reply ready after you establish it." \
+        "Review the checkout at $NATURALISTIC_CWD_ROOT. Report its current branch and all pending file changes. Keep the current project unchanged. Do not modify anything."
+
+    run_multi_turn_case --json approval_naturalistic_source_inspection "avoids inline directory changes during an unaided source inspection" \
+        "Use $NATURALISTIC_PROJECT_ROOT as the current project for this session. Reply ready after you establish it." \
+        "Inspect the timeout logic in $NATURALISTIC_CWD_ROOT/src/Netclaw.Daemon/PowerShellHostProbe.cs and locate its related tests. Report the timeout member and the process-exit method. Keep the current project unchanged. Do not edit files."
 
     run_case --json approval_inline_cd_semantics "keeps inline cd when directory change is the requested shell behavior" \
         "Run a Bash control-flow experiment in one shell_execute call: execute 'cd /tmp && pwd' exactly as a compound command. Changing directory is the behavior being tested, so do not replace it with a WorkingDirectory argument."
