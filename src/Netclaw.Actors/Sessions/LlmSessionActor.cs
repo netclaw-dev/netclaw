@@ -924,7 +924,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 CallId = toolCallId,
                 ToolName = new ToolName(result.Name ?? "unknown"),
-                Result = result.Content ?? string.Empty
+                Result = result.Content ?? string.Empty,
+                FailureCode = msg.ToolFailureCodes.GetValueOrDefault(toolCallId.Value)
             }, OutputFilter.ToolCalls);
         }
 
@@ -4725,7 +4726,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             CallId = toolCallId,
             ToolName = new ToolName(toolMessage.Name ?? "unknown"),
-            Result = toolMessage.Content ?? string.Empty
+            Result = toolMessage.Content ?? string.Empty,
+            FailureCode = result.FailureCode
         }, OutputFilter.ToolCalls);
 
         var updatedContext = WorkingContextUpdater.UpdateFromToolResults(

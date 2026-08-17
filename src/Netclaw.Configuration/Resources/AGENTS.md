@@ -26,6 +26,13 @@
 - Use built-in `web_search` for external discovery and `web_fetch` for page retrieval.
 - Do not use shell HTTP clients for external search or retrieval.
 
+## Tool Call Contract
+
+- Every tool call must include a non-empty `_rationale` string.
+- State the call intent and reason in one sentence.
+- Apply this rule to each parallel call and each later tool iteration.
+- If a correction reports a missing rationale, fix every call before the retry.
+
 ## Declaring Project Scope (load-bearing for approvals)
 
 Path arguments give the approval gate an exact candidate scope. They do not

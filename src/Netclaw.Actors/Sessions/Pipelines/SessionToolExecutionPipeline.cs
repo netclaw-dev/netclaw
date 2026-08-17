@@ -37,7 +37,8 @@ internal sealed record ToolCallResult(
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings,
     Jobs.ActiveJobInfo? StartedBackgroundJob = null,
-    SessionScratchCorrectionChange? ScratchCorrectionChange = null);
+    SessionScratchCorrectionChange? ScratchCorrectionChange = null,
+    string? FailureCode = null);
 
 internal abstract record SessionScratchCorrectionChange
 {
@@ -392,7 +393,16 @@ internal sealed class SessionToolExecutionPipeline
                 CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
                 AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)],
                 StartedBackgroundJobs = [.. results.Where(r => r.StartedBackgroundJob is not null).Select(r => r.StartedBackgroundJob!)],
-                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)]
+                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)],
+                ToolFailureCodes = results
+                    .Where(result => result.FailureCode is not null)
+                    .ToDictionary<ToolCallResult, string, string>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A failed tool result requires a call identity."),
+                        result => result.FailureCode
+                            ?? throw new InvalidOperationException("A failed tool result requires a failure code."),
+                        StringComparer.Ordinal)
             });
         }
         catch (TimeoutException ex)
@@ -425,6 +435,8 @@ internal sealed class SessionToolExecutionPipeline
         string? sessionScratchDenialDirectory,
         ModelInputBatchBudget modelInputBudget)
     {
+        var originalToolCall = tc;
+
         // Single execution-preflight seam, shared with the sub-agent path via
         // IToolExecutor.InterpretToolCall: validate the ORIGINAL arguments (parse
         // sentinel, invalid/ambiguous meta values, unrecognized keys) and, on
@@ -438,7 +450,7 @@ internal sealed class SessionToolExecutionPipeline
                 Content = rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], [], [], []);
+            }, [], [], [], [], FailureCode: rejection.DenyReason);
         }
 
         var meta = interpretation.Meta;
@@ -648,7 +660,7 @@ internal sealed class SessionToolExecutionPipeline
             }
 
             resultText = await ExecuteToolAttemptAsync(
-                _executor, tc, context, timeout, _timeProvider, batch.CancellationToken);
+                _executor, originalToolCall, context, timeout, _timeProvider, batch.CancellationToken);
             sw.Stop();
 
         }
@@ -788,7 +800,7 @@ internal sealed class SessionToolExecutionPipeline
                 }
 
                 resultText = await ExecuteToolAttemptAsync(
-                    _executor, tc, context, timeout, _timeProvider, batch.CancellationToken);
+                    _executor, originalToolCall, context, timeout, _timeProvider, batch.CancellationToken);
                 sw.Stop();
 
             }

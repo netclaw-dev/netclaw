@@ -98,7 +98,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify streamed sub-agent activity."
             });
 
         // Drain the stream the way the production pipeline drains a self-monitoring
@@ -191,7 +192,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify self-monitored sub-agent activity."
             });
 
         // spawn_agent is self-monitoring, so the parent drains it with no watchdog at

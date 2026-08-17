@@ -1336,7 +1336,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 try
                 {
-                    var result = await executor.ExecuteAsync(cleanedTc, toolContext, ct);
+                    var result = await executor.ExecuteAsync(tc, toolContext, ct);
                     return BuildToolResult(
                         cleanedTc,
                         result,
@@ -1435,7 +1435,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         // across parallel tool calls or later iterations.
                         var retryContext = CreatePerToolExecutionContext(executionContext, meta);
                         retryContext.Approval.SeedOneTimeApproval(tc.Name, OneTimeApprovalKeys.Create(ctx));
-                        var result = await executor.ExecuteAsync(cleanedTc, retryContext, ct);
+                        var result = await executor.ExecuteAsync(tc, retryContext, ct);
                         return BuildToolResult(
                             cleanedTc,
                             result,

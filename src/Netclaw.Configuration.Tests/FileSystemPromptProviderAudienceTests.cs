@@ -35,6 +35,18 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         _dir.Dispose();
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Every_audience_receives_the_tool_rationale_contract(TrustAudience audience)
+    {
+        var prompt = _provider.GetSystemPrompt(audience);
+
+        Assert.Contains("Every tool call must include a non-empty `_rationale` string.", prompt);
+        Assert.Contains("Apply this rule to each parallel call", prompt);
+    }
+
     [Fact]
     public void Public_audience_gets_stripped_agents_without_team_only_content()
     {

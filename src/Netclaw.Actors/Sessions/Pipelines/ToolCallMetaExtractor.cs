@@ -15,6 +15,10 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 /// </summary>
 internal static class ToolCallMetaExtractor
 {
+    internal const string RequiredRationaleError =
+        "Error: Required meta argument '_rationale' must be a non-empty string. " +
+        "Supply one sentence that states the tool call intent. The tool was NOT executed.";
+
     /// <param name="resolveMeta">
     /// Maps a key to its canonical meta field (schema-aware for the executor,
     /// exact for persistence). Defaults to exact. See
@@ -90,5 +94,32 @@ internal static class ToolCallMetaExtractor
         }
 
         return valueError;
+    }
+
+    /// <summary>
+    /// Requires a usable rationale for a new tool execution.
+    /// Transcript extraction remains tolerant of old calls without this field.
+    /// </summary>
+    public static string? ValidateRequiredRationale(
+        IDictionary<string, object?>? arguments, Func<string, string?> resolveMeta)
+    {
+        if (arguments is null || arguments.Count == 0)
+            return RequiredRationaleError;
+
+        foreach (var kvp in arguments)
+        {
+            if (!string.Equals(resolveMeta(kvp.Key), "_rationale", StringComparison.Ordinal))
+                continue;
+
+            return kvp.Value switch
+            {
+                string value when !string.IsNullOrWhiteSpace(value) => null,
+                JsonElement { ValueKind: JsonValueKind.String } value
+                    when !string.IsNullOrWhiteSpace(value.GetString()) => null,
+                _ => RequiredRationaleError
+            };
+        }
+
+        return RequiredRationaleError;
     }
 }

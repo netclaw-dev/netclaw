@@ -86,6 +86,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (ValidateArguments(toolCall.Arguments, resolveMeta) is { } rejection)
             return rejection;
 
+        if (ToolCallMetaExtractor.ValidateRequiredRationale(toolCall.Arguments, resolveMeta) is { } rationaleError)
+            return new ToolArgumentRejection(rationaleError, "invalid_rationale");
+
         if (registered is not McpToolAdapter
             && ToolArgumentValidator.ValidateArgumentKeys(registered, toolCall.Arguments) is { } keyError)
             return new ToolArgumentRejection(keyError, "unrecognized_argument");
@@ -141,18 +144,18 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             return $"Unknown tool: {toolCall.Name}";
         }
 
-        // Pre-dispatch validation runs before authorization so a doomed call
-        // never raises an approval prompt. This is the shared seam: callers that
-        // bypass the session pipeline (sub-agents, direct callers) get the same
-        // protection here. The pipeline preflights via ValidateToolCall too, so
-        // for that path this is a cheap idempotent re-check.
-        if (ValidateToolCall(toolCall) is { } rejection)
+        // Interpret the original call before authorization. This keeps required
+        // metadata available for validation and removes it before tool dispatch.
+        var interpretation = InterpretToolCall(toolCall);
+        if (interpretation.Rejection is { } rejection)
         {
             _logger.LogWarning(
                 "Rejected tool call ({Reason}): {ToolName} — {Error}",
                 rejection.DenyReason, toolCall.Name, rejection.Message);
             return rejection.Message;
         }
+
+        toolCall = interpretation.Cleaned;
 
         var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
         var tool = authorized.Tool;
@@ -228,8 +231,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             yield break;
         }
 
-        // Same pre-authorization validation as the non-streaming path.
-        if (ValidateToolCall(toolCall) is { } rejection)
+        // Use the same atomic validation and extraction as the non-streaming path.
+        var interpretation = InterpretToolCall(toolCall);
+        if (interpretation.Rejection is { } rejection)
         {
             _logger.LogWarning(
                 "Rejected tool call ({Reason}): {ToolName} — {Error}",
@@ -237,6 +241,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             yield return new ToolCompletedUpdate(rejection.Message);
             yield break;
         }
+
+        toolCall = interpretation.Cleaned;
 
         // Authorization throws (ToolApprovalRequiredException / ToolAccessDeniedException)
         // before the first item is produced; the tool-execution pipeline handles
