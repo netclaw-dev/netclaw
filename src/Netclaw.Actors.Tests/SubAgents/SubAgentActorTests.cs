@@ -32,6 +32,21 @@ public class SubAgentActorTests : TestKit
     private static readonly TimeSpan ApprovalAskTimeout = TimeSpan.FromSeconds(30);
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static FunctionCallContent CreateToolCall(string callId, string name)
+        => CreateToolCall(callId, name, new Dictionary<string, object?>());
+
+    private static FunctionCallContent CreateToolCall(
+        string callId,
+        string name,
+        IDictionary<string, object?> arguments)
+    {
+        var callArguments = new Dictionary<string, object?>(arguments, StringComparer.Ordinal)
+        {
+            ["_rationale"] = "Verify the sub-agent behavior."
+        };
+        return new FunctionCallContent(callId, name, callArguments);
+    }
+
     public SubAgentActorTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -290,7 +305,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-1", "greet",
+                CreateToolCall("call-1", "greet",
                     new Dictionary<string, object?> { ["name"] = "World" })
             ]
         };
@@ -321,7 +336,7 @@ public class SubAgentActorTests : TestKit
             onExecute: context => context.AddModelInputFile(imagePath, "diagram.png", "image/png"));
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-image", "load_image")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-image", "load_image")]
         };
         var definition = CreateDefinition([fakeTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, PermissivePolicy()));
@@ -356,7 +371,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-context", "inspect_context")
+                CreateToolCall("call-context", "inspect_context")
             ]
         };
 
@@ -388,7 +403,7 @@ public class SubAgentActorTests : TestKit
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-no-project", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-no-project", "inspect_context")]
         };
 
         var definition = CreateDefinition([fakeTool]);
@@ -415,7 +430,7 @@ public class SubAgentActorTests : TestKit
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-cwd", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-cwd", "inspect_context")]
         };
 
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
@@ -446,7 +461,7 @@ public class SubAgentActorTests : TestKit
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-null-cwd", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-null-cwd", "inspect_context")]
         };
 
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
@@ -477,7 +492,7 @@ public class SubAgentActorTests : TestKit
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-inherit-only", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-inherit-only", "inspect_context")]
         };
 
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
@@ -504,7 +519,7 @@ public class SubAgentActorTests : TestKit
         var firstTool = new FakeNetclawTool("inspect_context", "ok");
         var firstClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-1", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-1", "inspect_context")]
         };
         var firstAgent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([firstTool]), firstClient, PermissivePolicy()));
 
@@ -522,7 +537,7 @@ public class SubAgentActorTests : TestKit
         var secondTool = new FakeNetclawTool("inspect_context", "ok");
         var secondClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [new FunctionCallContent("call-2", "inspect_context")]
+            ToolCallsOnFirstCall = [CreateToolCall("call-2", "inspect_context")]
         };
         var secondAgent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([secondTool]), secondClient, PermissivePolicy()));
 
@@ -586,7 +601,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-approval", "shell_execute",
+                CreateToolCall("call-approval", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -624,7 +639,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-cwd-prompt", "shell_execute",
+                CreateToolCall("call-cwd-prompt", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -769,7 +784,11 @@ public class SubAgentActorTests : TestKit
             new FunctionCallContent(
                 declarationCallId,
                 SetWorkingDirectoryTool.ToolName,
-                new Dictionary<string, object?> { ["Path"] = worktree }),
+                new Dictionary<string, object?>
+                {
+                    ["Path"] = worktree,
+                    ["_rationale"] = "Declare the project directory before the next inspection."
+                }),
             ProjectScopeCall(retryCallId, worktree)
         ]);
         var approvalBridge = supportsApproval
@@ -834,7 +853,11 @@ public class SubAgentActorTests : TestKit
             new FunctionCallContent(
                 "call-control-project",
                 SetWorkingDirectoryTool.ToolName,
-                new Dictionary<string, object?> { ["Path"] = controlledDirectory })
+                new Dictionary<string, object?>
+                {
+                    ["Path"] = controlledDirectory,
+                    ["_rationale"] = "Verify that the project scope rejects control characters."
+                })
         ]);
         var promptProvider = new ProjectPromptProvider(controlledDirectory, projectGuidance);
         var actor = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
@@ -953,11 +976,11 @@ public class SubAgentActorTests : TestKit
         var policy = CreateApprovalRequiredPolicy();
         var fakeClient = new SequencedToolCallChatClient(
             [
-                new FunctionCallContent(
+                CreateToolCall(
                     "call-approval-1",
                     "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" }),
-                new FunctionCallContent(
+                CreateToolCall(
                     "call-approval-2",
                     "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
@@ -994,7 +1017,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-slow-approval", "shell_execute",
+                CreateToolCall("call-slow-approval", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1038,7 +1061,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-activity-approval", "shell_execute",
+                CreateToolCall("call-activity-approval", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1092,7 +1115,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-cancel", "shell_execute",
+                CreateToolCall("call-cancel", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1144,9 +1167,9 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-par-1", "shell_execute",
+                CreateToolCall("call-par-1", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" }),
-                new FunctionCallContent("call-par-2", "shell_execute",
+                CreateToolCall("call-par-2", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1192,7 +1215,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-rejected", "shell_execute",
+                CreateToolCall("call-rejected", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1224,7 +1247,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-stop", "shell_execute",
+                CreateToolCall("call-stop", "shell_execute",
                     new Dictionary<string, object?> { ["Command"] = "git push origin main" })
             ]
         };
@@ -1416,14 +1439,16 @@ public class SubAgentActorTests : TestKit
         => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
             ["Command"] = "gh api repos/example/project",
-            ["WorkingDirectory"] = "/tmp"
+            ["WorkingDirectory"] = "/tmp",
+            ["_rationale"] = "Inspect a disposable diagnostic artifact."
         });
 
     private static FunctionCallContent ProjectScopeCall(string callId, string workingDirectory)
         => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
             ["Command"] = ProjectScopeCommand,
-            ["WorkingDirectory"] = workingDirectory
+            ["WorkingDirectory"] = workingDirectory,
+            ["_rationale"] = "Inspect the project metric sources."
         });
 
     private static string ProjectScopeCommand =>
@@ -1514,7 +1539,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-loop", "looper")
+                CreateToolCall("call-loop", "looper")
             ],
             AlwaysReturnToolCalls = true
         };
@@ -1651,7 +1676,7 @@ public class SubAgentActorTests : TestKit
 
         // Tool-call content is substantive.
         var toolCall = StreamingResponseReader.Classify(
-            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("call-1", "inspect_context")] },
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [CreateToolCall("call-1", "inspect_context")] },
             anySubstantiveSeen: false);
         Assert.True(toolCall.HasSubstantiveContent);
 
@@ -1726,7 +1751,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent(
+                CreateToolCall(
                     "call-1",
                     "browser_playwright/navigate_page",
                     new Dictionary<string, object?> { ["url"] = "https://example.com" })
@@ -1994,7 +2019,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-edit", "file_edit",
+                CreateToolCall("call-edit", "file_edit",
                     new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
             ]
         };
@@ -2025,7 +2050,7 @@ public class SubAgentActorTests : TestKit
         {
             ToolCallsOnFirstCall =
             [
-                new FunctionCallContent("call-edit", "file_edit",
+                CreateToolCall("call-edit", "file_edit",
                     new Dictionary<string, object?> { ["Path"] = "src/Calculator.cs" })
             ]
         };

@@ -14,6 +14,13 @@
 - When one approach fails, try alternatives immediately. Do not report failure
   without attempting at least one fallback.
 
+## Tool Call Contract
+
+- Every tool call must include a non-empty `_rationale` string.
+- State the call intent and reason in one sentence.
+- Apply this rule to each parallel call and each later tool iteration.
+- If a correction reports a missing rationale, fix every call before the retry.
+
 ## Grounding Rules
 
 - Never state runtime facts (versions, status, availability) without checking with a tool.

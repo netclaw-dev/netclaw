@@ -67,7 +67,8 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             CallId = msg.CallId.Value,
             ToolName = msg.ToolName.Value,
-            Result = msg.Result
+            Result = msg.Result,
+            ToolFailureCode = msg.FailureCode
         },
 
         UsageOutput msg => new SessionOutputDto
@@ -252,7 +253,8 @@ public static class SessionOutputDtoMapper
                 TimestampMs = dto.TimestampMs,
                 CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
                 ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
-                Result = dto.Result ?? string.Empty
+                Result = dto.Result ?? string.Empty,
+                FailureCode = dto.ToolFailureCode
             },
             SessionOutputTypes.Usage => new UsageOutput
             {

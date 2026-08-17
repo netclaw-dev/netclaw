@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.52.0"
+  version: "2.53.0"
 ---
 
 # Netclaw Operations
@@ -97,6 +97,11 @@ meta keys also accept the underscore-dropped/cased/shortened forms
 (`TimeoutSeconds`, `timeout_seconds`, `Timeout` → the timeout hint; `Rationale`,
 `Background` likewise). The supplied value is always *used* — never silently
 defaulted.
+
+Every tool call requires a non-empty `_rationale` string. State the call intent
+and reason in one sentence. Apply this rule to each parallel call and each later
+tool iteration. If a correction reports a missing rationale, fix every call
+before the retry.
 
 Three things are still rejected loudly, and when rejected the tool did NOT run —
 fix and re-issue once, do not retry the same shape:
