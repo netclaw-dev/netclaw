@@ -88,6 +88,12 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         var prompt = _provider.GetSystemPrompt(TrustAudience.Personal);
 
         Assert.Contains("`WorkingDirectory` argument", prompt);
+        Assert.Contains("Do not place the named directory in `Command`", prompt);
+        Assert.Contains("Program-specific directory options do not replace `WorkingDirectory`", prompt);
+        Assert.Contains("Always use this rule for a named child directory or worktree", prompt);
+        Assert.Contains("Command='inspect'` and `WorkingDirectory='/repo/child'", prompt);
+        Assert.Contains("Keep the project root unless the user requests", prompt);
+        Assert.Contains("A denied child-directory call does not permit a project change", prompt);
         Assert.Contains("Do not prefix the command with an inline `cd`", prompt);
         Assert.Contains("Path arguments give the approval gate an exact candidate scope", prompt);
         Assert.Contains("safe-space root", prompt);

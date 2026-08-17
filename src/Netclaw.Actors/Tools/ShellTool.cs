@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tools;
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
-    "Execute commands requiring shell semantics. Do not use for known file reads, directory listings, or edits unless shell behavior is requested.",
+    "Execute operations requiring shell semantics. For one-call work in a named directory, set WorkingDirectory. Program-specific directory options do not replace it. Do not use for known file reads, directory listings, or edits unless shell behavior is requested.",
     Grant = "shell")]
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
@@ -41,9 +41,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ShellExecutionEnvironment _environment;
 
     public record Params(
-        [param: Description("The shell command to execute.")] string Command,
         [param: Description(
-            "Run the command in this directory. Prefer this argument to an inline cd. Omit it to use the session project or scratch directory.")]
+            "The shell operation only. For one-call work in a named directory, set WorkingDirectory. Example: use Command='inspect' and WorkingDirectory='/repo/child'.")]
+        string Command,
+        [param: Description(
+            "Run the operation in this directory. Always use it for one-call work in a named child directory or worktree. Example: use Command='inspect' and WorkingDirectory='/repo/child'. Omit it to use the session project or scratch directory.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)

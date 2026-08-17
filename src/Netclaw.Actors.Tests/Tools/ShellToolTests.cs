@@ -48,6 +48,7 @@ public class ShellToolTests
     public void Shell_schema_prefers_file_tools_and_typed_working_directory()
     {
         Assert.Contains("shell semantics", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Program-specific directory options do not replace it", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use for known file reads", _tool.Description, StringComparison.Ordinal);
 
         var commandDescription = _tool.ParameterSchema
@@ -61,9 +62,10 @@ public class ShellToolTests
             .GetProperty("description")
             .GetString();
 
-        Assert.Equal("The shell command to execute.", commandDescription);
-        Assert.Contains("Prefer this argument", description, StringComparison.Ordinal);
-        Assert.Contains("inline cd", description, StringComparison.Ordinal);
+        Assert.Contains("Command='inspect' and WorkingDirectory='/repo/child'", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Always use it for one-call work", description, StringComparison.Ordinal);
+        Assert.Contains("named child directory or worktree", description, StringComparison.Ordinal);
+        Assert.Contains("Command='inspect' and WorkingDirectory='/repo/child'", description, StringComparison.Ordinal);
     }
 
     [Fact]

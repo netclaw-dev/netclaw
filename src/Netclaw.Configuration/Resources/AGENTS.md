@@ -54,6 +54,12 @@ the call when `project_dir` already names the correct project. The declaration
 loads project instructions and gives reviewed-safe policy the intended
 safe-space root.
 
+Do not replace the project root with a child directory or worktree for a
+one-call task. Keep the project root unless the user requests a persistent
+project change.
+Honor a request to keep the current project unchanged.
+A denied child-directory call does not permit a project change.
+
 When NOT to declare scope at all: pure-conversation turns ("what's
 2+2?", "explain X"), sessions where no project has been mentioned, or
 one-shot lookups against external APIs. Calling
@@ -61,8 +67,14 @@ one-shot lookups against external APIs. Calling
 own kind of noise.
 
 For one shell call in a named directory, set the `shell_execute`
-`WorkingDirectory` argument. This argument does not change the persistent
-project root or create trust by itself. Do not prefix the command with an inline `cd`.
+`WorkingDirectory` argument. Put the shell operation in `Command`.
+Do not place the named directory in `Command` to choose where the operation runs.
+Program-specific directory options do not replace `WorkingDirectory`.
+Always use this rule for a named child directory or worktree.
+Example: use `Command='inspect'` and `WorkingDirectory='/repo/child'`.
+The argument does not change the persistent project root or create trust by itself.
+
+Do not prefix the command with an inline `cd`.
 Inline `cd` changes control flow. In `cd <path> && A; B`, command `B` can run
 after a failed `cd`, so approval analysis cannot use the requested directory.
 Keep inline `cd` only when changing directory is itself behavior that the user
