@@ -195,8 +195,23 @@ internal sealed class MattermostNetGatewayTransport : IMattermostGatewayTranspor
         _logger.LogInformation("Bot identity resolved: {BotUserId} (@{Username})",
             me.Id, me.Username);
 
-        await _client.StartReceivingAsync(cancellationToken);
-        return new MattermostBotIdentity(me.Id, me.Username);
+        // This seems to be required otherwise it will be trigger a state and
+        // reconnect, so we wait for the OnConnected event or the timeout.
+        var connected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void HandleInitialConnected(object? sender, ConnectionEventArgs e) => connected.TrySetResult(true);
+        _client.OnConnected += HandleInitialConnected;
+
+        try
+        {
+            await _client.StartReceivingAsync(cancellationToken);
+            await connected.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+            return new MattermostBotIdentity(me.Id, me.Username);
+        }
+        finally
+        {
+            _client.OnConnected -= HandleInitialConnected;
+        }
     }
 
     public async Task StopAsync()
