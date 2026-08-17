@@ -92,7 +92,7 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="CsCheck" Version="4.8.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
-    <PackageVersion Include="Testcontainers" Version="4.13.0" />
+    <PackageVersion Include="Testcontainers" Version="4.14.0" />
     <!-- Transitive security pin: Testcontainers 4.13.0 pulls SSH.NET 2025.1.0,
          which trips NU1903 (CVE-2026-48798 / GHSA-q939-rpr3-3284, path traversal
          in ScpClient.Download recursive downloads, affected <= 2025.1.0).

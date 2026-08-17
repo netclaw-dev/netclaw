@@ -1036,6 +1036,27 @@ stdout_json_tool_call_arguments() {
         "$STDOUT_FILE" 2>/dev/null
 }
 
+stdout_json_all_tool_calls_have_rationale() {
+    local minimum_calls="${1:-1}"
+    jq -e --argjson minimum_calls "$minimum_calls" '
+        (.toolCalls // []) as $calls
+        | ($calls | length) >= $minimum_calls
+          and all($calls[];
+              try (
+                  (.argumentsJson | fromjson | ._rationale) as $rationale
+                  | ($rationale | type) == "string"
+                    and ($rationale | length) > 0
+              ) catch false)
+    ' "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+stdout_json_tool_call_sequence_matches() {
+    local expected_json="$1"
+    jq -e --argjson expected "$expected_json" '
+        [(.toolCalls // [])[] | .toolName] == $expected
+    ' "$STDOUT_FILE" >/dev/null 2>&1
+}
+
 stdout_skill_file_read_called() {
     grep -aiE '^\[tool:call\] file_read\(' "$STDOUT_FILE" 2>/dev/null \
         | grep -qi 'SKILL\.md'
@@ -1305,6 +1326,13 @@ assert_tool_local_repository_search() {
     stdout_tool_called 'shell_execute' \
         && ! stdout_tool_called 'web_search' \
         && stdout_response_contains 'match.txt'
+}
+
+assert_tool_rationale_contract() {
+    stdout_json_envelope_valid \
+        && stdout_json_tool_call_sequence_matches \
+            '["file_list","list_reminders","file_read","skill_load"]' \
+        && stdout_json_all_tool_calls_have_rationale 4
 }
 
 assert_tool_timestamped_webhook() {
@@ -2165,6 +2193,9 @@ run_all() {
 
     run_case tool_local_repository_search "local repository search uses shell, not web_search" \
         "Search recursively under /home/netclaw/.netclaw/workspaces/file-tool-selection/search-target for the exact text local-search-eval-token and tell me which file contains it."
+
+    run_case --json tool_rationale_contract "all calls retain rationales across two parallel tool iterations" \
+        "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and list_reminders in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
 
     run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
         "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."

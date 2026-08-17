@@ -66,6 +66,7 @@ public sealed record SessionOutputDto
     public string? ToolName { get; init; }
     public string? ArgumentsJson { get; init; }
     public string? Result { get; init; }
+    public string? ToolFailureCode { get; init; }
 
     // Usage
     public long? InputTokens { get; init; }

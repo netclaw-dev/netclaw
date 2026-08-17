@@ -66,13 +66,54 @@ public class ToolArgumentValidatorTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var toolCall = new FunctionCallContent("call-1", "shell_execute", args);
+            var callArgs = new Dictionary<string, object?>(args, StringComparer.Ordinal);
+            if (!callArgs.Keys.Any(key =>
+                    string.Equals(ToolArgumentHelper.ResolveMetaField(key), "_rationale", StringComparison.Ordinal)))
+                callArgs["_rationale"] = "Validate the tool argument contract.";
+
+            var toolCall = new FunctionCallContent("call-1", "shell_execute", callArgs);
             return await _executor.ExecuteAsync(
                 toolCall, PersonalContext(sessionDir), TestContext.Current.CancellationToken);
         }
         finally
         {
             Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Missing_rationale_rejects_before_execution()
+    {
+        var rejection = _executor.ValidateToolCall(new FunctionCallContent(
+            "call-missing-rationale",
+            "shell_execute",
+            new Dictionary<string, object?> { ["Command"] = "echo should-not-run" }));
+
+        Assert.NotNull(rejection);
+        Assert.Equal("invalid_rationale", rejection!.DenyReason);
+        Assert.Contains("'_rationale'", rejection.Message);
+        Assert.Contains("non-empty string", rejection.Message);
+        Assert.Contains("NOT executed", rejection.Message);
+    }
+
+    [Fact]
+    public void Blank_null_and_non_string_rationales_reject()
+    {
+        object?[] invalidValues = [null, "  ", 42, false];
+
+        foreach (var invalidValue in invalidValues)
+        {
+            var rejection = _executor.ValidateToolCall(new FunctionCallContent(
+                "call-invalid-rationale",
+                "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = "echo should-not-run",
+                    ["_rationale"] = invalidValue
+                }));
+
+            Assert.NotNull(rejection);
+            Assert.Equal("invalid_rationale", rejection!.DenyReason);
         }
     }
 
@@ -294,7 +335,8 @@ public class ToolArgumentValidatorTests
             result = await executor.ExecuteAsync(
                 new FunctionCallContent("call-mcp", "memorizer/store", new Dictionary<string, object?>
                 {
-                    ["TotallyUnknownKey"] = "value"
+                    ["TotallyUnknownKey"] = "value",
+                    ["_rationale"] = "Verify the MCP validation boundary."
                 }),
                 TestToolExecutionContext.CreateUnbound(),
                 ct: TestContext.Current.CancellationToken);
@@ -345,7 +387,12 @@ public class ToolArgumentValidatorTests
     public void InterpretToolCall_valid_extracts_meta_and_strips_keys()
     {
         var interp = _executor.InterpretToolCall(new FunctionCallContent("c", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo hi", ["TimeoutSeconds"] = 300 }));
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "echo hi",
+                ["TimeoutSeconds"] = 300,
+                ["_rationale"] = "Verify meta extraction."
+            }));
 
         Assert.Null(interp.Rejection);
         Assert.Equal(300, interp.Meta?.TimeoutHintSeconds);

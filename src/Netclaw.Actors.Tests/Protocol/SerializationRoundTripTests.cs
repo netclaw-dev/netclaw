@@ -152,6 +152,24 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void Tool_result_failure_code_round_trips_through_the_transport_DTO()
+    {
+        var original = new ToolResultOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            CallId = new ToolCallId("call-rejected"),
+            ToolName = new ToolName("search"),
+            Result = "The tool was not executed.",
+            FailureCode = "invalid_rationale"
+        };
+
+        var result = Assert.IsType<ToolResultOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(original)));
+
+        Assert.Equal("invalid_rationale", result.FailureCode);
+    }
+
+    [Fact]
     public void TurnRecorded_round_trips_with_null_source_ids()
     {
         var original = new TurnRecorded
