@@ -85,7 +85,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         CancellationToken ct,
         TimeProvider? timeProvider = null,
         ShellApprovalHarnessScope? scope = null,
-        SafeVerbList? safeVerbs = null)
+        SafeVerbList? safeVerbs = null,
+        IReadOnlyList<string>? deniedPaths = null)
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
@@ -162,10 +163,10 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var countingApprovalService = new CountingApprovalService(approvalService);
         var config = CreateConfig();
         var commandPolicy = new ShellCommandPolicy(environment);
-        var deniedPaths = environment.Platform == ShellPlatform.Windows
-            ? new[] { @"C:\protected\config" }
-            : [];
-        var pathPolicy = new ToolPathPolicy(environment, deniedPaths);
+        var effectiveDeniedPaths = deniedPaths ?? (environment.Platform == ShellPlatform.Windows
+            ? [@"C:\protected\config"]
+            : []);
+        var pathPolicy = new ToolPathPolicy(environment, effectiveDeniedPaths);
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
@@ -282,6 +283,14 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var externalFile = Path.Combine(_externalDirectory, "secret.txt");
         File.WriteAllText(externalFile, "synthetic test data");
         File.CreateSymbolicLink(Path.Combine(_projectDirectory, relativePath), externalFile);
+    }
+
+    public void CreateProjectFileSymlink(string linkPath, string targetPath)
+    {
+        File.WriteAllText(Path.Combine(_projectDirectory, targetPath), "synthetic test data");
+        File.CreateSymbolicLink(
+            Path.Combine(_projectDirectory, linkPath),
+            Path.Combine(_projectDirectory, targetPath));
     }
 
     public async ValueTask DisposeAsync()

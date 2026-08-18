@@ -20,7 +20,9 @@ namespace Netclaw.Actors.Tools;
 /// Reads text files and inspects non-text files without returning raw bytes.
 /// </summary>
 [NetclawTool(ToolName,
-    "Read text files or inspect non-text files. Images can be loaded for visual inspection when the active model supports image input; PDFs/media/archives return metadata and guidance. For large text files, use StartLine and Limit to read sections.",
+    "Use for a known local file read. Read text or inspect non-text files without shell. " +
+    "Images can load for visual inspection when the active model supports image input. " +
+    "PDFs, media, and archives return metadata and guidance. Use StartLine and Limit for large text files.",
     Grant = "file")]
 public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {

@@ -19,12 +19,19 @@
 
 ## File and Shell Selection
 
-- Prefer file tools for known file reads, directory listings, and edits.
-- Do not use shell for those operations unless shell behavior is requested.
-- Never use `cat`, `sed`, or `ls` when a file tool can perform the requested operation.
-- Use `shell_execute` for local repository search, builds, tests, VCS, or process semantics.
-- Use built-in `web_search` for external discovery and `web_fetch` for page retrieval.
-- Do not use shell HTTP clients for external search or retrieval.
+- When available, use `file_read` for a known local file read.
+- When available, use `file_list` for a known local directory listing.
+- When available, use `file_write` or `file_edit` for a known local file change.
+- When available, use `web_search` for external discovery and `web_fetch` for a known external page.
+- When available, use `shell_execute` for local search, VCS, builds, tests, processes, or requested shell behavior.
+- Do not substitute shell commands when a listed first-party tool satisfies the task.
+
+Keep shell approval friction bounded:
+
+1. Start with the smallest single shell operation that directly answers the request.
+2. Add diagnostics only when the task requires them.
+3. After an approval-required result, do not split or retry shell variants.
+4. Use an available structured tool when it can finish; otherwise report the blocked operation once.
 
 ## Tool Call Contract
 
@@ -38,6 +45,13 @@
 Path arguments give the approval gate an exact candidate scope. They do not
 add a safe-space root or make an uncovered command safe. A stored folder
 grant can cover deeper paths beneath its approved root.
+
+Choose directories in this order:
+
+1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
+2. For one call in a named child directory, set typed `WorkingDirectory`.
+3. Use `session_dir` only for disposable work outside a project.
+4. Use an inline directory change only when the task requests that behavior.
 
 Call `set_working_directory <path>` before the first shell command when all of
 these conditions apply:
@@ -66,19 +80,9 @@ one-shot lookups against external APIs. Calling
 `set_working_directory` preemptively without a project signal is its
 own kind of noise.
 
-For one shell call in a named directory, set the `shell_execute`
-`WorkingDirectory` argument. Put the shell operation in `Command`.
-Do not place the named directory in `Command` to choose where the operation runs.
-Program-specific directory options do not replace `WorkingDirectory`.
-Always use this rule for a named child directory or worktree.
-Example: use `Command='inspect'` and `WorkingDirectory='/repo/child'`.
-The argument does not change the persistent project root or create trust by itself.
-
-Do not prefix the command with an inline `cd`.
-Inline `cd` changes control flow. In `cd <path> && A; B`, command `B` can run
-after a failed `cd`, so approval analysis cannot use the requested directory.
-Keep inline `cd` only when changing directory is itself behavior that the user
-asked you to run or test.
+Typed `WorkingDirectory` does not change the persistent project root or create authority.
+Program-specific directory options do not replace it.
+Inline directory changes alter control flow and remain subject to ordinary approval.
 
 **Recovery from a denied shell call.** If `shell_execute` fails with a denial
 that mentions cwd being outside the safe spaces, the result includes a hint

@@ -83,25 +83,27 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     }
 
     [Fact]
-    public void Personal_rules_prefer_typed_shell_working_directory_and_retry_failed_project_scope()
+    public void Personal_rules_apply_directory_order_and_retry_failed_project_scope()
     {
         var prompt = _provider.GetSystemPrompt(TrustAudience.Personal);
 
-        Assert.Contains("`WorkingDirectory` argument", prompt);
-        Assert.Contains("Do not place the named directory in `Command`", prompt);
-        Assert.Contains("Program-specific directory options do not replace `WorkingDirectory`", prompt);
-        Assert.Contains("Always use this rule for a named child directory or worktree", prompt);
-        Assert.Contains("Command='inspect'` and `WorkingDirectory='/repo/child'", prompt);
+        var projectIndex = prompt.IndexOf("For declared-project work, omit `WorkingDirectory`", StringComparison.Ordinal);
+        var childIndex = prompt.IndexOf("For one call in a named child directory", StringComparison.Ordinal);
+        var scratchIndex = prompt.IndexOf("Use `session_dir` only for disposable work outside a project", StringComparison.Ordinal);
+        var transitionIndex = prompt.IndexOf("Use an inline directory change only when", StringComparison.Ordinal);
+        Assert.True(projectIndex >= 0);
+        Assert.True(childIndex > projectIndex);
+        Assert.True(scratchIndex > childIndex);
+        Assert.True(transitionIndex > scratchIndex);
+        Assert.Contains("Program-specific directory options do not replace it", prompt);
         Assert.Contains("Keep the project root unless the user requests", prompt);
         Assert.Contains("A denied child-directory call does not permit a project change", prompt);
-        Assert.Contains("Do not prefix the command with an inline `cd`", prompt);
         Assert.Contains("Path arguments give the approval gate an exact candidate scope", prompt);
         Assert.Contains("safe-space root", prompt);
         Assert.DoesNotContain("path argument IS the declaration", prompt);
         Assert.Contains("before the first shell", prompt);
         Assert.Contains("Do not repeat", prompt);
         Assert.Contains("`project_dir` already names the correct project", prompt);
-        Assert.Contains("changing directory is itself behavior", prompt);
         Assert.Contains("correct the path and retry the tool", prompt);
         Assert.Contains("Do not continue with a stale directory", prompt);
     }
@@ -113,12 +115,14 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     {
         var prompt = _provider.GetSystemPrompt(audience);
 
-        Assert.Contains("Prefer file tools for known file reads", prompt);
-        Assert.Contains("Do not use shell for those operations", prompt);
-        Assert.Contains("Never use `cat`, `sed`, or `ls`", prompt);
-        Assert.Contains("Use `shell_execute` for local repository search", prompt);
-        Assert.Contains("Use built-in `web_search` for external discovery", prompt);
-        Assert.Contains("Do not use shell HTTP clients", prompt);
+        Assert.Contains("use `file_read` for a known local file read", prompt);
+        Assert.Contains("use `file_list` for a known local directory listing", prompt);
+        Assert.Contains("use `file_write` or `file_edit` for a known local file change", prompt);
+        Assert.Contains("use `shell_execute` for local search", prompt);
+        Assert.Contains("use `web_search` for external discovery", prompt);
+        Assert.Contains("Do not substitute shell commands", prompt);
+        Assert.Contains("Start with the smallest single shell operation", prompt);
+        Assert.Contains("do not split or retry shell variants", prompt);
     }
 
     [Fact]
@@ -126,7 +130,9 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     {
         var prompt = _provider.GetSystemPrompt(TrustAudience.Public);
 
-        Assert.DoesNotContain("Use `shell_execute` for local repository search", prompt);
+        Assert.DoesNotContain("use `shell_execute` for local search", prompt);
+        Assert.DoesNotContain("session_dir", prompt);
+        Assert.DoesNotContain("Keep shell approval friction bounded", prompt);
     }
 
     [Fact]

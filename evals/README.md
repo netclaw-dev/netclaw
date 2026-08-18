@@ -18,6 +18,15 @@ NETCLAW_EVAL_MODEL_ID=qwen3:30b \
   ./evals/run-evals.sh
 ```
 
+Set `NETCLAW_EVAL_PROVIDER_API_KEY` when the selected provider requires an API
+key. The harness passes it only to the ephemeral provider configuration and
+does not write it into run metadata.
+
+If the value uses Netclaw's `ENC:` form, set
+`NETCLAW_EVAL_DATA_PROTECTION_KEYS` to its key-ring directory. The harness
+copies those keys only into the throwaway eval home and excludes them from
+archived results.
+
 If any of `NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, or
 `NETCLAW_EVAL_MODEL_ID` is unset, the script prompts for the missing values
 on stdin (requires a terminal). In non-interactive contexts (CI, piped
@@ -120,6 +129,8 @@ formation regressions, while `memory_identity_preference_routing` and
 | `NETCLAW_EVAL_PROVIDER_TYPE` | Provider type (`ollama`, `openai`, `openai-compatible`, `openrouter`, `anthropic`) |
 | `NETCLAW_EVAL_PROVIDER_ENDPOINT` | Provider URL the container should call |
 | `NETCLAW_EVAL_MODEL_ID` | Main model id |
+| `NETCLAW_EVAL_PROVIDER_API_KEY` | Optional API key for the eval provider |
+| `NETCLAW_EVAL_DATA_PROTECTION_KEYS` | Optional key ring for an encrypted API key |
 
 If any of these is unset and stdin is a terminal, the script prompts for
 the missing values. In non-interactive contexts it fails loudly.

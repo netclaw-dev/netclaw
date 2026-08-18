@@ -351,6 +351,22 @@ Done when:
   interpretations are omitted. Other arguments, redirects, effects, dynamic
   values, and unknown commands remain strict. The sanitized live `tr -d '\\n'`
   loop reuses its existing `gh run view` grant without creating a `/n` scope.
+- [x] Parent, child, schemas, skills, and always-loaded rules share one
+  directory order and one shell-composition order. Approval-required shell
+  variants do not receive authority from that guidance.
+- [x] ShellSyntaxTree 0.3.5 already publishes complete facts for the ten new
+  sanitized fresh-session samples. Sixteen focused tests and one corpus entry
+  pin current occurrence, cwd, redirect, argument, and dynamic boundaries.
+- [x] A fixed leaf-glob root may contain an existing in-root final alias.
+  Broken, external, or uninspectable aliases remain strict. The exact
+  recursive-search pipeline now produces reusable candidates without private
+  executable parsing.
+- [x] Five changed runs per eight cases used the baseline model and
+  configuration. Structured guardrails remained 15/15. Four alignment cases
+  stayed below threshold. Prompt equivalents fell from 32 to 25, while the
+  explicit directory-transition shell attempts fell from 24 to 12. These
+  variable results remain recorded, not converted into weaker assertions.
+  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
 - [x] The current live mixed-read chain is complex with inline `cd`. Supplying
   the typed working directory makes the prompt reusable and exposes only the
   unproved `sed` and escaped-`grep` pattern candidates.

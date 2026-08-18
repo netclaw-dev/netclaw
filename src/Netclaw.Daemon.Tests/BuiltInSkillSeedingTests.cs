@@ -53,6 +53,36 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     }
 
     [Fact]
+    public void Operations_skill_and_project_reference_share_tool_and_directory_order()
+    {
+        var skillDirectory = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills", "netclaw-operations");
+        var skill = File.ReadAllText(Path.Combine(skillDirectory, "SKILL.md"));
+        var projects = File.ReadAllText(Path.Combine(skillDirectory, "references", "projects.md"));
+
+        Assert.Contains("version: \"2.55.0\"", skill, StringComparison.Ordinal);
+        Assert.Contains("use `file_read` for a known local file read", skill, StringComparison.Ordinal);
+        Assert.Contains("use `web_search` for external discovery", skill, StringComparison.Ordinal);
+        Assert.Contains("use `shell_execute` for local search", skill, StringComparison.Ordinal);
+        Assert.Contains("Start with the smallest single shell operation", skill, StringComparison.Ordinal);
+        Assert.Contains("do not split or retry shell variants", skill, StringComparison.Ordinal);
+
+        var statements = new[]
+        {
+            "For declared-project work, omit `WorkingDirectory`",
+            "For one call in a named child directory",
+            "Use `session_dir` only for disposable work outside a project",
+            "Use an inline directory change only when",
+            "Start with the smallest single shell operation",
+            "do not split or retry shell variants"
+        };
+        foreach (var statement in statements)
+        {
+            Assert.Contains(statement, skill, StringComparison.Ordinal);
+            Assert.Contains(statement, projects, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void CopyBuiltInSkills_seeds_to_empty_directory()
     {
         var skillsDir = Path.Combine(_dir.Path, "skills");

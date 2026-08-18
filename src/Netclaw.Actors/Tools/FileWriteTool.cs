@@ -17,7 +17,7 @@ namespace Netclaw.Actors.Tools;
 /// approval grants, and audience profiles continue to work.
 /// </summary>
 [NetclawTool(ToolName,
-    "Write content to a file, creating parent directories if needed",
+    "Use for creating or replacing a known local file without shell. Write content and create parent directories when needed.",
     Grant = "file")]
 public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 {

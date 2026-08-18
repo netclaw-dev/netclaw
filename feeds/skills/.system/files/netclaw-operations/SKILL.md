@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.54.0"
+  version: "2.55.0"
 ---
 
 # Netclaw Operations
@@ -39,12 +39,19 @@ a reference file — load the one matching the user's intent with
 
 ## File and Shell Selection
 
-Prefer file tools for known file reads, directory listings, and edits.
-Do not use shell for those operations unless shell behavior is requested.
-Never use `cat`, `sed`, or `ls` when a file tool can perform the requested operation.
-Use `shell_execute` for local repository search, builds, tests, VCS, or process semantics.
-Use built-in `web_search` for external discovery and `web_fetch` for page retrieval.
-Do not use shell HTTP clients for external search or retrieval.
+When available, use `file_read` for a known local file read.
+When available, use `file_list` for a known local directory listing.
+When available, use `file_write` or `file_edit` for a known local file change.
+When available, use `web_search` for external discovery and `web_fetch` for a known external page.
+When available, use `shell_execute` for local search, VCS, builds, tests, processes, or requested shell behavior.
+Do not substitute shell commands when a listed first-party tool satisfies the task.
+
+Keep shell approval friction bounded:
+
+1. Start with the smallest single shell operation that directly answers the request.
+2. Add diagnostics only when the task requires them.
+3. After an approval-required result, do not split or retry shell variants.
+4. Use an available structured tool when it can finish; otherwise report the blocked operation once.
 
 ## Project Directory
 
@@ -53,15 +60,15 @@ allowed roots); the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`,
 `AGENTS.md`, or `CONTEXT.md`) then loads into the prompt. Full rules:
 `skill_read_resource('netclaw-operations', 'references/projects.md')`.
 
-Use the `shell_execute` `WorkingDirectory` argument for one command in another
-directory. Put the shell operation in `Command`.
-Do not place the named directory in `Command` to choose where the operation runs.
+Choose directories in this order:
+
+1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
+2. For one call in a named child directory, set typed `WorkingDirectory`.
+3. Use `session_dir` only for disposable work outside a project.
+4. Use an inline directory change only when the task requests that behavior.
+
+Typed `WorkingDirectory` and absolute operands give exact scope but add no safe-space root.
 Program-specific directory options do not replace `WorkingDirectory`.
-Always use this rule for a named child directory or worktree.
-Example: use `Command='inspect'` and `WorkingDirectory='/repo/child'`.
-The argument and an absolute path operand provide exact scope, but
-they do not add a safe-space root. Keep an inline directory change only when
-that change is the requested behavior.
 
 When available, use `set_working_directory` before shell work if several
 commands target another user-named project.
@@ -291,10 +298,9 @@ declares scope implicitly.
 
 The approval gate runs three layers in order:
 
-Use the announced `session_dir` as private scratch for disposable command
-output. Preserve `/tmp` or the Windows temporary root when the task explicitly
-requires that platform path. Netclaw does not automatically clean session
-scratch yet.
+The directory order reserves `session_dir` for disposable non-project output.
+Preserve an explicitly required platform temporary path.
+Netclaw does not automatically clean session scratch yet.
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
 2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated

@@ -17,7 +17,8 @@ namespace Netclaw.Actors.Tools;
 /// created or overwritten — this subsumes the former <c>file_write</c> tool.
 /// </summary>
 [NetclawTool(ToolName,
-    "Edit a file with targeted text replacement (OldString/NewString), or write entire content (Content). " +
+    "Use for changing a known local file without shell. " +
+    "Apply targeted text replacement with OldString/NewString, or write entire content with Content. " +
     "For targeted edits, matches literal text (not regex) and fails if OldString is not found or is ambiguous. " +
     "For full writes, creates the file and parent directories if needed.",
     Grant = "file")]

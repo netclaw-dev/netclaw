@@ -1047,7 +1047,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                              || sessionDirectory.Any(char.IsControl)
             ? string.Empty
             : $"[session]\nsession_dir: {sessionDirectory}\n"
-              + "For disposable shell work, always set WorkingDirectory to session_dir unless the task explicitly requires another directory.";
+              + ToolChoiceGuidance.DirectorySelectionOrder + "\n"
+              + ToolChoiceGuidance.ShellCompositionOrder;
 
         return string.Join(
             "\n\n",
