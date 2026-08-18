@@ -1299,7 +1299,7 @@ internal static class McpCommand
 
         WriteConfigFile(paths.NetclawConfigPath, config);
         writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName.Value}' written to McpServerToolGrants for {updated} audience profile(s).");
-        writer.WriteLine("New tools added by the server will not be exposed until you update the grants.");
+        writer.WriteLine("New tools stay hidden from these Allowlist audiences until you update the grants.");
         return 0;
     }
 
