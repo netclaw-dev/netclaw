@@ -33,11 +33,9 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     private SignalRConnectionId _currentConnectionId;
     private Actors.Channels.ChannelType _channelType = Actors.Channels.ChannelType.Tui;
     private bool _deliveredThisTurn;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
+    private bool _turnInFlight;
+    // Each key connects an accepted reminder turn to its delivery observer.
+    // The actor removes the entry after turn completion or enqueue failure.
     private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -102,7 +100,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             catch (Exception ex)
             {
                 _log.Error(ex, "Failed to initialize SignalR session pipeline for Mode B reminder; stopping actor");
-                Sender.Tell(CommandNack.For(_sessionId, $"SignalR pipeline init failed: {ex.Message}"));
+                Sender.Tell(CommandDeferred.For(_sessionId, $"SignalR pipeline initialization failed: {ex.Message}"));
                 Context.Stop(Self);
             }
         });
@@ -131,6 +129,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await writer.WriteAsync(msg.Input, cts.Token);
+                _turnInFlight = true;
             }
             catch (OperationCanceledException)
             {
@@ -161,6 +160,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         ReceiveAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            _turnInFlight = false;
             // A reinit aborts any in-flight reminder turn before its
             // TurnCompleted. Report those as not-delivered now so the
             // execution actor redelivers immediately instead of stalling
@@ -188,13 +188,20 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         {
             var ackTarget = Sender;
 
+            if (_turnInFlight)
+            {
+                _log.Info("Deferring CurrentSession reminder because the session has an active turn");
+                ackTarget.Tell(CommandDeferred.For(_sessionId, "The target session has an active turn."));
+                return;
+            }
+
             var writer = _handle.InputQueue;
             if (writer is null)
             {
                 _log.Warning(
-                    "SignalR input queue not initialized; rejecting Mode B reminder for {SessionId}",
+                    "SignalR input queue not initialized; deferring CurrentSession reminder for {SessionId}",
                     _sessionId.Value);
-                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR pipeline not initialized"));
+                ackTarget.Tell(CommandDeferred.For(_sessionId, "SignalR pipeline is not initialized."));
                 return;
             }
 
@@ -215,10 +222,8 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
                 AckTarget = ackTarget
             };
 
-            // Only delivery-gated (DeliveryRequired) reminders carry a
-            // DeliveryObserver. Key it by the per-fire reminder delivery id so a
-            // second concurrent reminder to this session can't overwrite the
-            // first's observer before its turn reaches TurnCompleted.
+            // Only delivery-gated reminders carry a DeliveryObserver.
+            // The per-fire key connects the completed turn to the correct observer.
             if (msg.Source.DeliveryObserver is { } deliveryObserver
                 && msg.Source.ReminderId is { } reminderKey
                 && !string.IsNullOrWhiteSpace(reminderKey.Value))
@@ -228,6 +233,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await writer.WriteAsync(input, cts.Token);
+                _turnInFlight = true;
                 _log.Debug(
                     "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
                     _sessionId.Value, msg.Source.ReminderId);
@@ -235,12 +241,14 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             catch (OperationCanceledException)
             {
                 _log.Warning("Timed out enqueueing Mode B reminder for session {SessionId}", _sessionId.Value);
-                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR pipeline enqueue timeout"));
+                RemoveReminderDeliveryObserver(msg.Source.ReminderId);
+                ackTarget.Tell(CommandDeferred.For(_sessionId, "The SignalR pipeline enqueue timed out."));
             }
             catch (ChannelClosedException)
             {
-                _log.Warning("SignalR input queue closed; rejecting Mode B reminder for {SessionId}", _sessionId.Value);
-                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR input queue closed"));
+                _log.Warning("SignalR input queue closed; deferring CurrentSession reminder for {SessionId}", _sessionId.Value);
+                RemoveReminderDeliveryObserver(msg.Source.ReminderId);
+                ackTarget.Tell(CommandDeferred.For(_sessionId, "The SignalR input queue is closed."));
                 Self.Tell(new ReinitializePipeline("input queue closed during Mode B delivery"));
             }
         });
@@ -275,6 +283,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
                 {
                     ReportReminderDeliveryResult(noConnTurn, delivered: false);
                     _deliveredThisTurn = false;
+                    _turnInFlight = false;
                 }
                 return;
             }
@@ -292,6 +301,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             {
                 ReportReminderDeliveryResult(completed, delivered: _deliveredThisTurn);
                 _deliveredThisTurn = false;
+                _turnInFlight = false;
             }
         }
         catch (Exception ex)
@@ -305,6 +315,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             {
                 ReportReminderDeliveryResult(failedTurn, delivered: false);
                 _deliveredThisTurn = false;
+                _turnInFlight = false;
             }
         }
     }
@@ -327,6 +338,12 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
                 FailureReason: delivered ? null : "SignalR client did not receive the reply",
                 ObservedAtMs: completed.TimestampMs));
         }
+    }
+
+    private void RemoveReminderDeliveryObserver(ReminderId? reminderKey)
+    {
+        if (reminderKey is { } key)
+            _reminderDeliveryObservers.Remove(key);
     }
 
     /// <summary>

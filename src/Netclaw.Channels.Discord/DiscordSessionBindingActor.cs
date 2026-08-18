@@ -70,11 +70,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     // was produced" — it suppresses the empty-turn fallback so a failed post
     // isn't followed by a misleading "I didn't manage to produce a reply".
     private bool _postFailedThisTurn;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
+    // Each key connects an accepted reminder turn to its delivery observer.
+    // The actor removes the entry after turn completion or enqueue failure.
     private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
@@ -1066,18 +1063,25 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
         }
 
+        if (_turnInFlight)
+        {
+            _log.Info("Deferring CurrentSession reminder because the session has an active turn");
+            ackTarget.Tell(CommandDeferred.For(_sessionId, "The target session has an active turn."));
+            return;
+        }
+
         if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
         {
-            _log.Info("Rejecting Mode B reminder while restart drain is active");
-            ackTarget.Tell(CommandNack.For(_sessionId, ingressClosedReason));
+            _log.Info("Deferring CurrentSession reminder while restart drain is active");
+            ackTarget.Tell(CommandDeferred.For(_sessionId, ingressClosedReason));
             return;
         }
 
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Input queue is not initialized; rejecting Mode B reminder");
-            ackTarget.Tell(CommandNack.For(_sessionId, "Discord session pipeline not initialized"));
+            _log.Warning("Input queue is not initialized; deferring CurrentSession reminder");
+            ackTarget.Tell(CommandDeferred.For(_sessionId, "Discord session pipeline is not initialized."));
             return;
         }
 
@@ -1098,10 +1102,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             AckTarget = ackTarget
         };
 
-        // Only delivery-gated (DeliveryRequired) reminders carry a
-        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
-        // second concurrent reminder to this session can't overwrite the
-        // first's observer before its turn reaches TurnCompleted.
+        // Only delivery-gated reminders carry a DeliveryObserver.
+        // The per-fire key connects the completed turn to the correct observer.
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
@@ -1111,6 +1113,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
+            _turnInFlight = true;
             _log.Debug(
                 "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
                 _sessionId.Value, message.Source.ReminderId);
@@ -1118,13 +1121,21 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         catch (OperationCanceledException)
         {
             _log.Warning("Timed out enqueueing Mode B reminder for session {0}", _sessionId.Value);
-            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline enqueue timeout"));
+            RemoveReminderDeliveryObserver(message.Source.ReminderId);
+            ackTarget.Tell(CommandDeferred.For(_sessionId, "The Discord pipeline enqueue timed out."));
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
-            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
+            _log.Warning("Input queue closed; deferring CurrentSession reminder for session {0}", _sessionId.Value);
+            RemoveReminderDeliveryObserver(message.Source.ReminderId);
+            ackTarget.Tell(CommandDeferred.For(_sessionId, "The Discord pipeline input queue is closed."));
         }
+    }
+
+    private void RemoveReminderDeliveryObserver(ReminderId? reminderKey)
+    {
+        if (reminderKey is { } key)
+            _reminderDeliveryObservers.Remove(key);
     }
 
     private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }

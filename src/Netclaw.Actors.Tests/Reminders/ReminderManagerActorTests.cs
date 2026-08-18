@@ -931,6 +931,119 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
+    public async Task CurrentSession_deferral_retries_without_a_Netclaw_failure()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("defer-once-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new DeferringTrustedGateway(gatewayProbe.Ref, deferredAttempts: 1)),
+            "defer-once-current-session-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        var now = _timeProvider.GetUtcNow();
+        var definition = CreateCurrentSessionDefinition("defer-once", deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                FireAt = now.AddMilliseconds(100),
+                IntervalTicks = TimeSpan.FromHours(2).Ticks
+            }
+        };
+
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
+
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.True(status.Found);
+            Assert.True(status.Enabled);
+            Assert.Equal(0, status.ConsecutiveFailures);
+            Assert.Contains(status.RecentHistory, history => history.Success);
+
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance,
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.FailedCount);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_notificationSink.Alerts, alert =>
+            alert.Category == AlertType.ReminderExecutionFailed
+            && alert.Source == definition.Id.Value);
+    }
+
+    [Fact]
+    public async Task CurrentSession_deferral_records_one_failure_after_retry_exhaustion()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("always-defer-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new DeferringTrustedGateway(gatewayProbe.Ref, deferredAttempts: int.MaxValue)),
+            "always-defer-current-session-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        var definition = CreateCurrentSessionDefinition("defer-terminal", deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = _timeProvider.GetUtcNow().AddMilliseconds(100)
+            }
+        };
+
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
+
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(definition.Id),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.True(status.Found);
+            Assert.False(status.Enabled);
+            Assert.Equal(1, status.ConsecutiveFailures);
+            Assert.Equal(ReminderTerminalOutcome.Failed, status.TerminalOutcome);
+            var failure = Assert.Single(status.RecentHistory);
+            Assert.False(failure.Success);
+            Assert.Contains("active turn", failure.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance,
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(1, health.FailedCount);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(_notificationSink.Alerts, alert =>
+            alert.Category == AlertType.ReminderExecutionFailed
+            && alert.Source == definition.Id.Value);
+    }
+
+    [Fact]
     public async Task Reconcile_disables_expired_recurring_reminders()
     {
         var manager = await GetManagerAsync();
@@ -1450,6 +1563,28 @@ public class ReminderManagerActorTests : TestKit
             {
                 probe.Tell(msg);
                 Sender.Tell(CommandAck.For(msg.SessionId));
+            });
+        }
+    }
+
+    private sealed class DeferringTrustedGateway : ReceiveActor
+    {
+        private readonly IActorRef _probe;
+        private readonly int _deferredAttempts;
+        private int _attemptCount;
+
+        public DeferringTrustedGateway(IActorRef probe, int deferredAttempts)
+        {
+            _probe = probe;
+            _deferredAttempts = deferredAttempts;
+
+            Receive<DeliverTrustedSessionTurn>(msg =>
+            {
+                _probe.Tell(msg);
+                _attemptCount++;
+                Sender.Tell(_attemptCount <= _deferredAttempts
+                    ? CommandDeferred.For(msg.SessionId, "The target session has an active turn.")
+                    : CommandAck.For(msg.SessionId));
             });
         }
     }

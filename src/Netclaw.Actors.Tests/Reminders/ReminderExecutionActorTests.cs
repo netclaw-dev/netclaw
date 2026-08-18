@@ -373,6 +373,44 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         }
     }
 
+    [Fact]
+    public async Task Missing_supported_gateway_defers_CurrentSession_delivery()
+    {
+        var definition = CreateCurrentSessionDefinition("missing-slack", ChannelType.Slack);
+        var pipeline = new FailingSessionPipeline(new InvalidOperationException("pipeline must not start"));
+        var probe = CreateTestProbe();
+
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-missing-supported-gateway");
+
+        var deferred = await probe.ExpectMsgAsync<ReminderExecutionDeferred>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(definition.Id, deferred.Id);
+        Assert.Contains("not registered", deferred.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Unsupported_gateway_fails_CurrentSession_delivery()
+    {
+        var definition = CreateCurrentSessionDefinition("unsupported-origin", ChannelType.Reminder);
+        var pipeline = new FailingSessionPipeline(new InvalidOperationException("pipeline must not start"));
+        var probe = CreateTestProbe();
+
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-unsupported-gateway");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(completed.Success);
+        Assert.Contains("does not support", completed.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ReminderDefinition CreateDefinition(string id)
     {
         var now = TimeProvider.System.GetUtcNow();
@@ -394,6 +432,20 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             CreatedBy = "test",
             CreatedAt = now,
             UpdatedAt = now
+        };
+    }
+
+    private static ReminderDefinition CreateCurrentSessionDefinition(string id, ChannelType originChannelType)
+    {
+        var definition = CreateDefinition(id);
+        return definition with
+        {
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "C0123ABC/1712000000.000001",
+                OriginChannelType = originChannelType
+            }
         };
     }
 
@@ -435,6 +487,12 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 probe.Tell(completed);
                 if (acceptCompletion)
                     Sender.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
+            });
+            Receive<ReminderExecutionDeferred>(deferred =>
+            {
+                probe.Tell(deferred);
+                if (acceptCompletion)
+                    Sender.Tell(new ReminderExecutionAccepted(deferred.ExecutionId));
             });
             ReceiveAny(msg => probe.Tell(msg));
         }

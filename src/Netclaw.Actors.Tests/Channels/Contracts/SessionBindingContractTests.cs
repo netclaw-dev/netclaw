@@ -323,43 +323,68 @@ public abstract class SessionBindingContractTests : TestKit
         ClearReplyClientThrows();
     }
 
-    // Regression for the observer-clobber bug: two distinct reminders can target
-    // the same session concurrently. A single observer field is overwritten by
-    // the second dispatch before the first turn completes, so the first
-    // reminder's result is misrouted. Each observer must receive ITS OWN keyed
-    // result.
+    // A busy session must defer a second reminder before it registers an observer.
+    // The same occurrence can enter the session after the active turn ends.
     [Fact]
-    public async Task Concurrent_reminders_to_same_session_each_get_their_own_result()
+    public async Task Busy_session_defers_a_second_reminder()
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-reminder-concurrent");
         const string keyA = "reminder-A:111";
         const string keyB = "reminder-B:222";
+        var outputRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput("reply A") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = new ReminderId(keyA) },
-            new TextOutput("reply B") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = new ReminderId(keyB) }
-        ], reactive: true);
+            new TurnCompleted
+            {
+                SessionId = sid,
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                SourceReminderId = new ReminderId(keyA)
+            },
+            new TurnCompleted
+            {
+                SessionId = sid,
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2),
+                SourceReminderId = new ReminderId(keyB)
+            },
+            new TextOutput("retry barrier") { SessionId = sid }
+        ], outputRelease.Task);
 
         var observerA = CreateTestProbe();
         var observerB = CreateTestProbe();
+        var secondAttempt = CreateTestProbe();
         var binding = CreateBindingActor(sid, pipeline, detector);
         await pipeline.Created;
 
-        // Both reminders dispatched before either turn completes.
-        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder A", CreateReminderSource(keyA, observerA.Ref)));
-        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder B", CreateReminderSource(keyB, observerB.Ref)));
+        binding.Tell(new DeliverTrustedSessionTurn(
+            sid,
+            "reminder A",
+            CreateReminderSource(keyA, observerA.Ref)));
+        await AwaitAssertAsync(() => Assert.Single(pipeline.CapturedInputs), cancellationToken: ct);
 
-        var resultA = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
+        secondAttempt.Send(
+            binding,
+            new DeliverTrustedSessionTurn(sid, "reminder B", CreateReminderSource(keyB, observerB.Ref)));
+        var deferred = await secondAttempt.ExpectMsgAsync<CommandDeferred>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(new ReminderId(keyA), resultA.ReminderDeliveryKey);
+        Assert.Equal(sid, deferred.SessionId);
+        Assert.Contains("active turn", deferred.Reason, StringComparison.OrdinalIgnoreCase);
 
-        var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
+        outputRelease.TrySetResult();
+        var firstResult = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal(new ReminderId(keyB), resultB.ReminderDeliveryKey);
+        Assert.Equal(new ReminderId(keyA), firstResult.ReminderDeliveryKey);
+        await observerB.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), ct);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(GetPostedTexts(), text =>
+                text.Contains("retry barrier", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        var input = Assert.Single(pipeline.CapturedInputs);
+        Assert.Equal(new ReminderId(keyA), input.ReminderId);
     }
 
     // Regression for the misleading-fallback bug: when the real content post

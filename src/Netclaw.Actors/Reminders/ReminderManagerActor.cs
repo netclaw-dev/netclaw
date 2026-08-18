@@ -82,6 +82,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         ReceiveAsync<ReminderEnvelope<ReminderPayload>>(HandleReminderFiredAsync);
         ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionOutcomeAsync);
+        ReceiveAsync<ReminderExecutionDeferred>(HandleExecutionDeferredAsync);
         ReceiveAsync<ReminderExecutionTerminated>(HandleExecutionTerminatedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
@@ -753,6 +754,134 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _activeExecutions.TryRemove(outcome.Id, outcome.ExecutionId, out _);
             replyTo.Tell(new ReminderExecutionAccepted(outcome.ExecutionId));
         }
+    }
+
+    private async Task HandleExecutionDeferredAsync(ReminderExecutionDeferred deferred)
+    {
+        var replyTo = Sender;
+        if (!_activeExecutions.TryGet(deferred.Id, out var execution)
+            || execution.ExecutionId != deferred.ExecutionId)
+        {
+            replyTo.Tell(new ReminderExecutionAccepted(deferred.ExecutionId));
+            return;
+        }
+
+        try
+        {
+            await SettleDeferredExecutionAsync(deferred, execution);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Unexpected reminder deferral failure for '{0}'", deferred.Id.Value);
+            var definition = _definitionStore.Get(deferred.Id);
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+        }
+        finally
+        {
+            _activeExecutions.TryRemove(deferred.Id, deferred.ExecutionId, out _);
+            replyTo.Tell(new ReminderExecutionAccepted(deferred.ExecutionId));
+        }
+    }
+
+    private async Task SettleDeferredExecutionAsync(
+        ReminderExecutionDeferred deferred,
+        ActiveReminderExecution execution)
+    {
+        var definition = _definitionStore.Get(deferred.Id);
+        AkkaReminderProtocol.ReminderNackResponse nack;
+        try
+        {
+            nack = await _client!.NackAsync(execution.Envelope, deferred.Reason);
+        }
+        catch (Exception ex)
+        {
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+            return;
+        }
+
+        switch (nack.ResponseCode)
+        {
+            case ReminderNackResponseCode.RetryScheduled:
+                _log.Info(
+                    "Reminder '{0}' deferred because its session is unavailable. The scheduler will retry at {1}.",
+                    deferred.Id.Value,
+                    nack.NextAttemptAtUtc);
+                return;
+
+            case ReminderNackResponseCode.Failed:
+            case ReminderNackResponseCode.Expired:
+                await RecordTerminalDeferralAsync(deferred, execution, definition);
+                return;
+
+            case ReminderNackResponseCode.NotFound:
+                _log.Info(
+                    "Reminder '{0}' deferral found no active occurrence. The scheduler already settled it.",
+                    deferred.Id.Value);
+                return;
+
+            case ReminderNackResponseCode.Error:
+                if (definition is not null)
+                {
+                    EmitSettlementFailure(
+                        definition,
+                        nack.Message ?? $"Negative acknowledgement returned {nack.ResponseCode}.");
+                }
+                return;
+
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(nack.ResponseCode),
+                    nack.ResponseCode,
+                    "Unexpected reminder deferral response.");
+        }
+    }
+
+    private async Task RecordTerminalDeferralAsync(
+        ReminderExecutionDeferred deferred,
+        ActiveReminderExecution execution,
+        ReminderDefinition? definition)
+    {
+        var now = _timeProvider.GetUtcNow();
+        var sessionId = definition?.Delivery.SessionId
+            ?? $"reminder/{deferred.Id}/{execution.Envelope.DueTimeUtc.ToUnixTimeMilliseconds()}";
+        var history = new HistoryRecord(
+            execution.StartedAt,
+            Success: false,
+            DurationMs: (long)(now - execution.StartedAt).TotalMilliseconds,
+            sessionId,
+            deferred.Reason);
+        await AppendHistorySafelyAsync(deferred.Id, history);
+
+        var count = (definition?.ConsecutiveFailures ?? 0) + 1;
+        if (definition is not null)
+        {
+            try
+            {
+                definition = definition with
+                {
+                    ConsecutiveFailures = count,
+                    Enabled = false,
+                    TerminalOutcome = ReminderTerminalOutcome.Failed,
+                    UpdatedAtMs = now.ToUnixTimeMilliseconds()
+                };
+                _definitionStore.Save(definition);
+            }
+            catch (Exception ex)
+            {
+                EmitSettlementFailure(definition, ex.Message, ex);
+                return;
+            }
+        }
+
+        ReportExecutionFailure(
+            deferred.Id,
+            definition,
+            count,
+            deferred.Reason,
+            willDisable: true);
+        await CancelScheduleOnlyAsync(deferred.Id);
     }
 
     private async Task HandleExecutionTerminatedAsync(ReminderExecutionTerminated terminated)

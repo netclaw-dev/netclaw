@@ -477,6 +477,14 @@ internal sealed record ReminderExecutionCompleted(
     HistoryRecord History,
     string? ErrorMessage = null) : INoSerializationVerificationNeeded;
 
+/// <summary>
+/// Sent when a CurrentSession target cannot accept a distinct turn now.
+/// </summary>
+internal sealed record ReminderExecutionDeferred(
+    Guid ExecutionId,
+    ReminderId Id,
+    string Reason) : INoSerializationVerificationNeeded;
+
 internal sealed record ReminderExecutionAccepted(Guid ExecutionId) : INoSerializationVerificationNeeded;
 
 internal sealed record ReminderExecutionTerminated(

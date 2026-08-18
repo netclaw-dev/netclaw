@@ -272,7 +272,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             var gateway = ResolveGatewayFor(originChannelType);
             if (gateway is null)
             {
-                ReportOutcome(false, $"Mode B unsupported origin channel type: {originChannelType}");
+                if (IsSupportedCurrentSessionOrigin(originChannelType))
+                {
+                    ReportDeferred($"The {originChannelType} gateway is not registered yet.");
+                }
+                else
+                {
+                    ReportOutcome(false, $"CurrentSession does not support origin channel type: {originChannelType}");
+                }
                 return;
             }
 
@@ -308,6 +315,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                             "reminder_current_session_nack execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} reason={Reason}",
                             _executionId, _definition.Id, sessionId.Value, nack.Reason);
                         ReportOutcome(false, $"Session rejected reminder delivery: {nack.Reason}");
+                        break;
+
+                    case CommandDeferred deferred:
+                        _log.Info(
+                            "reminder_current_session_deferred execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} reason={Reason}",
+                            _executionId, _definition.Id, sessionId.Value, deferred.Reason);
+                        ReportDeferred(deferred.Reason);
                         break;
 
                     default:
@@ -411,6 +425,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             _ => null
         };
     }
+
+    private static bool IsSupportedCurrentSessionOrigin(ChannelType originChannelType) =>
+        originChannelType is ChannelType.Slack
+            or ChannelType.Discord
+            or ChannelType.Mattermost
+            or ChannelType.Tui
+            or ChannelType.SignalR;
 
     private TrustBoundary GetPersistedBoundaryOrThrow()
     {
@@ -600,6 +621,23 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             success,
             history,
             errorMessage));
+    }
+
+    private void ReportDeferred(string reason)
+    {
+        if (_completed || _settlementStarted)
+            return;
+
+        _settlementStarted = true;
+        Context.SetReceiveTimeout(null);
+        Timers.Cancel(ExecutionAttemptTimerKey);
+        Timers.Cancel(DeliveryBackstopTimerKey);
+        _completed = true;
+
+        Context.Parent.Tell(new ReminderExecutionDeferred(
+            _executionId,
+            _definition.Id,
+            reason));
     }
 
     private void HandleExecutionAccepted(ReminderExecutionAccepted accepted)

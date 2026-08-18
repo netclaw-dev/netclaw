@@ -28,4 +28,13 @@ public static partial class SessionProtocol
         public static CommandNack For(SessionId sessionId, string reason) =>
             new(sessionId, reason);
     }
+
+    /// <summary>
+    /// The session cannot accept the command now, but a later attempt can succeed.
+    /// </summary>
+    public sealed record CommandDeferred(SessionId SessionId, string Reason) : ISessionResponse
+    {
+        public static CommandDeferred For(SessionId sessionId, string reason) =>
+            new(sessionId, reason);
+    }
 }

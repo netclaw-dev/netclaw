@@ -47,7 +47,8 @@ public static partial class SessionProtocol
 
     /// <summary>
     /// Marker for a reply the session actor sends in response to a command/query Ask —
-    /// <see cref="CommandAck"/> (accepted) and <see cref="CommandNack"/> (rejected).
+    /// <see cref="CommandAck"/> (accepted), <see cref="CommandDeferred"/> (retry later),
+    /// and <see cref="CommandNack"/> (rejected).
     /// Lets callers (channel bindings, HTTP callback endpoints, the reminder execution
     /// actor) declare a typed Ask response instead of an untyped <c>object</c>.
     /// Transient: replies are local-dispatch only.

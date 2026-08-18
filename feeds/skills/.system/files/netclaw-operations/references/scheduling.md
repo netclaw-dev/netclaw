@@ -92,6 +92,15 @@ A known execution or delivery failure starts the Akka.Reminders retry policy.
 The retry uses bounded backoff and the same durable occurrence identity. A
 successful execution resets the consecutive failure count.
 
+A `current_session` reminder requires a session with no active turn. The session
+defers the reminder during an active turn, a restart drain, or pipeline outage.
+A supported gateway also defers the reminder when startup has not registered it.
+Netclaw sends an Akka.Reminders negative acknowledgement for each deferral.
+Each negative acknowledgement consumes one delivery attempt and applies durable
+backoff. A scheduled retry does not increase the Netclaw failure count or create
+failure history. Retry exhaustion creates one terminal failure and disables the
+reminder. An unsupported origin channel is a permanent delivery failure.
+
 A one-shot reminder stays enabled while an occurrence can retry. After a
 successful acknowledgement, Netclaw deletes its definition and history. A poison
 one-shot becomes disabled with a `Failed` outcome. Its definition and history

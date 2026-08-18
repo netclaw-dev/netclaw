@@ -21,6 +21,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private readonly List<IWithSessionId> _recordedFeedback = [];
     private readonly Func<SessionId, IReadOnlyList<SessionOutput>> _outputFactory;
     private readonly bool _reactive;
+    private readonly Task? _outputRelease;
     private readonly TaskCompletionSource<SessionPipelineOptions> _created = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private SessionPipelineOptions? _capturedOptions;
@@ -47,6 +48,15 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     {
         _outputFactory = outputFactory;
         _reactive = reactive;
+    }
+
+    public RecordingSessionPipeline(
+        Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory,
+        Task outputRelease)
+    {
+        _outputFactory = outputFactory;
+        _reactive = true;
+        _outputRelease = outputRelease;
     }
 
     public SessionPipelineOptions? CapturedOptions => Volatile.Read(ref _capturedOptions);
@@ -105,6 +115,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
                     {
                         // Wait for the first input to arrive before emitting anything.
                         await gate.Reader.ReadAsync(cancellationToken);
+                        if (_outputRelease is not null)
+                            await _outputRelease.WaitAsync(cancellationToken);
                     }
 
                     if (state < outputs.Count)
