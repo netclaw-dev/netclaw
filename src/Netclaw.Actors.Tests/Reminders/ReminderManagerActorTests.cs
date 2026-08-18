@@ -761,20 +761,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-timeout-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-timeout");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-timeout", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-timeout-gateway",
+                "auto-ack-current-session-timeout",
+                "current-session-timeout");
             Assert.NotNull(delivered.Source.ReminderId);
 
             await AwaitAssertAsync(async () =>
@@ -808,20 +799,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(30);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-failed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-failed");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-failed", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-failed-gateway",
+                "auto-ack-current-session-failed",
+                "current-session-failed");
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -891,20 +873,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-observed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-observed");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-observed", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-observed-gateway",
+                "auto-ack-current-session-observed",
+                "current-session-observed");
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -1125,24 +1098,13 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
         try
         {
-            var gatewayProbe = CreateTestProbe("discord-current-session-timeout-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-discord-current-session-timeout");
-            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition(
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
+                manager,
+                "discord-current-session-timeout-gateway",
+                "auto-ack-discord-current-session-timeout",
                 "discord-current-session-timeout",
-                deliveryRequired: true,
                 originChannelType: ChannelType.Discord,
                 sessionId: "129847561203948576/130111223344556677");
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
 
             await AwaitAssertAsync(async () =>
@@ -1174,24 +1136,13 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
         try
         {
-            var gatewayProbe = CreateTestProbe("discord-current-session-observed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-discord-current-session-observed");
-            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition(
+            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
+                manager,
+                "discord-current-session-observed-gateway",
+                "auto-ack-discord-current-session-observed",
                 "discord-current-session-observed",
-                deliveryRequired: true,
                 originChannelType: ChannelType.Discord,
                 sessionId: "129847561203948576/130111223344556677");
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -1655,6 +1606,44 @@ public class ReminderManagerActorTests : TestKit
             CreatedAt = now,
             UpdatedAt = now
         };
+    }
+
+    // Shared arrange for the CurrentSession delivery tests: registers an
+    // auto-acking gateway probe under the given key, saves a CurrentSession
+    // definition, fires it, and waits for the DeliverTrustedSessionTurn.
+    // Callers keep their own assertions and any follow-up delivery-result
+    // signaling — this only extracts the identical setup+dispatch prefix.
+    // (The probe itself is not returned: no call site needs it after the
+    // initial delivery is observed.)
+    private async Task<(ReminderDefinition Definition, DeliverTrustedSessionTurn Delivered)>
+        RegisterGatewayAndDeliverCurrentSessionReminderAsync<TGatewayKey>(
+            IActorRef manager,
+            string probeName,
+            string actorName,
+            string reminderId,
+            ChannelType originChannelType = ChannelType.Slack,
+            string? sessionId = null)
+    {
+        var gatewayProbe = CreateTestProbe(probeName);
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            actorName);
+        ActorRegistry.For(Sys).Register<TGatewayKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition(
+            reminderId,
+            deliveryRequired: true,
+            originChannelType: originChannelType,
+            sessionId: sessionId);
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        return (definition, delivered);
     }
 
     private static ReminderDefinition CreateCurrentSessionDefinition(

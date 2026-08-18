@@ -476,47 +476,18 @@ public class WebFetchToolTests : IDisposable
         Assert.DoesNotContain("Error", result);
     }
 
-    [Fact]
-    public async Task ExecuteAsync_allows_http_localhost_by_default()
+    [Theory]
+    [InlineData("http://localhost:8080/api")]
+    [InlineData("http://127.0.0.1:3000/")]
+    [InlineData("http://[::1]:5000/")]
+    public async Task ExecuteAsync_allows_http_loopback_addresses_by_default(string url)
     {
         var handler = new FakeHttpHandler("<html><body><p>Local</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            ToolInput.Create("Url", "http://localhost:8080/api"),
-            TestToolExecutionContext.CreateUnbound(),
-            CancellationToken.None);
-
-        Assert.Contains("Fetched:", result);
-        Assert.DoesNotContain("Error", result);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_allows_http_127_0_0_1_by_default()
-    {
-        var handler = new FakeHttpHandler("<html><body><p>Loopback</p></body></html>", "text/html");
-        var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
-
-        var result = await tool.ExecuteAsync(
-            ToolInput.Create("Url", "http://127.0.0.1:3000/"),
-            TestToolExecutionContext.CreateUnbound(),
-            CancellationToken.None);
-
-        Assert.Contains("Fetched:", result);
-        Assert.DoesNotContain("Error", result);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_allows_http_ipv6_loopback_by_default()
-    {
-        var handler = new FakeHttpHandler("<html><body><p>IPv6</p></body></html>", "text/html");
-        var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
-
-        var result = await tool.ExecuteAsync(
-            ToolInput.Create("Url", "http://[::1]:5000/"),
+            ToolInput.Create("Url", url),
             TestToolExecutionContext.CreateUnbound(),
             CancellationToken.None);
 

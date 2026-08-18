@@ -11,6 +11,7 @@ using Netclaw.Cli.Discord;
 using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
+using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -213,52 +214,50 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal("Slack bot token is required.", vm.Status.Value.Text);
     }
 
-    [Fact]
-    public async Task Save_blocks_invalid_slack_token_before_probe()
+    public static TheoryData<ChannelType, Action<IWizardStepViewModel>, string> InvalidFieldBeforeProbeCases { get; } = new()
+    {
+        {
+            ChannelType.Slack,
+            adapter =>
+            {
+                var slack = (SlackStepViewModel)adapter;
+                slack.SlackEnabled = true;
+                slack.BotToken = "not-a-slack-token";
+                slack.AppToken = "xapp-test";
+                slack.ChannelNamesInput = "netclaw-support";
+            },
+            "Slack bot token must start with xoxb-."
+        },
+        {
+            ChannelType.Mattermost,
+            adapter =>
+            {
+                var mattermost = (MattermostStepViewModel)adapter;
+                mattermost.MattermostEnabled = true;
+                mattermost.ServerUrl = "not-a-url";
+                mattermost.BotToken = "mattermost-token";
+                mattermost.ChannelIdsInput = "town-square";
+            },
+            "Mattermost server URL must be an absolute http:// or https:// URL."
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidFieldBeforeProbeCases))]
+    public async Task Save_blocks_invalid_field_before_probe(
+        ChannelType type, Action<IWizardStepViewModel> configureAdapter, string expectedStatusText)
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
         var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var slackProbe = new FakeSlackProbe();
-        using var vm = CreateViewModel(slackProbe: slackProbe);
-        vm.Step.LoadAdapterState(ChannelType.Slack, enabled: true, summary: "configured", adapter =>
-        {
-            var slack = (SlackStepViewModel)adapter;
-            slack.SlackEnabled = true;
-            slack.BotToken = "not-a-slack-token";
-            slack.AppToken = "xapp-test";
-            slack.ChannelNamesInput = "netclaw-support";
-        });
+        var (vm, resolveCallCount) = CreateProbedViewModel(type);
+        using var scopedVm = vm;
+        vm.Step.LoadAdapterState(type, enabled: true, summary: "configured", configureAdapter);
 
         await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsSaved.Value);
-        Assert.Equal("Slack bot token must start with xoxb-.", vm.Status.Value.Text);
-        Assert.Equal(0, slackProbe.ResolveCallCount);
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.False(File.Exists(_paths.SecretsPath));
-    }
-
-    [Fact]
-    public async Task Save_blocks_invalid_mattermost_url_before_probe()
-    {
-        File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var mattermostProbe = new FakeMattermostProbe();
-        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
-        vm.Step.LoadAdapterState(ChannelType.Mattermost, enabled: true, summary: "configured", adapter =>
-        {
-            var mattermost = (MattermostStepViewModel)adapter;
-            mattermost.MattermostEnabled = true;
-            mattermost.ServerUrl = "not-a-url";
-            mattermost.BotToken = "mattermost-token";
-            mattermost.ChannelIdsInput = "town-square";
-        });
-
-        await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(vm.IsSaved.Value);
-        Assert.Equal("Mattermost server URL must be an absolute http:// or https:// URL.", vm.Status.Value.Text);
-        Assert.Equal(0, mattermostProbe.ResolveCallCount);
+        Assert.Equal(expectedStatusText, vm.Status.Value.Text);
+        Assert.Equal(0, resolveCallCount());
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.False(File.Exists(_paths.SecretsPath));
     }
@@ -1097,69 +1096,107 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(["ttttttttttttttttttttttttab"], ToStringArray(channelsRaw));
     }
 
-    [Fact]
-    public async Task Save_blocks_when_slack_channel_name_unresolved_and_persists_nothing()
+    // The probe's API call worked (ErrorMessage null) but one entry did not resolve. Per the
+    // fail-loud decision, an unresolvable channel is an inert allow-list entry the runtime ACL
+    // can never match, so the save BLOCKS and persists nothing — not even the resolved channel
+    // or token — rather than keeping a dead name. The operator must fix or remove it. Holds for
+    // all three adapters; only the probe type, channel-field name, and literal tokens differ.
+    public static TheoryData<ChannelType, string, object, string> UnresolvedChannelCases { get; } = new()
     {
-        // The probe's API call worked (ErrorMessage null) but one name did not resolve. Per the
-        // fail-loud decision, an unresolvable channel is an inert allow-list entry the runtime ACL
-        // can never match, so the save BLOCKS and persists nothing — not even the resolved channel
-        // or token — rather than keeping a dead name. The operator must fix or remove it.
-        WriteChannelConfig();
-        WriteChannelSecrets();
+        {
+            ChannelType.Slack,
+            "openclaw, fake-channel",
+            new SlackChannelResolutionResult(
+                false, null, [new ResolvedSlackChannel("openclaw", "C99")], ["fake-channel"]),
+            "#fake-channel"
+        },
+        {
+            ChannelType.Discord,
+            "123456789, 987654321",
+            new DiscordChannelResolutionResult(
+                false, null, [new ResolvedDiscordChannel("123456789", "ops", "Stannard Labs")], ["987654321"]),
+            "#987654321"
+        },
+        {
+            ChannelType.Mattermost,
+            "town-square, bogus",
+            new MattermostChannelResolutionResult(
+                false, null, [new ResolvedMattermostChannel("town-square", "town-square", "Town Square")], ["bogus"]),
+            "#bogus"
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(UnresolvedChannelCases))]
+    public async Task Save_blocks_when_channel_unresolved_and_persists_nothing(
+        ChannelType type, string channelInput, object resolutionResult, string expectedUnresolvedTag)
+    {
+        // Slack's fixture predates the others and uses the partial WriteChannelConfig; Discord and
+        // Mattermost use the full fixture. Preserved as-is rather than normalized to keep this an
+        // honest consolidation of the original three tests.
+        if (type == ChannelType.Slack)
+        {
+            WriteChannelConfig();
+            WriteChannelSecrets();
+        }
+        else
+        {
+            WriteAllChannelConfig();
+            WriteAllChannelSecrets();
+        }
         var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
         var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var slackProbe = new FakeSlackProbe
-        {
-            NextResolutionResult = new SlackChannelResolutionResult(
-                false,
-                null,
-                [new ResolvedSlackChannel("openclaw", "C99")],
-                ["fake-channel"])
-        };
-        using var vm = CreateViewModel(slackProbe: slackProbe);
-        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-        slack.ChannelNamesInput = "openclaw, fake-channel";
+        var (vm, resolveCallCount) = CreateVmWithChannelInput(type, resolutionResult, channelInput);
+        using var scopedVm = vm;
 
         var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("#fake-channel", vm.Status.Value.Text);
+        Assert.Contains(expectedUnresolvedTag, vm.Status.Value.Text);
         Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(1, resolveCallCount());
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
-    [Fact]
-    public async Task Save_blocks_when_slack_probe_fails_and_persists_nothing()
+    // The probe itself failed (ErrorMessage set): we cannot validate, so the save must block and
+    // persist nothing — not even the resolved channels or token. Holds for all three adapters.
+    public static TheoryData<ChannelType, string, object, string> ProbeFailureCases { get; } = new()
     {
-        // The probe itself failed (ErrorMessage set): we cannot validate, so the save
-        // must block and persist nothing — not even the resolved channels or token.
-        WriteChannelConfig();
-        WriteChannelSecrets();
+        { ChannelType.Slack, "openclaw", new SlackChannelResolutionResult(false, "invalid_auth", [], []), "invalid_auth" },
+        { ChannelType.Discord, "987654321", new DiscordChannelResolutionResult(false, "Unauthorized", [], []), "Unauthorized" },
+        { ChannelType.Mattermost, "bogus", new MattermostChannelResolutionResult(false, "connection refused", [], []), "connection refused" }
+    };
+
+    [Theory]
+    [MemberData(nameof(ProbeFailureCases))]
+    public async Task Save_blocks_when_probe_fails_and_persists_nothing(
+        ChannelType type, string channelInput, object resolutionResult, string error)
+    {
+        if (type == ChannelType.Slack)
+        {
+            WriteChannelConfig();
+            WriteChannelSecrets();
+        }
+        else
+        {
+            WriteAllChannelConfig();
+            WriteAllChannelSecrets();
+        }
         var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
         var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var slackProbe = new FakeSlackProbe
-        {
-            NextResolutionResult = new SlackChannelResolutionResult(
-                false,
-                "invalid_auth",
-                [],
-                [])
-        };
-        using var vm = CreateViewModel(slackProbe: slackProbe);
-        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-        slack.ChannelNamesInput = "openclaw";
+        var (vm, resolveCallCount) = CreateVmWithChannelInput(type, resolutionResult, channelInput);
+        using var scopedVm = vm;
 
         var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(saved);
         Assert.False(vm.IsSaved.Value);
-        Assert.Equal("Slack channel lookup failed: invalid_auth", vm.Status.Value.Text);
+        Assert.Equal($"{type} channel lookup failed: {error}", vm.Status.Value.Text);
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(1, resolveCallCount());
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
@@ -1203,67 +1240,6 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         Assert.Equal("Channel settings save failed: Slack lookup exploded", vm.Status.Value.Text);
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
-    }
-
-    [Fact]
-    public async Task Save_blocks_when_discord_channel_id_unresolved_and_persists_nothing()
-    {
-        // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
-        // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var discordProbe = new FakeDiscordProbe
-        {
-            NextResolutionResult = new DiscordChannelResolutionResult(
-                false,
-                null,
-                [new ResolvedDiscordChannel("123456789", "ops", "Stannard Labs")],
-                ["987654321"])
-        };
-        using var vm = CreateViewModel(discordProbe: discordProbe);
-        vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "123456789, 987654321";
-
-        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(saved);
-        Assert.False(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("#987654321", vm.Status.Value.Text);
-        Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, discordProbe.ResolveCallCount);
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
-    }
-
-    [Fact]
-    public async Task Save_blocks_when_discord_probe_fails_and_persists_nothing()
-    {
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var discordProbe = new FakeDiscordProbe
-        {
-            NextResolutionResult = new DiscordChannelResolutionResult(
-                false,
-                "Unauthorized",
-                [],
-                [])
-        };
-        using var vm = CreateViewModel(discordProbe: discordProbe);
-        vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "987654321";
-
-        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(saved);
-        Assert.False(vm.IsSaved.Value);
-        Assert.Equal("Discord channel lookup failed: Unauthorized", vm.Status.Value.Text);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Equal(1, discordProbe.ResolveCallCount);
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
@@ -1649,67 +1625,6 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Save_blocks_when_mattermost_channel_id_unresolved_and_persists_nothing()
-    {
-        // The probe's API call worked (ErrorMessage null) but one id did not resolve. Per the
-        // fail-loud decision the save BLOCKS and persists nothing rather than keeping a dead entry.
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var mattermostProbe = new FakeMattermostProbe
-        {
-            NextResolutionResult = new MattermostChannelResolutionResult(
-                false,
-                null,
-                [new ResolvedMattermostChannel("town-square", "town-square", "Town Square")],
-                ["bogus"])
-        };
-        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
-        vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "town-square, bogus";
-
-        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(saved);
-        Assert.False(vm.IsSaved.Value);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("#bogus", vm.Status.Value.Text);
-        Assert.Contains("Could not resolve", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, mattermostProbe.ResolveCallCount);
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
-    }
-
-    [Fact]
-    public async Task Save_blocks_when_mattermost_probe_fails_and_persists_nothing()
-    {
-        WriteAllChannelConfig();
-        WriteAllChannelSecrets();
-        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
-        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
-        var mattermostProbe = new FakeMattermostProbe
-        {
-            NextResolutionResult = new MattermostChannelResolutionResult(
-                false,
-                "connection refused",
-                [],
-                [])
-        };
-        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
-        vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "bogus";
-
-        var saved = await vm.SaveAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(saved);
-        Assert.False(vm.IsSaved.Value);
-        Assert.Equal("Mattermost channel lookup failed: connection refused", vm.Status.Value.Text);
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Equal(1, mattermostProbe.ResolveCallCount);
-        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
-    }
-
-    [Fact]
     public async Task Save_true_for_picker_enabled_adapter_persists_section_even_if_child_flag_desyncs()
     {
         // Regression for the confirmed data-loss: validation gates on the picker's
@@ -1855,6 +1770,68 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         }),
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
+
+    // Builds a VM wired to a probe that returns `resolutionResult`, with `channelInput` staged on the
+    // adapter's channel field (Slack: ChannelNamesInput; Discord/Mattermost: ChannelIdsInput). The returned
+    // delegate reads ResolveCallCount off whichever concrete probe was created, since the three fakes share
+    // no common probe-call-count interface. Shared by the unresolved-channel and probe-failure theories.
+    private (ChannelsConfigViewModel Vm, Func<int> ResolveCallCount) CreateVmWithChannelInput(
+        ChannelType type, object resolutionResult, string channelInput)
+    {
+        switch (type)
+        {
+            case ChannelType.Slack:
+            {
+                var probe = new FakeSlackProbe { NextResolutionResult = (SlackChannelResolutionResult)resolutionResult };
+                var vm = CreateViewModel(slackProbe: probe);
+                vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).ChannelNamesInput = channelInput;
+                return (vm, () => probe.ResolveCallCount);
+            }
+            case ChannelType.Discord:
+            {
+                var probe = new FakeDiscordProbe { NextResolutionResult = (DiscordChannelResolutionResult)resolutionResult };
+                var vm = CreateViewModel(discordProbe: probe);
+                vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = channelInput;
+                return (vm, () => probe.ResolveCallCount);
+            }
+            case ChannelType.Mattermost:
+            {
+                var probe = new FakeMattermostProbe { NextResolutionResult = (MattermostChannelResolutionResult)resolutionResult };
+                var vm = CreateViewModel(mattermostProbe: probe);
+                vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = channelInput;
+                return (vm, () => probe.ResolveCallCount);
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(type));
+        }
+    }
+
+    // Builds a VM wired to a freshly-created, default-state probe for `type` — no resolution result or
+    // channel field is staged, since the caller drives adapter state itself (e.g. via LoadAdapterState).
+    // Used by tests that block before the probe is ever reached.
+    private (ChannelsConfigViewModel Vm, Func<int> ResolveCallCount) CreateProbedViewModel(ChannelType type)
+    {
+        switch (type)
+        {
+            case ChannelType.Slack:
+            {
+                var probe = new FakeSlackProbe();
+                return (CreateViewModel(slackProbe: probe), () => probe.ResolveCallCount);
+            }
+            case ChannelType.Discord:
+            {
+                var probe = new FakeDiscordProbe();
+                return (CreateViewModel(discordProbe: probe), () => probe.ResolveCallCount);
+            }
+            case ChannelType.Mattermost:
+            {
+                var probe = new FakeMattermostProbe();
+                return (CreateViewModel(mattermostProbe: probe), () => probe.ResolveCallCount);
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(type));
+        }
+    }
 
     // Stages an enabled adapter carrying `channelInput` in its channel field, then runs the background
     // resolution that canonicalizes it (the path the sub-flow completion triggers, exercised directly).

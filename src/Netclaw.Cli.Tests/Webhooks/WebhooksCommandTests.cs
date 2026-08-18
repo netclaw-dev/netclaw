@@ -19,6 +19,110 @@ public sealed class WebhooksCommandTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
+    public static TheoryData<string, string[]> InvalidSetArgumentsCases { get; } = new()
+    {
+        {
+            "MissingPrompt",
+            [
+                "webhooks", "set", "test-route",
+                "--secret", "test-secret"
+            ]
+        },
+        {
+            "MissingSecret",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt"
+            ]
+        },
+        {
+            "ConflictingCreateAndUpdateOnly",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--create-only",
+                "--update-only"
+            ]
+        },
+        {
+            "ConflictingEnabledFlags",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--enabled",
+                "--disabled"
+            ]
+        },
+        {
+            "ConflictingDeliveryFlags",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--delivery-required",
+                "--no-delivery-required"
+            ]
+        },
+        {
+            "InvalidVerificationKind",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--verification-kind", "invalid"
+            ]
+        },
+        {
+            "InvalidAudience",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--audience", "invalid"
+            ]
+        },
+        {
+            "MissingVerificationKindValue",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--verification-kind"
+            ]
+        },
+        {
+            "MissingNotificationChannelValue",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret", "test-secret",
+                "--notification-channel"
+            ]
+        }
+    };
+
+    public static TheoryData<string, string[]> MissingFlagValueCases { get; } = new()
+    {
+        {
+            "MissingPromptValue",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt",
+                "--secret", "test-secret"
+            ]
+        },
+        {
+            "MissingSecretFlagValue",
+            [
+                "webhooks", "set", "test-route",
+                "--prompt", "Test prompt",
+                "--secret"
+            ]
+        }
+    };
+
     public WebhooksCommandTests()
     {
         _paths = new NetclawPaths(_dir.Path);
@@ -183,26 +287,13 @@ public sealed class WebhooksCommandTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_paths.WebhooksDirectory, "github-issues.json")));
     }
 
-    [Fact]
-    public async Task Set_MissingPrompt_ReturnsOne()
+    [Theory]
+    [MemberData(nameof(InvalidSetArgumentsCases))]
+    public async Task Set_InvalidArguments_ReturnsOne(string caseName, string[] args)
     {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--secret", "test-secret"
-        ], _paths);
+        var result = await WebhooksCommand.RunAsync(args, _paths);
 
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_MissingSecret_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt"
-        ], _paths);
-
-        Assert.Equal(1, result);
+        Assert.True(result == 1, $"expected exit code 1 for case: {caseName}");
     }
 
     [Fact]
@@ -248,74 +339,6 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_ConflictingCreateAndUpdateOnly_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--create-only",
-            "--update-only"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_ConflictingEnabledFlags_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--enabled",
-            "--disabled"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_ConflictingDeliveryFlags_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--delivery-required",
-            "--no-delivery-required"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_InvalidVerificationKind_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--verification-kind", "invalid"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_InvalidAudience_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--audience", "invalid"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
     public async Task Set_InvalidRouteName_ReturnsOne()
     {
         var result = await WebhooksCommand.RunAsync([
@@ -328,56 +351,14 @@ public sealed class WebhooksCommandTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_paths.ConfigDirectory, "secrets.json")));
     }
 
-    [Fact]
-    public async Task Set_MissingPromptValue_ReturnsOne()
+    [Theory]
+    [MemberData(nameof(MissingFlagValueCases))]
+    public async Task Set_MissingFlagValue_ReturnsOneWithoutPersisting(string caseName, string[] args)
     {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt",
-            "--secret", "test-secret"
-        ], _paths);
+        var result = await WebhooksCommand.RunAsync(args, _paths);
 
-        Assert.Equal(1, result);
+        Assert.True(result == 1, $"expected exit code 1 for case: {caseName}");
         Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "test-route.json")));
-    }
-
-    [Fact]
-    public async Task Set_MissingSecretFlagValue_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret"
-        ], _paths);
-
-        Assert.Equal(1, result);
-        Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "test-route.json")));
-    }
-
-    [Fact]
-    public async Task Set_MissingVerificationKindValue_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--verification-kind"
-        ], _paths);
-
-        Assert.Equal(1, result);
-    }
-
-    [Fact]
-    public async Task Set_MissingNotificationChannelValue_ReturnsOne()
-    {
-        var result = await WebhooksCommand.RunAsync([
-            "webhooks", "set", "test-route",
-            "--prompt", "Test prompt",
-            "--secret", "test-secret",
-            "--notification-channel"
-        ], _paths);
-
-        Assert.Equal(1, result);
     }
 
     [Fact]

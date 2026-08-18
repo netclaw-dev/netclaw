@@ -22,53 +22,48 @@ public sealed class RetryingChatClientTests
         MaxDelay = TimeSpan.FromMilliseconds(10)
     };
 
-    [Fact]
-    public async Task RetriesOn429_ThenSucceeds()
+    public static TheoryData<string, Func<Exception>, int, int> RetryableTransientFailureCases { get; } = new()
     {
-        var attempts = 0;
-        var fake = new FakeChatClient((_,_,_) =>
         {
-            attempts++;
-            if (attempts < 3)
-                throw new HttpRequestException("rate limited", null, HttpStatusCode.TooManyRequests);
-            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
-        });
-
-        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("ok", response.Messages[0].Text);
-        Assert.Equal(3, attempts);
-    }
-
-    [Fact]
-    public async Task RetriesOn500_ThenSucceeds()
-    {
-        var attempts = 0;
-        var fake = new FakeChatClient((_,_,_) =>
+            "429",
+            () => new HttpRequestException("rate limited", null, HttpStatusCode.TooManyRequests),
+            2,
+            3
+        },
         {
-            attempts++;
-            if (attempts < 2)
-                throw new HttpRequestException("server error", null, HttpStatusCode.InternalServerError);
-            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
-        });
+            "500",
+            () => new HttpRequestException("server error", null, HttpStatusCode.InternalServerError),
+            1,
+            2
+        },
+        {
+            "StatuslessHttpRequestException",
+            () => new HttpRequestException("connection reset"),
+            1,
+            2
+        },
+        {
+            "TaskCanceledTimeout",
+            () => new TaskCanceledException("request timed out"),
+            1,
+            2
+        }
+    };
 
-        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("ok", response.Messages[0].Text);
-        Assert.Equal(2, attempts);
-    }
-
-    [Fact]
-    public async Task RetriesOnStatuslessHttpRequestException_ThenSucceeds()
+    [Theory]
+    [MemberData(nameof(RetryableTransientFailureCases))]
+    public async Task RetriesOnTransientFailure_ThenSucceeds(
+        string name,
+        Func<Exception> makeException,
+        int failuresBeforeSuccess,
+        int expectedAttempts)
     {
         var attempts = 0;
         var fake = new FakeChatClient((_, _, _) =>
         {
             attempts++;
-            if (attempts < 2)
-                throw new HttpRequestException("connection reset");
+            if (attempts <= failuresBeforeSuccess)
+                throw makeException();
             return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
         });
 
@@ -76,26 +71,7 @@ public sealed class RetryingChatClientTests
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response.Messages[0].Text);
-        Assert.Equal(2, attempts);
-    }
-
-    [Fact]
-    public async Task RetriesOnTaskCanceledTimeout_ThenSucceeds()
-    {
-        var attempts = 0;
-        var fake = new FakeChatClient((_, _, _) =>
-        {
-            attempts++;
-            if (attempts < 2)
-                throw new TaskCanceledException("request timed out");
-            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
-        });
-
-        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("ok", response.Messages[0].Text);
-        Assert.Equal(2, attempts);
+        Assert.True(attempts == expectedAttempts, $"case {name}: expected {expectedAttempts} attempts, got {attempts}");
     }
 
     [Fact]

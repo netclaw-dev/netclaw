@@ -2016,60 +2016,19 @@ public class DispatchingToolExecutorTests
             row => Assert.Equal(ShellCoverageKind.Session, row.Coverage));
     }
 
-    [Fact]
-    public async Task Malformed_actor_batch_applies_no_partial_evidence()
-    {
-        var approvalService = new FixedShellApprovalService(request =>
+    // The match factories cannot travel through the theory signature:
+    // ShellApprovalMatchRequest/ShellApprovalMatchResult are internal, so a
+    // public theory method taking a Func over them fails CS0051. Rows carry
+    // only the case slug; the theory body resolves the factory from here.
+    private static readonly Dictionary<string, Func<ShellApprovalMatchRequest, ShellApprovalMatchResult>>
+        UnstableActorBatchFactories = new()
         {
-            var first = request.Candidates[0];
-            var second = request.Candidates[1];
-            var matches = new[]
+            ["trace-preserved-after-fault"] = request =>
             {
-                new ShellGrantCandidateMatch(
-                    first.CandidateId,
-                    new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
-                    ShellCoverageKind.Session,
-                    NearMisses: []),
-                new ShellGrantCandidateMatch(
-                    second.CandidateId,
-                    new ToolApprovalMatch("unrelated", "session", "this chat"),
-                    ShellCoverageKind.Session,
-                    NearMisses: [])
-            };
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
-        });
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            "call-trace-preserved-after-fault",
-            ShellTool.ToolName,
-            ToolInput.Create("Command", "git status && git push"));
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext("signalr/trace-preserved-after-fault"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-        var row = Assert.Single(decision.ShellPolicyTrace.Rows);
-        Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
-        Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
-        Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
-    }
-
-    [Fact]
-    public async Task Changing_actor_batch_applies_no_partial_evidence()
-    {
-        var approvalService = new FixedShellApprovalService(request =>
-        {
-            var first = request.Candidates[0];
-            var second = request.Candidates[1];
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                new ShrinkingCandidateMatchList(
-                [
+                var first = request.Candidates[0];
+                var second = request.Candidates[1];
+                var matches = new[]
+                {
                     new ShellGrantCandidateMatch(
                         first.CandidateId,
                         new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
@@ -2080,17 +2039,50 @@ public class DispatchingToolExecutorTests
                         new ToolApprovalMatch("unrelated", "session", "this chat"),
                         ShellCoverageKind.Session,
                         NearMisses: [])
-                ]));
-        });
+                };
+                return new ShellApprovalMatchResult(
+                    new PersistentGrantStoreStatus.Ready(),
+                    Array.AsReadOnly(matches));
+            },
+            ["changing-actor-batch"] = request =>
+            {
+                var first = request.Candidates[0];
+                var second = request.Candidates[1];
+                return new ShellApprovalMatchResult(
+                    new PersistentGrantStoreStatus.Ready(),
+                    new ShrinkingCandidateMatchList(
+                    [
+                        new ShellGrantCandidateMatch(
+                            first.CandidateId,
+                            new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
+                            ShellCoverageKind.Session,
+                            NearMisses: []),
+                        new ShellGrantCandidateMatch(
+                            second.CandidateId,
+                            new ToolApprovalMatch("unrelated", "session", "this chat"),
+                            ShellCoverageKind.Session,
+                            NearMisses: [])
+                    ]));
+            },
+        };
+
+    public static IEnumerable<object[]> UnstableActorBatchCases() =>
+        UnstableActorBatchFactories.Keys.Select(static slug => new object[] { slug });
+
+    [Theory]
+    [MemberData(nameof(UnstableActorBatchCases))]
+    public async Task Unstable_actor_batch_applies_no_partial_evidence(string caseSlug)
+    {
+        var approvalService = new FixedShellApprovalService(UnstableActorBatchFactories[caseSlug]);
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
-            "call-changing-actor-batch",
+            $"call-{caseSlug}",
             ShellTool.ToolName,
             ToolInput.Create("Command", "git status && git push"));
 
         var decision = await executor.EvaluateAuthorizationAsync(
             call,
-            CreateInteractivePersonalContext("signalr/changing-actor-batch"),
+            CreateInteractivePersonalContext($"signalr/{caseSlug}"),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
@@ -2433,63 +2425,74 @@ public class DispatchingToolExecutorTests
             log["AuthorizationExplanation"]);
     }
 
-    [Fact]
-    public async Task File_read_is_denied_outside_session_directory_in_public_context()
+    public static IEnumerable<object[]> FileToolDeniedOutsideSessionDirectoryCases()
     {
-        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-public-read-{Guid.NewGuid():N}.txt");
-        await File.WriteAllTextAsync(filePath, "secret", TestContext.Current.CancellationToken);
-
-        try
-        {
-            var toolCall = CreateToolCall(
-                "call-file-read-deny", "file_read",
-                ToolInput.Create("Path", filePath));
-
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(sessionDir);
-
-            var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Public,
-                Boundary = TrustBoundary.Public,
-                ChannelType = "slack"
-            });
-
-            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
-            Assert.Contains("Public trust context", result);
-            Assert.Contains("session directory", result);
-        }
-        finally
-        {
-            File.Delete(filePath);
-        }
+        yield return
+        [
+            "file_read",
+            (Func<string, IDictionary<string, object?>>)(filePath => ToolInput.Create("Path", filePath)),
+            TrustAudience.Public,
+            TrustBoundary.Public,
+            new[] { "Public trust context", "session directory" },
+            /* preWriteFile */ true,
+            /* assertFileMissingAfter */ false
+        ];
+        yield return
+        [
+            "file_write",
+            (Func<string, IDictionary<string, object?>>)(filePath =>
+                ToolInput.Create("Path", filePath, "Content", "blocked")),
+            TrustAudience.Team,
+            TrustBoundary.Team,
+            new[] { "Team trust context", "session directory" },
+            /* preWriteFile */ false,
+            /* assertFileMissingAfter */ true
+        ];
     }
 
-    [Fact]
-    public async Task File_write_is_denied_outside_session_directory_in_team_context()
+    [Theory]
+    [MemberData(nameof(FileToolDeniedOutsideSessionDirectoryCases))]
+    public async Task File_tool_is_denied_outside_session_directory(
+        string toolName,
+        Func<string, IDictionary<string, object?>> buildArgs,
+        TrustAudience audience,
+        TrustBoundary boundary,
+        string[] expectedPhrases,
+        bool preWriteFile,
+        bool assertFileMissingAfter)
     {
-        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-team-write-{Guid.NewGuid():N}.txt");
+        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-{toolName}-outside-{Guid.NewGuid():N}.txt");
+        if (preWriteFile)
+        {
+            await File.WriteAllTextAsync(filePath, "secret", TestContext.Current.CancellationToken);
+        }
 
         try
         {
             var toolCall = CreateToolCall(
-                "call-file-write-deny", "file_write",
-                ToolInput.Create("Path", filePath, "Content", "blocked"));
+                $"call-{toolName}-deny", toolName,
+                buildArgs(filePath));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-team-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-{toolName}-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
             {
-                Audience = TrustAudience.Team,
-                Boundary = TrustBoundary.Team,
+                Audience = audience,
+                Boundary = boundary,
                 ChannelType = "slack"
             });
 
             var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
-            Assert.Contains("Team trust context", result);
-            Assert.Contains("session directory", result);
-            Assert.False(File.Exists(filePath));
+            foreach (var phrase in expectedPhrases)
+            {
+                Assert.Contains(phrase, result);
+            }
+
+            if (assertFileMissingAfter)
+            {
+                Assert.False(File.Exists(filePath));
+            }
         }
         finally
         {
@@ -2542,44 +2545,34 @@ public class DispatchingToolExecutorTests
         Assert.Equal("Unknown tool: unknown_tool", result);
     }
 
-    [Fact]
-    public void Team_profile_exposes_file_tools_and_hides_shell_and_webhooks()
+    public static IEnumerable<object[]> AudienceToolExposureCases()
     {
-        // Default Team profile (no explicit AllowedTools override).
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-
-        var policy = new ToolAccessPolicy(
-            config,
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy(),
-            new ToolPathPolicy([]));
-
-        var registry = new ToolRegistry();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-webhook-tools-{Guid.NewGuid():N}"));
-        paths.EnsureDirectoriesExist();
-        registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
-
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_write")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_edit")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("set_working_directory")!, TrustAudience.Team));
-        Assert.True(policy.IsToolExposed(registry.GetByName("web_fetch")!, TrustAudience.Team));
-        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, TrustAudience.Team));
-        Assert.False(policy.IsToolExposed(registry.GetByName("set_webhook")!, TrustAudience.Team));
-        Assert.False(policy.IsToolExposed(registry.GetByName("list_webhooks")!, TrustAudience.Team));
-        Assert.False(policy.IsToolExposed(registry.GetByName("delete_webhook")!, TrustAudience.Team));
+        yield return
+        [
+            TrustAudience.Team,
+            new[]
+            {
+                "file_read", "file_list", "file_write", "file_edit",
+                "attach_file", "set_working_directory", "web_fetch"
+            },
+            new[] { "shell_execute", "set_webhook", "list_webhooks", "delete_webhook" }
+        ];
+        yield return
+        [
+            TrustAudience.Public,
+            new[] { "file_read", "file_list", "attach_file" },
+            new[] { "file_write", "file_edit", "shell_execute", "set_working_directory", "web_fetch" }
+        ];
     }
 
-    [Fact]
-    public void Public_profile_exposes_read_tools_and_hides_mutation_tools()
+    [Theory]
+    [MemberData(nameof(AudienceToolExposureCases))]
+    public void Profile_exposes_configured_tools_and_hides_the_rest(
+        TrustAudience audience,
+        string[] exposedToolNames,
+        string[] hiddenToolNames)
     {
-        // Default Public profile — least-trusted: read, enumerate, attach only.
+        // Default profile (no explicit AllowedTools override).
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
 
         var policy = new ToolAccessPolicy(
@@ -2593,18 +2586,19 @@ public class DispatchingToolExecutorTests
             new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-public-tools-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-{audience}-tools-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
 
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, TrustAudience.Public));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, TrustAudience.Public));
-        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, TrustAudience.Public));
-        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, TrustAudience.Public));
-        Assert.False(policy.IsToolExposed(registry.GetByName("file_edit")!, TrustAudience.Public));
-        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, TrustAudience.Public));
-        Assert.False(policy.IsToolExposed(registry.GetByName("set_working_directory")!, TrustAudience.Public));
-        Assert.False(policy.IsToolExposed(registry.GetByName("web_fetch")!, TrustAudience.Public));
+        foreach (var toolName in exposedToolNames)
+        {
+            Assert.True(policy.IsToolExposed(registry.GetByName(toolName)!, audience));
+        }
+
+        foreach (var toolName in hiddenToolNames)
+        {
+            Assert.False(policy.IsToolExposed(registry.GetByName(toolName)!, audience));
+        }
     }
 
     [Fact]
@@ -2645,19 +2639,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task One_time_approval_allows_immediate_retry_only()
     {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-
-        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
-        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
 
         var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
         try
@@ -2666,15 +2648,7 @@ public class DispatchingToolExecutorTests
             var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
-                new ToolAccessPolicy(
-                    config,
-                    new EffectivePolicyDefaults(
-                        DeploymentPosture.Personal,
-                        TrustAudience.Personal,
-                        ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false),
-                    commandPolicy,
-                    pathPolicy),
+                policy,
                 approvalService);
 
             var toolCall = CreateToolCall(
@@ -2719,31 +2693,12 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_matching_shell_patterns()
     {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
 
-        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
-        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
-
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                commandPolicy,
-                pathPolicy));
+        // No approvalService is supplied: this deliberately exercises the
+        // DispatchingToolExecutor constructor's null default, not
+        // CreateApprovalGatedShellExecutor's UnexpectedApprovalService fallback.
+        var executor = new DispatchingToolExecutor(registry, policy);
 
         var toolCall = CreateToolCall(
             "call-approve-once-bypass",
@@ -2898,19 +2853,7 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task One_time_approval_uses_filtered_unapproved_patterns_on_retry()
     {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-
-        var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
-        var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
 
         var system = ActorSystem.Create($"tool-approval-filtered-once-{Guid.NewGuid():N}");
         try
@@ -2919,15 +2862,7 @@ public class DispatchingToolExecutorTests
             var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
             var executor = new DispatchingToolExecutor(
                 registry,
-                new ToolAccessPolicy(
-                    config,
-                    new EffectivePolicyDefaults(
-                        DeploymentPosture.Personal,
-                        TrustAudience.Personal,
-                        ShellExecutionMode.HostAllowed,
-                        UsedStrictFallback: false),
-                    commandPolicy,
-                    pathPolicy),
+                policy,
                 approvalService);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-filtered", null, new TestToolExecutionContextOptions
@@ -3586,6 +3521,30 @@ public class DispatchingToolExecutorTests
         IEnumerable<string>? deniedPaths = null,
         IShellTrustZonePolicy? shellTrustZonePolicy = null)
     {
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(
+            environment,
+            safeVerbs,
+            deniedPaths,
+            shellTrustZonePolicy);
+        return new DispatchingToolExecutor(
+            registry,
+            policy,
+            approvalService ?? new UnexpectedApprovalService(),
+            logger: logger);
+    }
+
+    // Shared by CreateApprovalGatedShellExecutor and the one-time-approval
+    // tests that construct DispatchingToolExecutor directly (those tests
+    // pass approvalService themselves, or intentionally omit it to exercise
+    // the constructor's null default — do not route them through
+    // CreateApprovalGatedShellExecutor, which substitutes an
+    // UnexpectedApprovalService for a null approvalService).
+    private static (ToolRegistry Registry, ToolAccessPolicy Policy) CreateApprovalGatedShellRegistryAndPolicy(
+        ShellExecutionEnvironment environment,
+        SafeVerbList? safeVerbs = null,
+        IEnumerable<string>? deniedPaths = null,
+        IShellTrustZonePolicy? shellTrustZonePolicy = null)
+    {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -3602,21 +3561,18 @@ public class DispatchingToolExecutorTests
             new NetclawPaths(),
             pathPolicy,
             commandPolicy);
-        return new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                commandPolicy,
-                pathPolicy,
-                shellTrustZonePolicy: shellTrustZonePolicy,
-                safeVerbs: safeVerbs),
-            approvalService ?? new UnexpectedApprovalService(),
-            logger: logger);
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy,
+            shellTrustZonePolicy: shellTrustZonePolicy,
+            safeVerbs: safeVerbs);
+        return (registry, policy);
     }
 
     private static FixedShellApprovalService GrantEveryShellCandidate()
