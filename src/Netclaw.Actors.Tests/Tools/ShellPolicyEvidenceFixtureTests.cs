@@ -146,7 +146,11 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
     {
         var invocation = CreateInvocation(catalog.FixtureDefaults, policyCase);
         var approvals = CreateApprovals(policyCase.Available);
-        var scope = policyCase.UsePhysicalHarnessScope
+        var environment = invocation.CreateEnvironment();
+        var materializeFileSystemFacts = policyCase.UsePhysicalHarnessScope
+                                         && ShellPathRules.UsesHostPathStyle(
+                                             environment.PathStyle);
+        var scope = materializeFileSystemFacts
             ? null
             : new ShellApprovalHarnessScope(
                 policyCase.ProjectDirectory,
@@ -163,9 +167,9 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             scope,
             policyCase.UseBundledSafeCatalog
                 ? null
-                : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()),
+                : CreateSafeVerbs(policyCase.Available, environment),
             policyCase.DeniedPaths);
-        ApplyFileSystemFacts(policyCase, harness);
+        ApplyFileSystemFacts(policyCase, harness, materializeFileSystemFacts);
 
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         TestContext.Current.TestOutputHelper?.WriteLine(
@@ -210,7 +214,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
     private static void ApplyFileSystemFacts(
         PolicyAdversarialCase policyCase,
-        ShellApprovalHarness harness)
+        ShellApprovalHarness harness,
+        bool materializeFileSystemFacts)
     {
         foreach (var fact in policyCase.FileSystemFacts ?? [])
         {
@@ -220,7 +225,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                     $"Unsupported fixture filesystem fact: {policyCase.Id}/{fact.Kind}.");
             }
 
-            harness.CreateProjectFileSymlink(fact.Path, fact.Target);
+            if (materializeFileSystemFacts)
+                harness.CreateProjectFileSymlink(fact.Path, fact.Target);
         }
     }
 
