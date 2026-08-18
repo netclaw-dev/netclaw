@@ -1992,7 +1992,8 @@ assert_approval_set_working_directory_positive() {
     stdout_json_tool_result_equals \
         'set_working_directory' "$set_call_id" "$PROJECT_SCOPE_EVAL_ROOT" || return 1
 
-    stdout_json_shell_results_accounted 1 \
+    stdout_json_shell_calls_keep_independent_operations_separate \
+        && stdout_json_shell_results_succeeded 1 \
         && jq -e '
             (.response | contains("project-scope-eval-marker-v1"))
             and (.response | contains("Project.csproj"))
@@ -2079,6 +2080,39 @@ stdout_json_shell_results_accounted() {
     done
 
     [[ "$successes" -ge "$minimum_successes" ]]
+}
+
+stdout_json_shell_results_succeeded() {
+    local minimum_successes="${1:-1}"
+    local call_id successes=0 headless_log
+    local -a call_ids
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    mapfile -t call_ids < <(jq -r '
+        .toolCalls[]?
+        | select(.toolName == "shell_execute")
+        | .callId // empty
+    ' "$STDOUT_FILE")
+
+    for call_id in "${call_ids[@]}"; do
+        grep -qaF \
+            "TOOL_RESULT: shell_execute call_id=$call_id result=Exit code: 0" \
+            "$headless_log" || return 1
+        successes=$((successes + 1))
+    done
+
+    [[ "$successes" -ge "$minimum_successes" ]]
+}
+
+stdout_json_shell_calls_keep_independent_operations_separate() {
+    jq -e '
+        all(.toolCalls[]? | select(.toolName == "shell_execute");
+            try (
+                (.argumentsJson | fromjson | .Command) as $command
+                | ($command | type) == "string"
+                  and ($command | length) > 0
+                  and (($command | test("(^|[^\\\\])(;|&&|\\|\\|)|[\\r\\n]")) | not)
+            ) catch false)
+    ' "$STDOUT_FILE" >/dev/null 2>&1
 }
 
 shell_calls_use_fresh_naturalistic_context() {
