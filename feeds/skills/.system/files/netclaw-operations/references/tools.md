@@ -100,13 +100,14 @@ The MCP server mode controls tool grants:
 
 - `All` does not use `McpServerToolGrants`.
 - A new tool inherits the server approval default in the `All` mode.
-- `Allowlist` exposes only the tools in `McpServerToolGrants`.
+- `Allowlist` applies `McpServerToolGrants` when the server has an entry.
+- An absent server entry adds no per-tool filter.
 - Within the approval policy, an exact tool override wins over the server default.
 
 Use `--revoke` to write a `Deny` override in the `All` mode.
 Use `--grant` to remove a `Deny` override or enable a tool above a `Deny` default.
 
-### Existing MCP servers
+### MCP servers in old configurations
 
 Servers added to `netclaw.json` before this behavior shipped stay untouched —
 their tool grants, `ApprovalPolicy.McpServerDefaults`, and `ToolOverrides`
