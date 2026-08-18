@@ -410,7 +410,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ToggleTool_AllPosture_UncheckPersistsDenyOverrideNotGrantAllowlist()
+    public void ToggleTool_AllMcpServersMode_UncheckPersistsDenyOverrideNotGrantAllowlist()
     {
         var vm = CreateVm();
         vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy", "delete" });
@@ -432,7 +432,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ToggleTool_AllPosture_ReCheckClearsDenyOverride()
+    public void ToggleTool_AllMcpServersMode_ReCheckClearsDenyOverride()
     {
         var vm = CreateVm();
         vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
@@ -453,7 +453,35 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ToggleTool_AllPosture_EnablesOverDefaultDeny()
+    public void ToggleTool_AllMcpServersMode_RespectsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__copy": "Deny" } }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        var overrides = personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/copy", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__copy", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_EnablesOverDefaultDeny()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         {
@@ -476,7 +504,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ToggleTool_AllowlistPosture_StillWritesGrantAllowlist()
+    public void ToggleTool_AllowlistMcpServersMode_StillWritesGrantAllowlist()
     {
         var vm = CreateVm();
         vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });

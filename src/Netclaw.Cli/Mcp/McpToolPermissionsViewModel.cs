@@ -291,8 +291,11 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
+            current = TryGetExactToolOverride(
+                ResolveProfile(SelectedAudience).ApprovalPolicy,
+                SelectedServer,
+                toolName.Value,
+                out var configMode)
                 ? configMode
                 : null;
         }
@@ -329,8 +332,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else if (approvalPolicy is not null)
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
+            if (TryGetExactToolOverride(approvalPolicy, SelectedServer, toolName.Value, out var configExact))
                 return (configExact, false);
         }
 
@@ -367,7 +369,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     }
 
     /// <summary>Checks whether the selected profile exposes all MCP servers.</summary>
-    private bool IsAllPostureForSelectedAudience()
+    private bool UsesAllMcpServersMode()
         => ResolveProfile(SelectedAudience).McpServersMode == ToolProfileMode.All;
 
     public bool IsToolGranted(ToolName toolName)
@@ -377,7 +379,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        if (IsAllPostureForSelectedAudience())
+        if (UsesAllMcpServersMode())
         {
             if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pendingAllAccess)
                 && !pendingAllAccess)
@@ -427,7 +429,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        if (IsAllPostureForSelectedAudience())
+        if (UsesAllMcpServersMode())
         {
             var enabledMode = GetServerDefault() == ToolApprovalMode.Deny
                 ? ToolApprovalMode.Approval
@@ -463,7 +465,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        if (IsAllPostureForSelectedAudience())
+        if (UsesAllMcpServersMode())
         {
             var overrideKey = (audienceName, SelectedServer, toolName.Value);
             if (GetEffectiveMode(toolName).Mode == ToolApprovalMode.Deny)
@@ -639,18 +641,38 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
             var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalSection, "ToolOverrides");
             var exactKey = $"{serverName}/{toolName}";
+            var aliasKey = $"{serverName}__{toolName}";
 
             if (mode is null)
             {
                 toolOverrides.Remove(exactKey);
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides.Remove(exactKey);
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
             else
             {
                 toolOverrides[exactKey] = mode.Value.ToString();
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
         }
+    }
+
+    private static bool TryGetExactToolOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
     }
 
     public void DiscardChanges()

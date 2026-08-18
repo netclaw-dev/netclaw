@@ -1259,7 +1259,7 @@ internal static class McpCommand
             {
                 if (targetAudience is not null)
                 {
-                    writer.WriteLine($"The {audienceName} audience uses All posture, which does not use tool grants.");
+                    writer.WriteLine($"The {audienceName} audience uses the All MCP server mode, which does not use tool grants.");
                     writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience {audienceName.ToLowerInvariant()}` to disable specific tools.");
                     return 1;
                 }
@@ -1343,7 +1343,8 @@ internal static class McpCommand
                 foreach (var tool in grantTools)
                 {
                     var key = $"{serverName.Value}/{tool}";
-                    if (profile.ApprovalPolicy?.ToolOverrides.TryGetValue(key, out var currentMode) == true
+                    var aliasKey = $"{serverName.Value}__{tool}";
+                    if (TryGetExactMcpOverride(profile.ApprovalPolicy, serverName.Value, tool, out var currentMode)
                         && currentMode != ToolApprovalMode.Deny)
                         continue;
 
@@ -1351,11 +1352,16 @@ internal static class McpCommand
                         toolOverrides[key] = ToolApprovalMode.Approval.ToString();
                     else
                         toolOverrides.Remove(key);
+
+                    toolOverrides.Remove(aliasKey);
                 }
 
             if (revokeTools is not null)
                 foreach (var tool in revokeTools)
+                {
                     toolOverrides[$"{serverName.Value}/{tool}"] = ToolApprovalMode.Deny.ToString();
+                    toolOverrides.Remove($"{serverName.Value}__{tool}");
+                }
 
             WriteConfigFile(paths.NetclawConfigPath, allConfig);
 
@@ -1436,6 +1442,21 @@ internal static class McpCommand
         return approvalPolicy.McpServerDefaults.TryGetValue(serverName, out var serverDefault)
             ? serverDefault
             : approvalPolicy.DefaultMode;
+    }
+
+    private static bool TryGetExactMcpOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
     }
 
     private static ToolConfig LoadToolConfig(NetclawPaths paths)

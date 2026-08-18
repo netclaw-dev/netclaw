@@ -664,7 +664,7 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Tools_Revoke_AllPosture_WritesDenyOverrideNotGrantAllowlist()
+    public async Task Tools_Revoke_AllMcpServersMode_WritesDenyOverrideNotGrantAllowlist()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
@@ -685,7 +685,7 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Tools_Grant_AllPosture_ClearsDenyOverride()
+    public async Task Tools_Grant_AllMcpServersMode_ClearsDenyOverride()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         {
@@ -710,7 +710,33 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Tools_Grant_AllPosture_PreservesApprovalOverride()
+    public async Task Tools_Grant_AllMcpServersMode_ClearsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__delete": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/delete", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__delete", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_PreservesApprovalOverride()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         {
@@ -735,7 +761,7 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Tools_Snapshot_AllPosture_IsRejected()
+    public async Task Tools_Snapshot_AllMcpServersMode_IsRejected()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
@@ -747,11 +773,11 @@ public sealed class McpCommandTests : IDisposable
             _paths, daemonApi, _output);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("All posture", _output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("All MCP server mode", _output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Tools_Grant_AllPosture_OverServerDefaultDeny_WritesApprovalOverride()
+    public async Task Tools_Grant_AllMcpServersMode_OverServerDefaultDeny_WritesApprovalOverride()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
         {

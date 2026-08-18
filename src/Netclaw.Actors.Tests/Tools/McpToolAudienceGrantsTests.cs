@@ -380,7 +380,7 @@ public sealed class McpToolAudienceGrantsTests
     [Theory]
     [InlineData(ToolApprovalMode.Auto, false)]
     [InlineData(ToolApprovalMode.Approval, true)]
-    public void AllPosture_NewTool_InheritsServerDefault(
+    public void AllMcpServersMode_NewTool_InheritsServerDefault(
         ToolApprovalMode serverDefault,
         bool needsApproval)
     {
