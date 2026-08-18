@@ -291,8 +291,11 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
+            current = TryGetExactToolOverride(
+                ResolveProfile(SelectedAudience).ApprovalPolicy,
+                SelectedServer,
+                toolName.Value,
+                out var configMode)
                 ? configMode
                 : null;
         }
@@ -329,8 +332,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else if (approvalPolicy is not null)
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
+            if (TryGetExactToolOverride(approvalPolicy, SelectedServer, toolName.Value, out var configExact))
                 return (configExact, false);
         }
 
@@ -363,8 +365,12 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configMode))
             return configMode;
 
-        return ToolApprovalMode.Auto;
+        return approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto;
     }
+
+    /// <summary>Checks whether the selected profile exposes all MCP servers.</summary>
+    private bool UsesAllMcpServersMode()
+        => ResolveProfile(SelectedAudience).McpServersMode == ToolProfileMode.All;
 
     public bool IsToolGranted(ToolName toolName)
     {
@@ -372,6 +378,15 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return false;
 
         var audienceName = AudienceName(SelectedAudience);
+
+        if (UsesAllMcpServersMode())
+        {
+            if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pendingAllAccess)
+                && !pendingAllAccess)
+                return false;
+
+            return GetEffectiveMode(toolName).Mode != ToolApprovalMode.Deny;
+        }
 
         // Check pending grants first
         if (_pendingGrants.TryGetValue(SelectedServer, out var serverGrants)
@@ -414,6 +429,22 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
+        if (UsesAllMcpServersMode())
+        {
+            var enabledMode = GetServerDefault() == ToolApprovalMode.Deny
+                ? ToolApprovalMode.Approval
+                : (ToolApprovalMode?)null;
+
+            foreach (var tool in DiscoveredTools)
+            {
+                _pendingToolOverrides[(audienceName, SelectedServer, tool)] =
+                    anyGranted ? ToolApprovalMode.Deny : enabledMode;
+            }
+
+            NotifyStateChanged();
+            return;
+        }
+
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
             serverGrants = [];
@@ -433,6 +464,24 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return;
 
         var audienceName = AudienceName(SelectedAudience);
+
+        if (UsesAllMcpServersMode())
+        {
+            var overrideKey = (audienceName, SelectedServer, toolName.Value);
+            if (GetEffectiveMode(toolName).Mode == ToolApprovalMode.Deny)
+            {
+                _pendingToolOverrides[overrideKey] = GetServerDefault() == ToolApprovalMode.Deny
+                    ? ToolApprovalMode.Approval
+                    : null;
+            }
+            else
+            {
+                _pendingToolOverrides[overrideKey] = ToolApprovalMode.Deny;
+            }
+
+            NotifyStateChanged();
+            return;
+        }
 
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
@@ -592,18 +641,38 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
             var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalSection, "ToolOverrides");
             var exactKey = $"{serverName}/{toolName}";
+            var aliasKey = $"{serverName}__{toolName}";
 
             if (mode is null)
             {
                 toolOverrides.Remove(exactKey);
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides.Remove(exactKey);
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
             else
             {
                 toolOverrides[exactKey] = mode.Value.ToString();
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
         }
+    }
+
+    private static bool TryGetExactToolOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
     }
 
     public void DiscardChanges()

@@ -1960,7 +1960,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         foreach (var profile in profiles.GetAllProfiles())
         {
-            if (profile.McpServerToolGrants is not { } grants
+            if (profile.McpServersMode == ToolProfileMode.All
+                || profile.McpServerToolGrants is not { } grants
                 || !grants.TryGetValue(serverName.Value, out var tools))
                 continue;
 

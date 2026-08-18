@@ -1209,6 +1209,15 @@ internal static class McpCommand
 
     private static string FormatGrantStatus(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var mode = profile.ApprovalPolicy?.GetEffectiveMode($"{serverName.Value}/{toolName.Value}")
+                ?? ToolApprovalMode.Auto;
+            return mode == ToolApprovalMode.Deny
+                ? "-        "
+                : "✱        ";
+        }
+
         if (profile.McpServerToolGrants is null)
             return "\u2731        "; // ✱ = all (no grants configured)
 
@@ -1246,8 +1255,19 @@ internal static class McpCommand
                 _ => profiles.Personal
             };
 
-            var serverAllowed = profile.McpServersMode == ToolProfileMode.All
-                || profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
+            if (profile.McpServersMode == ToolProfileMode.All)
+            {
+                if (targetAudience is not null)
+                {
+                    writer.WriteLine($"The {audienceName} audience uses the All MCP server mode, which does not use tool grants.");
+                    writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience {audienceName.ToLowerInvariant()}` to disable specific tools.");
+                    return 1;
+                }
+
+                continue;
+            }
+
+            var serverAllowed = profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
 
             if (!serverAllowed)
             {
@@ -1273,13 +1293,13 @@ internal static class McpCommand
 
         if (updated == 0)
         {
-            writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
+            writer.WriteLine($"No Allowlist audience permits server '{serverName.Value}'. Nothing to snapshot.");
             return 1;
         }
 
         WriteConfigFile(paths.NetclawConfigPath, config);
         writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName.Value}' written to McpServerToolGrants for {updated} audience profile(s).");
-        writer.WriteLine("New tools added by the server will not be exposed until you update the grants.");
+        writer.WriteLine("New tools stay hidden from these Allowlist audiences until you update the grants.");
         return 0;
     }
 
@@ -1308,7 +1328,55 @@ internal static class McpCommand
             return 1;
         }
 
-        // Build the updated tool set
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var (allConfig, _) = LoadConfigFiles(paths);
+            var allToolsSection = GetOrCreateSection(allConfig, "Tools");
+            var allProfilesSection = GetOrCreateSection(allToolsSection, "AudienceProfiles");
+            var allAudienceSection = GetOrCreateSection(allProfilesSection, audienceName);
+            var approvalPolicy = GetOrCreateSection(allAudienceSection, "ApprovalPolicy");
+            var toolOverrides = GetOrCreateSection(approvalPolicy, "ToolOverrides");
+
+            var serverDefaultIsDeny = InheritedServerMode(profile, serverName.Value) == ToolApprovalMode.Deny;
+
+            if (grantTools is not null)
+                foreach (var tool in grantTools)
+                {
+                    var key = $"{serverName.Value}/{tool}";
+                    var aliasKey = $"{serverName.Value}__{tool}";
+                    if (TryGetExactMcpOverride(profile.ApprovalPolicy, serverName.Value, tool, out var currentMode)
+                        && currentMode != ToolApprovalMode.Deny)
+                        continue;
+
+                    if (serverDefaultIsDeny)
+                        toolOverrides[key] = ToolApprovalMode.Approval.ToString();
+                    else
+                        toolOverrides.Remove(key);
+
+                    toolOverrides.Remove(aliasKey);
+                }
+
+            if (revokeTools is not null)
+                foreach (var tool in revokeTools)
+                {
+                    toolOverrides[$"{serverName.Value}/{tool}"] = ToolApprovalMode.Deny.ToString();
+                    toolOverrides.Remove($"{serverName.Value}__{tool}");
+                }
+
+            WriteConfigFile(paths.NetclawConfigPath, allConfig);
+
+            var allChanges = new List<string>();
+            if (grantTools is { Count: > 0 })
+                allChanges.Add($"enabled {grantTools.Count}");
+            if (revokeTools is { Count: > 0 })
+                allChanges.Add($"disabled {revokeTools.Count}");
+
+            writer.WriteLine(
+                $"Updated {audienceName} profile for '{serverName.Value}': {string.Join(", ", allChanges)} tool(s). " +
+                "Disabled tools carry a Deny approval override; every other tool inherits the server default.");
+            return 0;
+        }
+
         HashSet<string> currentTools;
         if (profile.McpServerToolGrants is { } existing
             && existing.TryGetValue(serverName.Value, out var currentList))
@@ -1365,6 +1433,32 @@ internal static class McpCommand
         };
     }
 
+    private static ToolApprovalMode InheritedServerMode(ToolAudienceProfile profile, string serverName)
+    {
+        var approvalPolicy = profile.ApprovalPolicy;
+        if (approvalPolicy is null)
+            return ToolApprovalMode.Auto;
+
+        return approvalPolicy.McpServerDefaults.TryGetValue(serverName, out var serverDefault)
+            ? serverDefault
+            : approvalPolicy.DefaultMode;
+    }
+
+    private static bool TryGetExactMcpOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
+    }
+
     private static ToolConfig LoadToolConfig(NetclawPaths paths)
     {
         if (!File.Exists(paths.NetclawConfigPath))
@@ -1405,7 +1499,7 @@ internal static class McpCommand
         writer.WriteLine("Flags for 'add':");
         writer.WriteLine("  --grant-all  CI escape hatch. Skip the empty-grants writes and leave tool");
         writer.WriteLine("               grants null (legacy \"all pass\" behavior). Approval defaults");
-        writer.WriteLine("               (Personal=Approval, Team=Approval, Public=Deny) are still written.");
+        writer.WriteLine("               (Personal=Auto, Team=Approval, Public=Deny) are still written.");
         writer.WriteLine("  --auth       Start the OAuth flow immediately after adding (HTTP/SSE only).");
         writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
         writer.WriteLine("               dynamic client registration.");

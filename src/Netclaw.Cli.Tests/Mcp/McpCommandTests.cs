@@ -663,6 +663,155 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("HTTP 502 Bad Gateway", message);
     }
 
+    [Fact]
+    public async Task Tools_Revoke_AllMcpServersMode_WritesDenyOverrideNotGrantAllowlist()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_ClearsDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox/delete": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/delete", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_ClearsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__delete": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/delete", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__delete", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_PreservesApprovalOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox/copy": "Approval" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
+    }
+
+    [Fact]
+    public async Task Tools_Snapshot_AllMcpServersMode_IsRejected()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--snapshot", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("All MCP server mode", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_OverServerDefaultDeny_WritesApprovalOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "McpServerDefaults": { "dropbox": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
+    }
+
+    private static DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
+    {
+        var body = JsonSerializer.Serialize(tools);
+        return CreateDaemonApi(request => request.RequestUri!.AbsolutePath == $"/api/mcp/tools/{serverName}"
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            }
+            : new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));

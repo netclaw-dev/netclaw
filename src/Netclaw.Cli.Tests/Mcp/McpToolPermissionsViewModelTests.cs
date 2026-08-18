@@ -409,6 +409,121 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         Assert.Equal("Allowlist", GetAudienceProfile(doc, "Personal").GetProperty("McpServersMode").GetString());
     }
 
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_UncheckPersistsDenyOverrideNotGrantAllowlist()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy", "delete" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.True(vm.IsToolGranted(new ToolName("delete")));
+
+        vm.ToggleTool(new ToolName("delete"));
+        Assert.False(vm.IsToolGranted(new ToolName("delete")));
+        Assert.Equal(ToolApprovalMode.Deny, vm.GetEffectiveMode(new ToolName("delete")).Mode);
+
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_ReCheckClearsDenyOverride()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        Assert.False(
+            personal.TryGetProperty("ApprovalPolicy", out var ap)
+            && ap.TryGetProperty("ToolOverrides", out var overrides)
+            && overrides.TryGetProperty("dropbox/copy", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_RespectsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__copy": "Deny" } }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        var overrides = personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/copy", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__copy", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_EnablesOverDefaultDeny()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "DefaultMode": "Deny" }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.Equal(ToolApprovalMode.Approval, vm.GetEffectiveMode(new ToolName("copy")).Mode);
+    }
+
+    [Fact]
+    public void ToggleTool_AllowlistMcpServersMode_StillWritesGrantAllowlist()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Team);
+
+        vm.ToggleServerAccess();
+        vm.ToggleTool(new ToolName("search"));
+        Assert.True(vm.IsToolGranted(new ToolName("create-pages")));
+        Assert.False(vm.IsToolGranted(new ToolName("search")));
+
+        Assert.True(vm.Save());
+
+        var team = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Team");
+        var grants = team.GetProperty("McpServerToolGrants").GetProperty("notion")
+            .EnumerateArray().Select(static e => e.GetString()).ToList();
+        Assert.Contains("create-pages", grants);
+        Assert.DoesNotContain("search", grants);
+    }
+
     private static void CycleServerDefault(McpToolPermissionsViewModel vm, bool reverse)
     {
         if (reverse)

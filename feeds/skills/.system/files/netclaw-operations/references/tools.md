@@ -56,15 +56,14 @@ additionally cannot discover or load skills, subagents, memory tools,
 scheduling tools, or the `web_search` / `web_fetch` tools regardless of
 feature flags.
 
-### Adding MCP servers (fail-closed by default)
+### Add MCP servers
 
-`netclaw mcp add` writes new MCP servers with **zero granted tools** and
-per-audience approval defaults so freshly added servers are never silently
-exposed:
+`netclaw mcp add` writes an approval default for each audience.
+The command writes closed tool grants for the Team and Public audiences.
 
 | Audience | Grants | Approval default |
 |----------|--------|------------------|
-| Personal | `[]` (empty list — all tools denied until the operator opts in) | `Approval` |
+| Personal | Not used (`All` MCP server mode) | `Auto` |
 | Team     | `[]` | `Approval` |
 | Public   | `[]` | `Deny` |
 
@@ -74,14 +73,14 @@ per-server approval mode. Bare `netclaw mcp tools` is a read-only CLI view
 of the same state; both commands surface a discoverability hint toward the
 TUI.
 
-Escape hatch: `netclaw mcp add --grant-all` keeps the legacy "null grants
-= all tools pass" behavior for CI. Even with `--grant-all`, the per-audience
-approval defaults (Personal/Team=Approval, Public=Deny) are still written —
-you cannot turn off the approval prompts at `mcp add` time.
+The `--grant-all` option skips the closed grants for Team and Public.
+The option does not change the approval defaults.
 
 Inside the TUI (`netclaw mcp permissions`):
 
-- `Enter` toggles the highlighted tool's grant
+- `Enter` toggles the highlighted tool. In the `All` MCP server mode, the toggle sets
+  `Deny` (disabled) or clears it (inherit the server default). In `Allowlist`
+  mode, it adds or removes the tool from the grant list.
 - `A` toggles all tools on/off for the current audience
 - `E` enables/disables the whole server for the current audience
 - `M` cycles the **server default** approval mode (`Auto → Approval → Deny → Auto`)
@@ -93,18 +92,29 @@ Approval-mode resolution precedence (for MCP tools):
 
 1. Exact `ToolOverrides["{server}/{tool}"]` override
 2. `McpServerDefaults[{server}]` default
-3. Fail-closed fallback (Personal audience, shell/file-edit matcher family)
-4. Audience `DefaultMode`
+3. Audience `DefaultMode`
 
-Newly discovered tools on an existing server automatically inherit the
-server default; you do not need to re-run `permissions` after the server
-learns a new tool.
+A tool with an effective `Deny` mode does not appear in the model tool list.
 
-### Migrating existing MCP servers
+The MCP server mode controls tool grants:
+
+- `All` does not use `McpServerToolGrants`.
+- A new tool inherits the server approval default in the `All` mode.
+- `Allowlist` applies `McpServerToolGrants` when the server has an entry.
+- An absent server entry adds no per-tool filter.
+- Within the approval policy, an exact tool override wins over the server default.
+
+Use `--revoke` to write a `Deny` override in the `All` mode.
+Use `--grant` to remove a `Deny` override or enable a tool above a `Deny` default.
+
+### MCP servers in old configurations
 
 Servers added to `netclaw.json` before this behavior shipped stay untouched —
 their tool grants, `ApprovalPolicy.McpServerDefaults`, and `ToolOverrides`
 entries are not rewritten during an upgrade.
+
+An existing grant snapshot has no effect when its audience uses the `All` mode.
+The update does not remove or replace any exact tool override.
 
 `netclaw doctor` will emit a warning for each enabled MCP server that
 Personal can reach (`McpServersMode = All`) but has no

@@ -59,7 +59,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         var skill = File.ReadAllText(Path.Combine(skillDirectory, "SKILL.md"));
         var projects = File.ReadAllText(Path.Combine(skillDirectory, "references", "projects.md"));
 
-        Assert.Contains("version: \"2.56.0\"", skill, StringComparison.Ordinal);
+        Assert.Contains("version: \"2.58.0\"", skill, StringComparison.Ordinal);
         Assert.Contains("use `file_read` for a known local file read", skill, StringComparison.Ordinal);
         Assert.Contains("use `web_search` for external discovery", skill, StringComparison.Ordinal);
         Assert.Contains("use `shell_execute` for local search", skill, StringComparison.Ordinal);

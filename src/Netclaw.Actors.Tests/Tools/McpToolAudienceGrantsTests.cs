@@ -377,7 +377,78 @@ public sealed class McpToolAudienceGrantsTests
         Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
     }
 
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto, false)]
+    [InlineData(ToolApprovalMode.Approval, true)]
+    public void AllMcpServersMode_NewTool_InheritsServerDefault(
+        ToolApprovalMode serverDefault,
+        bool needsApproval)
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy"]
+        };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox"] = serverDefault
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var newTool = CreateMcpTool("dropbox", "get_upload_url");
+
+        Assert.True(policy.IsToolExposed(newTool, PersonalContext()));
+        Assert.Equal(
+            needsApproval,
+            policy.AuthorizeInvocation(newTool, CreateExecutionContext(TrustAudience.Personal)).NeedsApproval);
+    }
+
+    [Fact]
+    public void FilterExposedTools_HidesDenyOverrideAndKeepsNewTool()
+    {
+        var registry = new ToolRegistry();
+        var deniedTool = CreateMcpTool("dropbox", "delete");
+        var newTool = CreateMcpTool("dropbox", "get_upload_url");
+        registry.Register(deniedTool);
+        registry.Register(newTool);
+
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["delete"]
+        };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox/delete"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        var filtered = policy.FilterExposedTools(
+            [deniedTool.ToAITool(), newTool.ToAITool()],
+            registry,
+            PersonalTrustContext());
+
+        var exposed = Assert.Single(filtered);
+        Assert.Equal("dropbox__get_upload_url", ((AIFunction)exposed).Name);
+    }
+
     // ── Helpers ──
+
+    private static EffectiveTrustContext PersonalTrustContext() => new(
+        DeploymentPosture.Personal,
+        TrustAudience.Personal,
+        TrustAudience.Personal,
+        TrustAudience.Personal,
+        TrustBoundary.TrustedInstance,
+        PrincipalClassification.TrustedInternal,
+        TransportAuthenticity.Verified,
+        PayloadTaint.Trusted,
+        null, null, false, false, null);
 
     private static McpToolAdapter CreateMcpTool(string serverName, string toolName, string? description = null)
     {
