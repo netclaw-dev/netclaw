@@ -38,6 +38,8 @@ public sealed partial class ShellApprovalEvidenceContractTests
         "post-terminal-denial-guidance-eval-results.json";
     private const string FreshSessionLiveBatchingHarvestFile =
         "post-334cb4c-live-batching-harvest.json";
+    private const string IndependentOperationGuidanceResultsFile =
+        "post-independent-operation-guidance-eval-results.json";
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
     private const string LiveRegressionCasesSha256 =
@@ -58,6 +60,8 @@ public sealed partial class ShellApprovalEvidenceContractTests
         "f33ec751446cd4d37f8d89fe00e12e98d1da97a5e7d89392dc345c3f8a8db4cf";
     private const string FreshSessionLiveBatchingHarvestSha256 =
         "1bed4fb0739fcd5ca004965856af302723392d805539d4aee6bb278533e5c00f";
+    private const string IndependentOperationGuidanceResultsSha256 =
+        "00da34db374e5db7c7b53fe8dd6c7b66a290bdfdbcc872457db96b384574c7d6";
 
     [Fact]
     public void Fresh_session_eval_baseline_separates_completion_from_approval_friction()
@@ -512,6 +516,59 @@ public sealed partial class ShellApprovalEvidenceContractTests
         string replacement)
     {
         var json = File.ReadAllText(EvidencePath(FreshSessionLiveBatchingHarvestFile));
+        var mutated = json.Replace(original, replacement, StringComparison.Ordinal);
+
+        Assert.NotEqual(json, mutated);
+        Assert.NotEqual(
+            ComputeSha256(Encoding.UTF8.GetBytes(json)),
+            ComputeSha256(Encoding.UTF8.GetBytes(mutated)));
+    }
+
+    [Fact]
+    public void Independent_operation_guidance_results_bind_the_exact_comparison()
+    {
+        var bytes = File.ReadAllBytes(EvidencePath(IndependentOperationGuidanceResultsFile));
+        using var document = JsonDocument.Parse(bytes);
+        var root = document.RootElement;
+        var runtime = root.GetProperty("runtime");
+        var baseline = root.GetProperty("baseline");
+        var changed = root.GetProperty("changed");
+
+        Assert.Equal(IndependentOperationGuidanceResultsSha256, ComputeSha256(bytes));
+        Assert.DoesNotContain((byte)'\r', bytes);
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("764c396b8418aed9d7ce320a7c31da9788d013b0", runtime.GetProperty("commit").GetString());
+        Assert.Equal("334cb4c430a5fe79131dde4c7185f9a4e1d5a95f", runtime.GetProperty("baseCommit").GetString());
+        Assert.Equal("deepseek-v4-flash", runtime.GetProperty("model").GetString());
+        Assert.Equal(5, runtime.GetProperty("runsPerCase").GetInt32());
+        Assert.False(runtime.GetProperty("interactiveApprovalAvailable").GetBoolean());
+
+        Assert.Equal(3, baseline.GetProperty("behaviorPassCount").GetInt32());
+        Assert.Equal(4, baseline.GetProperty("taskCompletionCount").GetInt32());
+        Assert.Equal(6, baseline.GetProperty("shellCallCount").GetInt32());
+        Assert.Equal(1, baseline.GetProperty("independentBatchRunCount").GetInt32());
+        Assert.Equal(1, baseline.GetProperty("approvalPromptEquivalentCount").GetInt32());
+
+        Assert.Equal(5, changed.GetProperty("behaviorPassCount").GetInt32());
+        Assert.Equal(5, changed.GetProperty("taskCompletionCount").GetInt32());
+        Assert.Equal(5, changed.GetProperty("setWorkingDirectoryCallCount").GetInt32());
+        Assert.Equal(5, changed.GetProperty("shellCallCount").GetInt32());
+        Assert.Equal(5, changed.GetProperty("successfulShellCallCount").GetInt32());
+        Assert.Equal(0, changed.GetProperty("compoundShellCallCount").GetInt32());
+        Assert.Equal(0, changed.GetProperty("typedWorkingDirectoryCallCount").GetInt32());
+        Assert.Equal(0, changed.GetProperty("approvalPromptEquivalentCount").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("\"behaviorPassCount\": 5", "\"behaviorPassCount\": 4")]
+    [InlineData("\"compoundShellCallCount\": 0", "\"compoundShellCallCount\": 1")]
+    [InlineData("\"approvalPromptEquivalentCount\": 0", "\"approvalPromptEquivalentCount\": 1")]
+    [InlineData("removed one compound prompted run", "retained one compound prompted run")]
+    public void Independent_operation_guidance_digest_detects_measurement_mutation(
+        string original,
+        string replacement)
+    {
+        var json = File.ReadAllText(EvidencePath(IndependentOperationGuidanceResultsFile));
         var mutated = json.Replace(original, replacement, StringComparison.Ordinal);
 
         Assert.NotEqual(json, mutated);

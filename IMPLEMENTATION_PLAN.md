@@ -408,6 +408,13 @@ Done when:
   from a rejected named path in 5/5. The fix is
   guidance-only: it declares the task's first path before probing, then uses a
   user-provided fallback after rejection. It adds no shell authority.
+- [x] A post-#1990 live sample found four approvals among ten shell calls. All
+  four calls joined independent diagnostics, and one also used inline `cd`.
+  The strict direct-provider baseline passed 3/5 and contained one prompted
+  compound run. Generic independent-operation guidance raised the exact
+  committed image to 5/5. It produced five successful single-operation shell
+  calls and no approval equivalent. See
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-independent-operation-guidance-eval-results.json`.
 - [x] The initial follow-up disposable eval was discarded. Its prompt requested
   a diagnostic command but omitted the exact content required by its assertion.
   The corrected case names the disposable file effect and exact content without

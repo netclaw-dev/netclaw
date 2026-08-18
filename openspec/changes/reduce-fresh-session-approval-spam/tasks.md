@@ -96,7 +96,7 @@
 - [x] 10.16 Run five final-image trials per case: project 5/5, negative 5/5, and rejected-path recovery 5/5.
 - [ ] 10.17 Deliver issue #1892, swap the exact merged binary, and validate new live project sessions.
 - [x] 10.18 Freeze sanitized post-#1990 batching evidence and a strict five-run 3/5 behavior baseline.
-- [ ] 10.19 Strengthen generic independent-operation guidance and rerun the unchanged five-session eval.
+- [x] 10.19 Strengthen generic independent-operation guidance and rerun the unchanged five-session eval.
 - [ ] 10.20 Deliver, swap the exact merged binary, and validate multiple new live sessions.
 
 ## 11. Completion Audit
