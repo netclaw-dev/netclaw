@@ -62,12 +62,6 @@ jobs:
       - name: "dotnet build"
         run: dotnet build -c Release
 
-      # Pre-warm the npm cache so MCP stdio smoke tests don't time out downloading
-      # @modelcontextprotocol/server-everything on the first npx invocation.
-      - name: "Warm npm cache for MCP smoke tests"
-        shell: bash
-        run: npx -y @modelcontextprotocol/server-everything --version || true
-
       # Pre-warm the PowerShell host probe so cold-start (Defender scan, first-run
       # init) doesn't push the in-test 5s probe timeout on loaded Windows runners.
       # Warm both pwsh.exe and the powershell.exe fallback — the resolver probes

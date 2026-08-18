@@ -14,8 +14,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 
 /// <summary>
 /// End-to-end smoke tests that connect to a real MCP server over stdio.
-/// Uses @modelcontextprotocol/server-everything (the official test server).
-/// Requires Node.js/npx on the PATH.
+/// Uses the repository's deterministic MCP smoke server.
 /// </summary>
 public class McpStdioSmokeTests : IAsyncDisposable
 {
@@ -24,65 +23,23 @@ public class McpStdioSmokeTests : IAsyncDisposable
     [Fact]
     public async Task ConnectToStdioServer_DiscoversTools()
     {
-        var entry = new McpServerEntry
-        {
-            Transport = "stdio",
-            Command = "npx",
-            Arguments = ["-y", "@modelcontextprotocol/server-everything"],
-            Enabled = true,
-        };
+        _client = await CreateClientAsync("discovery");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        var transport = new StdioClientTransport(new StdioClientTransportOptions
-        {
-            Command = entry.Command,
-            Arguments = entry.Arguments,
-            Name = "everything-test",
-            ShutdownTimeout = TimeSpan.FromSeconds(10),
-        });
-
-        _client = await McpClient.CreateAsync(transport, new McpClientOptions
-        {
-            ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
-            InitializationTimeout = TimeSpan.FromMinutes(3),
-        }, cancellationToken: CancellationToken.None);
-
-        var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);
-
-        // server-everything exposes several test tools
         Assert.NotEmpty(tools);
-        Assert.True(tools.Count >= 1, $"Expected at least 1 tool, got {tools.Count}");
+        Assert.Contains(tools, tool => tool.Name == "add");
+        Assert.Contains(tools, tool => tool.Name == "echo");
     }
 
     [Fact]
     public async Task McpToolAdapter_WrapsDiscoveredTools()
     {
-        var entry = new McpServerEntry
-        {
-            Transport = "stdio",
-            Command = "npx",
-            Arguments = ["-y", "@modelcontextprotocol/server-everything"],
-            Enabled = true,
-        };
-
-        var transport = new StdioClientTransport(new StdioClientTransportOptions
-        {
-            Command = entry.Command,
-            Arguments = entry.Arguments,
-            Name = "everything-adapter-test",
-            ShutdownTimeout = TimeSpan.FromSeconds(10),
-        });
-
-        _client = await McpClient.CreateAsync(transport, new McpClientOptions
-        {
-            ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
-            InitializationTimeout = TimeSpan.FromMinutes(3),
-        }, cancellationToken: CancellationToken.None);
-
-        var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);
+        _client = await CreateClientAsync("adapter");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wrap with our adapter and verify namespacing
         var registry = new ToolRegistry();
-        registry.WithMcpTools("everything", tools);
+        registry.WithMcpTools("smoke", tools);
 
         var allTools = registry.GetAllRegistrations();
         Assert.NotEmpty(allTools);
@@ -90,8 +47,8 @@ public class McpStdioSmokeTests : IAsyncDisposable
         // All tool names should be namespaced with server name
         foreach (var reg in allTools)
         {
-            Assert.StartsWith("everything/", reg.Tool.Name);
-            Assert.Equal("mcp:everything", reg.GrantCategory);
+            Assert.StartsWith("smoke/", reg.Tool.Name);
+            Assert.Equal("mcp:smoke", reg.GrantCategory);
         }
 
         // Tools should NOT be in always-loaded set (MCP tools are dynamic)
@@ -102,62 +59,33 @@ public class McpStdioSmokeTests : IAsyncDisposable
     [Fact]
     public async Task SearchTools_FindsMcpToolsByName()
     {
-        var entry = new McpServerEntry
-        {
-            Transport = "stdio",
-            Command = "npx",
-            Arguments = ["-y", "@modelcontextprotocol/server-everything"],
-            Enabled = true,
-        };
-
-        var transport = new StdioClientTransport(new StdioClientTransportOptions
-        {
-            Command = entry.Command,
-            Arguments = entry.Arguments,
-            Name = "everything-search-test",
-            ShutdownTimeout = TimeSpan.FromSeconds(10),
-        });
-
-        _client = await McpClient.CreateAsync(transport, new McpClientOptions
-        {
-            ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
-            InitializationTimeout = TimeSpan.FromMinutes(3),
-        }, cancellationToken: CancellationToken.None);
-
-        var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);
+        _client = await CreateClientAsync("search");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var registry = new ToolRegistry();
-        registry.WithMcpTools("everything", tools);
+        registry.WithMcpTools("smoke", tools);
 
         // Pick the first tool name and search for it
         var firstTool = tools[0];
         var results = registry.SearchTools(firstTool.Name, null, 10);
 
         Assert.NotEmpty(results);
-        Assert.Contains(results, t => t.Name == $"everything/{firstTool.Name}");
+        Assert.Contains(results, t => t.Name == $"smoke/{firstTool.Name}");
     }
 
     [Fact]
     public async Task McpClientManager_ConnectsAndRegistersTools()
     {
-        var entry = new McpServerEntry
-        {
-            Transport = "stdio",
-            Command = "npx",
-            Arguments = ["-y", "@modelcontextprotocol/server-everything"],
-            Enabled = true,
-        };
-
         var registry = new ToolRegistry();
         await using var harness = McpSmokeHarness.Create(
-            new Dictionary<string, McpServerEntry> { ["everything"] = entry }, registry);
+            new Dictionary<string, McpServerEntry> { ["smoke"] = CreateEntry() }, registry);
 
-        await harness.Manager.StartAsync(CancellationToken.None);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
 
         var statuses = harness.Manager.GetServerStatuses();
-        Assert.True(statuses.ContainsKey(new McpServerName("everything")));
+        Assert.True(statuses.ContainsKey(new McpServerName("smoke")));
 
-        var status = statuses[new McpServerName("everything")];
+        var status = statuses[new McpServerName("smoke")];
         Assert.Equal(McpConnectionState.Connected, status.State);
         Assert.True(status.ToolCount > 0, $"Expected tools, got {status.ToolCount}");
         Assert.Null(status.ErrorMessage);
@@ -165,12 +93,38 @@ public class McpStdioSmokeTests : IAsyncDisposable
         // Verify tools were registered in the registry
         var allRegs = registry.GetAllRegistrations();
         Assert.NotEmpty(allRegs);
-        Assert.All(allRegs, r => Assert.StartsWith("everything/", r.Tool.Name));
+        Assert.All(allRegs, r => Assert.StartsWith("smoke/", r.Tool.Name));
 
         // GetClient should return a live client
-        var client = harness.Manager.GetClient(new McpServerName("everything"));
+        var client = harness.Manager.GetClient(new McpServerName("smoke"));
         Assert.NotNull(client);
     }
+
+    private async Task<McpClient> CreateClientAsync(string name)
+    {
+        var transport = new StdioClientTransport(new StdioClientTransportOptions
+        {
+            Command = "dotnet",
+            Arguments = [SmokeMcpServerLocator.LocateDll()],
+            Name = $"smoke-{name}",
+            ShutdownTimeout = TimeSpan.FromSeconds(10),
+        });
+
+        return await McpClient.CreateAsync(transport, new McpClientOptions
+        {
+            ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
+            InitializationTimeout = TimeSpan.FromSeconds(30),
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private static McpServerEntry CreateEntry()
+        => new()
+        {
+            Transport = "stdio",
+            Command = "dotnet",
+            Arguments = [SmokeMcpServerLocator.LocateDll()],
+            Enabled = true,
+        };
 
     public async ValueTask DisposeAsync()
     {
