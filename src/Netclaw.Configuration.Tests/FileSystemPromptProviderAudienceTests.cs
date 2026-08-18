@@ -135,6 +135,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("do not attempt a shell redirect first", prompt);
         Assert.Contains("Start with the smallest single shell operation", prompt);
         Assert.Contains("Use one operation per call", prompt);
+        Assert.Contains("Keep independent searches and diagnostics separate", prompt);
+        Assert.Contains("do not join them with separators or labels", prompt);
         Assert.Contains("Add a pipeline only when the requested result requires it", prompt);
         Assert.Contains("disposable writable work outside a project", prompt);
         Assert.Contains("do not substitute platform temporary storage", prompt);

@@ -115,6 +115,8 @@ search, VCS, builds, tests, and process semantics SHALL remain shell work.
 Guidance SHALL NOT claim that a preferred tool bypasses its own authority.
 Guidance SHALL start with the smallest necessary shell operation. It SHALL use
 one operation per call unless the requested result requires a pipeline. After
+independent searches or diagnostics, it SHALL keep later operations in separate
+calls instead of joining them with separators or presentation labels. After
 an approval-required result, it SHALL avoid retried or substitute shell variants.
 A `Tool access denied:` result SHALL be terminal: guidance SHALL NOT change
 scope, retry, or substitute another tool. It MAY apply one
@@ -203,6 +205,13 @@ tool can complete.
 - **WHEN** the agent authors the first shell call
 - **THEN** the call contains that operation only
 - **AND** it does not add branch, history, layout, or environment diagnostics
+
+#### Scenario: Independent shell reads remain separate
+
+- **GIVEN** a task requires multiple independent searches or diagnostics
+- **WHEN** the agent authors shell calls for those operations
+- **THEN** each independent operation uses a separate call
+- **AND** separators or presentation labels do not join their outputs
 
 #### Scenario: Policy-blocked shell work does not fan out
 

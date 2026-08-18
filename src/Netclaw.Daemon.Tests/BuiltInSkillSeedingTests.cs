@@ -67,6 +67,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("do not attempt a shell redirect first", skill, StringComparison.Ordinal);
         Assert.Contains("Start with the smallest single shell operation", skill, StringComparison.Ordinal);
         Assert.Contains("Use one operation per call", skill, StringComparison.Ordinal);
+        Assert.Contains("Keep independent searches and diagnostics separate", skill, StringComparison.Ordinal);
+        Assert.Contains("do not join them with separators or labels", skill, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", skill, StringComparison.Ordinal);
         Assert.Contains("disposable writable work outside a project", skill, StringComparison.Ordinal);
         Assert.Contains("do not substitute platform temporary storage", skill, StringComparison.Ordinal);
@@ -84,6 +86,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
             "Use an inline directory change only when",
             "Start with the smallest single shell operation",
             "Use one operation per call",
+            "Keep independent searches and diagnostics separate",
+            "do not join them with separators or labels",
             "Add a pipeline only when the requested result requires it",
             "After an approval-required result",
             "A `Tool access denied:` result is terminal",

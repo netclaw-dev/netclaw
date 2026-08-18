@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.59.0"
+  version: "2.60.0"
 ---
 
 # Netclaw Operations
@@ -52,11 +52,12 @@ For disposable text, use `file_write` then `file_read`; do not attempt a shell r
 Keep shell approval friction bounded:
 
 1. Start with the smallest single shell operation that directly answers the request.
-2. Use one operation per call. Add a pipeline only when the requested result requires it.
-3. Do not use shell only to verify a successful structured tool result.
-4. After an approval-required result, do not retry or substitute shell variants.
-5. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
-6. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+2. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels.
+3. Add a pipeline only when the requested result requires it.
+4. Do not use shell only to verify a successful structured tool result.
+5. After an approval-required result, do not retry or substitute shell variants.
+6. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
+7. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
 
 ## Project Directory
 

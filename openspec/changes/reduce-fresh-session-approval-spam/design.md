@@ -131,11 +131,14 @@ tool is available. The shell description will retain its negative boundary.
 The same surfaces will state one shell-composition order:
 
 1. Start with the smallest shell operation that answers the request.
-2. Do not use shell only to verify a successful structured tool result.
-3. Do not retry or substitute shell variants after an approval-required result.
-4. Treat a `Tool access denied:` result as terminal. Do not change scope, retry,
+2. Keep independent searches and diagnostics in separate calls. Do not join
+   them with shell separators or presentation labels.
+3. Add a pipeline only when the requested result requires it.
+4. Do not use shell only to verify a successful structured tool result.
+5. Do not retry or substitute shell variants after an approval-required result.
+6. Treat a `Tool access denied:` result as terminal. Do not change scope, retry,
    or substitute another tool.
-5. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
+7. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
    available structured tool or report the blocked operation once.
 
 A successful `file_write` or `file_edit` result is the confirmation for that

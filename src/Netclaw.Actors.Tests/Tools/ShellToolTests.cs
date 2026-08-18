@@ -62,6 +62,8 @@ public class ShellToolTests
         Assert.Contains("do not substitute platform temporary storage", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("smallest operation that answers the request", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Use one operation per call", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Keep independent searches and diagnostics separate", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("do not join them with separators or labels", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use shell only to verify successful structured results", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("After approval-required results, do not retry or substitute variants", _tool.Description, StringComparison.Ordinal);
@@ -83,6 +85,8 @@ public class ShellToolTests
 
         Assert.Contains("smallest shell operation that answers the request", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Use one operation per call", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Keep independent searches and diagnostics separate", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("do not join them with separators or labels", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not verify successful structured results with shell", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not retry approval-required variants", commandDescription, StringComparison.Ordinal);
