@@ -1032,26 +1032,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
         _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptMessageTs = new SlackEventTs(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new SlackEventTs(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, SlackEventTs>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new SlackEventTs(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, SlackEventTs>(_pendingApprovalRequests, cleared);
 
     private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
 
@@ -1843,18 +1833,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private sealed record ThreadOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
     private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
-    private sealed class PendingApprovalRequest
+    private sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalRequest<SlackEventTs>
     {
-        public PendingApprovalRequest(ToolInteractionRequest request)
+        public PendingApprovalRequest(ToolInteractionRequest request) : base(request)
         {
-            Request = request;
-            CallId = request.CallId;
-            RequesterSenderId = request.RequesterSenderId?.Value;
-            RequesterPrincipal = request.RequesterPrincipal;
-            Options = request.Options;
-            OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
-            ToolName = request.ToolName.Value;
-            DisplayText = request.DisplayText;
         }
 
         public PendingApprovalRequest(
@@ -1865,46 +1847,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             SlackEventTs? promptMessageTs,
             string? toolName = null,
             string? displayText = null)
+            : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageTs, toolName, displayText)
         {
-            Request = null;
-            CallId = callId;
-            RequesterSenderId = requesterSenderId;
-            RequesterPrincipal = requesterPrincipal;
-            OptionKeys = [.. optionKeys];
-            var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
-            Options = OptionKeys
-                .Select(key => new ToolInteractionOption(
-                    new ApprovalOptionKey(key),
-                    ApprovalOptionKeys.LabelFor(key, isMcpTool)))
-                .ToArray();
-            PromptMessageTs = promptMessageTs;
-            ToolName = toolName;
-            DisplayText = displayText;
         }
 
-        public ToolInteractionRequest? Request { get; }
-        public ToolCallId CallId { get; }
-        public string? RequesterSenderId { get; }
-        public PrincipalClassification? RequesterPrincipal { get; }
-        public IReadOnlyList<ToolInteractionOption> Options { get; }
-        public IReadOnlyList<string> OptionKeys { get; }
-
-        /// <summary>
-        /// Tool name. Populated from <see cref="ToolInteractionRequest.ToolName"/>
-        /// on the hot path and from the persisted
-        /// <see cref="PendingApprovalPromptTracked.ToolName"/> on the cold-spawn
-        /// recovery path. Null only for journal entries written before the field
-        /// was added.
-        /// </summary>
-        public string? ToolName { get; }
-
-        /// <summary>
-        /// Display text (already truncated to the persisted ceiling on the
-        /// cold-spawn path). Null only for legacy journal entries.
-        /// </summary>
-        public string? DisplayText { get; }
-
-        public SlackEventTs? PromptMessageTs { get; set; }
+        public SlackEventTs? PromptMessageTs
+        {
+            get => PromptId;
+            set => PromptId = value;
+        }
     }
 
     private sealed record InitializePipeline : INoSerializationVerificationNeeded

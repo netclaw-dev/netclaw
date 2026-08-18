@@ -1105,8 +1105,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
-
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
         => new(
             ChannelType.Mattermost.ToWireValue(),
@@ -1117,27 +1115,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
         MattermostUserId senderId, ToolCallId? callId)
-    {
-        if (callId is { } resolvedCallId)
-        {
-            var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
-                p.CallId == resolvedCallId);
-            if (byCallId is null)
-                return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
-                return (ApprovalLookupResult.WrongRequester, null);
-            return (ApprovalLookupResult.Matched, byCallId);
-        }
-
-        if (_pendingApprovalRequests.Count == 0)
-            return (ApprovalLookupResult.NotFound, null);
-
-        var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
-        return bySender is not null
-            ? (ApprovalLookupResult.Matched, bySender)
-            : (ApprovalLookupResult.WrongRequester, null);
-    }
+        => PendingApprovalLookup.Resolve<PendingApprovalRequest, MattermostPostId>(
+            _pendingApprovalRequests, senderId.Value, callId);
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
@@ -1595,32 +1574,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 return null;
             });
 
-    internal static List<string> ChunkMessage(string text)
-    {
-        if (text.Length <= MaxMattermostPostLength)
-            return [text];
-
-        var chunks = new List<string>();
-        var remaining = text.AsSpan();
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= MaxMattermostPostLength)
-            {
-                chunks.Add(remaining.ToString());
-                break;
-            }
-
-            var splitAt = MaxMattermostPostLength;
-            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
-            if (newlineIdx > 0)
-                splitAt = newlineIdx + 1;
-
-            chunks.Add(remaining[..splitAt].ToString());
-            remaining = remaining[splitAt..];
-        }
-
-        return chunks;
-    }
+    internal static List<string> ChunkMessage(string text) =>
+        MessageChunker.Chunk(text, MaxMattermostPostLength);
 
     private void AdvanceCursor(string candidatePostId)
     {
@@ -1645,26 +1600,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
         _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptPostId = new MattermostPostId(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new MattermostPostId(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, MattermostPostId>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new MattermostPostId(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, MattermostPostId>(_pendingApprovalRequests, cleared);
 
     private sealed record InitializePipeline
     {

@@ -128,7 +128,7 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
         if (request.AddressKind == ChannelAddressKind.DirectMessage && !_options.AllowDirectMessages)
             return ChannelAddressResolutionResult.Unsupported("Mattermost direct-message resolution is disabled in configuration.");
 
-        var query = NormalizeUserQuery(request.Query);
+        var query = UserQueryNormalizer.StripLeadingAt(request.Query);
         if (MattermostIdentifierFormat.IsMattermostId(query))
         {
             var userId = new MattermostUserId(query);
@@ -185,12 +185,6 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
     private ResolvedChannelAddress ToResolvedAddress(ChannelAddressKind addressKind, MattermostUser user)
     {
         return new ResolvedChannelAddress(Key, addressKind, user.Id, GetDisplayName(user));
-    }
-
-    private static string NormalizeUserQuery(string query)
-    {
-        var normalized = query.Trim();
-        return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
     }
 
     private static string GetDisplayName(MattermostUser user)

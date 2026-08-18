@@ -1127,8 +1127,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
-
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
         => new(
             ChannelType.Discord.ToWireValue(),
@@ -1139,27 +1137,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
         DiscordUserId senderId, Netclaw.Tools.ToolCallId? callId)
-    {
-        if (callId is { } resolvedCallId)
-        {
-            var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
-                p.CallId == resolvedCallId);
-            if (byCallId is null)
-                return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
-                return (ApprovalLookupResult.WrongRequester, null);
-            return (ApprovalLookupResult.Matched, byCallId);
-        }
-
-        if (_pendingApprovalRequests.Count == 0)
-            return (ApprovalLookupResult.NotFound, null);
-
-        var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
-        return bySender is not null
-            ? (ApprovalLookupResult.Matched, bySender)
-            : (ApprovalLookupResult.WrongRequester, null);
-    }
+        => PendingApprovalLookup.Resolve<PendingApprovalRequest, DiscordMessageId>(
+            _pendingApprovalRequests, senderId.Value, callId);
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
@@ -1635,32 +1614,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 return $"`{file.Name}` has an untrusted URL domain and was skipped.";
             });
 
-    internal static List<string> ChunkMessage(string text)
-    {
-        if (text.Length <= MaxDiscordMessageLength)
-            return [text];
-
-        var chunks = new List<string>();
-        var remaining = text.AsSpan();
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= MaxDiscordMessageLength)
-            {
-                chunks.Add(remaining.ToString());
-                break;
-            }
-
-            var splitAt = MaxDiscordMessageLength;
-            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
-            if (newlineIdx > 0)
-                splitAt = newlineIdx + 1;
-
-            chunks.Add(remaining[..splitAt].ToString());
-            remaining = remaining[splitAt..];
-        }
-
-        return chunks;
-    }
+    internal static List<string> ChunkMessage(string text) =>
+        MessageChunker.Chunk(text, MaxDiscordMessageLength);
 
     private void AdvanceCursor(ulong candidateSnowflake)
     {
@@ -1691,26 +1646,16 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
         _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptMessageId = new DiscordMessageId(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new DiscordMessageId(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, DiscordMessageId>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new DiscordMessageId(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, DiscordMessageId>(_pendingApprovalRequests, cleared);
 
     private static ulong? TryParseSnowflake(string value)
         => ulong.TryParse(value, out var id) ? id : null;

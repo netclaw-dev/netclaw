@@ -55,20 +55,10 @@ public sealed record StartMattermostProactiveThread(
 
 public sealed record MattermostProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
 
-internal sealed class PendingApprovalRequest
+internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalRequest<MattermostPostId>
 {
-    public PendingApprovalRequest(ToolInteractionRequest request)
+    public PendingApprovalRequest(ToolInteractionRequest request) : base(request)
     {
-        Request = request;
-        CallId = request.CallId;
-        RequesterSenderId = request.RequesterSenderId is { } requesterSenderId
-            ? requesterSenderId.Value
-            : null;
-        RequesterPrincipal = request.RequesterPrincipal;
-        Options = request.Options;
-        OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
-        ToolName = request.ToolName.Value;
-        DisplayText = request.DisplayText;
     }
 
     public PendingApprovalRequest(
@@ -79,43 +69,13 @@ internal sealed class PendingApprovalRequest
         MattermostPostId? promptPostId,
         string? toolName = null,
         string? displayText = null)
+        : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptPostId, toolName, displayText)
     {
-        Request = null;
-        CallId = callId;
-        RequesterSenderId = requesterSenderId;
-        RequesterPrincipal = requesterPrincipal;
-        OptionKeys = [.. optionKeys];
-        var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
-        Options = OptionKeys
-            .Select(key => new ToolInteractionOption(
-                new ApprovalOptionKey(key),
-                ApprovalOptionKeys.LabelFor(key, isMcpTool)))
-            .ToArray();
-        PromptPostId = promptPostId;
-        ToolName = toolName;
-        DisplayText = displayText;
     }
 
-    public ToolInteractionRequest? Request { get; }
-    public ToolCallId CallId { get; }
-
-    public string? RequesterSenderId { get; }
-
-    public PrincipalClassification? RequesterPrincipal { get; }
-    public IReadOnlyList<ToolInteractionOption> Options { get; }
-    public IReadOnlyList<string> OptionKeys { get; }
-
-    /// <summary>
-    /// Tool name carried through cold-spawn recovery. Null on pre-field
-    /// journal entries.
-    /// </summary>
-    public string? ToolName { get; }
-
-    /// <summary>
-    /// Display text carried through cold-spawn recovery (already truncated to
-    /// the persisted ceiling). Null on pre-field journal entries.
-    /// </summary>
-    public string? DisplayText { get; }
-
-    public MattermostPostId? PromptPostId { get; set; }
+    public MattermostPostId? PromptPostId
+    {
+        get => PromptId;
+        set => PromptId = value;
+    }
 }
