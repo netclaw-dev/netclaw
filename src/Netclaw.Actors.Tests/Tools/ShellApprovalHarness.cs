@@ -128,8 +128,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         // Seed all persistent grants in ONE Ask per audience instead of one Ask
         // per grant. The actor's RecordStructuredToolApproval handler persists a
         // whole grant list in a single locked, atomic write (ToolApprovalStore.AddApprovals
-        // -> one SaveLocked), so this is byte-for-byte equivalent to N sequential seed
-        // messages. It removes N-1 synchronous WriteThrough + Flush(flushToDisk: true) file
+        // -> one SaveLocked), so the resulting store state is equivalent to N sequential seed
+        // messages (the only divergence is per-entry CreatedAt stamping under a real clock,
+        // which is unobservable here: fixture tests run on a frozen FakeTimeProvider and no
+        // harness test asserts seed timestamps). It removes N-1 synchronous WriteThrough +
+        // Flush(flushToDisk: true) file
         // rewrites from the test's critical path: the Ask deadline is a hard 5s wall clock,
         // and under full-suite parallel load on Windows CI (Defender scanning each new
         // tool-approvals.json in a fresh %TEMP% tree) per-write latency of the heaviest case
