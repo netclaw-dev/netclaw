@@ -4,9 +4,9 @@ Working branch: `refactor/binding-engine`, stacked on `refactor/delivery-failure
 
 ## 1. Discord cursor stringization (prerequisite)
 
-- [ ] 1.1 Add `SnowflakeCursorComparer` (length-then-ordinal) to `Netclaw.Channels` with a unit test proving equivalence to `ulong` ordering: cross-digit-length pairs, adjacent powers of ten, `ulong.MaxValue`, and short synthetic test IDs
-- [ ] 1.2 Replace Discord's internal `ulong` cursor (`_cursorSnowflake`, `AdvanceCursor(ulong)`, `TryParseSnowflake`) with `string` state compared via the comparator; persisted `CursorAdvanced` handling is already string and stays untouched
-- [ ] 1.3 Run Discord contract + cursor tests; verify no persisted-format change with the serialization test suite
+- [x] 1.1 Add `SnowflakeCursorComparer` (length-then-ordinal) to `Netclaw.Channels` with a unit test proving equivalence to `ulong` ordering: cross-digit-length pairs, adjacent powers of ten, `ulong.MaxValue`, and short synthetic test IDs
+- [x] 1.2 Replace Discord's internal `ulong` cursor (`_cursorSnowflake`, `AdvanceCursor(ulong)`, `TryParseSnowflake`) with `string` state compared via the comparator; persisted `CursorAdvanced` handling is already string and stays untouched
+- [x] 1.3 Run Discord contract + cursor tests; verify no persisted-format change with the serialization test suite
 
 ## 2. Gap-hydration engine
 

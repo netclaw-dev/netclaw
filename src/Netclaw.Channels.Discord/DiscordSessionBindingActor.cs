@@ -78,14 +78,18 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
-    private ulong? _cursorSnowflake;
-    private ulong? _pendingCursorSnowflake;
+    // Snowflake cursors in canonical decimal string form, which is also the
+    // persisted CursorAdvanced form. NormalizeSnowflake produces every value,
+    // so CursorComparer can order them.
+    private static readonly SnowflakeCursorComparer CursorComparer = SnowflakeCursorComparer.Instance;
+    private string? _cursor;
+    private string? _pendingCursor;
 
     // Reliable in-flight-turn signal for the mention re-arm guard: set when the
-    // main inbound is enqueued (unlike _pendingCursorSnowflake, which is only set
+    // main inbound is enqueued (unlike _pendingCursor, which is only set
     // for inbounds with a parseable snowflake), cleared when the turn ends or the
     // pipeline reinitializes. Without it, a null-snowflake in-flight turn would
-    // leave _pendingCursorSnowflake unset and let a following mention re-arm
+    // leave _pendingCursor unset and let a following mention re-arm
     // mid-turn — the PR #733 no-duplicate hazard.
     private bool _turnInFlight;
 
@@ -436,10 +440,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _turnInFlight = true;
             ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
 
-            if (TryParseSnowflake(message.EventId.Value) is { } eventSnowflake)
+            if (NormalizeSnowflake(message.EventId.Value) is { } eventCursor)
             {
-                if (_pendingCursorSnowflake is not { } pending || eventSnowflake > pending)
-                    _pendingCursorSnowflake = eventSnowflake;
+                if (_pendingCursor is not { } pending || CursorComparer.Compare(eventCursor, pending) > 0)
+                    _pendingCursor = eventCursor;
             }
         }
         catch (OperationCanceledException)
@@ -485,15 +489,15 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             _log.Info(
                 "Thread history hydration: empty thread, no backfill cursor={Cursor} session={Session}",
-                _cursorSnowflake?.ToString() ?? "none", _sessionId.Value);
+                _cursor ?? "none", _sessionId.Value);
             return;
         }
 
-        var cursor = _cursorSnowflake;
+        var cursor = _cursor;
         var candidates = new List<ChannelInput>(history.Count);
         foreach (var item in history)
         {
-            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
+            if (NormalizeSnowflake(item.MessageId ?? string.Empty) is not { } itemCursor)
                 continue;
 
             // Strict: only include messages newer than the cursor. PR #733's
@@ -503,7 +507,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             // duplicate it. The in-flight-crash case is handled too: a turn
             // that didn't complete leaves the cursor un-advanced, so the
             // message has snowflake > cursor and is correctly included in the gap.
-            if (cursor is { } c && itemSnowflake <= c)
+            if (cursor is { } c && CursorComparer.Compare(itemCursor, c) <= 0)
                 continue;
 
             candidates.Add(item);
@@ -513,7 +517,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             _log.Info(
                 "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor} session={Session}",
-                history.Count, cursor?.ToString() ?? "none", _sessionId.Value);
+                history.Count, cursor ?? "none", _sessionId.Value);
             return;
         }
 
@@ -522,7 +526,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         _log.Info(
             "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
+            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor ?? "none", _sessionId.Value);
 
         if (classified.DetectorUnavailable)
             await SafeReplyAsync(BackfillDetectorWarning);
@@ -567,7 +571,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
 
         var triggerInput = trigger.Input;
-        var triggerSnowflake = TryParseSnowflake(triggerInput.MessageId ?? string.Empty);
+        var triggerCursor = NormalizeSnowflake(triggerInput.MessageId ?? string.Empty);
         var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
 
         if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
@@ -592,10 +596,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             // enqueue so a mention arriving before this turn completes does not re-arm.
             _turnInFlight = true;
 
-            if (triggerSnowflake is { } sn)
+            if (triggerCursor is { } tc)
             {
-                if (_pendingCursorSnowflake is not { } pending || sn > pending)
-                    _pendingCursorSnowflake = sn;
+                if (_pendingCursor is not { } pending || CursorComparer.Compare(tc, pending) > 0)
+                    _pendingCursor = tc;
             }
 
             _log.Info(
@@ -689,7 +693,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static ChannelInput MergeAdoptedContext(
         ChannelInput triggerInput,
         List<AdoptedContextMessage> adoptedContext,
-        ulong? cursor)
+        string? cursor)
     {
         var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
             adoptedContext,
@@ -704,7 +708,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
             AdoptedSpeakerIds = merged.SpeakerIds,
             AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor?.ToString(),
+            AdoptedContextLowerBound = cursor,
             AdoptedContextUpperBound = triggerInput.MessageId,
             AdoptedContextEntries = merged.Entries
         };
@@ -729,7 +733,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         // Without the live message's ordering key the gap below it cannot be
         // bounded; leave hydration re-armed and take the fetch-free path.
-        if (TryParseSnowflake(liveMessageId) is not { } liveSnowflake)
+        if (NormalizeSnowflake(liveMessageId) is not { } liveCursor)
             return baseInput;
 
         IReadOnlyList<ChannelInput> history;
@@ -749,18 +753,18 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         // above) keeps the flag armed — classify/merge outcomes never re-arm.
         _hydrationPending = false;
 
-        var cursor = _cursorSnowflake;
+        var cursor = _cursor;
         var candidates = new List<ChannelInput>(history.Count);
         foreach (var item in history)
         {
-            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
+            if (NormalizeSnowflake(item.MessageId ?? string.Empty) is not { } itemCursor)
                 continue;
 
             // Strictly above the watermark and strictly below the live inbound:
             // the live inbound is the executable message, not adopted context.
-            if (cursor is { } c && itemSnowflake <= c)
+            if (cursor is { } c && CursorComparer.Compare(itemCursor, c) <= 0)
                 continue;
-            if (itemSnowflake >= liveSnowflake)
+            if (CursorComparer.Compare(itemCursor, liveCursor) >= 0)
                 continue;
 
             candidates.Add(item);
@@ -1208,9 +1212,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 break;
 
             case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorSnowflake is { } pendingSnowflake)
-                    AdvanceCursor(pendingSnowflake);
-                _pendingCursorSnowflake = null;
+                if (completed.Outcome == TurnOutcome.Completed && _pendingCursor is { } pendingCursor)
+                    AdvanceCursor(pendingCursor);
+                _pendingCursor = null;
                 _turnInFlight = false;
 
                 if (completed.SourceReminderId is { } sourceReminderKey
@@ -1621,27 +1625,27 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     internal static List<string> ChunkMessage(string text) =>
         MessageChunker.Chunk(text, MaxDiscordMessageLength);
 
-    private void AdvanceCursor(ulong candidateSnowflake)
+    private void AdvanceCursor(string candidateCursor)
     {
-        if (_cursorSnowflake is { } c && candidateSnowflake <= c)
+        if (_cursor is { } c && CursorComparer.Compare(candidateCursor, c) <= 0)
         {
             _log.Debug("Session cursor did not advance session={Session} snowflake={Snowflake}",
-                _sessionId.Value, candidateSnowflake);
+                _sessionId.Value, candidateCursor);
             return;
         }
 
-        Persist(new CursorAdvanced(candidateSnowflake.ToString()), ApplyCursorAdvanced);
+        Persist(new CursorAdvanced(candidateCursor), ApplyCursorAdvanced);
     }
 
     private void ApplyCursorAdvanced(CursorAdvanced advanced)
     {
-        if (!ulong.TryParse(advanced.Cursor, out var snowflake))
+        if (NormalizeSnowflake(advanced.Cursor) is not { } cursor)
         {
             _log.Warning("Corrupt cursor value during recovery, skipping: {Cursor}", advanced.Cursor);
             return;
         }
 
-        _cursorSnowflake = snowflake;
+        _cursor = cursor;
 
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
@@ -1661,8 +1665,16 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
         => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, DiscordMessageId>(_pendingApprovalRequests, cleared);
 
-    private static ulong? TryParseSnowflake(string value)
-        => ulong.TryParse(value, out var id) ? id : null;
+    /// <summary>
+    /// Returns the canonical decimal form of a Discord snowflake, or null
+    /// when the value is not a snowflake and therefore has no order. The
+    /// <see cref="ulong"/> round-trip is a validation and normalization
+    /// step, not cursor state: it rejects the same inputs the previous
+    /// numeric cursor rejected, and it strips a form such as a leading zero
+    /// that <see cref="SnowflakeCursorComparer"/> cannot order.
+    /// </summary>
+    private static string? NormalizeSnowflake(string value)
+        => ulong.TryParse(value, out var id) ? id.ToString() : null;
 
     private sealed record InitializePipeline
     {
