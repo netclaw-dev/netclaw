@@ -861,7 +861,10 @@ internal static class McpCommand
 
         try
         {
-            await using var client = await CreateOneOffClientAsync(serverName, entry);
+            // Bound the connect handshake by the probe budget so a slow/cold stdio
+            // server (e.g. npx cold start) fails fast instead of hanging on the SDK's
+            // 60s default InitializationTimeout.
+            await using var client = await CreateOneOffClientAsync(serverName, entry, initializationTimeout: ProbeTimeout);
             var tools = await client.ListToolsAsync(cancellationToken: timeoutCts.Token);
             return new McpProbeResult(McpProbeStatus.Connected, tools.Count, null);
         }
@@ -891,13 +894,21 @@ internal static class McpCommand
         {
             return new McpProbeResult(McpProbeStatus.Unreachable, 0, "connection timed out");
         }
+        catch (TimeoutException) when (!ct.IsCancellationRequested)
+        {
+            // The MCP SDK throws TimeoutException when the initialization handshake
+            // exceeds InitializationTimeout. Map it to Unreachable so a slow/cold stdio
+            // server is reported deterministically instead of escaping as a crash.
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, "connection timed out");
+        }
         catch (Exception ex) when (ex is IOException or SocketException)
         {
             return new McpProbeResult(McpProbeStatus.Unreachable, 0, "connection failed");
         }
     }
 
-    internal static async Task<McpClient> CreateOneOffClientAsync(McpServerName serverName, McpServerEntry entry)
+    internal static async Task<McpClient> CreateOneOffClientAsync(
+        McpServerName serverName, McpServerEntry entry, TimeSpan? initializationTimeout = null)
     {
         IClientTransport transport;
 
@@ -932,7 +943,7 @@ internal static class McpCommand
             transport = new HttpClientTransport(options, McpHttpClientFactory.Shared);
         }
 
-        return await McpClient.CreateAsync(transport, new McpClientOptions
+        var clientOptions = new McpClientOptions
         {
             ClientInfo = new()
             {
@@ -942,7 +953,15 @@ internal static class McpCommand
                 WebsiteUrl = "https://netclaw.dev",
                 Description = "Open-source autonomous operations agent built on Akka.NET",
             },
-        });
+        };
+
+        // When the caller supplies a budget (the probe does), bound the initialization
+        // handshake by it instead of the SDK's 60s default so slow/cold stdio servers
+        // fail fast and deterministically.
+        if (initializationTimeout is not null)
+            clientOptions.InitializationTimeout = initializationTimeout.Value;
+
+        return await McpClient.CreateAsync(transport, clientOptions);
     }
 
     // ── Config file helpers (delegated to ConfigFileHelper) ──
