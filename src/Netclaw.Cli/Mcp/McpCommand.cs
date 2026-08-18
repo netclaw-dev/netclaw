@@ -1209,6 +1209,18 @@ internal static class McpCommand
 
     private static string FormatGrantStatus(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
+        // In All posture the grant list is additive: a tool is exposed unless its
+        // effective approval mode is Deny (the disable signal). This mirrors the
+        // runtime resolver and exposure gate.
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var mode = profile.ApprovalPolicy?.GetEffectiveMode($"{serverName.Value}/{toolName.Value}")
+                ?? ToolApprovalMode.Auto;
+            return mode == ToolApprovalMode.Deny
+                ? "-        "             // disabled via Deny
+                : "✱        ";      // exposed (additive)
+        }
+
         if (profile.McpServerToolGrants is null)
             return "\u2731        "; // ✱ = all (no grants configured)
 
@@ -1237,6 +1249,7 @@ internal static class McpCommand
         };
 
         var updated = 0;
+        var skippedAllPosture = false;
         foreach (var audienceName in audienceNames)
         {
             var profile = audienceName switch
@@ -1246,8 +1259,24 @@ internal static class McpCommand
                 _ => profiles.Personal
             };
 
-            var serverAllowed = profile.McpServersMode == ToolProfileMode.All
-                || profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
+            // A snapshot pins the current tool set as a closed allow-list. That
+            // only makes sense in Allowlist posture. In All posture the grant
+            // list is additive, so a snapshot would not restrict anything; point
+            // the operator at --revoke, which disables a tool via a Deny override.
+            if (profile.McpServersMode == ToolProfileMode.All)
+            {
+                if (targetAudience is not null)
+                {
+                    writer.WriteLine($"The {audienceName} audience exposes MCP servers in All posture; a snapshot is additive and would not restrict tools.");
+                    writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience {audienceName.ToLowerInvariant()}` to disable specific tools.");
+                    return 1;
+                }
+
+                skippedAllPosture = true;
+                continue;
+            }
+
+            var serverAllowed = profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
 
             if (!serverAllowed)
             {
@@ -1273,7 +1302,16 @@ internal static class McpCommand
 
         if (updated == 0)
         {
-            writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
+            if (skippedAllPosture)
+            {
+                writer.WriteLine($"Server '{serverName.Value}' is only reachable by audience(s) in All posture, where a snapshot is additive and would not restrict tools.");
+                writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience <name>` to disable specific tools.");
+            }
+            else
+            {
+                writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
+            }
+
             return 1;
         }
 
@@ -1308,7 +1346,53 @@ internal static class McpCommand
             return 1;
         }
 
-        // Build the updated tool set
+        // Open (All) posture: the grant list is additive, so writing an
+        // allow-list would be inert. "Disable" is a Deny approval override and
+        // "enable" clears it, matching the TUI and the runtime exposure gate.
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var (allConfig, _) = LoadConfigFiles(paths);
+            var allToolsSection = GetOrCreateSection(allConfig, "Tools");
+            var allProfilesSection = GetOrCreateSection(allToolsSection, "AudienceProfiles");
+            var allAudienceSection = GetOrCreateSection(allProfilesSection, audienceName);
+            var approvalPolicy = GetOrCreateSection(allAudienceSection, "ApprovalPolicy");
+            var toolOverrides = GetOrCreateSection(approvalPolicy, "ToolOverrides");
+
+            // Enable = clear the override so the tool inherits the server
+            // default. But if the server default is itself Deny, clearing would
+            // leave the tool hidden; write an explicit Approval override instead
+            // (secure-by-default: exposed, but gated) so enable always takes effect.
+            var serverDefaultIsDeny = InheritedServerMode(profile, serverName.Value) == ToolApprovalMode.Deny;
+
+            if (grantTools is not null)
+                foreach (var tool in grantTools)
+                {
+                    var key = $"{serverName.Value}/{tool}";
+                    if (serverDefaultIsDeny)
+                        toolOverrides[key] = ToolApprovalMode.Approval.ToString();
+                    else
+                        toolOverrides.Remove(key);
+                }
+
+            if (revokeTools is not null)
+                foreach (var tool in revokeTools)
+                    toolOverrides[$"{serverName.Value}/{tool}"] = ToolApprovalMode.Deny.ToString();
+
+            WriteConfigFile(paths.NetclawConfigPath, allConfig);
+
+            var allChanges = new List<string>();
+            if (grantTools is { Count: > 0 })
+                allChanges.Add($"enabled {grantTools.Count}");
+            if (revokeTools is { Count: > 0 })
+                allChanges.Add($"disabled {revokeTools.Count}");
+
+            writer.WriteLine(
+                $"Updated {audienceName} profile for '{serverName.Value}': {string.Join(", ", allChanges)} tool(s). " +
+                "Disabled tools carry a Deny approval override; every other tool inherits the server default.");
+            return 0;
+        }
+
+        // Build the updated tool set (Allowlist posture: closed allow-list)
         HashSet<string> currentTools;
         if (profile.McpServerToolGrants is { } existing
             && existing.TryGetValue(serverName.Value, out var currentList))
@@ -1363,6 +1447,20 @@ internal static class McpCommand
             TrustAudience.Team => profiles.Team,
             _ => profiles.Personal
         };
+    }
+
+    // The approval mode a tool with no explicit override inherits for this
+    // server: the server default, else the audience default, else Auto. Mirrors
+    // ToolApprovalConfig precedence for the server-level (non-tool) case.
+    private static ToolApprovalMode InheritedServerMode(ToolAudienceProfile profile, string serverName)
+    {
+        var approvalPolicy = profile.ApprovalPolicy;
+        if (approvalPolicy is null)
+            return ToolApprovalMode.Auto;
+
+        return approvalPolicy.McpServerDefaults.TryGetValue(serverName, out var serverDefault)
+            ? serverDefault
+            : approvalPolicy.DefaultMode;
     }
 
     private static ToolConfig LoadToolConfig(NetclawPaths paths)

@@ -77,11 +77,17 @@ internal sealed class ToolAudienceProfileResolver
         => IsToolAllowed(toolName, context.Audience);
 
     public bool IsToolAllowed(ToolName toolName, TrustAudience audience)
+        => IsToolAllowed(toolName, ResolveProfile(audience));
+
+    /// <summary>
+    /// Profile-accepting overload. Callers that filter many tools for one
+    /// audience resolve the profile once and pass it in, so a filter pass does
+    /// not re-resolve the profile per tool.
+    /// </summary>
+    public bool IsToolAllowed(ToolName toolName, ToolAudienceProfile profile)
     {
         if (!IsProfileManagedTool(toolName))
             return true;
-
-        var profile = ResolveProfile(audience);
 
         if (profile.ToolsMode == ToolProfileMode.All)
             return true;
@@ -103,10 +109,16 @@ internal sealed class ToolAudienceProfileResolver
 
     /// <summary>
     /// Checks whether a specific tool from an MCP server is allowed for the given audience.
-    /// Returns true if:
-    /// - The profile has no <see cref="ToolAudienceProfile.McpServerToolGrants"/> (null), or
-    /// - The server has no entry in the grants dictionary, or
-    /// - The tool name appears in the server's grant list.
+    /// The per-tool grant list is posture-aware:
+    /// - No <see cref="ToolAudienceProfile.McpServerToolGrants"/> (null) → all tools pass.
+    /// - The server has no entry in the grants dictionary → all tools pass.
+    /// - The tool name appears in the server's grant list → passes.
+    /// - The tool name is absent and the audience <see cref="ToolAudienceProfile.McpServersMode"/>
+    ///   is <see cref="ToolProfileMode.All"/> → passes. The grant list is additive, so a tool the
+    ///   server added after the operator wrote the list inherits the server default posture.
+    /// - The tool name is absent and the audience <see cref="ToolAudienceProfile.McpServersMode"/>
+    ///   is <see cref="ToolProfileMode.Allowlist"/> → denied. The closed allow-list keeps
+    ///   least-trust audiences fail-closed.
     /// </summary>
     public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, TrustAudience audience)
     {
@@ -164,7 +176,7 @@ internal sealed class ToolAudienceProfileResolver
     private static TrustAudience ResolveAudience(ToolInvocationContext context)
         => context.Audience;
 
-    private static bool IsMcpServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
+    public bool IsMcpServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
     {
         if (profile.McpServersMode == ToolProfileMode.All)
             return true;
@@ -172,7 +184,7 @@ internal sealed class ToolAudienceProfileResolver
         return profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
+    public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
         if (profile.McpServerToolGrants is not { } grants)
             return true;
@@ -180,7 +192,15 @@ internal sealed class ToolAudienceProfileResolver
         if (!grants.TryGetValue(serverName.Value, out var allowedTools))
             return true;
 
-        return allowedTools.Contains(toolName.Value, StringComparer.Ordinal);
+        if (allowedTools.Contains(toolName.Value, StringComparer.Ordinal))
+            return true;
+
+        // The tool is not named in the grant list. In All posture the grant list
+        // is additive, not a closed allow-list: an unnamed tool (for example one
+        // the server added after the operator wrote the list) still passes and
+        // inherits the server default approval posture. Allowlist posture stays
+        // closed so least-trust audiences remain fail-closed.
+        return profile.McpServersMode == ToolProfileMode.All;
     }
 
     private static bool IsProfileManagedTool(ToolName toolName)

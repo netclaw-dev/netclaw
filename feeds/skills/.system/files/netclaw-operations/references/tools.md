@@ -81,7 +81,9 @@ you cannot turn off the approval prompts at `mcp add` time.
 
 Inside the TUI (`netclaw mcp permissions`):
 
-- `Enter` toggles the highlighted tool's grant
+- `Enter` toggles the highlighted tool. In open (`All`) posture the toggle sets
+  `Deny` (disabled) or clears it (inherit the server default). In `Allowlist`
+  posture it adds or removes the tool from the grant list.
 - `A` toggles all tools on/off for the current audience
 - `E` enables/disables the whole server for the current audience
 - `M` cycles the **server default** approval mode (`Auto → Approval → Deny → Auto`)
@@ -96,15 +98,34 @@ Approval-mode resolution precedence (for MCP tools):
 3. Fail-closed fallback (Personal audience, shell/file-edit matcher family)
 4. Audience `DefaultMode`
 
-Newly discovered tools on an existing server automatically inherit the
-server default; you do not need to re-run `permissions` after the server
-learns a new tool.
+A tool whose effective mode is `Deny` is **removed from the tool list the model
+sees** — the model never receives a tool it cannot call.
+
+Per-tool grants are posture-aware:
+
+- **Open (`All`) posture** (Personal by default): the grant list is *additive*.
+  A newly discovered tool is exposed and inherits the server default. Disable a
+  specific tool by setting it to `Deny`. From the CLI: `netclaw mcp tools
+  <server> --revoke <tool> --audience personal` writes the `Deny` override, and
+  `--grant <tool>` clears it.
+- **`Allowlist` posture** (Team/Public by default): the grant list is *closed*.
+  A tool stays hidden until it is granted, so a newly discovered tool is not
+  exposed until the operator adds it.
+
+You do not need to re-run `permissions` after a server learns a new tool; in
+open posture it appears automatically under the server default.
 
 ### Migrating existing MCP servers
 
 Servers added to `netclaw.json` before this behavior shipped stay untouched —
 their tool grants, `ApprovalPolicy.McpServerDefaults`, and `ToolOverrides`
 entries are not rewritten during an upgrade.
+
+A grant snapshot stored for an `All`-posture audience (for example a Personal
+snapshot written by an older build) is now *inert*: the additive grant list no
+longer restricts tools, so a newly discovered tool still appears. To disable a
+specific tool, set a `Deny` override in `netclaw mcp permissions` (or
+`netclaw mcp tools <server> --revoke <tool> --audience <name>`).
 
 `netclaw doctor` will emit a warning for each enabled MCP server that
 Personal can reach (`McpServersMode = All`) but has no

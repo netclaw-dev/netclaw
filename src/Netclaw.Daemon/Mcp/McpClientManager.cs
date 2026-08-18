@@ -1954,9 +1954,46 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private void LogToolDrift(McpServerName serverName, IReadOnlyList<AIFunction> discoveredTools)
     {
-        var profiles = _toolConfig.AudienceProfiles;
-        var allGrantedTools = new HashSet<string>(StringComparer.Ordinal);
-        var hasAnyGrants = false;
+        var report = ComputeToolDrift(
+            _toolConfig.AudienceProfiles,
+            serverName,
+            discoveredTools.Select(t => t.Name).ToList());
+
+        if (report.Ungranted.Count > 0)
+        {
+            _logger.LogWarning(
+                "MCP server '{Name}' exposes {Count} tool(s) not granted to any allowlisted audience: {Tools}. " +
+                "Review and add to McpServerToolGrants if intended.",
+                serverName.Value, report.Ungranted.Count, string.Join(", ", report.Ungranted));
+        }
+
+        if (report.Stale.Count > 0)
+        {
+            _logger.LogWarning(
+                "McpServerToolGrants for '{Name}' contains {Count} tool(s) not found on server: {Tools}. " +
+                "These may have been removed or renamed.",
+                serverName.Value, report.Stale.Count, string.Join(", ", report.Stale));
+        }
+    }
+
+    /// <summary>
+    /// Drift between a server's discovered tools and its configured grants.
+    /// <see cref="Ungranted"/> and <see cref="Stale"/> are computed only from
+    /// Allowlist-posture grant lists, which alone close the tool set. All-posture
+    /// grant lists are additive (they no longer restrict tools), so they never
+    /// produce drift.
+    /// </summary>
+    internal sealed record ToolDriftReport(
+        IReadOnlyList<string> Ungranted,
+        IReadOnlyList<string> Stale);
+
+    internal static ToolDriftReport ComputeToolDrift(
+        ToolAudienceProfiles profiles,
+        McpServerName serverName,
+        IReadOnlyList<string> discoveredToolNames)
+    {
+        var allowlistGranted = new HashSet<string>(StringComparer.Ordinal);
+        var hasAllowlistGrants = false;
 
         foreach (var profile in profiles.GetAllProfiles())
         {
@@ -1964,34 +2001,24 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 || !grants.TryGetValue(serverName.Value, out var tools))
                 continue;
 
-            hasAnyGrants = true;
+            // A grant list under All posture is additive, so it no longer hides
+            // ungranted tools. Only Allowlist-posture grant lists genuinely close
+            // the set, so only those drive the ungranted/stale drift warnings.
+            if (profile.McpServersMode == ToolProfileMode.All)
+                continue;
+
+            hasAllowlistGrants = true;
             foreach (var tool in tools)
-                allGrantedTools.Add(tool);
+                allowlistGranted.Add(tool);
         }
 
-        if (!hasAnyGrants)
-            return;
+        if (!hasAllowlistGrants)
+            return new ToolDriftReport([], []);
 
-        var discoveredNames = new HashSet<string>(
-            discoveredTools.Select(t => t.Name), StringComparer.Ordinal);
-        var ungranted = discoveredNames.Except(allGrantedTools).ToList();
-        var stale = allGrantedTools.Except(discoveredNames).ToList();
-
-        if (ungranted.Count > 0)
-        {
-            _logger.LogWarning(
-                "MCP server '{Name}' exposes {Count} tool(s) not granted to any audience: {Tools}. " +
-                "Review and add to McpServerToolGrants if intended.",
-                serverName.Value, ungranted.Count, string.Join(", ", ungranted));
-        }
-
-        if (stale.Count > 0)
-        {
-            _logger.LogWarning(
-                "McpServerToolGrants for '{Name}' contains {Count} tool(s) not found on server: {Tools}. " +
-                "These may have been removed or renamed.",
-                serverName.Value, stale.Count, string.Join(", ", stale));
-        }
+        var discoveredNames = new HashSet<string>(discoveredToolNames, StringComparer.Ordinal);
+        return new ToolDriftReport(
+            discoveredNames.Except(allowlistGranted).ToList(),
+            allowlistGranted.Except(discoveredNames).ToList());
     }
 
     public void Dispose()

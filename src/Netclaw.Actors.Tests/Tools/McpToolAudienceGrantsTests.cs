@@ -377,7 +377,238 @@ public sealed class McpToolAudienceGrantsTests
         Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
     }
 
+    // ── Posture-aware per-tool grants (issue #1959) ──
+
+    [Fact]
+    public void AllPosture_ToolAbsentFromGrantSnapshot_IsExposed()
+    {
+        // Regression for #1959. Personal is All posture. A grant snapshot names
+        // the tools that existed when the operator configured the server. A tool
+        // the server adds later is absent from the snapshot, but the additive
+        // grant layer must still expose it.
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy", "delete", "move"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "get_upload_url"), PersonalContext()));
+        // A tool the snapshot names stays exposed too.
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "copy"), PersonalContext()));
+    }
+
+    [Fact]
+    public void AllowlistPosture_ToolAbsentFromGrantSnapshot_StaysHidden()
+    {
+        // Team is Allowlist posture. The grant list stays closed so least-trust
+        // audiences remain fail-closed for a newly discovered tool.
+        var config = CreateConfigWithTeamServer("dropbox");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy", "delete", "move"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        Assert.False(policy.IsToolExposed(CreateMcpTool("dropbox", "get_upload_url"), TeamContext()));
+    }
+
+    [Fact]
+    public void AllPosture_NewTool_InheritsApprovalServerDefault()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy"]
+        };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var newTool = CreateMcpTool("dropbox", "get_upload_url");
+
+        // Approval is not Deny, so the tool is exposed ...
+        Assert.True(policy.IsToolExposed(newTool, PersonalContext()));
+        // ... and the new tool inherits the server default at invocation.
+        var decision = policy.AuthorizeInvocation(newTool, CreateExecutionContext(TrustAudience.Personal));
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void AllPosture_NewTool_InheritsAutoServerDefault()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy"]
+        };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox"] = ToolApprovalMode.Auto
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var newTool = CreateMcpTool("dropbox", "get_upload_url");
+
+        Assert.True(policy.IsToolExposed(newTool, PersonalContext()));
+        var decision = policy.AuthorizeInvocation(newTool, CreateExecutionContext(TrustAudience.Personal));
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+    }
+
+    // ── Deny hides an MCP tool from exposure ──
+
+    [Fact]
+    public void AllPosture_DenyTool_HiddenFromExposure()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox/delete"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        // The Deny tool is removed from the list the model sees.
+        Assert.False(policy.IsToolExposed(CreateMcpTool("dropbox", "delete"), PersonalContext()));
+        // A sibling tool with no Deny stays exposed.
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "copy"), PersonalContext()));
+    }
+
+    [Fact]
+    public void AllPosture_DenyTool_StillDeniedAtInvocation()
+    {
+        // The exposure hide is in addition to the existing invocation block.
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox/delete"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        var decision = policy.AuthorizeInvocation(
+            CreateMcpTool("dropbox", "delete"),
+            CreateExecutionContext(TrustAudience.Personal));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+    }
+
+    [Fact]
+    public void FilterExposedTools_RemovesDenyTool_KeepsNewTool()
+    {
+        var registry = new ToolRegistry();
+        var copyTool = CreateMcpTool("dropbox", "copy");
+        var deleteTool = CreateMcpTool("dropbox", "delete");
+        var newTool = CreateMcpTool("dropbox", "get_upload_url");
+        registry.Register(copyTool);
+        registry.Register(deleteTool);
+        registry.Register(newTool);
+
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy", "delete"]
+        };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox/delete"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        var aiTools = new[] { copyTool.ToAITool(), deleteTool.ToAITool(), newTool.ToAITool() };
+        var filtered = policy.FilterExposedTools(aiTools, registry, PersonalTrustContext());
+
+        var names = filtered.Select(t => ((AIFunction)t).Name).ToList();
+        Assert.Contains("dropbox__copy", names);           // granted, not denied
+        Assert.Contains("dropbox__get_upload_url", names); // new tool, additive in All posture
+        Assert.DoesNotContain("dropbox__delete", names);   // Deny → hidden
+    }
+
+    [Fact]
+    public void AllowlistPosture_GrantedTool_WithDenyOverride_IsHidden()
+    {
+        // Deny hides a tool for EVERY audience, not only All posture: a tool that
+        // is granted (passes the allow-list) but carries a Deny override is
+        // removed from the exposed list rather than shown-then-refused.
+        var config = CreateConfigWithTeamServer("dropbox");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["dropbox"] = ["copy", "delete"]
+        };
+        config.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["dropbox/delete"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+
+        Assert.False(policy.IsToolExposed(CreateMcpTool("dropbox", "delete"), TeamContext())); // granted but Deny → hidden
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "copy"), TeamContext()));     // granted, no Deny
+    }
+
+    // ── Migration: an All-posture snapshot is additive after load ──
+
+    [Fact]
+    public void AllPosture_GrantSnapshot_DeserializesAndExposesNewTool()
+    {
+        // A config written before the server added a tool carries a full snapshot
+        // under Personal (All posture). After load the snapshot is additive: the
+        // new tool is exposed rather than treated as disabled.
+        var json = """
+        {
+            "ShellMode": "HostAllowed",
+            "AudienceProfiles": {
+                "Personal": {
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": {
+                        "dropbox": ["copy", "delete", "move"]
+                    }
+                }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<ToolConfig>(json,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+            });
+
+        Assert.NotNull(config);
+        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "get_upload_url"), PersonalContext()));
+        Assert.True(policy.IsToolExposed(CreateMcpTool("dropbox", "copy"), PersonalContext()));
+    }
+
     // ── Helpers ──
+
+    private static EffectiveTrustContext PersonalTrustContext() => new(
+        DeploymentPosture.Personal,
+        TrustAudience.Personal,
+        TrustAudience.Personal,
+        TrustAudience.Personal,
+        TrustBoundary.TrustedInstance,
+        PrincipalClassification.TrustedInternal,
+        TransportAuthenticity.Verified,
+        PayloadTaint.Trusted,
+        null, null, false, false, null);
 
     private static McpToolAdapter CreateMcpTool(string serverName, string toolName, string? description = null)
     {
