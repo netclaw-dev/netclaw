@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
 using Netclaw.Tests.Utilities;
@@ -14,11 +15,12 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class PidFileWatchdogServiceTests : IDisposable
 {
-    private static readonly TimeSpan FastPoll = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(1);
 
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeApplicationLifetime _lifetime;
+    private readonly FakeTimeProvider _timeProvider = new();
 
     public PidFileWatchdogServiceTests()
     {
@@ -35,8 +37,7 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
         var sut = CreateService();
         await sut.StartAsync(CancellationToken.None);
 
-        // Let several poll cycles pass
-        await WaitUntilAsync(() => false, timeout: FastPoll * 8);
+        _timeProvider.Advance(PollInterval * 8);
 
         Assert.False(_lifetime.StopRequested);
 
@@ -53,8 +54,9 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
         await sut.StartAsync(CancellationToken.None);
 
         File.Delete(_paths.PidFilePath);
+        _timeProvider.Advance(PollInterval);
 
-        Assert.True(await WaitUntilAsync(() => _lifetime.StopRequested, timeout: TimeSpan.FromSeconds(5)));
+        await _lifetime.ShutdownRequested.WaitAsync(TestContext.Current.CancellationToken);
 
         await sut.StopAsync(CancellationToken.None);
         sut.Dispose();
@@ -65,8 +67,9 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
     {
         var sut = CreateService();
         await sut.StartAsync(CancellationToken.None);
+        _timeProvider.Advance(PollInterval);
 
-        Assert.True(await WaitUntilAsync(() => _lifetime.StopRequested, timeout: TimeSpan.FromSeconds(5)));
+        await _lifetime.ShutdownRequested.WaitAsync(TestContext.Current.CancellationToken);
 
         await sut.StopAsync(CancellationToken.None);
         sut.Dispose();
@@ -78,27 +81,8 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
             _paths,
             _lifetime,
             NullLogger<PidFileWatchdogService>.Instance,
-            FastPoll);
-    }
-
-    /// <summary>
-    /// Polls a condition until it becomes true or the timeout expires.
-    /// Returns true if the condition was met, false on timeout.
-    /// </summary>
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
-    {
-        using var cts = new CancellationTokenSource(timeout);
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cts.Token))
-            {
-                if (condition())
-                    return true;
-            }
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested) { } // slopwatch-ignore: SW003 timeout expired — fall through to final condition check
-        return condition();
+            _timeProvider,
+            PollInterval);
     }
 
     public void Dispose()
@@ -108,12 +92,16 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
 
     private sealed class FakeApplicationLifetime : IHostApplicationLifetime
     {
-        public bool StopRequested { get; private set; }
+        private readonly TaskCompletionSource _shutdownRequested =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool StopRequested => _shutdownRequested.Task.IsCompleted;
+        public Task ShutdownRequested => _shutdownRequested.Task;
 
         public CancellationToken ApplicationStarted => CancellationToken.None;
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
 
-        public void StopApplication() => StopRequested = true;
+        public void StopApplication() => _shutdownRequested.TrySetResult();
     }
 }

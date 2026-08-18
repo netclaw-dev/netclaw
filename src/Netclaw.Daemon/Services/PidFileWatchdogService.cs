@@ -21,17 +21,18 @@ public sealed class PidFileWatchdogService : IHostedService, IDisposable
     private readonly NetclawPaths _paths;
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly ILogger<PidFileWatchdogService> _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _pollInterval;
-    private CancellationTokenSource? _cts;
-    private Task? _pollTask;
+    private ITimer? _timer;
 
     private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(5);
 
     public PidFileWatchdogService(
         NetclawPaths paths,
         IHostApplicationLifetime appLifetime,
-        ILogger<PidFileWatchdogService> logger)
-        : this(paths, appLifetime, logger, DefaultPollInterval)
+        ILogger<PidFileWatchdogService> logger,
+        TimeProvider timeProvider)
+        : this(paths, appLifetime, logger, timeProvider, DefaultPollInterval)
     {
     }
 
@@ -39,54 +40,51 @@ public sealed class PidFileWatchdogService : IHostedService, IDisposable
         NetclawPaths paths,
         IHostApplicationLifetime appLifetime,
         ILogger<PidFileWatchdogService> logger,
+        TimeProvider timeProvider,
         TimeSpan pollInterval)
     {
         _paths = paths;
         _appLifetime = appLifetime;
         _logger = logger;
+        _timeProvider = timeProvider;
         _pollInterval = pollInterval;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _pollTask = PollAsync(_cts.Token);
+        _timer = _timeProvider.CreateTimer(
+            static state => ((PidFileWatchdogService)state!).CheckPidFile(),
+            this,
+            _pollInterval,
+            _pollInterval);
         return Task.CompletedTask;
     }
 
-    private async Task PollAsync(CancellationToken ct)
+    private void CheckPidFile()
     {
-        using var timer = new PeriodicTimer(_pollInterval);
-        // OperationCanceledException from WaitForNextTickAsync on shutdown is
-        // expected and handled by StopAsync via ConfigureAwaitOptions.SuppressThrowing.
-        while (await timer.WaitForNextTickAsync(ct))
+        if (!File.Exists(_paths.PidFilePath))
         {
-            if (!File.Exists(_paths.PidFilePath))
-            {
-                _logger.LogWarning(
-                    "PID file missing ({PidFilePath}). Initiating shutdown to prevent orphan daemon.",
-                    _paths.PidFilePath);
-                _appLifetime.StopApplication();
+            var timer = Interlocked.Exchange(ref _timer, null);
+            if (timer is null)
                 return;
-            }
+
+            timer.Dispose();
+            _logger.LogWarning(
+                "PID file missing ({PidFilePath}). Initiating shutdown to prevent orphan daemon.",
+                _paths.PidFilePath);
+            _appLifetime.StopApplication();
         }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_cts is not null)
-        {
-            await _cts.CancelAsync();
-        }
-
-        if (_pollTask is not null)
-        {
-            await _pollTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        }
+        var timer = Interlocked.Exchange(ref _timer, null);
+        if (timer is not null)
+            await timer.DisposeAsync();
     }
 
     public void Dispose()
     {
-        _cts?.Dispose();
+        Interlocked.Exchange(ref _timer, null)?.Dispose();
     }
 }

@@ -5,8 +5,8 @@
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Protocol;
@@ -24,9 +24,7 @@ public sealed class DaemonClientSessionTests
     public async Task ResumeSessionAsync_reattaches_to_existing_session_via_EnsureSession()
     {
         using var host = await StartFakeHubAsync();
-        var port = TestNetworkHelpers.GetBoundPort(host);
-
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        await using var client = InMemorySignalRClientFactory.Create(host);
 
         // Create an initial session to get a known session ID
         var originalSessionId = await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
@@ -34,7 +32,7 @@ public sealed class DaemonClientSessionTests
 
         // Simulate a "new client" by creating a fresh DaemonClient
         // that resumes the same session ID
-        await using var client2 = new DaemonClient($"http://127.0.0.1:{port}");
+        await using var client2 = InMemorySignalRClientFactory.Create(host);
 
         var outputReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var sub = client2.SessionOutput.Subscribe(output =>
@@ -51,17 +49,16 @@ public sealed class DaemonClientSessionTests
         // Verify the session is functional — can send and receive messages
         await client2.SendAsync("hello-resumed", TestContext.Current.CancellationToken);
 
-        await outputReceived.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await outputReceived.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
     public async Task RespondToInteractionAsync_invokes_hub_method()
     {
         using var host = await StartFakeHubAsync();
-        var port = TestNetworkHelpers.GetBoundPort(host);
         var state = host.Services.GetRequiredService<FakeSessionState>();
 
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        await using var client = InMemorySignalRClientFactory.Create(host);
         await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
 
         await client.RespondToInteractionAsync("call-1", ApprovalOptionKeys.ApproveOnce, TestContext.Current.CancellationToken);
@@ -73,10 +70,9 @@ public sealed class DaemonClientSessionTests
     public async Task RespondToInteractionAsync_supports_session_scope()
     {
         using var host = await StartFakeHubAsync();
-        var port = TestNetworkHelpers.GetBoundPort(host);
         var state = host.Services.GetRequiredService<FakeSessionState>();
 
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        await using var client = InMemorySignalRClientFactory.Create(host);
         await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
 
         await client.RespondToInteractionAsync("call-2", ApprovalOptionKeys.ApproveSession, TestContext.Current.CancellationToken);
@@ -84,21 +80,15 @@ public sealed class DaemonClientSessionTests
         Assert.Equal(("call-2", ApprovalOptionKeys.ApproveSession), state.LastInteractionResponse);
     }
 
-    // port: 0 (default) lets Kestrel bind a free ephemeral port and hold it for the
-    // host's lifetime; callers read the actual port back via TestNetworkHelpers.GetBoundPort.
-    private static async Task<IHost> StartFakeHubAsync(int port = 0)
+    private static async Task<IHost> StartFakeHubAsync()
     {
         var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseKestrel();
-        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        builder.WebHost.UseTestServer();
         builder.Services.AddSignalR();
         builder.Services.AddSingleton<FakeSessionState>();
 
         var app = builder.Build();
-        app.MapHub<FakeResumeHub>("/hub/session", options =>
-        {
-            options.Transports = HttpTransportType.WebSockets | HttpTransportType.LongPolling;
-        });
+        app.MapHub<FakeResumeHub>("/hub/session");
 
         await app.StartAsync();
         return app;
@@ -170,7 +160,7 @@ public sealed class DaemonClientSessionTests
             {
                 Type = "text",
                 SessionId = sessionId,
-                TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
                 Text = $"echo:{text}"
             });
 
@@ -178,7 +168,7 @@ public sealed class DaemonClientSessionTests
             {
                 Type = "turn_completed",
                 SessionId = sessionId,
-                TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
                 TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             });
         }
