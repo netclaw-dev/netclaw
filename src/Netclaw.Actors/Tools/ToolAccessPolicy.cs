@@ -108,11 +108,7 @@ public sealed class ToolAccessPolicy
         IEnumerable<AITool> tools,
         ToolRegistry registry,
         EffectiveTrustContext? trustContext)
-    {
-        // Resolve the audience profile ONCE for the whole pass, not per tool.
-        var audience = ResolveAudience(trustContext);
-        var profile = _profileResolver.ResolveProfile(audience);
-        return tools
+        => tools
             .Where(tool =>
             {
                 var name = GetToolName(tool);
@@ -120,20 +116,14 @@ public sealed class ToolAccessPolicy
                     return true;
 
                 var registration = registry.GetRegistrationByToolName(name);
-                return registration is null || IsToolExposed(registration.Tool, profile, audience);
+                return registration is null || IsToolExposed(registration, trustContext);
             })
             .ToList();
-    }
 
     public IReadOnlyList<INetclawTool> FilterDiscoverableTools(
         IEnumerable<INetclawTool> tools,
         ToolInvocationContext context)
-    {
-        // Resolve the audience profile ONCE for the whole pass, not per tool.
-        var audience = ResolveAudience(context);
-        var profile = _profileResolver.ResolveProfile(audience);
-        return tools.Where(tool => IsToolExposed(tool, profile, audience)).ToList();
-    }
+        => tools.Where(tool => IsToolExposed(tool, context)).ToList();
 
     public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext? trustContext)
         => IsToolExposed(registration.Tool, ResolveAudience(trustContext));
@@ -145,37 +135,21 @@ public sealed class ToolAccessPolicy
         => _profileResolver.IsMcpServerAllowed(serverName, audience);
 
     internal bool IsToolExposed(INetclawTool tool, TrustAudience audience)
-        => IsToolExposed(tool, _profileResolver.ResolveProfile(audience), audience);
-
-    // Core exposure decision. Takes the already-resolved audience profile so a
-    // filter pass over many tools resolves the profile once and reuses it for
-    // every per-tool ACL and approval check.
-    internal bool IsToolExposed(INetclawTool tool, ToolAudienceProfile profile, TrustAudience audience)
     {
         // Feature-disabled tools are hidden for ALL audiences
         if (IsFeatureDisabledTool(tool.Name))
             return false;
 
         if (tool is McpToolAdapter mcp)
-        {
-            var mcpServer = new McpServerName(mcp.ServerName);
-            if (!_profileResolver.IsMcpServerAllowed(mcpServer, profile)
-                || !_profileResolver.IsMcpToolAllowed(mcpServer, new ToolName(mcp.BareToolName), profile))
-                return false;
+            return _profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), audience)
+                && _profileResolver.IsMcpToolAllowed(
+                    new McpServerName(mcp.ServerName),
+                    new ToolName(mcp.BareToolName),
+                    audience)
+                && _profileResolver.ResolveProfile(audience).ApprovalPolicy?.GetEffectiveMode(mcp.Name)
+                    != ToolApprovalMode.Deny;
 
-            // A tool whose effective approval mode is Deny is "disabled": remove
-            // it from the exposed list so the model never receives a tool the
-            // policy will always block. This applies to EVERY audience, not only
-            // All posture — a granted-but-Deny tool in an Allowlist audience is
-            // hidden too, since showing a tool that always fails helps no one.
-            // Reuses the shared approval precedence (ToolOverrides →
-            // McpServerDefaults → DefaultMode) so exposure and invocation cannot
-            // drift. A newly discovered tool has no Deny entry, so it stays
-            // exposed under the server default posture.
-            return profile.ApprovalPolicy?.GetEffectiveMode(mcp.Name) != ToolApprovalMode.Deny;
-        }
-
-        if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), profile))
+        if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), audience))
             return false;
 
         if (IsShellCoupledTool(tool))

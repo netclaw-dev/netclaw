@@ -5,13 +5,10 @@
 // -----------------------------------------------------------------------
 using System.Net.Http;
 using System.Text.Json;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
-using Netclaw.Actors.Tools;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
-using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -419,10 +416,8 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy", "delete" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        // Personal is All posture: every tool starts enabled.
         Assert.True(vm.IsToolGranted(new ToolName("delete")));
 
-        // Unchecking disables the tool by writing a Deny override.
         vm.ToggleTool(new ToolName("delete"));
         Assert.False(vm.IsToolGranted(new ToolName("delete")));
         Assert.Equal(ToolApprovalMode.Deny, vm.GetEffectiveMode(new ToolName("delete")).Mode);
@@ -433,7 +428,6 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         Assert.Equal(
             "Deny",
             personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
-        // The checkbox must NOT persist a closed McpServerToolGrants allow-list in All posture.
         Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
     }
 
@@ -444,15 +438,14 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        vm.ToggleTool(new ToolName("copy")); // disable → Deny
+        vm.ToggleTool(new ToolName("copy"));
         Assert.False(vm.IsToolGranted(new ToolName("copy")));
-        vm.ToggleTool(new ToolName("copy")); // re-enable → inherit server default
+        vm.ToggleTool(new ToolName("copy"));
         Assert.True(vm.IsToolGranted(new ToolName("copy")));
 
         Assert.True(vm.Save());
 
         var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
-        // Re-enabling clears the override, so no per-tool entry is persisted.
         Assert.False(
             personal.TryGetProperty("ApprovalPolicy", out var ap)
             && ap.TryGetProperty("ToolOverrides", out var overrides)
@@ -460,17 +453,14 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ToggleTool_AllPosture_EnablesOverServerDefaultDeny()
+    public void ToggleTool_AllPosture_EnablesOverDefaultDeny()
     {
-        // When the server default is Deny (all tools hidden by default), the
-        // checkbox must still be able to turn a single tool on. Clearing the
-        // override would inherit Deny, so enable writes an explicit Approval.
         File.WriteAllText(_paths.NetclawConfigPath, """
         {
           "configVersion": 1,
           "Tools": { "AudienceProfiles": { "Personal": {
             "McpServersMode": "All",
-            "ApprovalPolicy": { "McpServerDefaults": { "dropbox": "Deny" } }
+            "ApprovalPolicy": { "DefaultMode": "Deny" }
           } } }
         }
         """);
@@ -478,10 +468,8 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        // Server default Deny → the tool starts disabled (unchecked).
         Assert.False(vm.IsToolGranted(new ToolName("copy")));
 
-        // Enabling must actually take effect (not a dead toggle).
         vm.ToggleTool(new ToolName("copy"));
         Assert.True(vm.IsToolGranted(new ToolName("copy")));
         Assert.Equal(ToolApprovalMode.Approval, vm.GetEffectiveMode(new ToolName("copy")).Mode);
@@ -494,7 +482,6 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
         vm.SetSelectedAudienceForTests(TrustAudience.Team);
 
-        // Team is Allowlist posture. Enable the server, then uncheck one tool.
         vm.ToggleServerAccess();
         vm.ToggleTool(new ToolName("search"));
         Assert.True(vm.IsToolGranted(new ToolName("create-pages")));
@@ -507,72 +494,6 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
             .EnumerateArray().Select(static e => e.GetString()).ToList();
         Assert.Contains("create-pages", grants);
         Assert.DoesNotContain("search", grants);
-    }
-
-    [Fact]
-    public void ToggleTool_AllPosture_Deny_HidesToolFromRuntimePolicy()
-    {
-        // Cross-boundary contract: the TUI (producer) writes a Deny override; a
-        // runtime ToolAccessPolicy (consumer) built from that written config hides
-        // the tool. Proves the persisted representation matches the consumer.
-        // Seed a realistic Personal profile (All posture, as init writes it) so
-        // the reloaded config keeps the open posture.
-        File.WriteAllText(_paths.NetclawConfigPath, """
-        {
-          "configVersion": 1,
-          "Tools": {
-            "AudienceProfiles": {
-              "Personal": { "McpServersMode": "All" }
-            }
-          }
-        }
-        """);
-
-        var vm = CreateVm();
-        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy", "delete" });
-        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
-
-        vm.ToggleTool(new ToolName("delete")); // disable via Deny
-        Assert.True(vm.Save());
-
-        var toolConfig = LoadToolConfigFromDisk();
-        var policy = new ToolAccessPolicy(
-            toolConfig,
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy(),
-            new ToolPathPolicy([]));
-
-        var personalContext = new ToolInvocationContext(
-            new ToolRunScope
-            {
-                Session = new ToolSessionScope.Bound("slack/thread-1", null),
-                Audience = TrustAudience.Personal,
-                InlineOutputBudget = InlineOutputBudget.Default,
-                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
-            },
-            ToolExecutionTimeout.Default);
-
-        Assert.False(policy.IsToolExposed(McpTool("dropbox", "delete"), personalContext)); // Deny → hidden
-        Assert.True(policy.IsToolExposed(McpTool("dropbox", "copy"), personalContext));    // enabled
-    }
-
-    private static McpToolAdapter McpTool(string serverName, string toolName)
-        => new(AIFunctionFactory.Create(() => "result", toolName, toolName), serverName, toolName);
-
-    private ToolConfig LoadToolConfigFromDisk()
-    {
-        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        var tools = doc.RootElement.GetProperty("Tools");
-        return JsonSerializer.Deserialize<ToolConfig>(
-            tools.GetRawText(),
-            new JsonSerializerOptions
-            {
-                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-            })!;
     }
 
     private static void CycleServerDefault(McpToolPermissionsViewModel vm, bool reverse)

@@ -1209,16 +1209,13 @@ internal static class McpCommand
 
     private static string FormatGrantStatus(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
-        // In All posture the grant list is additive: a tool is exposed unless its
-        // effective approval mode is Deny (the disable signal). This mirrors the
-        // runtime resolver and exposure gate.
         if (profile.McpServersMode == ToolProfileMode.All)
         {
             var mode = profile.ApprovalPolicy?.GetEffectiveMode($"{serverName.Value}/{toolName.Value}")
                 ?? ToolApprovalMode.Auto;
             return mode == ToolApprovalMode.Deny
-                ? "-        "             // disabled via Deny
-                : "✱        ";      // exposed (additive)
+                ? "-        "
+                : "✱        ";
         }
 
         if (profile.McpServerToolGrants is null)
@@ -1249,7 +1246,6 @@ internal static class McpCommand
         };
 
         var updated = 0;
-        var skippedAllPosture = false;
         foreach (var audienceName in audienceNames)
         {
             var profile = audienceName switch
@@ -1259,20 +1255,15 @@ internal static class McpCommand
                 _ => profiles.Personal
             };
 
-            // A snapshot pins the current tool set as a closed allow-list. That
-            // only makes sense in Allowlist posture. In All posture the grant
-            // list is additive, so a snapshot would not restrict anything; point
-            // the operator at --revoke, which disables a tool via a Deny override.
             if (profile.McpServersMode == ToolProfileMode.All)
             {
                 if (targetAudience is not null)
                 {
-                    writer.WriteLine($"The {audienceName} audience exposes MCP servers in All posture; a snapshot is additive and would not restrict tools.");
+                    writer.WriteLine($"The {audienceName} audience uses All posture, which does not use tool grants.");
                     writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience {audienceName.ToLowerInvariant()}` to disable specific tools.");
                     return 1;
                 }
 
-                skippedAllPosture = true;
                 continue;
             }
 
@@ -1302,16 +1293,7 @@ internal static class McpCommand
 
         if (updated == 0)
         {
-            if (skippedAllPosture)
-            {
-                writer.WriteLine($"Server '{serverName.Value}' is only reachable by audience(s) in All posture, where a snapshot is additive and would not restrict tools.");
-                writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience <name>` to disable specific tools.");
-            }
-            else
-            {
-                writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
-            }
-
+            writer.WriteLine($"No Allowlist audience permits server '{serverName.Value}'. Nothing to snapshot.");
             return 1;
         }
 
@@ -1346,9 +1328,6 @@ internal static class McpCommand
             return 1;
         }
 
-        // Open (All) posture: the grant list is additive, so writing an
-        // allow-list would be inert. "Disable" is a Deny approval override and
-        // "enable" clears it, matching the TUI and the runtime exposure gate.
         if (profile.McpServersMode == ToolProfileMode.All)
         {
             var (allConfig, _) = LoadConfigFiles(paths);
@@ -1358,16 +1337,16 @@ internal static class McpCommand
             var approvalPolicy = GetOrCreateSection(allAudienceSection, "ApprovalPolicy");
             var toolOverrides = GetOrCreateSection(approvalPolicy, "ToolOverrides");
 
-            // Enable = clear the override so the tool inherits the server
-            // default. But if the server default is itself Deny, clearing would
-            // leave the tool hidden; write an explicit Approval override instead
-            // (secure-by-default: exposed, but gated) so enable always takes effect.
             var serverDefaultIsDeny = InheritedServerMode(profile, serverName.Value) == ToolApprovalMode.Deny;
 
             if (grantTools is not null)
                 foreach (var tool in grantTools)
                 {
                     var key = $"{serverName.Value}/{tool}";
+                    if (profile.ApprovalPolicy?.ToolOverrides.TryGetValue(key, out var currentMode) == true
+                        && currentMode != ToolApprovalMode.Deny)
+                        continue;
+
                     if (serverDefaultIsDeny)
                         toolOverrides[key] = ToolApprovalMode.Approval.ToString();
                     else
@@ -1392,7 +1371,6 @@ internal static class McpCommand
             return 0;
         }
 
-        // Build the updated tool set (Allowlist posture: closed allow-list)
         HashSet<string> currentTools;
         if (profile.McpServerToolGrants is { } existing
             && existing.TryGetValue(serverName.Value, out var currentList))
@@ -1449,9 +1427,6 @@ internal static class McpCommand
         };
     }
 
-    // The approval mode a tool with no explicit override inherits for this
-    // server: the server default, else the audience default, else Auto. Mirrors
-    // ToolApprovalConfig precedence for the server-level (non-tool) case.
     private static ToolApprovalMode InheritedServerMode(ToolAudienceProfile profile, string serverName)
     {
         var approvalPolicy = profile.ApprovalPolicy;
@@ -1503,7 +1478,7 @@ internal static class McpCommand
         writer.WriteLine("Flags for 'add':");
         writer.WriteLine("  --grant-all  CI escape hatch. Skip the empty-grants writes and leave tool");
         writer.WriteLine("               grants null (legacy \"all pass\" behavior). Approval defaults");
-        writer.WriteLine("               (Personal=Approval, Team=Approval, Public=Deny) are still written.");
+        writer.WriteLine("               (Personal=Auto, Team=Approval, Public=Deny) are still written.");
         writer.WriteLine("  --auth       Start the OAuth flow immediately after adding (HTTP/SSE only).");
         writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
         writer.WriteLine("               dynamic client registration.");

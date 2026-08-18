@@ -363,15 +363,10 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configMode))
             return configMode;
 
-        return ToolApprovalMode.Auto;
+        return approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto;
     }
 
-    /// <summary>
-    /// True when the selected audience exposes MCP servers in <see cref="ToolProfileMode.All"/>
-    /// posture. In All posture the per-tool checkbox maps to the approval axis (Deny =
-    /// disabled) rather than the closed <see cref="ToolAudienceProfile.McpServerToolGrants"/>
-    /// allow-list, so a newly discovered tool stays enabled under the server default.
-    /// </summary>
+    /// <summary>Checks whether the selected profile exposes all MCP servers.</summary>
     private bool IsAllPostureForSelectedAudience()
         => ResolveProfile(SelectedAudience).McpServersMode == ToolProfileMode.All;
 
@@ -382,11 +377,6 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        // In All posture the checkbox means "not disabled": a tool is enabled
-        // unless its effective approval mode is Deny. Disable is expressed as a
-        // Deny override, so a newly discovered tool (no override) reads as enabled
-        // and inherits the server default. This mirrors the runtime resolver,
-        // which treats the grant list as additive in All posture.
         if (IsAllPostureForSelectedAudience())
         {
             if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pendingAllAccess)
@@ -437,14 +427,16 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        // In All posture, "disable all" writes a Deny override for each tool and
-        // "enable all" clears the overrides (inherit the server default).
         if (IsAllPostureForSelectedAudience())
         {
+            var enabledMode = GetServerDefault() == ToolApprovalMode.Deny
+                ? ToolApprovalMode.Approval
+                : (ToolApprovalMode?)null;
+
             foreach (var tool in DiscoveredTools)
             {
                 _pendingToolOverrides[(audienceName, SelectedServer, tool)] =
-                    anyGranted ? ToolApprovalMode.Deny : null;
+                    anyGranted ? ToolApprovalMode.Deny : enabledMode;
             }
 
             NotifyStateChanged();
@@ -471,12 +463,6 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
-        // In All posture the checkbox toggles the Deny approval override, not the
-        // allow-list. Enabled → set Deny (disable). Disabled → enable: clear the
-        // override so the tool inherits the server default — but if the server
-        // default is itself Deny, clearing would leave the tool hidden, so write
-        // an explicit Approval override (secure-by-default: exposed, but gated)
-        // so the checkbox always turns the tool on.
         if (IsAllPostureForSelectedAudience())
         {
             var overrideKey = (audienceName, SelectedServer, toolName.Value);
