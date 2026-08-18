@@ -361,7 +361,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return McpCatalogRefreshResult.Failed;
             }
 
-            _logger.LogWarning(ex,
+            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
                 "MCP server '{Name}' catalog refresh failed; keeping generation {Generation} unchanged",
                 current.Name.Value,
                 current.Generation);
@@ -847,7 +847,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 LogOAuthRefreshFailureDiagnostics(current.Name.Value, entry.Url);
             if (current.IsConnected)
             {
-                _logger.LogWarning(ex,
+                _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
                     "MCP server '{Name}' replacement failed; generation {Generation} remains connected",
                     current.Name.Value,
                     current.Generation);
@@ -865,7 +865,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     _credentialStore.ForgetClientIdentity(current.Name, entry.Url!, CancellationToken.None);
 
                 var error = CreateSafeOAuthError(ex, "connection initialization");
-                _logger.LogError(ex,
+                _logger.LogError(SecretOutputRedactor.RedactForLogging(ex),
                     "Explicit MCP OAuth candidate failed for server '{Name}' during {Operation} (provider status {ProviderStatus})",
                     current.Name.Value,
                     error.Operation,
@@ -939,13 +939,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var error = new McpErrorResponse(
                 "Authorization was cancelled or expired. Start a new MCP authorization attempt.",
                 "authorization exchange");
-            _logger.LogWarning(ex, "Explicit MCP OAuth flow was cancelled for '{Name}'", flow.ServerName.Value);
+            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "Explicit MCP OAuth flow was cancelled for '{Name}'", flow.ServerName.Value);
             _flowBroker.Fail(flow, error);
         }
         catch (Exception ex)
         {
             var error = CreateSafeOAuthError(ex, "connection initialization");
-            _logger.LogError(ex, "Explicit MCP OAuth flow failed for '{Name}'", flow.ServerName.Value);
+            _logger.LogError(SecretOutputRedactor.RedactForLogging(ex), "Explicit MCP OAuth flow failed for '{Name}'", flow.ServerName.Value);
             _flowBroker.Fail(flow, error);
         }
     }
@@ -1003,7 +1003,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             // The replacement is already published and serving; a failed disposal of the
             // old client leaks a connection but must not fail the reconnect.
-            _logger.LogError(ex, "Error disposing replaced MCP client '{Name}'", replaced.Name.Value);
+            _logger.LogError(SecretOutputRedactor.RedactForLogging(ex), "Error disposing replaced MCP client '{Name}'", replaced.Name.Value);
         }
     }
 
@@ -1424,7 +1424,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         if (failureStatus.State is McpConnectionState.AwaitingAuth)
         {
-            _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name.Value);
+            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "MCP server '{Name}' requires OAuth authorization", name.Value);
             EmitAuthAlert(name,
                 $"MCP server '{name.Value}' requires OAuth authorization. Run: netclaw mcp auth {name.Value}",
                 "authorization_required");
@@ -1433,7 +1433,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         if (failureStatus.State is McpConnectionState.AuthFailed)
         {
-            _logger.LogWarning(ex, "MCP server '{Name}' authentication failed", name.Value);
+            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "MCP server '{Name}' authentication failed", name.Value);
             if (hasOAuthRuntimeHints || hasCachedTokens)
             {
                 EmitAuthAlert(name,
@@ -1449,7 +1449,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             return;
         }
 
-        _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name.Value);
+        _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "Failed to connect to MCP server '{Name}'", name.Value);
         EmitDisconnectedAlert(name,
             $"MCP server '{name.Value}' connection failed: {failureStatus.ErrorMessage}");
     }
@@ -1506,7 +1506,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var status = CreateAwaitingAuthStatus(current.Name, _timeProvider.GetUtcNow())
             with { ToolCount = current.ToolFunctions.Count };
         lifecycle.Publish(current with { Status = status });
-        _logger.LogWarning(ex,
+        _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
             "MCP server '{Name}' lost OAuth authorization during catalog refresh; marked AwaitingAuth",
             current.Name.Value);
         LogOAuthRefreshFailureDiagnostics(current.Name.Value, resourceUrl);

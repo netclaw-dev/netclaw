@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tools;
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
-    "Execute commands requiring shell semantics. Do not use for known file reads, directory listings, or edits unless shell behavior is requested.",
+    "Execute operations requiring shell semantics. For one-call work in a named directory, set WorkingDirectory. Program-specific directory options do not replace it. Do not use for known file reads, directory listings, or edits unless shell behavior is requested.",
     Grant = "shell")]
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
@@ -41,9 +41,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ShellExecutionEnvironment _environment;
 
     public record Params(
-        [param: Description("The shell command to execute.")] string Command,
         [param: Description(
-            "Run the command in this directory. Prefer this argument to an inline cd. Omit it to use the session project or scratch directory.")]
+            "The shell operation only. For one-call work in a named directory, set WorkingDirectory. Example: use Command='inspect' and WorkingDirectory='/repo/child'.")]
+        string Command,
+        [param: Description(
+            "Run the operation in this directory. Always use it for one-call work in a named child directory or worktree. Example: use Command='inspect' and WorkingDirectory='/repo/child'. Omit it to use the session project or scratch directory.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
@@ -142,16 +144,23 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             process.StandardInput.Close();
 
             // Start draining both pipes up front: a chatty child can deadlock if
-            // one pipe buffer fills while we wait on the other. The reads take
-            // CancellationToken.None deliberately — a redirected child holds the
-            // pipe write-ends open, so a blocked pipe read cannot be interrupted
-            // by a token; killing the process is what closes the pipes.
+            // one pipe buffer fills while we wait on the other.
+            //
+            // drainCts starts linked to the caller/timeout token, so a genuine
+            // command timeout still cuts the drain short. It gets a second,
+            // short fuse armed below once the direct child exits on its own:
+            // a forked or backgrounded grandchild (a daemon, a `cmd &` job)
+            // can inherit the pipe write end and hold it open past the
+            // parent's exit, so EOF may never arrive. Without that fuse the
+            // drain would hang for the grandchild's full life span instead of
+            // returning once the command itself is done.
             //
             // BoundedOutputReader reads into a head+tail window bounded by
             // MaxOutputChars but continues draining after the cap is reached so
             // the pipe never fills up and deadlocks a still-running child.
-            var stdoutTask = BoundedOutputReader.DrainToWindowAsync(process.StandardOutput, _config.MaxOutputChars, CancellationToken.None);
-            var stderrTask = BoundedOutputReader.DrainToWindowAsync(process.StandardError, _config.MaxOutputChars, CancellationToken.None);
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+            var stdoutTask = BoundedOutputReader.DrainToWindowAsync(process.StandardOutput, _config.MaxOutputChars, drainCts.Token);
+            var stderrTask = BoundedOutputReader.DrainToWindowAsync(process.StandardError, _config.MaxOutputChars, drainCts.Token);
 
             try
             {
@@ -199,8 +208,13 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     : "Error: Command cancelled.";
             }
 
-            var (stdoutText, _) = await stdoutTask;
-            var (stderrText, _) = await stderrTask;
+            // The direct child exited on its own. Give the drain a short grace
+            // window to flush output that is already buffered, then stop
+            // waiting on it — see the comment above drainCts.
+            drainCts.CancelAfter(PostExitDrainGrace);
+
+            var (stdoutText, _, stdoutGraceCut) = await stdoutTask;
+            var (stderrText, _, stderrGraceCut) = await stderrTask;
 
             // Assemble the raw combined output (stdout then stderr). Each stream was
             // drained to MaxOutputChars, so the concatenation can be up to 2x — re-window
@@ -219,6 +233,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
 
             var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
+            if (stdoutGraceCut || stderrGraceCut)
+                captured += GraceCutMarker;
+
             return $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}";
         }
     }
@@ -350,22 +367,39 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             {
                 process.StandardInput.Close();
 
+                // drainCts starts linked to the caller/timeout token, so a
+                // genuine command timeout still cuts the drain short. It gets
+                // a second, short fuse armed below once the direct child
+                // exits on its own — see the matching comment in
+                // ExecuteCoreAsync for why that fuse is needed.
+                using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+
                 var drainStdout = DrainPipeToChannelAsync(
-                    process.StandardOutput, stdoutAcc, activityChannel.Writer, "stdout");
+                    process.StandardOutput, stdoutAcc, activityChannel.Writer, "stdout", drainCts.Token);
                 var drainStderr = DrainPipeToChannelAsync(
-                    process.StandardError, stderrAcc, activityChannel.Writer, "stderr");
+                    process.StandardError, stderrAcc, activityChannel.Writer, "stderr", drainCts.Token);
 
                 _ = Task.WhenAll(drainStdout, drainStderr)
                     .ContinueWith(
                         _ => activityChannel.Writer.TryComplete(),
                         TaskContinuationOptions.ExecuteSynchronously);
 
+                // Relays activity updates to the caller as they arrive. This
+                // task runs independently of the awaits below, so output
+                // still streams live while the process is running — it only
+                // finishes once the channel completes (both drains done) or
+                // linkedCts cancels.
+                var relayActivities = RelayActivitiesAsync(activityChannel.Reader, output, linkedCts.Token);
+
                 try
                 {
-                    await foreach (var activity in activityChannel.Reader.ReadAllAsync(linkedCts.Token))
-                        output.TryWrite(activity);
-
+                    // WaitForExitAsync only tracks the direct child. Once it
+                    // returns, arm the drain's short post-exit grace window
+                    // (see drainCts above) instead of waiting on the drain
+                    // for the rest of the command timeout.
                     await process.WaitForExitAsync(linkedCts.Token);
+                    drainCts.CancelAfter(PostExitDrainGrace);
+                    await relayActivities;
                 }
                 catch (OperationCanceledException)
                 {
@@ -373,16 +407,26 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     // accumulated) but a token fired in the narrow gap before
                     // WaitForExitAsync returned, fall through to assemble the
                     // valid accumulated output instead of discarding it.
+                    // drainCts already observes the same cancellation through
+                    // its link to linkedCts, so the relay below cannot hang.
                     if (!process.HasExited)
                     {
                         await KillAndDrainAsync(process, drainStdout, drainStderr);
+                        await relayActivities;
                         output.TryWrite(new ToolCompletedUpdate(
                             $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."));
                         return;
                     }
+
+                    await relayActivities;
                 }
 
-                try { await Task.WhenAll(drainStdout, drainStderr); }
+                var graceCut = false;
+                try
+                {
+                    var drainCancelled = await Task.WhenAll(drainStdout, drainStderr);
+                    graceCut = drainCancelled[0] || drainCancelled[1];
+                }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
@@ -402,6 +446,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 }
 
                 var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
+                if (graceCut)
+                    captured += GraceCutMarker;
+
                 output.TryWrite(new ToolCompletedUpdate(
                     $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}"));
             }
@@ -443,30 +490,83 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     private static readonly TimeSpan CoalesceInterval = TimeSpan.FromMilliseconds(500);
 
-    private static async Task DrainPipeToChannelAsync(
+    // Once the direct child process exits on its own, a forked or
+    // backgrounded grandchild can still hold the stdout/stderr pipe write
+    // end open (see the drainCts comments in ExecuteCoreAsync and
+    // ExecuteStreamCoreAsync). This grace window gives already-buffered
+    // output time to flush before the drain stops waiting for EOF.
+    private static readonly TimeSpan PostExitDrainGrace = TimeSpan.FromMilliseconds(500);
+
+    // The tool appends this text when the post-exit grace window cuts a drain
+    // before EOF. A background child can still hold the pipe open, so the
+    // capture can be partial. This marker makes the cut visible to the agent.
+    private static readonly string GraceCutMarker =
+        $"{Environment.NewLine}Note: a background process held the output pipe open. "
+        + "The tool did not capture output after this point.";
+
+    private static async Task RelayActivitiesAsync(
+        ChannelReader<ToolActivityUpdate> reader,
+        ChannelWriter<ToolCallUpdate> output,
+        CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var activity in reader.ReadAllAsync(ct))
+                output.TryWrite(activity);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The outer token cancelled before the channel drained on its own
+            // (for example the process is being killed after a timeout).
+            // Whatever already relayed stays relayed.
+            Debug.WriteLine("shell_execute: activity relay stopped — outer token cancelled.");
+        }
+    }
+
+    /// <summary>
+    /// Drains one pipe into <paramref name="accumulator"/> and the live activity
+    /// channel. Returns true when <paramref name="ct"/> cancelled the read before
+    /// the pipe reached EOF. The caller uses this flag to mark a grace-cut — the
+    /// same signal that <see cref="BoundedOutputReader.DrainToWindowAsync"/>
+    /// returns for the non-streaming path.
+    /// </summary>
+    private static async Task<bool> DrainPipeToChannelAsync(
         TextReader pipe,
         BoundedOutputAccumulator accumulator,
         ChannelWriter<ToolActivityUpdate> channel,
-        string phase)
+        string phase,
+        CancellationToken ct)
     {
         var buf = ArrayPool<char>.Shared.Rent(4096);
         var coalesced = new StringBuilder(4096);
         var lastFlush = Stopwatch.GetTimestamp();
+        var cancelled = false;
         try
         {
-            int read;
-            while ((read = await pipe.ReadAsync(buf.AsMemory(), CancellationToken.None)) > 0)
+            try
             {
-                var span = buf.AsSpan(0, read);
-                accumulator.Append(span);
-                coalesced.Append(span);
-
-                if (Stopwatch.GetElapsedTime(lastFlush) >= CoalesceInterval)
+                int read;
+                while ((read = await pipe.ReadAsync(buf.AsMemory(), ct)) > 0)
                 {
-                    channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
-                    coalesced.Clear();
-                    lastFlush = Stopwatch.GetTimestamp();
+                    var span = buf.AsSpan(0, read);
+                    accumulator.Append(span);
+                    coalesced.Append(span);
+
+                    if (Stopwatch.GetElapsedTime(lastFlush) >= CoalesceInterval)
+                    {
+                        channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
+                        coalesced.Clear();
+                        lastFlush = Stopwatch.GetTimestamp();
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The pipe never reached EOF within the bound — most commonly a
+                // backgrounded or daemonized grandchild that inherited the write
+                // end after the direct process exited. Stop reading; whatever is
+                // already buffered still gets flushed below.
+                cancelled = true;
             }
 
             if (coalesced.Length > 0)
@@ -476,9 +576,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             ArrayPool<char>.Shared.Return(buf, clearArray: true);
         }
+
+        return cancelled;
     }
 
-    private static async Task KillAndDrainAsync(Process process, Task drainStdout, Task drainStderr)
+    private static async Task KillAndDrainAsync(Process process, Task<bool> drainStdout, Task<bool> drainStderr)
     {
         try { process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException ex)

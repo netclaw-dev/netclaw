@@ -273,6 +273,13 @@ Done when:
   Three failures used `git -C`, and one failure used inline `cd`. The source
   inspection baseline passed 0/5. Each run read the named file, then tried
   shell search before `file_list`.
+- [x] The shell schema and always-loaded rules now separate `Command` from
+  one-call directory selection. The rules do not name an executable syntax.
+  The unchanged worktree status case passed 4/5. Direct typed scope and the
+  deliberate inline-directory case each passed 5/5.
+- [x] The unchanged source-inspection case passed 1/5. Four runs used shell
+  search after `file_read`. This result tracks a separate first-party recursive
+  file-search gap.
 - [x] A sanitized subagent eval proves that a different user-named project is
   declared before the child's first multi-command shell inspection. Absolute
   path operands remain exact scopes, but do not create a safe-space root. The

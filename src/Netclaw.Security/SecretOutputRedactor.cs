@@ -80,10 +80,39 @@ public static partial class SecretOutputRedactor
         return sanitized;
     }
 
+    /// <summary>
+    /// An exception surfaced from an external call (an OAuth token/DCR exchange, a webhook
+    /// delivery, a subprocess) can carry the far side's raw error body inside
+    /// <see cref="Exception.Message"/> or an inner exception, and that body can echo back a
+    /// secret the request sent. Passing such an exception straight to a logger lets the
+    /// unredacted body reach any log sink, including ones that leave the box (OTLP export).
+    /// This swaps in a redacted stand-in only when secret-shaped content is actually
+    /// present, so the overwhelming majority of exceptions (network errors, cancellations,
+    /// disposal failures) keep their original instance, type, and full native stack trace.
+    /// </summary>
+    public static Exception RedactForLogging(Exception ex)
+    {
+        var rendered = ex.ToString();
+        var redacted = Redact(rendered);
+        if (string.Equals(redacted, rendered, StringComparison.Ordinal))
+            return ex;
+
+        var typeName = ex.GetType().FullName ?? ex.GetType().Name;
+        return new RedactedLoggingException(
+            $"{typeName} (message redacted; matched secret-shaped content): {redacted}");
+    }
+
+    private sealed class RedactedLoggingException(string message) : Exception(message);
+
     [GeneratedRegex("\"((?:api[_-]?key|token|secret|password|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?key|private[_-]?key|connection[_-]?string|credential)[^\"]*)\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex JsonSecretValueRegex();
 
-    [GeneratedRegex("\\b((?:api[_-]?key|token|secret|password|authorization|credential)[A-Z0-9_-]*)=([^\\s;]+)", RegexOptions.IgnoreCase)]
+    // Kept in lockstep with JsonSecretValueRegex's key fragments: an OAuth token endpoint's
+    // error body is as likely to arrive form-urlencoded ("client_secret=...&grant_type=...")
+    // as JSON, and a compound key like "client_secret" or "refresh_token" does not match a
+    // bare "secret"/"token" fragment here, since \b only anchors at the start of the whole
+    // key -- "client_secret" has no word boundary before "secret".
+    [GeneratedRegex("\\b((?:api[_-]?key|token|secret|password|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?key|private[_-]?key|connection[_-]?string|credential)[A-Z0-9_-]*)=([^\\s;]+)", RegexOptions.IgnoreCase)]
     private static partial Regex EnvSecretValueRegex();
 
     [GeneratedRegex("(Authorization\\s*:\\s*Bearer\\s+)(\\S+)", RegexOptions.IgnoreCase)]
