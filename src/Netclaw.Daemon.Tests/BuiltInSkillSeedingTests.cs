@@ -59,7 +59,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         var skill = File.ReadAllText(Path.Combine(skillDirectory, "SKILL.md"));
         var projects = File.ReadAllText(Path.Combine(skillDirectory, "references", "projects.md"));
 
-        Assert.Contains("version: \"2.58.0\"", skill, StringComparison.Ordinal);
+        Assert.Contains("version: \"2.59.0\"", skill, StringComparison.Ordinal);
         Assert.Contains("use `file_read` for a known local file read", skill, StringComparison.Ordinal);
         Assert.Contains("use `web_search` for external discovery", skill, StringComparison.Ordinal);
         Assert.Contains("use `shell_execute` for local search", skill, StringComparison.Ordinal);
@@ -67,16 +67,25 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("do not use shell only to verify", skill, StringComparison.Ordinal);
         Assert.Contains("do not attempt a shell redirect first", skill, StringComparison.Ordinal);
         Assert.Contains("Start with the smallest single shell operation", skill, StringComparison.Ordinal);
+        Assert.Contains("Use one operation per call", skill, StringComparison.Ordinal);
+        Assert.Contains("Add a pipeline only when the requested result requires it", skill, StringComparison.Ordinal);
+        Assert.Contains("disposable writable work outside a project", skill, StringComparison.Ordinal);
+        Assert.Contains("do not substitute platform temporary storage", skill, StringComparison.Ordinal);
         Assert.Contains("After an approval-required result", skill, StringComparison.Ordinal);
         Assert.Contains("A `Tool access denied:` result is terminal", skill, StringComparison.Ordinal);
+        Assert.Contains("Do not probe a named project path before declaring it", skill, StringComparison.Ordinal);
+        Assert.Contains("user-provided fallback before other tools", skill, StringComparison.Ordinal);
+        Assert.Contains("Use the task's first project path exactly", skill, StringComparison.Ordinal);
 
         var statements = new[]
         {
             "For declared-project work, omit `WorkingDirectory`",
             "For one call in a named child directory",
-            "Use `session_dir` only for disposable work outside a project",
+            "Use `session_dir` for disposable writable work outside a project",
             "Use an inline directory change only when",
             "Start with the smallest single shell operation",
+            "Use one operation per call",
+            "Add a pipeline only when the requested result requires it",
             "After an approval-required result",
             "A `Tool access denied:` result is terminal",
             "Apply one `Tool execution deferred:` correction unchanged"

@@ -696,7 +696,10 @@ SHALL use built-in `web_fetch`, not a shell HTTP client.
 - **THEN** the path can provide the candidate's exact policy scope
 - **AND** it does not add that project as a safe-space root
 - **AND** model guidance tells the agent to call `set_working_directory` before
-  several shell calls in that project
+  the first shell or file tool call in that project
+- **AND** guidance declares a named path before probing it with another tool
+- **AND** guidance does not replace the first named path with its parent
+- **AND** a rejected declaration precedes a user-provided fallback declaration
 - **AND** the same rule applies when a subagent's exposed tools include
   `set_working_directory` and its inherited project differs
 - **AND** the rule is absent when that tool is unavailable

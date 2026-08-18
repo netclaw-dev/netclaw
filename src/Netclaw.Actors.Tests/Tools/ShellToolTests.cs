@@ -58,8 +58,11 @@ public class ShellToolTests
         Assert.Contains("shell semantics", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("local search, VCS, builds, tests, processes", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("declared-project work, omit WorkingDirectory", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("session_dir only for disposable non-project work", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("session_dir for disposable writable work outside a project", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("do not substitute platform temporary storage", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("smallest operation that answers the request", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Use one operation per call", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Add a pipeline only when the requested result requires it", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use shell only to verify successful structured results", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("After approval-required results, do not retry or substitute variants", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", _tool.Description, StringComparison.Ordinal);
@@ -79,6 +82,8 @@ public class ShellToolTests
             .GetString();
 
         Assert.Contains("smallest shell operation that answers the request", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Use one operation per call", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Add a pipeline only when the requested result requires it", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not verify successful structured results with shell", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not retry approval-required variants", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", commandDescription, StringComparison.Ordinal);
@@ -87,7 +92,8 @@ public class ShellToolTests
         Assert.Contains("Set only for one call", description, StringComparison.Ordinal);
         Assert.Contains("named child directory or worktree", description, StringComparison.Ordinal);
         Assert.Contains("Omit for declared-project work", description, StringComparison.Ordinal);
-        Assert.Contains("session_dir only for disposable non-project work", description, StringComparison.Ordinal);
+        Assert.Contains("session_dir for disposable writable work outside a project", description, StringComparison.Ordinal);
+        Assert.Contains("do not substitute platform temporary storage", description, StringComparison.Ordinal);
     }
 
     [Theory]

@@ -100,7 +100,7 @@ Parent and child guidance will use this order:
 
 1. Use `project_dir` for work that belongs to the declared project.
 2. Use typed `WorkingDirectory` for one call in a named child directory.
-3. Use `session_dir` only for disposable work outside a project.
+3. Use `session_dir` for disposable writable work outside a project.
 4. Keep an inline directory change only when that change is the task.
 
 A successful `set_working_directory` call already updates child project scope

@@ -89,7 +89,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
 
         var projectIndex = prompt.IndexOf("For declared-project work, omit `WorkingDirectory`", StringComparison.Ordinal);
         var childIndex = prompt.IndexOf("For one call in a named child directory", StringComparison.Ordinal);
-        var scratchIndex = prompt.IndexOf("Use `session_dir` only for disposable work outside a project", StringComparison.Ordinal);
+        var scratchIndex = prompt.IndexOf("Use `session_dir` for disposable writable work outside a project", StringComparison.Ordinal);
         var transitionIndex = prompt.IndexOf("Use an inline directory change only when", StringComparison.Ordinal);
         Assert.True(projectIndex >= 0);
         Assert.True(childIndex > projectIndex);
@@ -101,7 +101,12 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Path arguments give the approval gate an exact candidate scope", prompt);
         Assert.Contains("safe-space root", prompt);
         Assert.DoesNotContain("path argument IS the declaration", prompt);
-        Assert.Contains("before the first shell", prompt);
+        Assert.Contains("before the first project tool call", prompt);
+        Assert.Contains("The work needs a shell or file tool", prompt);
+        Assert.Contains("Do not probe a named project path first", prompt);
+        Assert.Contains("user-provided fallback before other tools", prompt);
+        Assert.Contains("Use the task's first project path exactly", prompt);
+        Assert.Contains("Do not substitute its parent", prompt);
         Assert.Contains("Do not repeat", prompt);
         Assert.Contains("`project_dir` already names the correct project", prompt);
         Assert.Contains("Only `Tool execution deferred:` permits one scope correction", prompt);
@@ -129,6 +134,10 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("do not use shell only to verify", prompt);
         Assert.Contains("do not attempt a shell redirect first", prompt);
         Assert.Contains("Start with the smallest single shell operation", prompt);
+        Assert.Contains("Use one operation per call", prompt);
+        Assert.Contains("Add a pipeline only when the requested result requires it", prompt);
+        Assert.Contains("disposable writable work outside a project", prompt);
+        Assert.Contains("do not substitute platform temporary storage", prompt);
         Assert.Contains("After an approval-required result", prompt);
         Assert.Contains("A `Tool access denied:` result is terminal", prompt);
         Assert.Contains("Apply one `Tool execution deferred:` correction unchanged", prompt);

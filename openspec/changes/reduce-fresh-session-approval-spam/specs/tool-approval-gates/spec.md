@@ -113,8 +113,9 @@ prefer their first-party file tools. External discovery SHALL prefer
 `web_search`, and page retrieval SHALL prefer `web_fetch`. Local repository
 search, VCS, builds, tests, and process semantics SHALL remain shell work.
 Guidance SHALL NOT claim that a preferred tool bypasses its own authority.
-Guidance SHALL start with the smallest necessary shell operation. After an
-approval-required result, it SHALL avoid retried or substitute shell variants.
+Guidance SHALL start with the smallest necessary shell operation. It SHALL use
+one operation per call unless the requested result requires a pipeline. After
+an approval-required result, it SHALL avoid retried or substitute shell variants.
 A `Tool access denied:` result SHALL be terminal: guidance SHALL NOT change
 scope, retry, or substitute another tool. It MAY apply one
 `Tool execution deferred:` correction unchanged. Otherwise it SHALL use an
@@ -195,6 +196,13 @@ tool can complete.
 - **WHEN** the agent composes its first shell call
 - **THEN** guidance selects the smallest operation that answers the task
 - **AND** optional diagnostics remain absent until the task requires them
+
+#### Scenario: Unrequested diagnostics do not create a command chain
+
+- **GIVEN** one shell operation answers the requested result
+- **WHEN** the agent authors the first shell call
+- **THEN** the call contains that operation only
+- **AND** it does not add branch, history, layout, or environment diagnostics
 
 #### Scenario: Policy-blocked shell work does not fan out
 

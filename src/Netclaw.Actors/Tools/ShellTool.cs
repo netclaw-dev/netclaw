@@ -22,8 +22,10 @@ namespace Netclaw.Actors.Tools;
 [NetclawTool(ToolName,
     "Execute local search, VCS, builds, tests, processes, or other operations requiring shell semantics. " +
     "For declared-project work, omit WorkingDirectory. Use it for one call in a named child directory. " +
-    "Use session_dir only for disposable non-project work. Keep inline directory changes only when requested. " +
-    "Start with the smallest operation that answers the request. Do not use shell only to verify successful structured results. " +
+    "Use session_dir for disposable writable work outside a project; do not substitute platform temporary storage. " +
+    "Keep inline directory changes only when requested. " +
+    "Start with the smallest operation that answers the request. Use one operation per call. " +
+    "Add a pipeline only when the requested result requires it. Do not use shell only to verify successful structured results. " +
     "After approval-required results, do not retry or substitute variants. Treat 'Tool access denied:' as terminal; do not change scope. " +
     "Apply one 'Tool execution deferred:' correction unchanged. " +
     "Do not use shell for known file reads, listings, edits, or disposable text unless shell behavior is requested.",
@@ -48,10 +50,10 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     public record Params(
         [param: Description(
-            "The smallest shell operation that answers the request. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. Do not retry approval-required variants. Treat 'Tool access denied:' as terminal; do not change scope. Apply one 'Tool execution deferred:' correction unchanged.")]
+            "The smallest shell operation that answers the request. Use one operation per call. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. Do not retry approval-required variants. Treat 'Tool access denied:' as terminal; do not change scope. Apply one 'Tool execution deferred:' correction unchanged.")]
         string Command,
         [param: Description(
-            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Use session_dir only for disposable non-project work.")]
+            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Use session_dir for disposable writable work outside a project; do not substitute platform temporary storage.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)

@@ -398,8 +398,16 @@ Done when:
   external directory transitions produced exactly one hard denial, no scope
   correction, and no retry. See
   `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-terminal-denial-guidance-eval-results.json`.
-- [ ] Merge the bounded terminal-denial guidance correction, swap the exact
-  merged binary, and confirm five fresh live denial sessions before completion.
+- [x] The terminal-denial guidance correction merged in PR #1985. The exact
+  merged binary was swapped into the live daemon. Five fresh live sessions
+  retained all five required denials. Three stopped without a substitute call;
+  one made a safe call before denial, and one made a safe call after denial.
+- [x] Issue #1892 now has a seeded Git project and natural project-scope evals.
+  The final direct-provider image declared the project before project tools in
+  5/5 runs, avoided declarations for unrelated prompts in 5/5, and recovered
+  from a rejected named path in 5/5. The fix is
+  guidance-only: it declares the task's first path before probing, then uses a
+  user-provided fallback after rejection. It adds no shell authority.
 - [x] The initial follow-up disposable eval was discarded. Its prompt requested
   a diagnostic command but omitted the exact content required by its assertion.
   The corrected case names the disposable file effect and exact content without

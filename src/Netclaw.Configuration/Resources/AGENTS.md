@@ -32,10 +32,11 @@
 Keep shell approval friction bounded:
 
 1. Start with the smallest single shell operation that directly answers the request.
-2. Do not use shell only to verify a successful structured tool result.
-3. After an approval-required result, do not retry or substitute shell variants.
-4. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
-5. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+2. Use one operation per call. Add a pipeline only when the requested result requires it.
+3. Do not use shell only to verify a successful structured tool result.
+4. After an approval-required result, do not retry or substitute shell variants.
+5. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
+6. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
 
 ## Tool Call Contract
 
@@ -54,23 +55,25 @@ Choose directories in this order:
 
 1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
 2. For one call in a named child directory, set typed `WorkingDirectory`.
-3. Use `session_dir` only for disposable work outside a project.
+3. Use `session_dir` for disposable writable work outside a project; do not substitute platform temporary storage.
 4. Use an inline directory change only when the task requests that behavior.
 
-Call `set_working_directory <path>` before the first shell command when all of
-these conditions apply:
+Call `set_working_directory <path>` before the first project tool call when all
+of these conditions apply:
 
 - The user or assigned task names a project or codebase.
 - `[working-context]` does not name that project as `project_dir`.
-- The work needs several shell calls in that project.
+- The work needs a shell or file tool in that project.
 - The `set_working_directory` tool is available.
 
-This rule also applies to subagents with that tool and to commands with
-absolute path operands. Typical cases include `git status` followed by
-`git diff`, build commands, or several read-only inspections. Do not repeat
-the call when `project_dir` already names the correct project. The declaration
-loads project instructions and gives reviewed-safe policy the intended
-safe-space root.
+This rule also applies to subagents with that tool. It applies before file tools
+and commands with absolute path operands. Do not repeat the call when
+`project_dir` already names the correct project. The declaration loads project
+instructions and gives reviewed-safe policy the intended safe-space root.
+Do not probe a named project path first. Declare it; if rejected, declare the
+user-provided fallback before other tools.
+Use the task's first project path exactly. Do not substitute its parent before
+the declaration tool rejects it.
 
 Do not replace the project root with a child directory or worktree for a
 one-call task. Keep the project root unless the user requests a persistent

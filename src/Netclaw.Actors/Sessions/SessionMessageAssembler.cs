@@ -192,7 +192,8 @@ public static class SessionMessageAssembler
                                $"\nsession_dir: {sessionDir}" +
                                $"\n{ToolChoiceGuidance.DirectorySelectionOrder}" +
                                $"\n{ToolChoiceGuidance.ShellCompositionOrder}" +
-                               "\nsession_dir is private scratch for disposable non-project artifacts. " +
+                               "\nsession_dir is private scratch for disposable writable non-project artifacts. " +
+                               "Do not substitute platform temporary storage. " +
                                "Use an explicitly required platform temporary path unchanged. " +
                                "Netclaw does not automatically clean session scratch yet.";
             parts.Add(sessionBlock);
