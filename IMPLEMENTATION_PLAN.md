@@ -351,6 +351,47 @@ Done when:
   interpretations are omitted. Other arguments, redirects, effects, dynamic
   values, and unknown commands remain strict. The sanitized live `tr -d '\\n'`
   loop reuses its existing `gh run view` grant without creating a `/n` scope.
+- [x] Parent, child, schemas, skills, and always-loaded rules share one
+  directory order and one shell-composition order. Approval-required shell
+  variants do not receive authority from that guidance.
+- [x] ShellSyntaxTree 0.3.5 already publishes complete facts for the ten new
+  sanitized fresh-session samples. Sixteen focused tests and one corpus entry
+  pin current occurrence, cwd, redirect, argument, and dynamic boundaries.
+- [x] A fixed leaf-glob root may contain an existing in-root final alias.
+  Broken, external, or uninspectable aliases remain strict. The exact
+  recursive-search pipeline now produces reusable candidates without private
+  executable parsing.
+- [x] Five changed runs per eight cases used the baseline model and
+  configuration. Structured guardrails remained 15/15. Four alignment cases
+  stayed below threshold. Prompt equivalents fell from 32 to 25, while the
+  explicit directory-transition shell attempts fell from 24 to 12. These
+  variable results remain recorded, not converted into weaker assertions.
+  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
+- [x] PR #1982 merged as `9d02d19efd75fe871c8603e151e3e7169a9d9433`.
+  The live daemon preserved a rollback binary, swapped to that exact commit,
+  recovered its session catalog, and passed five natural fixed-pipeline runs
+  without an approval or complex marker.
+- [x] Forty-five post-swap fresh sessions are frozen in
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-9d02d19-binary-swap-eval-results.json`.
+  The original eight workloads improved from 17/40 to 23/40 behavior passes;
+  the added fixed-pipeline case passed 5/5. Observed prompt equivalents fell
+  from 25 to 2, but 446 historical grants make that prompt delta non-causal.
+  Fifteen retained trust-zone denials exposed redundant file verification,
+  disposable redirects, child absolute paths, and retry-after-denial debt.
+- [ ] Deliver and live-test the follow-up guidance that treats successful file
+  results as confirmation, starts disposable text on file tools, and avoids
+  shell retry or substitution after approval and access denials.
+- [x] The initial follow-up disposable eval was discarded. Its prompt requested
+  a diagnostic command but omitted the exact content required by its assertion.
+  The corrected case names the disposable file effect and exact content without
+  prescribing a tool.
+- [x] Pre-delivery fresh-session evals passed the strengthened guidance boundary:
+  disposable file tools passed 5/5, terminal trust-zone denial passed 5/5
+  without a scope change or retry, and known file edit passed 4/5 at threshold.
+  The fifth edit run ended before model behavior with a provider 402 response.
+  An earlier denial run was discarded because its assertion expected a CLI log
+  shape that JSON mode does not emit; the corrected assertion binds the daemon's
+  exact authorization outcome.
 - [x] The current live mixed-read chain is complex with inline `cd`. Supplying
   the typed working directory makes the prompt reusable and exposes only the
   unproved `sed` and escaped-`grep` pattern candidates.

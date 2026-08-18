@@ -34,9 +34,21 @@ Rules:
 - Do not call the tool again when `project_dir` already names the right project
 - A failed call does not change the project directory. Correct the path and
   retry the tool before you continue.
-- For one shell call in another directory, use the `shell_execute`
-  `WorkingDirectory` argument. Do not add an inline `cd` unless changing
-  directory is itself the behavior the user asked you to run or test.
+
+Choose directories in this order:
+
+1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
+2. For one call in a named child directory, set typed `WorkingDirectory`.
+3. Use `session_dir` only for disposable work outside a project.
+4. Use an inline directory change only when the task requests that behavior.
+
+Keep shell approval friction bounded:
+
+1. Start with the smallest single shell operation that directly answers the request.
+2. Do not use shell only to verify a successful structured tool result.
+3. After an approval-required result, do not retry or substitute shell variants.
+4. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
+5. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
 
 The project directory is distinct from the session directory
 (`~/.netclaw/sessions/{id}/`). The session directory is immutable and used for

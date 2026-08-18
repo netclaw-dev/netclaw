@@ -23,7 +23,9 @@ namespace Netclaw.Actors.Tools;
 /// grep, or attach_file to work with the content.
 /// </summary>
 [NetclawTool("web_fetch",
-    "Fetch a URL and save its content to a local file. HTML: format='raw' (default) preserves structure, format='text' extracts plain text. Binary (images, PDFs): saves raw bytes with correct extension. Returns file path with preview. Use file_read to examine content or attach_file to send binary files to the user.",
+    "Use for retrieving a known external page or URL. Save content to a local file without shell. " +
+    "HTML raw mode preserves structure; text mode extracts text. Binary content keeps its correct extension. " +
+    "Returns a file path with preview. Use file_read to examine content or attach_file to send binary files.",
     Grant = "web")]
 public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {

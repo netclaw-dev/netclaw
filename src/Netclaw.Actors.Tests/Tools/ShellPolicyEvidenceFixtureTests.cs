@@ -18,6 +18,9 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture fixture) :
     IClassFixture<ShellApprovalMatrixFixture>
 {
+    private const string PolicyFixturesFile = "netclaw-policy-fixtures.json";
+    private const string FreshSessionPolicyFixturesFile = "fresh-session-policy-fixtures.json";
+
     [Fact]
     public async Task Policy_fixtures_execute_through_the_coordinator()
     {
@@ -97,6 +100,9 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
     public static TheoryData<string> LiveRegressionCaseIds => new(
         Enumerable.Range(1, 32).Select(number => $"L{number:00}"));
 
+    public static TheoryData<string> FreshSessionRegressionCaseIds => new(
+        Enumerable.Range(1, 10).Select(number => $"R{number:00}"));
+
     [Theory]
     [MemberData(nameof(LiveRegressionCaseIds))]
     public async Task Live_regression_fixtures_pin_current_policy_outcomes(string caseId)
@@ -115,6 +121,24 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
     }
 
+    [Theory]
+    [MemberData(nameof(FreshSessionRegressionCaseIds))]
+    public async Task Fresh_session_regression_fixtures_pin_current_policy_outcomes(string caseId)
+    {
+        var catalog = JsonSerializer.Deserialize(
+                          File.ReadAllBytes(EvidencePath(FreshSessionPolicyFixturesFile)),
+                          ShellPolicyFixtureJsonContext.Default.PolicyFixtureCatalog)
+                      ?? throw new InvalidDataException("The fresh-session fixture catalog has no root object.");
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse(
+            catalog.FixtureDefaults.ClockUtc,
+            CultureInfo.InvariantCulture));
+
+        var liveCase = Assert.Single(
+            catalog.LiveRegressionCases,
+            item => item.PolicyCase.Id == caseId);
+        await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
+    }
+
     private async Task AssertPolicyCaseAsync(
         PolicyFixtureCatalog catalog,
         FakeTimeProvider timeProvider,
@@ -122,6 +146,17 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
     {
         var invocation = CreateInvocation(catalog.FixtureDefaults, policyCase);
         var approvals = CreateApprovals(policyCase.Available);
+        var environment = invocation.CreateEnvironment();
+        var materializeFileSystemFacts = policyCase.UsePhysicalHarnessScope
+                                         && ShellPathRules.UsesHostPathStyle(
+                                             environment.PathStyle);
+        var scope = materializeFileSystemFacts
+            ? null
+            : new ShellApprovalHarnessScope(
+                policyCase.ProjectDirectory,
+                policyCase.SessionDirectory,
+                catalog.FixtureDefaults.Session.SessionId,
+                policyCase.Available.OneTimeApprovalKeys);
         await using var harness = await ShellApprovalHarness.CreateAsync(
             policyCase.Id,
             invocation,
@@ -129,14 +164,12 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             fixture.ActorSystem,
             TestContext.Current.CancellationToken,
             timeProvider,
-            new ShellApprovalHarnessScope(
-                policyCase.ProjectDirectory,
-                policyCase.SessionDirectory,
-                catalog.FixtureDefaults.Session.SessionId,
-                policyCase.Available.OneTimeApprovalKeys),
+            scope,
             policyCase.UseBundledSafeCatalog
                 ? null
-                : CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
+                : CreateSafeVerbs(policyCase.Available, environment),
+            policyCase.DeniedPaths);
+        ApplyFileSystemFacts(policyCase, harness, materializeFileSystemFacts);
 
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         TestContext.Current.TestOutputHelper?.WriteLine(
@@ -148,7 +181,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             + $"checks={harness.ApprovalService.CheckCount}; "
             + $"allow={decision.AllowReason}; "
             + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
-            + $"trace={string.Join(", ", decision.ShellPolicyTrace.Rows.Select(row => $"{row.Stage}/{row.Reason}"))}");
+            + "trace:\n"
+            + string.Join(Environment.NewLine, decision.ShellPolicyTrace.Rows.Select(FormatActualTraceRow)));
 
         Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
         Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
@@ -161,6 +195,39 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             policyCase.Expected.OptionKeys,
             decision.ApprovalContext?.Options.Select(option => option.Key.Value).ToList());
         Assert.Equal(policyCase.Expected.ActorCheckCount, harness.ApprovalService.CheckCount);
+        if (policyCase.Expected.CandidateCoverage is { } expectedCoverage)
+        {
+            Assert.Equal(
+                expectedCoverage.Select(item => (item.CandidateId, item.Coverage)),
+                decision.ShellPolicyTrace.Rows
+                    .Where(row => row.CandidateId is not null && row.Coverage is not null)
+                    .Select(row => (row.CandidateId!.Value.Value, row.Coverage!.Value.ToString())));
+        }
+
+        if (policyCase.Expected.Trace is { } expectedTrace)
+        {
+            Assert.Equal(
+                expectedTrace.Select(FormatExpectedTraceRow),
+                decision.ShellPolicyTrace.Rows.Select(FormatActualTraceRow));
+        }
+    }
+
+    private static void ApplyFileSystemFacts(
+        PolicyAdversarialCase policyCase,
+        ShellApprovalHarness harness,
+        bool materializeFileSystemFacts)
+    {
+        foreach (var fact in policyCase.FileSystemFacts ?? [])
+        {
+            if (fact.Kind != "ProjectFileSymlink" || !policyCase.UsePhysicalHarnessScope)
+            {
+                throw new InvalidDataException(
+                    $"Unsupported fixture filesystem fact: {policyCase.Id}/{fact.Kind}.");
+            }
+
+            if (materializeFileSystemFacts)
+                harness.CreateProjectFileSymlink(fact.Path, fact.Target);
+        }
     }
 
     private static void AssertProjectedCandidates(
@@ -323,11 +390,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var pathStyle = host == ShellApprovalHost.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
-        if (!string.Equals(
-                policyCase.InitialWorkingDirectory,
-                policyCase.ProjectDirectory,
-                StringComparison.Ordinal)
-            || !CanonicalShellPath.TryCreate(
+        if (!CanonicalShellPath.TryCreate(
                 policyCase.ProjectDirectory,
                 pathStyle,
                 out var normalizedProjectDirectory)
@@ -347,9 +410,24 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             throw new InvalidDataException($"Unsupported fixture scope: {policyCase.Id}.");
         }
 
+
+        var directoryShape = policyCase.InitialWorkingDirectory switch
+        {
+            var directory when string.Equals(
+                directory,
+                policyCase.ProjectDirectory,
+                StringComparison.Ordinal) => ApprovalDirectoryShape.Project,
+            var directory when string.Equals(
+                directory,
+                policyCase.SessionDirectory,
+                StringComparison.Ordinal) => ApprovalDirectoryShape.Session,
+            _ => throw new InvalidDataException(
+                $"Unsupported initial working directory: {policyCase.Id}.")
+        };
+
         return new ShellApprovalInvocation(
             policyCase.Command,
-            ApprovalDirectoryShape.Project,
+            directoryShape,
             Enum.Parse<TrustAudience>(defaults.Audience),
             defaults.InteractiveApprovalCapability == "Available",
             host);
@@ -447,9 +525,9 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             _ => throw new InvalidDataException($"Unsupported fixture outcome: {outcome}.")
         };
 
-    private static string EvidencePath()
+    private static string EvidencePath(string fileName = PolicyFixturesFile)
         => Path.Combine(
             AppContext.BaseDirectory,
             "ApprovalEvidence",
-            "netclaw-policy-fixtures.json");
+            fileName);
 }

@@ -18,7 +18,8 @@ namespace Netclaw.Actors.Tools;
 /// directories an audience may list are exactly that audience's read roots.
 /// </summary>
 [NetclawTool(ToolName,
-    "List the files and subdirectories directly inside a directory. Returns a single-level listing only — it does not read file contents and does not recurse.",
+    "Use for a known local directory listing. List its immediate files and subdirectories without shell. " +
+    "The listing has one level; it does not read file contents or recurse. Use shell for recursive repository search.",
     Grant = "file")]
 public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
 {

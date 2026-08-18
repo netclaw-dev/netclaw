@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Providers.SelfHosted;
 using Xunit;
@@ -375,7 +376,9 @@ public sealed class SessionMessageAssemblerTests
         var text = staticBlock.Text ?? string.Empty;
 
         Assert.Contains("session_dir:", text);
-        Assert.Contains("private scratch for disposable artifacts", text);
+        Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, text, StringComparison.Ordinal);
+        Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, text, StringComparison.Ordinal);
+        Assert.Contains("private scratch for disposable non-project artifacts", text);
         Assert.Contains("explicitly required platform temporary path unchanged", text);
         Assert.Contains("does not automatically clean session scratch yet", text);
         Assert.DoesNotContain("media_dir:", text);

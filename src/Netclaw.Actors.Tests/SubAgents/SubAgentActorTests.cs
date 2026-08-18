@@ -822,6 +822,12 @@ public class SubAgentActorTests : TestKit
         Assert.Single(
             client.LastReceivedMessages!,
             message => message.Text.Contains($"session_dir: {sessionDirectory}", StringComparison.Ordinal));
+        Assert.Single(
+            client.LastReceivedMessages!,
+            message => message.Text.Contains(ToolChoiceGuidance.DirectorySelectionOrder, StringComparison.Ordinal));
+        Assert.Single(
+            client.LastReceivedMessages!,
+            message => message.Text.Contains(ToolChoiceGuidance.ShellCompositionOrder, StringComparison.Ordinal));
         Assert.DoesNotContain(
             sessionDirectory,
             client.LastReceivedMessages!.Single(message => message.Role == ChatRole.System).Text,
@@ -869,7 +875,7 @@ public class SubAgentActorTests : TestKit
         var result = await actor.Ask<SubAgentResult>(
             new RunSubAgent
             {
-                Scope = SubAgentTestScope.Create(),
+                Scope = SubAgentTestScope.Create(projectDirectory: worktree),
                 Task = "Try to declare the project.",
                 Timeout = TimeSpan.FromSeconds(5)
             },
@@ -877,7 +883,7 @@ public class SubAgentActorTests : TestKit
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.Output);
-        Assert.Null(result.WorkingContext!.ProjectDirectory);
+        Assert.Equal(worktree, result.WorkingContext!.ProjectDirectory);
         Assert.Equal(
             "Error: path contains an invalid control character.",
             GetLastToolResult(client.LastReceivedMessages, "call-control-project"));
@@ -886,6 +892,14 @@ public class SubAgentActorTests : TestKit
         Assert.DoesNotContain(
             projectGuidance,
             client.LastReceivedMessages!.Single(message => message.Role == ChatRole.System).Text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"project_dir: {worktree}",
+            client.LastReceivedMessages!.Single(message => message.Role == ChatRole.User).Text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            controlledDirectory,
+            client.LastReceivedMessages!.Single(message => message.Role == ChatRole.User).Text,
             StringComparison.Ordinal);
     }
 
@@ -1898,8 +1912,9 @@ public class SubAgentActorTests : TestKit
         var userMessage = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains("[session]", userMessage);
         Assert.Contains($"session_dir: {sessionDirectory}", userMessage);
-        Assert.Contains("For disposable shell work, always set WorkingDirectory to session_dir", userMessage);
-        Assert.Contains("explicitly requires another directory", userMessage);
+        Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, userMessage, StringComparison.Ordinal);
+        Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, userMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("always set WorkingDirectory to session_dir", userMessage, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(sessionDirectory, fakeClient.LastReceivedMessages[0].Text);
     }
 

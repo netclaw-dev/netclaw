@@ -56,8 +56,16 @@ public class ShellToolTests
     public void Shell_schema_prefers_file_tools_and_typed_working_directory()
     {
         Assert.Contains("shell semantics", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("Program-specific directory options do not replace it", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("Do not use for known file reads", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("local search, VCS, builds, tests, processes", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("declared-project work, omit WorkingDirectory", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("session_dir only for disposable non-project work", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("smallest operation that answers the request", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not use shell only to verify successful structured results", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("After approval-required results, do not retry or substitute variants", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not use shell for known file reads", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("or disposable text unless shell behavior is requested", _tool.Description, StringComparison.Ordinal);
 
         var commandDescription = _tool.ParameterSchema
             .GetProperty("properties")
@@ -70,10 +78,62 @@ public class ShellToolTests
             .GetProperty("description")
             .GetString();
 
-        Assert.Contains("Command='inspect' and WorkingDirectory='/repo/child'", commandDescription, StringComparison.Ordinal);
-        Assert.Contains("Always use it for one-call work", description, StringComparison.Ordinal);
+        Assert.Contains("smallest shell operation that answers the request", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Do not verify successful structured results with shell", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Do not retry approval-required variants", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Do not use shell for disposable text unless shell behavior is requested", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Set only for one call", description, StringComparison.Ordinal);
         Assert.Contains("named child directory or worktree", description, StringComparison.Ordinal);
-        Assert.Contains("Command='inspect' and WorkingDirectory='/repo/child'", description, StringComparison.Ordinal);
+        Assert.Contains("Omit for declared-project work", description, StringComparison.Ordinal);
+        Assert.Contains("session_dir only for disposable non-project work", description, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(typeof(FileWriteTool), "successful result confirms the write")]
+    [InlineData(typeof(FileEditTool), "successful result confirms the change")]
+    public void File_mutation_schema_does_not_request_shell_verification(Type toolType, string expectedResult)
+    {
+        var attribute = Assert.Single(
+            toolType.GetCustomAttributes(typeof(NetclawToolAttribute), inherit: false)
+                .Cast<NetclawToolAttribute>());
+
+        Assert.Contains(expectedResult, attribute.Description, StringComparison.Ordinal);
+        Assert.Contains("do not verify it with shell unless requested", attribute.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void File_schemas_route_disposable_text_without_shell()
+    {
+        var writeAttribute = Assert.Single(
+            typeof(FileWriteTool).GetCustomAttributes(typeof(NetclawToolAttribute), inherit: false)
+                .Cast<NetclawToolAttribute>());
+        var readAttribute = Assert.Single(
+            typeof(FileReadTool).GetCustomAttributes(typeof(NetclawToolAttribute), inherit: false)
+                .Cast<NetclawToolAttribute>());
+
+        Assert.Contains("disposable session text", writeAttribute.Description, StringComparison.Ordinal);
+        Assert.Contains("when shell behavior is not requested", writeAttribute.Description, StringComparison.Ordinal);
+        Assert.Contains("read disposable text after file_write", readAttribute.Description, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(typeof(FileReadTool), "known local file read")]
+    [InlineData(typeof(FileListTool), "known local directory listing")]
+    [InlineData(typeof(FileWriteTool), "known local file")]
+    [InlineData(typeof(FileEditTool), "known local file")]
+    [InlineData(typeof(WebSearchTool), "external discovery")]
+    [InlineData(typeof(WebFetchTool), "known external page or URL")]
+    public void First_party_tool_schema_states_its_preferred_task(
+        Type toolType,
+        string expectedTask)
+    {
+        var attribute = Assert.Single(
+            toolType.GetCustomAttributes(typeof(NetclawToolAttribute), inherit: false)
+                .Cast<NetclawToolAttribute>());
+
+        Assert.Contains(expectedTask, attribute.Description, StringComparison.Ordinal);
     }
 
     [Fact]
