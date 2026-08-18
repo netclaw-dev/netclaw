@@ -205,6 +205,61 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Mcp_tool_output_reaches_the_model_unredacted()
+    {
+        // A presigned upload URL: the redactor mangles its X-Amz-Credential= value, so
+        // if MCP suppression weren't wired the model would receive a broken, unusable URL.
+        const string presignedUrl =
+            "https://acct.r2.cloudflarestorage.com/bucket/2026/08/x.png?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+            "&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request" +
+            "&X-Amz-Signature=deadbeefcafe0123456789abcdef";
+
+        // Guard: prove the redactor really would strip this — otherwise the test proves nothing.
+        Assert.DoesNotContain("abc123def456ghijklmnop", SecretOutputRedactor.Redact(presignedUrl));
+
+        // An MCP tool (no invoker => runs the bound function directly) that returns the URL.
+        var mcpFunction = AIFunctionFactory.Create(() => presignedUrl, "create_upload");
+        var adapter = new McpToolAdapter(mcpFunction, "assetbridge", "create_upload");
+
+        var registry = new ToolRegistry();
+        registry.Register(adapter);
+
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [adapter.Name] = ToolApprovalMode.Auto
+            }
+        };
+        var mcpCommandPolicy = new ShellCommandPolicy(ShellEnvironment);
+        var mcpPathPolicy = new ToolPathPolicy(ShellEnvironment, []);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                mcpCommandPolicy,
+                mcpPathPolicy));
+
+        var toolCall = CreateToolCall("call-mcp", adapter.Name, new Dictionary<string, object?>());
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+        });
+
+        var result = await executor.ExecuteAsync(toolCall, context, CancellationToken.None);
+
+        // MCP output is trusted-by-configuration, so the model gets the full, usable URL.
+        Assert.Contains("abc123def456ghijklmnop", result);
+        Assert.DoesNotContain("***REDACTED***", result);
+    }
+
+    [Fact]
     public async Task Shell_output_still_redacts_secrets()
     {
         // Shell output continues to be redacted — only file tools suppress it.

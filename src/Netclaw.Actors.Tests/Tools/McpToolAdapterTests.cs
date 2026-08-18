@@ -32,6 +32,18 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public void Suppresses_output_redaction_because_mcp_servers_are_trusted()
+    {
+        var fakeTool = AIFunctionFactory.Create(() => "result", "store");
+        var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
+
+        // MCP servers are trusted, user-configured integrations, so their output
+        // flows to the model verbatim (like Claude Code / Cursor). Redacting it
+        // corrupts legitimate payloads such as presigned upload URLs.
+        Assert.True(adapter.SuppressOutputRedaction);
+    }
+
+    [Fact]
     public void LlmFacingName_uses_double_underscore_separator()
     {
         // MCP tool names commonly include single underscores
