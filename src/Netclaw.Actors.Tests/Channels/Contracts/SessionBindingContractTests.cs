@@ -825,6 +825,38 @@ public abstract class SessionBindingContractTests : TestKit
         ClearReplyClientThrows();
     }
 
+    [Fact]
+    public async Task Feedback_send_failure_faults_the_actor()
+    {
+        // Contract: when the session feedback pipe itself fails, the binding
+        // actor must fail loudly. A swallowed failure leaves a zombie session
+        // that waits on a delivery report that will never arrive. The loud
+        // path is a supervised restart, which re-creates the pipeline.
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-feedback-fail");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("this will fail to post") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+        ])
+        {
+            FeedbackException = new InvalidOperationException("feedback pipe down")
+        };
+
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        // A supervised restart shows up as a second pipeline CreateAsync call.
+        await AwaitAssertAsync(
+            () => Assert.True(
+                pipeline.CreateCount >= 2,
+                $"expected a supervised restart to re-create the pipeline; CreateCount={pipeline.CreateCount}"),
+            cancellationToken: ct);
+
+        ClearReplyClientThrows();
+    }
+
     // --- Pipeline Lifecycle ---
 
     [Fact]

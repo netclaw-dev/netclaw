@@ -1417,7 +1417,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send delivery feedback to session");
+            // A dead feedback pipe means the session never learns the turn
+            // failed. Rethrow so supervision restarts the actor and
+            // re-creates the pipeline, same as the Slack binding actor.
+            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
+            throw;
         }
     }
 
