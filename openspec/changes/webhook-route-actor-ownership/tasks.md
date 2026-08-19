@@ -7,7 +7,7 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 - [ ] 1.1 Add `WebhookRouteActor` (plain `ReceiveActor`) with `UpsertRoute`/`DeleteRoute`/`GetRoute`/`ListRoutes` messages; validate via `WebhookRouteValidator` before persistence; persist through the existing `WebhookRouteStore`; store I/O failures return errors to the caller, never swallowed
 - [ ] 1.2 Register the actor in daemon wiring; rewire `SetWebhookTool` and `DeleteWebhookTool` to `Ask` the actor; tool schemas and result shapes unchanged
 - [ ] 1.3 Subscribe the actor to the existing route hot-reload signal; reconcile external file changes by re-reading affected routes (D2 — no new watcher machinery)
-- [ ] 1.4 Actor tests: mailbox serialization of concurrent same-route RMW (deterministic, outcome-only), validation-rejection-does-not-persist, restart rebuilds from disk, external-change reconciliation
+- [ ] 1.4 Actor tests: two concurrent FIELD-LEVEL updates to the same route lose neither field (the real RMW lost-update proof — mutation messages carry data, the actor does read-modify-write per message), validation-rejection-does-not-persist, restart rebuilds from disk, reconciliation on the hot-reload SIGNAL (fake the signal; the existing inbound-webhooks hot-reload coverage owns file-to-signal — do NOT write a new filesystem-watcher timing test)
 
 ## 2. /api/webhooks resource
 
@@ -19,7 +19,8 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 - [ ] 3.1 Extend the `DaemonApi` client with the webhook resource calls
 - [ ] 3.2 `WebhooksCommand`: probe-based mode selection per D4 (reachable+present → API; unreachable/404 → direct file + one stderr notice; other API errors fail without fallback); stdout and exit codes identical in both modes
 - [ ] 3.3 `InboundWebhooksConfigViewModel`: route saves through the same mode selection (reuse the command's seam per the design's open question — no parallel construct)
-- [ ] 3.4 CLI tests: mode selection (API path recorded when daemon up; file written + notice when down; 400 fails without file write); existing `WebhooksCommandTests` stay green unchanged in file mode
+- [ ] 3.4 CLI tests: mode selection (API path recorded when daemon up; file written + notice when daemon DOWN; file written + notice on 404 from an OLD daemon — a distinct test from daemon-down; 400 and 401 fail the command with NO file write); existing `WebhooksCommandTests` stay green unchanged in file mode
+- [ ] 3.5 View-model fake-failure test: a failed API save in `InboundWebhooksConfigViewModel` blocks the save BEFORE any persistence (Automation Floor rule for dynamic validation)
 
 ## 4. Test replacement and skew guard
 
