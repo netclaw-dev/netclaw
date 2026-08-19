@@ -28,6 +28,6 @@ Working branch: `refactor/binding-engine`, stacked on `refactor/delivery-failure
 
 ## 5. Finish
 
-- [ ] 5.1 Full solution build with zero warnings; full `Netclaw.Actors.Tests`, `Netclaw.Daemon.Tests` channel suites; slopwatch and header gates
-- [ ] 5.2 Line-count accounting for the PR description (target ~1,200-1,500 lines removed) and parity-spec sync via `/opsx-sync`
+- [x] 5.1 Full solution build with zero warnings; full `Netclaw.Actors.Tests`, `Netclaw.Daemon.Tests` channel suites; slopwatch and header gates
+- [x] 5.2 Line-count accounting for the PR description (target ~1,200-1,500 lines removed) and parity-spec sync via `/opsx-sync`
 - [ ] 5.3 Submit `refactor/binding-engine` as PR 4 via `gh stack submit`; PR body documents any differences surfaced by the stop rule
