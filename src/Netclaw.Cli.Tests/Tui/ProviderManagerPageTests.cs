@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -12,7 +11,6 @@ using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -146,33 +144,11 @@ public sealed class ProviderManagerPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, ProviderManagerViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        ProviderManagerViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/provider", builder =>
-        {
-            builder.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>(
-                "/provider",
-                _ => new ProviderManagerPage(),
-                _ =>
-                {
-                    capturedVm = new ProviderManagerViewModel(_paths, _registry, _fakeProbe);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<ProviderManagerPage, ProviderManagerViewModel>(
+            "/provider",
+            () => new ProviderManagerPage(),
+            () => new ProviderManagerViewModel(_paths, _registry, _fakeProbe),
+            out input);
 
     [Fact]
     public async Task DeleteKey_OnSecondRow_RemovesHighlightedProvider()

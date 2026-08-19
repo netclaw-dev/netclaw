@@ -1379,205 +1379,11 @@ public sealed class SQLiteMemoryStore
     {
         await WithConnectionAsync(async (conn, ct) =>
         {
-        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
-        foreach (var operation in operations)
-        {
-            var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            var resolvedBoundary = string.Equals(operation.Boundary, TrustBoundary.LegacyRestrictedValue, StringComparison.Ordinal)
-                ? TrustBoundary.TrustedInstanceValue
-                : operation.Boundary;
-            var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
-                ? operation.Title
-                : operation.AnchorCanonicalName;
-            var anchor = CreateDefaultAnchor(canonicalName) with
-            {
-                AnchorType = operation.AnchorType,
-                Sensitivity = operation.Sensitivity,
-                RecallMode = operation.RecallMode,
-                Confidence = operation.Confidence,
-                FreshnessAtMs = now,
-                CreatedAtMs = now,
-                UpdatedAtMs = now
-            };
+            await ApplyCurationOperationsAsync(conn, tx, operations, ct);
 
-            await EnsureAnchorAsync(conn, tx, anchor, ct);
-
-            if (operation.Kind == MemoryKind.Record.ToWireValue())
-            {
-                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId().Value : operation.MemoryId;
-                await using var recordCmd = conn.CreateCommand();
-                recordCmd.Transaction = tx;
-                recordCmd.CommandText = """
-                    INSERT INTO memory_records(
-                      record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, supersedes_record_id,
-                      update_semantics, boundary, audience, sensitivity, recall_mode, confidence,
-                      freshness_at, expires_at, created_at)
-                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $slotsJson, $supersedes,
-                      $semantics, $boundary, $audience, $sensitivity, $recallMode, $confidence,
-                      $freshnessAt, $expiresAt, $createdAt);
-                    """;
-                recordCmd.Parameters.AddWithValue("$id", recId);
-                recordCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
-                recordCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
-                recordCmd.Parameters.AddWithValue("$recordType", operation.Title);
-                recordCmd.Parameters.AddWithValue("$payloadJson", operation.Content);
-                recordCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
-                recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-                recordCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
-                recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
-                recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
-                recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
-                recordCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
-                recordCmd.Parameters.AddWithValue("$createdAt", now);
-                await recordCmd.ExecuteNonQueryAsync(ct);
-
-                if (IsSearchableRecallMode(operation.RecallMode))
-                    await UpsertRecordFtsAsync(conn, tx, recId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
-
-                continue;
-            }
-
-            var resolvedRecallMode = string.Equals(operation.MemoryClass, MemoryClass.Trace.ToWireValue(), StringComparison.OrdinalIgnoreCase)
-                ? MemoryRecallMode.Never.ToWireValue()
-                : operation.RecallMode;
-
-            // Anchor-based dedup: same logic as ApplyCurationBatchAsync. Reusing an existing
-            // document_id here (documentId set, collision left null) is safe: it means the
-            // operation already carries an explicit target (Update decision). Finding an
-            // existing row via the anchor lookup below (collision set) is a genuine Create
-            // collision — see DedupCollision's remarks — and must append, not overwrite.
-            string documentId;
-            DedupCollision? collision = null;
-            if (!string.IsNullOrWhiteSpace(operation.MemoryId))
-            {
-                documentId = operation.MemoryId;
-            }
-            else if (string.Equals(operation.UpdateSemantics, MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
-            {
-                await using var lookupCmd = conn.CreateCommand();
-                lookupCmd.Transaction = tx;
-                lookupCmd.CommandText = """
-                    SELECT document_id, title, markdown_body, boundary, audience, sensitivity
-                    FROM memory_documents
-                    WHERE anchor_id = $anchorId
-                    ORDER BY updated_at DESC
-                    LIMIT 1;
-                    """;
-                lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
-                await using var lookupReader = await lookupCmd.ExecuteReaderAsync(ct);
-                if (await lookupReader.ReadAsync(ct))
-                {
-                    documentId = lookupReader.GetString(0);
-                    collision = new DedupCollision(
-                        lookupReader.GetString(1),
-                        lookupReader.GetString(2),
-                        lookupReader.IsDBNull(3) ? null : lookupReader.GetString(3),
-                        lookupReader.IsDBNull(4) ? null : lookupReader.GetString(4),
-                        lookupReader.GetString(5));
-                }
-                else
-                {
-                    documentId = MemoryTypedId.NewDocumentId().Value;
-                }
-            }
-            else
-            {
-                documentId = MemoryTypedId.NewDocumentId().Value;
-            }
-
-            if (collision is not null)
-            {
-                // Idempotency guard: a colliding proposal whose content the existing body
-                // already holds verbatim adds nothing — appending it would bloat the
-                // document on every repeat (the inverse failure of the overwrite bug this
-                // path fixes). Logged no-op: the document row stays byte-identical.
-                if (collision.MarkdownBody.Contains(operation.Content, StringComparison.Ordinal))
-                {
-                    _logger.LogInformation(
-                        "curation_dedup_duplicate_skipped anchor={AnchorCanonicalName} targetDoc={DocumentId}",
-                        canonicalName,
-                        documentId);
-                    continue;
-                }
-
-                _logger.LogInformation(
-                    "curation_dedup_append anchor={AnchorCanonicalName} targetDoc={DocumentId}",
-                    canonicalName,
-                    documentId);
-            }
-
-            // Preserve the colliding row's identity/classification; only the body grows
-            // (appended) and update_semantics flips to append-document to record that this
-            // write did not overwrite. Non-collision path is the pre-existing behavior.
-            var effectiveTitle = collision is not null ? collision.Title : operation.Title;
-            var effectiveBody = collision is not null
-                ? BuildDedupAppendedBody(collision.MarkdownBody, operation.Content)
-                : operation.Content;
-            var effectiveBoundary = collision is not null ? collision.Boundary : resolvedBoundary;
-            var effectiveAudience = collision is not null ? collision.Audience : operation.Audience.ToWireValue();
-            var effectiveSensitivity = collision is not null ? collision.Sensitivity : operation.Sensitivity;
-            var effectiveSemantics = collision is not null
-                ? MemoryUpdateSemantics.AppendDocument.ToWireValue()
-                : operation.UpdateSemantics;
-
-            await using var documentCmd = conn.CreateCommand();
-            documentCmd.Transaction = tx;
-            documentCmd.CommandText = """
-                INSERT INTO memory_documents(
-                  document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
-                  boundary, audience, sensitivity, recall_mode, confidence, freshness_at,
-                  expires_at, created_at, updated_at)
-                VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
-                  $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt,
-                  $expiresAt, $createdAt, $updatedAt)
-                ON CONFLICT(document_id) DO UPDATE SET
-                  memory_class=excluded.memory_class,
-                  title=excluded.title,
-                  markdown_body=excluded.markdown_body,
-                  aliases_json=excluded.aliases_json,
-                  facets_json=excluded.facets_json,
-                  slots_json=excluded.slots_json,
-                  update_semantics=excluded.update_semantics,
-                  boundary=excluded.boundary,
-                  audience=excluded.audience,
-                  sensitivity=excluded.sensitivity,
-                  recall_mode=excluded.recall_mode,
-                  confidence=excluded.confidence,
-                  freshness_at=excluded.freshness_at,
-                  expires_at=excluded.expires_at,
-                  updated_at=excluded.updated_at;
-                """;
-            documentCmd.Parameters.AddWithValue("$id", documentId);
-            documentCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
-            documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
-            documentCmd.Parameters.AddWithValue("$title", effectiveTitle);
-            documentCmd.Parameters.AddWithValue("$body", effectiveBody);
-            documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$semantics", effectiveSemantics);
-            documentCmd.Parameters.AddWithValue("$boundary", (object?)effectiveBoundary ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$audience", (object?)effectiveAudience ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$sensitivity", effectiveSensitivity);
-            documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
-            documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
-            documentCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$createdAt", now);
-            documentCmd.Parameters.AddWithValue("$updatedAt", now);
-            await documentCmd.ExecuteNonQueryAsync(ct);
-
-            if (IsSearchableRecallMode(resolvedRecallMode))
-                await UpsertDocumentFtsAsync(conn, tx, documentId, effectiveTitle, effectiveBody, operation.AliasesJson, operation.FacetsJson, ct);
-        }
-
-        await tx.CommitAsync(ct);
+            await tx.CommitAsync(ct);
         }, ct);
     }
 
@@ -1588,8 +1394,38 @@ public sealed class SQLiteMemoryStore
     {
         await WithConnectionAsync(async (conn, ct) =>
         {
-        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
+            await ApplyCurationOperationsAsync(conn, tx, operations, ct);
+
+            await using var markDone = conn.CreateCommand();
+            markDone.Transaction = tx;
+            markDone.CommandText = """
+                UPDATE memory_checkpoints
+                SET status = 'completed',
+                    updated_at = $updatedAt
+                WHERE checkpoint_id = $id;
+                """;
+            markDone.Parameters.AddWithValue("$id", checkpointId);
+            markDone.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+            await markDone.ExecuteNonQueryAsync(ct);
+
+            await tx.CommitAsync(ct);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Shared per-operation write loop for <see cref="ApplyInlineCurationBatchAsync"/> and
+    /// <see cref="ApplyCurationBatchAsync"/>: anchor resolution, record insert, anchor-based
+    /// dedup lookup, document upsert, and FTS upsert. Both callers run this inside their own
+    /// transaction and commit (or add a checkpoint update) afterward.
+    /// </summary>
+    private async Task ApplyCurationOperationsAsync(
+        SqliteConnection conn,
+        SqliteTransaction tx,
+        IReadOnlyList<SQLiteMemoryCurationOperation> operations,
+        CancellationToken ct)
+    {
         foreach (var operation in operations)
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -1788,21 +1624,6 @@ public sealed class SQLiteMemoryStore
             if (IsSearchableRecallMode(resolvedRecallMode))
                 await UpsertDocumentFtsAsync(conn, tx, documentId, effectiveTitle, effectiveBody, operation.AliasesJson, operation.FacetsJson, ct);
         }
-
-        await using var markDone = conn.CreateCommand();
-        markDone.Transaction = tx;
-        markDone.CommandText = """
-            UPDATE memory_checkpoints
-            SET status = 'completed',
-                updated_at = $updatedAt
-            WHERE checkpoint_id = $id;
-            """;
-        markDone.Parameters.AddWithValue("$id", checkpointId);
-        markDone.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        await markDone.ExecuteNonQueryAsync(ct);
-
-        await tx.CommitAsync(ct);
-        }, ct);
     }
 
     private async Task<T> WithConnectionAsync<T>(
