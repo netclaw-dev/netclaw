@@ -59,8 +59,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private bool _hasObservedApprovalRequest;
 
     private readonly SessionPipelineHandle _handle;
+    private readonly ThreadGapHydrationEngine _hydrationEngine;
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
+
+    // A Slack ts is decimal seconds, so two ts values order by numeric value,
+    // not by ordinal text. SlackEventTs.CompareTo owns that rule; the hydration
+    // engine compares cursor keys through this wrapper.
+    private static readonly IComparer<string> CursorComparer =
+        Comparer<string>.Create((x, y) => new SlackEventTs(x).CompareTo(new SlackEventTs(y)));
 
     // Reliable in-flight-turn signal for the mention re-arm guard: set when ANY
     // inbound is enqueued (unlike _pendingCursorTs, which is only set for inbounds
@@ -113,6 +120,24 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
+
+        _hydrationEngine = new ThreadGapHydrationEngine(
+            sessionId: _sessionId,
+            channelType: ChannelType.Slack,
+            historyFetcher: _dependencies.ThreadHistoryFetcher,
+            injectionDetector: _promptInjectionDetector,
+            classifierSourceContext: "slack-backfill",
+            cursorComparer: CursorComparer,
+            cursorKeySelector: messageId => new SlackEventId(messageId ?? string.Empty).TryGetEventTs()?.Value,
+            isAuthorizedSender: senderId =>
+                SlackAclPolicy.IsAllowedUser(new SlackUserId(senderId), _dependencies.Options),
+            log: _log,
+            readCursor: () => _cursorTs?.Value,
+            readInputQueue: () => _handle.InputQueue,
+            readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
+            warnBackfillDetectorUnavailableAsync: () => SafePostAsync(BackfillDetectorWarning),
+            onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
+            setHydrationPending: pending => _hydrationPending = pending);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -182,7 +207,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         {
             try
             {
-                await PerformOneShotHydrationAsync();
+                await _hydrationEngine.PerformOneShotHydrationAsync();
             }
             catch (Exception ex)
             {
@@ -414,8 +439,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // MentionRequiredInThread the conversation actor forwards only mentions here,
             // so every inbound is a deliberate re-entry. _turnInFlight guards against a
             // re-arm while a prior turn is still processing, preserving the PR #733
-            // no-duplicate invariant; BuildInputWithDeferredHydrationAsync no-ops on an
-            // empty gap.
+            // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
             //
             // Two accepted trade-offs of reusing the existing backfill (vs. a new
             // drop-tracking side channel): (1) one thread-history fetch per mention on an
@@ -432,14 +456,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _hydrationPending = true;
             }
 
-            var buildResult = _hydrationPending
-                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options)
-                ? await BuildInputWithDeferredHydrationAsync(message, contents, currentTs, inboundCts.Token)
-                : BuildInputForInbound(message, contents);
-            var input = buildResult.Input;
-
-            if (buildResult.BackfillDetectorUnavailable)
-                await SafePostAsync(BackfillDetectorWarning);
+            var input = BuildInputForInbound(message, contents);
+            if (_hydrationPending
+                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options))
+            {
+                input = await _hydrationEngine.ApplyDeferredHydrationAsync(
+                    input, message.EventId.Value, inboundCts.Token);
+            }
 
             try
             {
@@ -447,15 +470,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 queueWriteCts.CancelAfter(OperationTimeout);
 
                 await writer.WriteAsync(input, queueWriteCts.Token);
-                _turnInFlight = true;
 
                 // Defer cursor persistence until TurnCompleted confirms durable turn recording,
                 // otherwise a crash between cursor and turn persist loses messages.
-                if (currentTs is { } ts)
-                {
-                    if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
-                        _pendingCursorTs = ts;
-                }
+                AdvancePendingCursorForEnqueuedTurn(currentTs?.Value);
 
                 QueueProcessingIndicatorRefreshIfActive();
             }
@@ -631,7 +649,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             initCts.Token);
     }
 
-    private InboundBuildResult BuildInputForInbound(
+    private ChannelInput BuildInputForInbound(
         SlackThreadInbound triggeringMessage,
         IReadOnlyList<AIContent> liveContents)
     {
@@ -660,7 +678,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
-        return new InboundBuildResult(baseInput, false);
+        return baseInput;
     }
 
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
@@ -672,326 +690,20 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _threadTs.Value);
 
     /// <summary>
-    /// One-shot thread history hydration. Runs once per actor lifetime, in the
-    /// Hydrating behavior immediately after pipeline initialization. Fetches
-    /// thread history, computes the gap relative to the recovered cursor, and
-    /// if there is an authorized message in the gap, synthesizes one backfill
-    /// <see cref="ChannelInput"/> using that message as the trigger and older
-    /// gap messages as adopted context. Hands the synthesized input to the
-    /// session pipeline through the normal input-queue path.
+    /// Records that a turn went into the input queue. The turn-in-flight flag
+    /// guards the mention re-arm path; the pending cursor keeps the highest ts
+    /// of the turn and only becomes the persisted cursor on TurnCompleted.
     /// </summary>
-    private async Task PerformOneShotHydrationAsync()
+    private void AdvancePendingCursorForEnqueuedTurn(string? candidateTs)
     {
-        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
+        _turnInFlight = true;
 
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return;
-        }
-
-        if (history.Count == 0)
-        {
-            _log.Info("Thread history hydration: empty thread, no backfill cursor={Cursor}", _cursorTs?.Value ?? "none");
-            return;
-        }
-
-        var cursor = _cursorTs;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (new SlackEventId(item.MessageId ?? string.Empty).TryGetEventTs() is not { } itemTs)
-                continue;
-
-            // Strict: only include messages newer than the cursor. PR #733's
-            // "cursor advances only on TurnCompleted" guarantees that
-            // ts == cursor means the session already has that message persisted
-            // — re-including it here on a restart hydration would duplicate it.
-            // The in-flight-crash case is handled too: a turn that didn't
-            // complete leaves the cursor un-advanced, so the message has
-            // ts > cursor and is correctly included in the gap.
-            if (cursor is { } c && itemTs.CompareTo(c) <= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor}",
-                history.Count, cursor?.Value ?? "none");
-            return;
-        }
-
-        var classified = await ClassifyGapAsync(candidates, cts.Token);
-        var gap = classified.Gap;
-
-        _log.Info(
-            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor}",
-            history.Count, gap.Count, classified.BlockedForRisk, cursor?.Value ?? "none");
-
-        if (classified.DetectorUnavailable)
-            await SafePostAsync(BackfillDetectorWarning);
-
-        if (gap.Count == 0)
+        if (candidateTs is null)
             return;
 
-        // Locate the most recent authorized message in the gap — it plays the
-        // role of the "current authorized message" that adopted-context normally
-        // anchors around. Without one we have no authorized trigger to enqueue;
-        // we transition to Active and let the next live authorized inbound be
-        // the trigger (the cursor stays put, so staleness still drops anything
-        // already seen).
-        AdoptedContextMessage? trigger = null;
-        for (var i = gap.Count - 1; i >= 0; i--)
-        {
-            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
-            {
-                trigger = gap[i];
-                break;
-            }
-        }
-
-        if (trigger is null)
-        {
-            // Deferred: a non-empty gap with no authorized trigger. The
-            // proactive-thread case — the binding actor's lifetime began when
-            // the agent posted the thread root, so this hydration ran before
-            // any authorized human inbound existed. Re-arm so the first
-            // authorized inbound performs this hydration (adopting the gap,
-            // e.g. the bot-authored root) instead of taking the fetch-free path.
-            _hydrationPending = true;
-            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound");
-            return;
-        }
-
-        var adoptedContext = new List<AdoptedContextMessage>();
-        foreach (var item in gap)
-        {
-            if (ReferenceEquals(item, trigger))
-                break;
-            adoptedContext.Add(item);
-        }
-
-        // Build the synthesized inbound. The trigger's ChannelInput already
-        // carries its own text+attachment contents (loaded by the history
-        // fetcher), so we treat those as the "live" contents for the merge.
-        var triggerInput = trigger.Input;
-        var triggerTs = new SlackEventId(triggerInput.MessageId ?? string.Empty).TryGetEventTs();
-        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; skipping hydration backfill");
-            return;
-        }
-
-        try
-        {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            writeCts.CancelAfter(OperationTimeout);
-            await writer.WriteAsync(backfillInput, writeCts.Token);
-            // A hydration backfill is an in-flight turn too; mirror the live-inbound
-            // enqueue so a mention arriving before this turn completes does not re-arm.
-            _turnInFlight = true;
-
-            if (triggerTs is { } ts)
-            {
-                if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
-                    _pendingCursorTs = ts;
-            }
-
-            _log.Info(
-                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount}",
-                triggerInput.MessageId,
-                adoptedContext.Count);
-            ChannelTelemetry.For(ChannelType.Slack).RecordMessageEnqueued();
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-        catch (ChannelClosedException ex)
-        {
-            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-    }
-
-    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
-    {
-        var text = string.Join("\n", input.Contents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        return PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, text, "slack-backfill", _log, cancellationToken);
-    }
-
-    private readonly record struct GapClassification(
-        List<AdoptedContextMessage> Gap,
-        int BlockedForRisk,
-        bool DetectorUnavailable);
-
-    /// <summary>
-    /// Runs prompt-injection classification over candidate gap messages and
-    /// captures each surviving message's authority-at-inclusion. Blocked
-    /// messages are dropped; detector-unavailable messages are also dropped
-    /// and surface a caller-visible flag.
-    /// </summary>
-    private async Task<GapClassification> ClassifyGapAsync(
-        IReadOnlyList<ChannelInput> candidates,
-        CancellationToken cancellationToken)
-    {
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var item = candidates[i];
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = SlackAclPolicy.IsAllowedUser(new SlackUserId(item.SenderId.Value), _dependencies.Options)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(item, authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        item.SenderId,
-                        item.MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
-
-        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
-    }
-
-    /// <summary>
-    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
-    /// preceding <paramref name="triggerInput"/> (the executable message) and
-    /// returns the trigger input with adopted-context metadata populated.
-    /// </summary>
-    private static ChannelInput MergeAdoptedContext(
-        ChannelInput triggerInput,
-        List<AdoptedContextMessage> adoptedContext,
-        SlackEventTs? cursor)
-    {
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerInput.SenderId.Value,
-            triggerInput.ReceivedAt);
-
-        return triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor?.Value,
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
-    }
-
-    /// <summary>
-    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
-    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
-    /// This authorized inbound is the executable trigger; the thread gap strictly
-    /// before it — most importantly a proactively-posted bot-authored root —
-    /// is fetched, classified, and merged as its adopted-context window. On
-    /// fetch failure the turn proceeds without an adopted window and hydration
-    /// stays re-armed so a later authorized inbound retries.
-    /// </summary>
-    private async Task<InboundBuildResult> BuildInputWithDeferredHydrationAsync(
-        SlackThreadInbound message,
-        IReadOnlyList<AIContent> liveContents,
-        SlackEventTs? liveTs,
-        CancellationToken cancellationToken)
-    {
-        var baseResult = BuildInputForInbound(message, liveContents);
-
-        // Without the live message's ordering key the gap below it cannot be
-        // bounded; leave hydration re-armed and take the fetch-free path.
-        if (liveTs is not { } liveEventTs)
-            return baseResult;
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: execute the turn without an adopted window and keep
-            // hydration re-armed so a later authorized inbound retries.
-            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return baseResult;
-        }
-
-        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
-        // above) keeps the flag armed — classify/merge outcomes never re-arm.
-        _hydrationPending = false;
-
-        var cursor = _cursorTs;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (new SlackEventId(item.MessageId ?? string.Empty).TryGetEventTs() is not { } itemTs)
-                continue;
-
-            // Strictly above the watermark and strictly below the live inbound:
-            // the live inbound is the executable message, not adopted context.
-            if (cursor is { } c && itemTs.CompareTo(c) <= 0)
-                continue;
-            if (itemTs.CompareTo(liveEventTs) >= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-            return baseResult;
-
-        var classified = await ClassifyGapAsync(candidates, cancellationToken);
-        if (classified.Gap.Count == 0)
-            return new InboundBuildResult(baseResult.Input, classified.DetectorUnavailable);
-
-        var mergedInput = MergeAdoptedContext(baseResult.Input, classified.Gap, cursor);
-        _log.Info(
-            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId}",
-            classified.Gap.Count,
-            baseResult.Input.MessageId);
-
-        return new InboundBuildResult(mergedInput, classified.DetectorUnavailable);
+        var ts = new SlackEventTs(candidateTs);
+        if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
+            _pendingCursorTs = ts;
     }
 
     private void AdvanceCursor(SlackEventTs candidateTs)
@@ -1042,8 +754,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
         => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, SlackEventTs>(_pendingApprovalRequests, cleared);
-
-    private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
 
     private async Task ReinitializePipelineAsync(string reason)
     {

@@ -10,9 +10,9 @@ Working branch: `refactor/binding-engine`, stacked on `refactor/delivery-failure
 
 ## 2. Gap-hydration engine
 
-- [ ] 2.1 Extract the shared engine (fetch → cursor-filter → classify → merge adopted context → enqueue) into `Netclaw.Channels`, transplanting the Mattermost copy as the reference implementation; constructor takes required classifier, authorization callback, history fetcher, and cursor comparator
-- [ ] 2.2 Delegate Mattermost, then Discord, then Slack hydration to the engine; diff each removed region against the transplant to confirm mechanical equivalence; STOP and surface any real semantic difference instead of normalizing it
-- [ ] 2.3 Hydration contract tests green for all three channels (fetch-once, stash-during-hydration, restart re-runs, adopted-context backfill, deferred hydration)
+- [x] 2.1 Extract the shared engine (fetch → cursor-filter → classify → merge adopted context → enqueue) into `Netclaw.Channels`, transplanting the Mattermost copy as the reference implementation; constructor takes required classifier, authorization callback, history fetcher, and cursor comparator
+- [x] 2.2 Delegate Mattermost, then Discord, then Slack hydration to the engine; diff each removed region against the transplant to confirm mechanical equivalence; STOP and surface any real semantic difference instead of normalizing it
+- [x] 2.3 Hydration contract tests green for all three channels (fetch-once, stash-during-hydration, restart re-runs, adopted-context backfill, deferred hydration)
 
 ## 3. Approval-response flow
 

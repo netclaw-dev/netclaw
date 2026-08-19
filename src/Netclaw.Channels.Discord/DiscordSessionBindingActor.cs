@@ -48,6 +48,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
+
+    // Null when the gateway supplies no thread-history fetcher. That is a real
+    // runtime state (an instance without history access), not a disabled check:
+    // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
+    private readonly ThreadGapHydrationEngine? _hydrationEngine;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
     // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
@@ -134,6 +139,26 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "discord-session");
 
+        if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
+        {
+            _hydrationEngine = new ThreadGapHydrationEngine(
+                sessionId: _sessionId,
+                channelType: ChannelType.Discord,
+                historyFetcher: historyFetcher,
+                injectionDetector: _promptInjectionDetector,
+                classifierSourceContext: "discord-backfill",
+                cursorComparer: CursorComparer,
+                cursorKeySelector: NormalizeSnowflake,
+                isAuthorizedSender: IsAuthorizedSender,
+                log: _log,
+                readCursor: () => _cursor,
+                readInputQueue: () => _handle.InputQueue,
+                readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
+                warnBackfillDetectorUnavailableAsync: () => SafeReplyAsync(BackfillDetectorWarning),
+                onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
+                setHydrationPending: pending => _hydrationPending = pending);
+        }
+
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
         Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
@@ -214,7 +239,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             try
             {
-                await PerformOneShotHydrationAsync();
+                if (_hydrationEngine is { } engine)
+                    await engine.PerformOneShotHydrationAsync();
             }
             catch (Exception ex)
             {
@@ -388,11 +414,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
 
         // Live inbound path is fetch-free. Thread history is hydrated once per
-        // actor lifetime in PerformOneShotHydrationAsync (driven by the
+        // actor lifetime by the hydration engine (driven by the
         // RecoveryCompleted handler); the only exception is a deferred
-        // hydration, which ApplyDeferredHydrationAsync completes on the first
-        // authorized inbound. By the time we get here the session already has
-        // the historical context it needs.
+        // hydration, which the engine completes on the first authorized
+        // inbound. By the time we get here the session already has the
+        // historical context it needs.
         var input = new ChannelInput
         {
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value),
@@ -413,7 +439,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         // MentionRequiredInThread the conversation actor forwards only mentions here,
         // so every inbound is a deliberate re-entry. _turnInFlight guards against a
         // re-arm while a prior turn is still processing, preserving the PR #733
-        // no-duplicate invariant; ApplyDeferredHydrationAsync no-ops on an empty gap.
+        // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
         //
         // Two accepted trade-offs of reusing the existing backfill (vs. a new
         // drop-tracking side channel): (1) one thread-history fetch per mention on an
@@ -430,21 +456,20 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _hydrationPending = true;
         }
 
-        if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
-            input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        if (_hydrationPending
+            && IsAuthorizedSender(message.SenderId.Value)
+            && _hydrationEngine is { } engine)
+        {
+            input = await engine.ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        }
 
         try
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
-            _turnInFlight = true;
             ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
 
-            if (NormalizeSnowflake(message.EventId.Value) is { } eventCursor)
-            {
-                if (_pendingCursor is not { } pending || CursorComparer.Compare(eventCursor, pending) > 0)
-                    _pendingCursor = eventCursor;
-            }
+            AdvancePendingCursorForEnqueuedTurn(NormalizeSnowflake(message.EventId.Value));
         }
         catch (OperationCanceledException)
         {
@@ -458,336 +483,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    /// <summary>
-    /// One-shot thread history hydration. Runs once per actor lifetime, in the
-    /// Hydrating behavior immediately after pipeline initialization. Fetches
-    /// thread history, computes the gap relative to the recovered cursor, and
-    /// if there is an authorized message in the gap, synthesizes one backfill
-    /// <see cref="ChannelInput"/> using that message as the trigger and older
-    /// gap messages as adopted context. Hands the synthesized input to the
-    /// session pipeline through the normal input-queue path.
-    /// </summary>
-    private async Task PerformOneShotHydrationAsync()
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return;
-
-        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return;
-        }
-
-        if (history.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: empty thread, no backfill cursor={Cursor} session={Session}",
-                _cursor ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var cursor = _cursor;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (NormalizeSnowflake(item.MessageId ?? string.Empty) is not { } itemCursor)
-                continue;
-
-            // Strict: only include messages newer than the cursor. PR #733's
-            // "cursor advances only on TurnCompleted" guarantees that
-            // snowflake == cursor means the session already has that message
-            // persisted — re-including it here on a restart hydration would
-            // duplicate it. The in-flight-crash case is handled too: a turn
-            // that didn't complete leaves the cursor un-advanced, so the
-            // message has snowflake > cursor and is correctly included in the gap.
-            if (cursor is { } c && CursorComparer.Compare(itemCursor, c) <= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor} session={Session}",
-                history.Count, cursor ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var classified = await ClassifyGapAsync(candidates, cts.Token);
-        var gap = classified.Gap;
-
-        _log.Info(
-            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor ?? "none", _sessionId.Value);
-
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (gap.Count == 0)
-            return;
-
-        // Locate the most recent authorized message in the gap — it plays the
-        // role of the "current authorized message" that adopted-context normally
-        // anchors around. Without one we have no authorized trigger to enqueue;
-        // we transition to Active and let the next live authorized inbound be
-        // the trigger.
-        AdoptedContextMessage? trigger = null;
-        for (var i = gap.Count - 1; i >= 0; i--)
-        {
-            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
-            {
-                trigger = gap[i];
-                break;
-            }
-        }
-
-        if (trigger is null)
-        {
-            // Deferred: a non-empty gap with no authorized trigger. The
-            // proactive-thread case — the binding actor's lifetime began when
-            // the agent posted the thread root, so this hydration ran before
-            // any authorized human inbound existed. Re-arm so the first
-            // authorized inbound performs this hydration (adopting the gap,
-            // e.g. the bot-authored root) instead of taking the fetch-free path.
-            _hydrationPending = true;
-            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound session={Session}", _sessionId.Value);
-            return;
-        }
-
-        var adoptedContext = new List<AdoptedContextMessage>();
-        foreach (var item in gap)
-        {
-            if (ReferenceEquals(item, trigger))
-                break;
-            adoptedContext.Add(item);
-        }
-
-        var triggerInput = trigger.Input;
-        var triggerCursor = NormalizeSnowflake(triggerInput.MessageId ?? string.Empty);
-        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; skipping hydration backfill");
-            return;
-        }
-
-        try
-        {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            writeCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await writer.WriteAsync(backfillInput, writeCts.Token);
-            // A hydration backfill is an in-flight turn too; mirror the live-inbound
-            // enqueue so a mention arriving before this turn completes does not re-arm.
-            _turnInFlight = true;
-
-            if (triggerCursor is { } tc)
-            {
-                if (_pendingCursor is not { } pending || CursorComparer.Compare(tc, pending) > 0)
-                    _pendingCursor = tc;
-            }
-
-            _log.Info(
-                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
-                triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-        catch (ChannelClosedException ex)
-        {
-            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-    }
-
-    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
-    {
-        var text = string.Join("\n", input.Contents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        return PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, text, "discord-backfill", _log, cancellationToken);
-    }
-
     // Discord authorization basis for adopted-context: an empty AllowedUserIds
     // list means the instance is unrestricted; otherwise the sender must be listed.
     private bool IsAuthorizedSender(string senderId)
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
-
-    private readonly record struct GapClassification(
-        List<AdoptedContextMessage> Gap,
-        int BlockedForRisk,
-        bool DetectorUnavailable);
-
-    /// <summary>
-    /// Runs prompt-injection classification over candidate gap messages and
-    /// captures each surviving message's authority-at-inclusion. Blocked
-    /// messages are dropped; detector-unavailable messages are also dropped
-    /// and surface a caller-visible flag.
-    /// </summary>
-    private async Task<GapClassification> ClassifyGapAsync(
-        IReadOnlyList<ChannelInput> candidates,
-        CancellationToken cancellationToken)
-    {
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = IsAuthorizedSender(candidates[i].SenderId.Value)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        candidates[i].SenderId,
-                        candidates[i].MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
-
-        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
-    }
-
-    /// <summary>
-    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
-    /// preceding <paramref name="triggerInput"/> (the executable message) and
-    /// returns the trigger input with adopted-context metadata populated.
-    /// </summary>
-    private static ChannelInput MergeAdoptedContext(
-        ChannelInput triggerInput,
-        List<AdoptedContextMessage> adoptedContext,
-        string? cursor)
-    {
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerInput.SenderId.Value,
-            triggerInput.ReceivedAt);
-
-        return triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor,
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
-    }
-
-    /// <summary>
-    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
-    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
-    /// This authorized inbound is the executable trigger; the thread gap strictly
-    /// before it — most importantly a proactively-posted bot-authored root — is
-    /// fetched, classified, and merged as its adopted-context window. On fetch
-    /// failure the turn proceeds un-enriched and hydration stays re-armed so a
-    /// later authorized inbound retries.
-    /// </summary>
-    private async Task<ChannelInput> ApplyDeferredHydrationAsync(
-        ChannelInput baseInput,
-        string liveMessageId,
-        CancellationToken cancellationToken)
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return baseInput;
-
-        // Without the live message's ordering key the gap below it cannot be
-        // bounded; leave hydration re-armed and take the fetch-free path.
-        if (NormalizeSnowflake(liveMessageId) is not { } liveCursor)
-            return baseInput;
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: execute the turn without an adopted window and keep
-            // hydration re-armed so a later authorized inbound retries.
-            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return baseInput;
-        }
-
-        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
-        // above) keeps the flag armed — classify/merge outcomes never re-arm.
-        _hydrationPending = false;
-
-        var cursor = _cursor;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (NormalizeSnowflake(item.MessageId ?? string.Empty) is not { } itemCursor)
-                continue;
-
-            // Strictly above the watermark and strictly below the live inbound:
-            // the live inbound is the executable message, not adopted context.
-            if (cursor is { } c && CursorComparer.Compare(itemCursor, c) <= 0)
-                continue;
-            if (CursorComparer.Compare(itemCursor, liveCursor) >= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-            return baseInput;
-
-        var classified = await ClassifyGapAsync(candidates, cancellationToken);
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (classified.Gap.Count == 0)
-            return baseInput;
-
-        _log.Info(
-            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
-            classified.Gap.Count,
-            baseInput.MessageId,
-            _sessionId.Value);
-
-        return MergeAdoptedContext(baseInput, classified.Gap, cursor);
-    }
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message)
     {
@@ -1625,6 +1325,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     internal static List<string> ChunkMessage(string text) =>
         MessageChunker.Chunk(text, MaxDiscordMessageLength);
 
+    /// <summary>
+    /// Records that a turn went into the input queue. The turn-in-flight flag
+    /// guards the mention re-arm path; the pending cursor keeps the highest
+    /// snowflake of the turn and only becomes the persisted cursor on
+    /// TurnCompleted.
+    /// </summary>
+    private void AdvancePendingCursorForEnqueuedTurn(string? candidateCursor)
+    {
+        _turnInFlight = true;
+
+        if (candidateCursor is null)
+            return;
+
+        if (_pendingCursor is not { } pending || CursorComparer.Compare(candidateCursor, pending) > 0)
+            _pendingCursor = candidateCursor;
+    }
+
     private void AdvanceCursor(string candidateCursor)
     {
         if (_cursor is { } c && CursorComparer.Compare(candidateCursor, c) <= 0)
@@ -1673,7 +1390,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     /// numeric cursor rejected, and it strips a form such as a leading zero
     /// that <see cref="SnowflakeCursorComparer"/> cannot order.
     /// </summary>
-    private static string? NormalizeSnowflake(string value)
+    private static string? NormalizeSnowflake(string? value)
         => ulong.TryParse(value, out var id) ? id.ToString() : null;
 
     private sealed record InitializePipeline
