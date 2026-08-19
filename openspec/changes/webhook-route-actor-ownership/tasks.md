@@ -16,16 +16,16 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 
 ## 3. CLI dual-mode write path
 
-- [ ] 3.1 Extend the `DaemonApi` client with the webhook resource calls
-- [ ] 3.2 `WebhooksCommand`: probe-based mode selection per D4 (reachable+present → API; unreachable/404 → direct file + one stderr notice; other API errors fail without fallback); stdout and exit codes identical in both modes
-- [ ] 3.3 `InboundWebhooksConfigViewModel`: route saves through the same mode selection (reuse the command's seam per the design's open question — no parallel construct)
-- [ ] 3.4 CLI tests: mode selection (API path recorded when daemon up; file written + notice when daemon DOWN; file written + notice on 404 from an OLD daemon — a distinct test from daemon-down; 400 and 401 fail the command with NO file write); existing `WebhooksCommandTests` stay green unchanged in file mode
-- [ ] 3.5 View-model fake-failure test: a failed API save in `InboundWebhooksConfigViewModel` blocks the save BEFORE any persistence (Automation Floor rule for dynamic validation)
+- [x] 3.1 Extend the `DaemonApi` client with the webhook resource calls
+- [x] 3.2 `WebhooksCommand`: probe-based mode selection per D4 (reachable+present → API; unreachable/404 → direct file + one stderr notice; other API errors fail without fallback); stdout and exit codes identical in both modes
+- [x] 3.3 RESOLVED NOT APPLICABLE: `InboundWebhooksConfigViewModel` has no route save — it writes only `Webhooks.Enabled`/`ExecutionTimeoutSeconds` to `netclaw.json` and delegates route authoring to `netclaw webhooks` (its own UI says so); its only route access is a read against canonical disk, already correct
+- [x] 3.4 CLI tests: mode selection (API path recorded when daemon up; file written + notice when daemon DOWN; file written + notice on 404 from an OLD daemon — a distinct test from daemon-down; 400 and 401 fail the command with NO file write); existing `WebhooksCommandTests` stay green unchanged in file mode
+- [x] 3.5 RESOLVED NOT APPLICABLE with 3.3: no view-model route save exists to fake-fail; the command-level 400/401 no-file-write tests cover the save-blocked-before-persistence guarantee for the surface that actually mutates routes
 
 ## 4. Test replacement and skew guard
 
-- [ ] 4.1 Delete `Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases` and the same choreography pattern in `Update_lock_wait_honors_cancellation`; replace with ONE outcome-only store-level cross-process-guard test (no bounded event waits, no scheduling asserts) retained until the mutex follow-up
-- [ ] 4.2 Verify no remaining test in the repo asserts on thread-pool scheduling for this capability (grep for the choreography pattern)
+- [x] 4.1 Delete `Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases` and the same choreography pattern in `Update_lock_wait_honors_cancellation`; replace with ONE outcome-only store-level cross-process-guard test (no bounded event waits, no scheduling asserts) retained until the mutex follow-up
+- [x] 4.2 Verify no remaining test in the repo asserts on thread-pool scheduling for this capability (grep for the choreography pattern)
 
 ## 5. Finish
 

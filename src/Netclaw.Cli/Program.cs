@@ -860,6 +860,37 @@ static async Task RunAsync(string[] args)
     // ── Webhook management ──
     if (mode is "webhooks")
     {
+        var webhooksSubcommand = args.Length > 1 ? args[1] : "list";
+
+        // `set` and `delete` mutate routes, so they belong to the daemon when it
+        // runs — they need the DaemonApi client. Building the DI host parses local
+        // config (netclaw.json, secrets.json); a corrupt file must produce a
+        // readable error, not a stack trace. Every other subcommand reads route
+        // files, which stay canonical, so it needs no daemon.
+        if (webhooksSubcommand is "set" or "delete")
+        {
+            try
+            {
+                var builder = CreateQuietHostBuilder(args);
+                using var webhooksHost = builder.Build();
+                var webhooksPaths = webhooksHost.Services.GetRequiredService<NetclawPaths>();
+                webhooksPaths.EnsureDirectoriesExist();
+                Environment.ExitCode = await WebhooksCommand.RunAsync(
+                    args,
+                    webhooksPaths,
+                    output: null,
+                    webhooksHost.Services.GetRequiredService<DaemonApi>());
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+            {
+                Console.Error.WriteLine($"webhooks {webhooksSubcommand}: could not load local configuration: {ex.Message}");
+                Console.Error.WriteLine("Fix the file it names (under ~/.netclaw/config) and retry.");
+                Environment.ExitCode = 1;
+            }
+
+            return;
+        }
+
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
         Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths);

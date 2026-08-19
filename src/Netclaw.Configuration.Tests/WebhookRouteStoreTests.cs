@@ -224,13 +224,27 @@ public sealed class WebhookRouteStoreTests : IDisposable
         Assert.Contains(errors, error => error.Contains("not supported", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The cross-process guard for the version-skew window. The daemon actor now
+    /// serializes every in-process mutation, so this test covers only what the
+    /// actor cannot: an old CLI in another process writing the same route file.
+    /// <para>
+    /// It asserts one outcome — no lost update — and nothing about scheduling.
+    /// The mutex follow-up that closes the skew window removes the mutex and this
+    /// test together.
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases()
+    public async Task Update_loses_no_field_when_two_store_instances_write_at_the_same_time()
     {
+        const int rounds = 4;
         var firstStore = new WebhookRouteStore(_paths);
         string? aliasPath = null;
         string? parentAliasPath = null;
-        NetclawPaths secondPaths = _paths;
+        var secondPaths = _paths;
+
+        // On POSIX a second process can reach the same file through a symlink, so
+        // the lock identity must survive the alias.
         if (!OperatingSystem.IsWindows())
         {
             var parentPath = Path.GetDirectoryName(_dir.Path)
@@ -244,88 +258,45 @@ public sealed class WebhookRouteStoreTests : IDisposable
             secondPaths = new NetclawPaths(aliasPath);
         }
 
-        var secondStore = new WebhookRouteStore(secondPaths);
-        firstStore.Save("concurrent-route", CreateValidRoute());
-        using var firstEntered = new ManualResetEventSlim();
-        using var secondStarted = new ManualResetEventSlim();
-        using var releaseFirst = new ManualResetEventSlim();
-        var cancellationToken = TestContext.Current.CancellationToken;
-
         try
         {
-            var first = Task.Run(() => firstStore.Update("concurrent-route", cancellationToken, existing =>
-            {
-                firstEntered.Set();
-                Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-                existing!.RateLimitPerMinute = 12;
-                return (existing, true);
-            }), cancellationToken);
-            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            var secondStore = new WebhookRouteStore(secondPaths);
+            var seed = CreateValidRoute();
+            var baselineRateLimit = seed.RateLimitPerMinute;
+            var baselineMaxBody = seed.MaxBodyBytes;
+            firstStore.Save("concurrent-route", seed);
+            var cancellationToken = TestContext.Current.CancellationToken;
 
-            var second = Task.Run(() =>
+            var updates = new List<Task>();
+            for (var round = 0; round < rounds; round++)
             {
-                secondStarted.Set();
-                return secondStore.Update("concurrent-route", cancellationToken, existing =>
+                updates.Add(Task.Run(() => firstStore.Update("concurrent-route", cancellationToken, existing =>
                 {
-                    existing!.MaxBodyBytes = 2048;
+                    existing!.RateLimitPerMinute++;
                     return (existing, true);
-                });
-            }, cancellationToken);
+                }), cancellationToken));
 
-            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-            releaseFirst.Set();
-            await Task.WhenAll(first, second);
+                updates.Add(Task.Run(() => secondStore.Update("concurrent-route", cancellationToken, existing =>
+                {
+                    existing!.MaxBodyBytes++;
+                    return (existing, true);
+                }), cancellationToken));
+            }
 
+            await Task.WhenAll(updates);
+
+            // Every increment read the value its predecessor wrote. A dropped
+            // read-modify-write shows up as a short count on either field.
             Assert.True(firstStore.TryGet("concurrent-route", out var saved));
-            Assert.Equal(12, saved.Definition!.RateLimitPerMinute);
-            Assert.Equal(2048, saved.Definition.MaxBodyBytes);
+            Assert.Equal(baselineRateLimit + rounds, saved.Definition!.RateLimitPerMinute);
+            Assert.Equal(baselineMaxBody + rounds, saved.Definition.MaxBodyBytes);
         }
         finally
         {
-            releaseFirst.Set();
             if (aliasPath is not null)
                 Directory.Delete(aliasPath);
             if (parentAliasPath is not null)
                 Directory.Delete(parentAliasPath);
-        }
-    }
-
-    [Fact]
-    public async Task Update_lock_wait_honors_cancellation()
-    {
-        var firstStore = new WebhookRouteStore(_paths);
-        firstStore.Save("cancelled-update", CreateValidRoute());
-        using var firstEntered = new ManualResetEventSlim();
-        using var releaseFirst = new ManualResetEventSlim();
-        using var cancellation = new CancellationTokenSource();
-        var testCancellation = TestContext.Current.CancellationToken;
-
-        var first = Task.Run(() => firstStore.Update(
-            "cancelled-update",
-            testCancellation,
-            existing =>
-            {
-                firstEntered.Set();
-                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), testCancellation));
-                return (existing, true);
-            }), testCancellation);
-        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), testCancellation));
-
-        var second = Task.Run(() => firstStore.Update(
-            "cancelled-update",
-            cancellation.Token,
-            existing => (existing, true)), testCancellation);
-        cancellation.Cancel();
-
-        try
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
-        }
-        finally
-        {
-            releaseFirst.Set();
-            await first;
         }
     }
 

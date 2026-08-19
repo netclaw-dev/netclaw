@@ -234,6 +234,43 @@ public sealed class DaemonApi
             : await client.PostAsJsonAsync($"{_endpoint}/api/reminders/import", request, cts.Token);
     }
 
+    // ── Webhook routes ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists the daemon's webhook routes. The CLI also uses this call as its
+    /// write-path probe: a transport failure means the daemon is down, and a 404
+    /// means the daemon predates the resource. Both answers select direct-file
+    /// mode; every other failure status is a hard error.
+    /// </summary>
+    public async Task<HttpResponseMessage> ListWebhookRoutesAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.GetAsync($"{_endpoint}/api/webhooks", cts.Token);
+    }
+
+    /// <summary>
+    /// Creates or updates one webhook route. <paramref name="request"/> is a
+    /// field-level patch: an omitted (null) property leaves the stored value
+    /// unchanged, so two patches of different fields compose in the daemon.
+    /// </summary>
+    public async Task<HttpResponseMessage> UpsertWebhookRouteAsync(
+        string name,
+        object request,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.PutAsJsonAsync($"{_endpoint}/api/webhooks/{Uri.EscapeDataString(name)}", request, cts.Token);
+    }
+
+    public async Task<HttpResponseMessage> DeleteWebhookRouteAsync(string name, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.DeleteAsync($"{_endpoint}/api/webhooks/{Uri.EscapeDataString(name)}", cts.Token);
+    }
+
     // ── MCP OAuth ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> StartMcpOAuthAsync(string name, CancellationToken ct = default)
