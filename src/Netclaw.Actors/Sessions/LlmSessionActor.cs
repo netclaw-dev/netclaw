@@ -226,9 +226,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _lifecycleObserver = observability?.LifecycleObserver;
         _clientProvider = services.ClientProvider;
         _chatClient = services.ClientProvider.GetClient(ModelRole.Main);
-        _compactionClient = modelCapabilities.CompactionModelId is not null
-            ? services.ClientProvider.GetClient(ModelRole.Compaction)
-            : _chatClient;
+        // The provider owns role resolution. Its contract states that a role without a
+        // configured model falls back to ModelRole.Main, so the actor must not repeat
+        // that decision here.
+        _compactionClient = services.ClientProvider.GetClient(ModelRole.Compaction);
         _model = modelCapabilities;
         _config = config;
         _promptProvider = services.PromptProvider;
@@ -2131,17 +2132,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeSnapshot();
             MaybeGenerateTitle();
             _activeRecall = recallResult;
-
-            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId,
-                TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.TurnComplete,
-                Priority: 40,
-                Payload: SessionMemoryCheckpointFactory.ForTurnComplete(
-                    _sessionId,
-                    evt,
-                    CurrentMemoryBoundary(),
-                    CurrentMemoryAudience())));
 
             _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
 
