@@ -74,6 +74,20 @@ The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-
 - **THEN** the Discord hook renames the thread
 - **AND** a channel without that capability ignores the output in its hook
 
+#### Scenario: Pipeline reinitialize keeps each channel's cursor discipline
+
+- **GIVEN** a pipeline reinitialize while a turn is in flight
+- **WHEN** the binding actor resets the engine
+- **THEN** Slack discards the pending cursor
+- **AND** Discord and Mattermost keep it, which preserves their current behavior
+
+> Note: the step-4 transplant surfaced this divergence. Slack clears the
+> pending cursor on reinitialize; Discord and Mattermost keep it, so a later
+> `TurnCompleted` can commit the cursor of a turn that the reinitialize
+> abandoned. That is a possible latent defect in the Discord and Mattermost
+> behavior, tracked as a product question outside this change. This change
+> preserves each channel's current behavior via `DiscardPendingCursor()`.
+
 ### Requirement: Transport-failure escalation parity
 
 The safe transport-call skeleton SHALL record telemetry, notify delivery failure, and preserve the fail-loud contract: when the session feedback pipe fails, the error SHALL propagate so supervision restarts the actor and re-creates the pipeline. No channel SHALL swallow a feedback-pipe failure.
