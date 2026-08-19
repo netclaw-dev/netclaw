@@ -74,7 +74,7 @@ public sealed class WebhookRouteActor : ReceiveActor
             // original exception so the tool reports it and the HTTP handler
             // returns a server error. The actor keeps serving — its state lives
             // on disk, so one failed write leaves nothing to repair in memory.
-            _log.Warning(ex, "Webhook route '{0}' could not be saved.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be saved.", routeName);
             Sender.Tell(new Status.Failure(ex));
         }
     }
@@ -95,7 +95,7 @@ public sealed class WebhookRouteActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Webhook route '{0}' could not be deleted.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be deleted.", routeName);
             Sender.Tell(new Status.Failure(ex));
         }
     }
@@ -115,7 +115,7 @@ public sealed class WebhookRouteActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Webhook route '{0}' could not be read.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be read.", routeName);
             Sender.Tell(new Status.Failure(ex));
         }
     }
@@ -141,20 +141,19 @@ public sealed class WebhookRouteActor : ReceiveActor
     /// result. Returns a null definition for every rejection, which tells
     /// <see cref="WebhookRouteStore.Update"/> to leave the file untouched.
     /// </summary>
-    private static (WebhookRouteConfig? Definition, RouteSaved Result) Merge(
+    private (WebhookRouteConfig? Definition, RouteSaved Result) Merge(
         string routeName,
         UpsertRoute command,
         WebhookRouteConfig? existing)
     {
         if (existing is not null && existing.Audience > command.CreatorAudience)
         {
-            return (null, new RouteSaved(
+            return Reject(
                 routeName,
-                Success: false,
-                Created: false,
-                Route: null,
+                command,
+                existing,
                 WebhookRouteError.Authority,
-                $"Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()})."));
+                $"Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()}).");
         }
 
         TrustAudience audience;
@@ -164,13 +163,12 @@ public sealed class WebhookRouteActor : ReceiveActor
         }
         else if (requested > command.CreatorAudience)
         {
-            return (null, new RouteSaved(
+            return Reject(
                 routeName,
-                Success: false,
-                Created: false,
-                Route: null,
+                command,
+                existing,
                 WebhookRouteError.Authority,
-                $"Requested audience '{requested.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()})."));
+                $"Requested audience '{requested.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()}).");
         }
         else
         {
@@ -193,13 +191,12 @@ public sealed class WebhookRouteActor : ReceiveActor
             || command.ToleranceSeconds is not null;
         if (mergedKind != WebhookVerifierKind.HmacTimestamped && patchHasTimestampSettings)
         {
-            return (null, new RouteSaved(
+            return Reject(
                 routeName,
-                Success: false,
-                Created: false,
-                Route: null,
+                command,
+                existing,
                 WebhookRouteError.Validation,
-                "Timestamp verification settings require verification kind 'hmac-timestamped'."));
+                "Timestamp verification settings require verification kind 'hmac-timestamped'.");
         }
 
         var definition = new WebhookRouteConfig
@@ -261,13 +258,12 @@ public sealed class WebhookRouteActor : ReceiveActor
         var validationErrors = WebhookRouteValidator.Validate(routeName, definition);
         if (validationErrors.Count > 0)
         {
-            return (null, new RouteSaved(
+            return Reject(
                 routeName,
-                Success: false,
-                Created: false,
-                Route: null,
+                command,
+                existing,
                 WebhookRouteError.Validation,
-                validationErrors[0]));
+                validationErrors[0]);
         }
 
         return (definition, new RouteSaved(
@@ -275,6 +271,38 @@ public sealed class WebhookRouteActor : ReceiveActor
             Success: true,
             Created: existing is null,
             Route: definition));
+    }
+
+    /// <summary>
+    /// Builds a rejection reply and records it. A refused route mutation is a
+    /// security event: it is the one signal that a caller tried to take over or
+    /// to mint authority above its own. The record names the route, both
+    /// audiences, and the reason. It never names the route secret.
+    /// </summary>
+    private (WebhookRouteConfig? Definition, RouteSaved Result) Reject(
+        string routeName,
+        UpsertRoute command,
+        WebhookRouteConfig? existing,
+        WebhookRouteError error,
+        string reason)
+    {
+        _log.Warning(
+            "Webhook route {RouteName} rejected ({RejectionKind}). Creator audience {CreatorAudience}, "
+            + "requested audience {RequestedAudience}, stored audience {StoredAudience}. Reason: {Reason}",
+            routeName,
+            error,
+            command.CreatorAudience.ToWireValue(),
+            command.RequestedAudience?.ToWireValue() ?? "(inherited)",
+            existing?.Audience.ToWireValue() ?? "(new route)",
+            reason);
+
+        return (null, new RouteSaved(
+            routeName,
+            Success: false,
+            Created: false,
+            Route: null,
+            error,
+            reason));
     }
 
     private static string? NormalizeOptional(string value, bool trim = true)

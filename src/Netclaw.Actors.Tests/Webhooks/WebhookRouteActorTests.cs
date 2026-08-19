@@ -179,6 +179,33 @@ public class WebhookRouteActorTests : TestKit
     }
 
     /// <summary>
+    /// The security audit trail. A refused mutation is the one signal that a
+    /// caller tried to take over authority above its own, so the actor records
+    /// it at warning level with both audiences.
+    /// </summary>
+    [Fact]
+    public async Task An_authority_rejection_is_recorded_in_the_log()
+    {
+        await CreateRouteAsync("audited-route");
+
+        await EventFilter
+            .Warning(contains: "audited-route")
+            .ExpectOneAsync(async () =>
+            {
+                var response = await RouteActor.Ask<RouteSaved>(
+                    new UpsertRoute
+                    {
+                        RouteName = "audited-route",
+                        CreatorAudience = TrustAudience.Public,
+                        Prompt = "Take over the route."
+                    },
+                    TestContext.Current.CancellationToken);
+                Assert.False(response.Success);
+            },
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
     /// A new incarnation of the actor serves the route the previous incarnation
     /// wrote. The actor keeps no cache, so a restart has nothing to lose and
     /// rebuilds its whole answer from the route files.
