@@ -22,9 +22,9 @@ Working branch: `refactor/binding-engine`, stacked on `refactor/delivery-failure
 
 ## 4. Output template and safe transport calls
 
-- [ ] 4.1 Extract turn-completion bookkeeping engine; engine returns events to persist, actor keeps `Persist`/`PersistAll`; channel-specific outputs (`SessionTitleOutput`, `ProcessingStateOutput`) go through the channel hook
-- [ ] 4.2 Extract the safe transport-call skeleton (timing → call → telemetry → notify) preserving per-channel telemetry categories and the PR #2004 fail-loud contract
-- [ ] 4.3 Contract tests green: delivery-failed feedback, empty-turn fallback, reminder settlement, `Feedback_send_failure_faults_the_actor`
+- [x] 4.1 Extract turn-completion bookkeeping engine; engine returns events to persist, actor keeps `Persist`/`PersistAll`; channel-specific outputs (`SessionTitleOutput`, `ProcessingStateOutput`) go through the channel hook
+- [x] 4.2 Extract the safe transport-call skeleton (timing → call → telemetry → notify) preserving per-channel telemetry categories and the PR #2004 fail-loud contract — Discord and Mattermost delegate; Slack keeps its own by the stop rule (three exception classes, one with `RecordReplyRejected` telemetry no other channel has, plus deferred failure reporting)
+- [x] 4.3 Contract tests green: delivery-failed feedback, empty-turn fallback, reminder settlement, `Feedback_send_failure_faults_the_actor`
 
 ## 5. Finish
 

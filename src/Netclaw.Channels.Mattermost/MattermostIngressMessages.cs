@@ -72,10 +72,4 @@ internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalR
         : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptPostId, toolName, displayText)
     {
     }
-
-    public MattermostPostId? PromptPostId
-    {
-        get => PromptId;
-        set => PromptId = value;
-    }
 }

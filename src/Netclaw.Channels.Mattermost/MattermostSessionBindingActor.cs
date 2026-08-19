@@ -54,38 +54,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private readonly ThreadGapHydrationEngine? _hydrationEngine;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
     private readonly ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId> _approvalFlow;
-
-    // Gates the text-approval cold path. The gate rule lives with the cold path
-    // in ApprovalResponseFlow.
-    private bool _hasObservedApprovalRequest;
+    private readonly ChannelOutputEngine<PendingApprovalRequest, MattermostPostId> _outputEngine;
+    private readonly SafeTransportCall _safeCall;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
-    private bool _deliveredThisTurn;
-    // True when a content post/upload this turn was attempted but failed (the
-    // model produced output, the transport rejected it). Distinct from "nothing
-    // was produced" — it suppresses the empty-turn fallback so a failed post
-    // isn't followed by a misleading "I didn't manage to produce a reply".
-    private bool _postFailedThisTurn;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
-    private TurnNumber _turnNumber;
     private string? _cursorPostId;
-    private string? _pendingCursorPostId;
-
-    // Reliable in-flight-turn signal for the mention re-arm guard: set when the
-    // main inbound is enqueued (unlike _pendingCursorPostId, which is only set for
-    // inbounds with a non-empty post id), cleared when the turn ends or the
-    // pipeline reinitializes. Without it, a null-id in-flight turn would leave
-    // _pendingCursorPostId unset and let a following mention re-arm mid-turn —
-    // the PR #733 no-duplicate hazard.
-    private bool _turnInFlight;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -124,6 +100,35 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "mattermost-session");
 
+        _safeCall = new SafeTransportCall(
+            ChannelType.Mattermost,
+            _dependencies.TimeProvider,
+            NotifyDeliveryFailedAsync);
+
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, MattermostPostId>(
+            channelType: ChannelType.Mattermost,
+            channelName: "Mattermost",
+            // Mattermost post IDs are lexicographically sortable strings.
+            cursorComparer: StringComparer.Ordinal,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest(request),
+            isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
+            renderTextOutput: textOutput => textOutput.Text,
+            renderErrorOutput: error => $":warning: {error.Message}",
+            postTextAsync: SafeReplyAsync,
+            uploadFileAsync: SafeUploadFileAsync,
+            postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
+            readPromptIdValue: promptPostId => promptPostId.Value,
+            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: AdvanceCursor,
+            postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
+            // Mattermost reports a delivery failure inline from SafeReplyAsync,
+            // so the session already knows by the time the turn completes.
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
+            readObservedAtMs: completed => completed.TimestampMs);
+
         if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
         {
             _hydrationEngine = new ThreadGapHydrationEngine(
@@ -141,7 +146,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 readInputQueue: () => _handle.InputQueue,
                 readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
                 warnBackfillDetectorUnavailableAsync: () => SafeReplyAsync(BackfillDetectorWarning),
-                onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
+                onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
                 setHydrationPending: pending => _hydrationPending = pending);
         }
 
@@ -153,7 +158,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
             matchOrder: ApprovalMatchOrder.Newest,
-            hasObservedApprovalRequest: () => _hasObservedApprovalRequest,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
             postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
             persistPromptCleared: callId => Persist(
                 new PendingApprovalPromptCleared { CallId = callId.Value },
@@ -277,17 +282,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
-            _deliveredThisTurn = false;
-            _postFailedThisTurn = false;
-            // A reinit abandons any in-flight turn before its TurnCompleted; clear
-            // the mention re-arm guard so the next mention can re-hydrate instead of
-            // being blocked by a stuck flag.
-            _turnInFlight = false;
-            // A reinit aborts any in-flight reminder turn before its
-            // TurnCompleted. Report those as not-delivered now so the
-            // execution actor redelivers immediately instead of stalling
-            // until the backstop timeout.
-            FailPendingReminderDeliveries($"Mattermost pipeline reinitialized: {msg.Reason}");
+            _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -427,7 +422,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         // mention, not this one (and can be skipped if the cursor later advances past
         // it under rapid concurrent mentions).
         if (!_hydrationPending
-            && !_turnInFlight
+            && !_outputEngine.TurnInFlight
             && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
         {
             _hydrationPending = true;
@@ -447,7 +442,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
 
             var eventId = message.EventId.Value;
-            AdvancePendingCursorForEnqueuedTurn(string.IsNullOrEmpty(eventId) ? null : eventId);
+            _outputEngine.AdvancePendingCursorForEnqueuedTurn(string.IsNullOrEmpty(eventId) ? null : eventId);
         }
         catch (OperationCanceledException)
         {
@@ -579,7 +574,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -611,109 +606,21 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
-        switch (msg.Output)
-        {
-            case TextOutput textOutput:
-                if (await SafeReplyAsync(textOutput.Text))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case ErrorOutput error:
-                if (await SafeReplyAsync($":warning: {error.Message}"))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case FileOutput file:
-                if (await SafeUploadFileAsync(file))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
-                _hasObservedApprovalRequest = true;
-                var pendingApproval = new PendingApprovalRequest(request);
-                _pendingApprovalRequests.Add(pendingApproval);
-
-                var promptPostId = await SafeReplyWithApprovalPromptAsync(request);
-                if (promptPostId is not null)
-                {
-                    pendingApproval.PromptPostId = promptPostId;
-                    Persist(new PendingApprovalPromptTracked
-                    {
-                        CallId = pendingApproval.CallId.Value,
-                        RequesterSenderId = pendingApproval.RequesterSenderId,
-                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
-                        OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptPostId.Value.Value,
-                        ToolName = pendingApproval.ToolName,
-                        // Preserve null-vs-set semantics on the wire: Truncate
-                        // returns string.Empty for null input, which would round-
-                        // trip as DisplayText="" with HasDisplayText=true.
-                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
-                            ? null
-                            : ApprovalDisplayTextFormatter.Truncate(
-                                pendingApproval.DisplayText,
-                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
-                    }, ApplyPendingApprovalPromptTracked);
-                }
-                else
-                {
-                    _pendingApprovalRequests.Remove(pendingApproval);
-                }
-                break;
-
-            // Mattermost threads don't support renaming, so SessionTitleOutput is ignored.
-
-            case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorPostId is { } pendingCursor)
-                    AdvanceCursor(pendingCursor);
-                _pendingCursorPostId = null;
-                _turnInFlight = false;
-
-                if (completed.SourceReminderId is { } sourceReminderKey
-                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
-                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
-                {
-                    reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey,
-                        ChannelType.Mattermost,
-                        Delivered: _deliveredThisTurn,
-                        FailureReason: _deliveredThisTurn ? null : "Mattermost post did not succeed",
-                        ObservedAtMs: completed.TimestampMs));
-                }
-
-                // Only post the empty-turn fallback when the turn genuinely
-                // produced nothing. A failed post already notified the session
-                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
-                // didn't manage to produce a reply" on top would be misleading
-                // (a reply WAS produced) and double up with the redelivered one.
-                if (!_deliveredThisTurn && !_postFailedThisTurn)
-                    await SafeReplyAsync(EmptyTurnFallbackText);
-
-                _turnNumber = completed.TurnNumber;
-                var clearedPrompts = _pendingApprovalRequests
-                    .Select(pending => new PendingApprovalPromptCleared
-                    {
-                        CallId = pending.CallId.Value
-                    })
-                    .ToArray();
-                if (clearedPrompts.Length > 0)
-                {
-                    PersistAll(
-                        clearedPrompts,
-                        cleared => ApplyPendingApprovalPromptCleared(cleared));
-                }
-                _pendingApprovalRequests.Clear();
-                _deliveredThisTurn = false;
-                _postFailedThisTurn = false;
-                break;
-        }
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
     }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Mattermost
+    /// supports none of them, so every one is ignored here. Mattermost threads
+    /// cannot be renamed, so a <c>SessionTitleOutput</c> has no effect, and the
+    /// binding renders no processing indicator. The missing processing
+    /// indicator is a capability difference from Slack and Discord. Whether
+    /// Mattermost should gain one is a product question, recorded as an open
+    /// question in the OpenSpec design for this change.
+    /// </summary>
+    private Task HandleChannelSpecificOutputAsync(SessionOutput output) => Task.CompletedTask;
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
@@ -780,9 +687,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (Exception ex)
         {
+            // The shared output engine auto-denies the request when this
+            // returns null, so the blocked tool call still unwinds.
             _log.Error(ex, "Failed posting Mattermost approval prompt; auto-denying request");
             ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "auto_deny");
-            await SendApprovalDenyOnFailureAsync(request.CallId);
             return null;
         }
     }
@@ -793,31 +701,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     /// notifying the session of the delivery failure). Callers that gate
     /// reminder delivery confirmation on real delivery must honor the result.
     /// </summary>
-    private async Task<bool> SafeReplyAsync(string text)
-    {
-        var chunks = ChunkMessage(text);
-        foreach (var chunk in chunks)
-        {
-            var startedAt = _dependencies.TimeProvider.GetTimestamp();
-            try
-            {
-                var postMessage = BuildPostMessage(chunk);
-                await _dependencies.ReplyClient.PostReplyAsync(postMessage);
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
-            }
-            catch (Exception ex)
-            {
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value);
-                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private Task<bool> SafeReplyAsync(string text)
+        => _safeCall.PostChunkedAsync(
+            text,
+            MaxMattermostPostLength,
+            chunk => _dependencies.ReplyClient.PostReplyAsync(BuildPostMessage(chunk)),
+            ex => _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value));
 
     private MattermostPostMessage BuildPostMessage(
         string text,
@@ -832,65 +721,41 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task<bool> SafeUploadFileAsync(FileOutput file)
     {
-        var startedAt = _dependencies.TimeProvider.GetTimestamp();
-        try
+        // A missing file never reaches the transport, so it carries no transport
+        // telemetry and a different failure kind.
+        if (!File.Exists(file.FilePath))
         {
-            if (!File.Exists(file.FilePath))
+            _log.Warning("File not found for upload: {Path}", file.FilePath);
+            await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
+            return false;
+        }
+
+        var uploaded = await _safeCall.InvokeAsync(
+            async () =>
             {
-                _log.Warning("File not found for upload: {Path}", file.FilePath);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
-                return false;
-            }
+                using var uploadCts = new CancellationTokenSource(OperationTimeout);
+                var fileId = await _dependencies.ReplyClient.UploadFileAsync(
+                    _channelId,
+                    file.FilePath,
+                    file.FileName,
+                    uploadCts.Token);
 
-            using var uploadCts = new CancellationTokenSource(OperationTimeout);
-            var fileId = await _dependencies.ReplyClient.UploadFileAsync(
-                _channelId,
-                file.FilePath,
-                file.FileName,
-                uploadCts.Token);
+                using var postCts = new CancellationTokenSource(OperationTimeout);
+                var postMessage = BuildPostMessage($":paperclip: {file.FileName}", fileIds: [fileId]);
+                await _dependencies.ReplyClient.PostReplyAsync(postMessage, postCts.Token);
+            },
+            ex =>
+            {
+                if (ex is OperationCanceledException)
+                    _log.Error(ex, "Timed out uploading file {FileName} to Mattermost thread", file.FileName);
+                else
+                    _log.Error(ex, "Failed to upload file {FileName} to Mattermost thread", file.FileName);
+            });
 
-            using var postCts = new CancellationTokenSource(OperationTimeout);
-            var postMessage = BuildPostMessage($":paperclip: {file.FileName}", fileIds: [fileId]);
-            await _dependencies.ReplyClient.PostReplyAsync(postMessage, postCts.Token);
-
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
+        if (uploaded)
             _log.Info("Uploaded file to Mattermost thread: {FileName}", file.FileName);
-            return true;
-        }
-        catch (OperationCanceledException ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Timed out uploading file {FileName} to Mattermost thread", file.FileName);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Failed to upload file {FileName} to Mattermost thread", file.FileName);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
-    }
 
-    /// <summary>
-    /// Tells every in-flight reminder observer that delivery did not happen,
-    /// then clears them. Called when a turn can no longer reach TurnCompleted
-    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
-    /// rather than waiting out its backstop timeout.
-    /// </summary>
-    private void FailPendingReminderDeliveries(string reason)
-    {
-        if (_reminderDeliveryObservers.Count == 0)
-            return;
-
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Mattermost, Delivered: false, FailureReason: reason));
-
-        _reminderDeliveryObservers.Clear();
+        return uploaded;
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
@@ -900,7 +765,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
             {
                 SessionId = _sessionId,
-                TurnNumber = _turnNumber,
+                TurnNumber = _outputEngine.LastCompletedTurnNumber,
                 ChannelType = ChannelType.Mattermost,
                 FailureKind = failureKind,
                 ErrorMessage = errorMessage
@@ -1072,24 +937,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     internal static List<string> ChunkMessage(string text) =>
         MessageChunker.Chunk(text, MaxMattermostPostLength);
 
-    /// <summary>
-    /// Records that a turn went into the input queue. The turn-in-flight flag
-    /// guards the mention re-arm path; the pending cursor keeps the highest
-    /// post id of the turn and only becomes the persisted cursor on
-    /// TurnCompleted.
-    /// </summary>
-    private void AdvancePendingCursorForEnqueuedTurn(string? candidatePostId)
-    {
-        _turnInFlight = true;
-
-        if (candidatePostId is null)
-            return;
-
-        if (_pendingCursorPostId is null
-            || string.CompareOrdinal(candidatePostId, _pendingCursorPostId) > 0)
-            _pendingCursorPostId = candidatePostId;
-    }
-
     private void AdvanceCursor(string candidatePostId)
     {
         if (_cursorPostId is not null && string.CompareOrdinal(candidatePostId, _cursorPostId) <= 0)
@@ -1112,7 +959,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
-        _hasObservedApprovalRequest = true;
+        _outputEngine.MarkApprovalRequestObserved();
         PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, MattermostPostId>(
             _pendingApprovalRequests,
             tracked,

@@ -37,39 +37,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     // Slack subscribes to OutputFilter.Text (final assembled text), not TextStreaming.
     private const string EmptyTurnFallbackText = ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
     // No streaming state needed — Slack receives TextOutput only, not TextDeltaOutput.
-    private bool _postedThisTurn;
-    private bool _uploadedFileThisTurn;
+
+    // Slack tells the session about a delivery failure at turn completion, not
+    // at post time, so it keeps the failure descriptor of the last failed post.
+    // The engine's per-turn failure flag gates every read of this field, and
+    // both turn-completion hooks clear it.
     private PostResult? _lastFailedPost;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
     private readonly ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs> _approvalFlow;
-
-    // Gates the text-approval cold path. The gate rule lives with the cold path
-    // in ApprovalResponseFlow.
-    private bool _hasObservedApprovalRequest;
+    private readonly ChannelOutputEngine<PendingApprovalRequest, SlackEventTs> _outputEngine;
 
     private readonly SessionPipelineHandle _handle;
     private readonly ThreadGapHydrationEngine _hydrationEngine;
     private SlackEventTs? _cursorTs;
-    private SlackEventTs? _pendingCursorTs;
 
     // A Slack ts is decimal seconds, so two ts values order by numeric value,
     // not by ordinal text. SlackEventTs.CompareTo owns that rule; the hydration
-    // engine compares cursor keys through this wrapper.
+    // engine and the output engine compare cursor keys through this wrapper.
     private static readonly IComparer<string> CursorComparer =
         Comparer<string>.Create((x, y) => new SlackEventTs(x).CompareTo(new SlackEventTs(y)));
 
-    // Reliable in-flight-turn signal for the mention re-arm guard: set when ANY
-    // inbound is enqueued (unlike _pendingCursorTs, which is only set for inbounds
-    // with a parseable ts), cleared when the turn ends. Without it, a null-ts
-    // in-flight turn would leave _pendingCursorTs unset and let a following mention
-    // re-arm mid-turn — the PR #733 no-duplicate hazard.
-    private bool _turnInFlight;
     private volatile bool _processingIndicatorActive;
     private readonly object _processingIndicatorRenderLock = new();
     private Task _processingIndicatorRenderTail = Task.CompletedTask;
@@ -117,6 +104,33 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
 
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, SlackEventTs>(
+            channelType: ChannelType.Slack,
+            channelName: "Slack",
+            cursorComparer: CursorComparer,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest(request),
+            // Slack renders every interaction request as an approval prompt.
+            // Discord and Mattermost render only Kind == "approval".
+            isApprovalRequest: _ => true,
+            renderTextOutput: textOutput =>
+            {
+                var fullText = textOutput.Text?.Trim();
+                return string.IsNullOrWhiteSpace(fullText) ? null : fullText;
+            },
+            renderErrorOutput: error => $":warning: {error.Message} (ref: {error.CorrelationId.ToString("N")[..8]})",
+            postTextAsync: PostOutputTextAsync,
+            uploadFileAsync: UploadOutputFileAsync,
+            postApprovalPromptAsync: HandleApprovalRequestAsync,
+            readPromptIdValue: promptMessageTs => promptMessageTs.Value,
+            onApprovalPromptFailedAsync: SendApprovalDenyOnFailureAsync,
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: cursor => AdvanceCursor(new SlackEventTs(cursor)),
+            postEmptyTurnFallbackAsync: PostEmptyTurnFallbackAsync,
+            onEmptyTurnSuppressedAsync: NotifyFailedTurnAsync,
+            readObservedAtMs: _ => _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+
         _hydrationEngine = new ThreadGapHydrationEngine(
             sessionId: _sessionId,
             channelType: ChannelType.Slack,
@@ -132,7 +146,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             readInputQueue: () => _handle.InputQueue,
             readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
             warnBackfillDetectorUnavailableAsync: () => SafePostAsync(BackfillDetectorWarning),
-            onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
+            onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
             setHydrationPending: pending => _hydrationPending = pending);
 
         _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs>(
@@ -146,7 +160,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // own lookup used before the extraction. Discord and Mattermost
             // resolve the most recent one.
             matchOrder: ApprovalMatchOrder.Oldest,
-            hasObservedApprovalRequest: () => _hasObservedApprovalRequest,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
             postWrongRequesterWarningAsync: () => SafePostAsync(WrongRequesterWarning),
             persistPromptCleared: callId => Persist(
                 new PendingApprovalPromptCleared { CallId = callId.Value },
@@ -339,7 +353,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -465,7 +479,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // mention, not this one (and can be skipped if the cursor later advances past
             // it under rapid concurrent mentions).
             if (!_hydrationPending
-                && !_turnInFlight
+                && !_outputEngine.TurnInFlight
                 && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
             {
                 _hydrationPending = true;
@@ -488,7 +502,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
                 // Defer cursor persistence until TurnCompleted confirms durable turn recording,
                 // otherwise a crash between cursor and turn persist loses messages.
-                AdvancePendingCursorForEnqueuedTurn(currentTs?.Value);
+                _outputEngine.AdvancePendingCursorForEnqueuedTurn(currentTs?.Value);
 
                 QueueProcessingIndicatorRefreshIfActive();
             }
@@ -704,23 +718,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _channelId.Value,
             _threadTs.Value);
 
-    /// <summary>
-    /// Records that a turn went into the input queue. The turn-in-flight flag
-    /// guards the mention re-arm path; the pending cursor keeps the highest ts
-    /// of the turn and only becomes the persisted cursor on TurnCompleted.
-    /// </summary>
-    private void AdvancePendingCursorForEnqueuedTurn(string? candidateTs)
-    {
-        _turnInFlight = true;
-
-        if (candidateTs is null)
-            return;
-
-        var ts = new SlackEventTs(candidateTs);
-        if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
-            _pendingCursorTs = ts;
-    }
-
     private void AdvanceCursor(SlackEventTs candidateTs)
     {
         if (_cursorTs is { } c && candidateTs.CompareTo(c) <= 0)
@@ -740,7 +737,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (_cursorTs is { } c && ts.CompareTo(c) <= 0)
             return true;
 
-        if (_pendingCursorTs is { } p && ts.CompareTo(p) <= 0)
+        if (_outputEngine.PendingCursor is { } p && ts.CompareTo(new SlackEventTs(p)) <= 0)
             return true;
 
         return false;
@@ -758,7 +755,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
-        _hasObservedApprovalRequest = true;
+        _outputEngine.MarkApprovalRequestObserved();
         PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, SlackEventTs>(
             _pendingApprovalRequests,
             tracked,
@@ -773,18 +770,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private async Task ReinitializePipelineAsync(string reason)
     {
         QueueProcessingIndicatorClearIfActive();
-        _pendingCursorTs = null;
-        _turnInFlight = false;
-        // Reset per-turn delivery flags: a reinit aborts the in-flight turn,
-        // and a stale _postedThisTurn=true would otherwise leak into the next
+        // Slack drops the cursor key of the abandoned turn; Discord and
+        // Mattermost keep theirs across a reinitialize.
+        _outputEngine.DiscardPendingCursor();
+        // Reset the per-turn delivery state: a reinit aborts the in-flight
+        // turn, and a stale delivered flag would otherwise leak into the next
         // turn and falsely report a later reminder as delivered.
-        _postedThisTurn = false;
-        _uploadedFileThisTurn = false;
         _lastFailedPost = null;
-        // Report any in-flight reminder turn as not-delivered now so the
-        // execution actor redelivers immediately rather than stalling until
-        // the backstop timeout.
-        FailPendingReminderDeliveries($"Slack pipeline reinitialized: {reason}");
+        _outputEngine.ResetForPipelineReinitialize(reason);
         await _handle.ReinitializeAsync(
             reason,
             () => Timers.StartSingleTimer(
@@ -795,133 +788,76 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task HandleOutputAsync(ThreadOutput threadOutput)
     {
-        switch (threadOutput.Output)
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(threadOutput.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
+    }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Slack
+    /// renders a processing indicator; other output types have no Slack effect.
+    /// BufferFlush and TextDeltaOutput never arrive, because Slack subscribes to
+    /// OutputFilter.Text (final assembled text), not TextStreaming.
+    /// </summary>
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        if (output is ProcessingStateOutput processing)
+            await RenderProcessingStateAsync(processing);
+    }
+
+    /// <summary>
+    /// Posts turn output text for the shared engine. Slack keeps the failure
+    /// descriptor instead of telling the session now, because it reports a
+    /// delivery failure once at turn completion.
+    /// </summary>
+    private async Task<bool> PostOutputTextAsync(string text)
+    {
+        var result = await SafePostAsync(text);
+        if (!result.Success)
+            _lastFailedPost = result;
+        return result.Success;
+    }
+
+    /// <summary>Uploads turn output for the shared engine. See <see cref="PostOutputTextAsync"/>.</summary>
+    private async Task<bool> UploadOutputFileAsync(FileOutput file)
+    {
+        var result = await SafeUploadFileAsync(file);
+        if (!result.Success)
+            _lastFailedPost = result;
+        return result.Success;
+    }
+
+    private async Task PostEmptyTurnFallbackAsync()
+    {
+        _lastFailedPost = null;
+        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
+        await SafePostAsync(EmptyTurnFallbackText);
+    }
+
+    /// <summary>
+    /// Tells the session that the turn produced output the transport rejected.
+    /// Slack defers this report to turn completion and sends it once with the
+    /// completed turn's number. Discord and Mattermost report each failed post
+    /// inline instead, so their engine hook does nothing here.
+    /// </summary>
+    private async Task NotifyFailedTurnAsync(TurnCompleted completed)
+    {
+        var failedPost = _lastFailedPost;
+        _lastFailedPost = null;
+
+        if (failedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
         {
-            case TextOutput text:
-            {
-                var fullText = text.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(fullText))
-                {
-                    var result = await SafePostAsync(fullText);
-                    if (result.Success)
-                        _postedThisTurn = true;
-                    else
-                        _lastFailedPost = result;
-                }
-
-                break;
-            }
-
-            case FileOutput file:
-                var uploadResult = await SafeUploadFileAsync(file);
-                if (!uploadResult.Success)
-                    _lastFailedPost = uploadResult;
-                break;
-
-            case ProcessingStateOutput processing:
-                await RenderProcessingStateAsync(processing);
-                break;
-
-            // BufferFlush and TextDeltaOutput are not received — Slack subscribes
-            // to OutputFilter.Text (final assembled text), not TextStreaming.
-
-            case ToolInteractionRequest interaction:
-                _hasObservedApprovalRequest = true;
-                var pendingApproval = new PendingApprovalRequest(interaction);
-                _pendingApprovalRequests.Add(pendingApproval);
-                var promptMessageTs = await HandleApprovalRequestAsync(interaction);
-                if (promptMessageTs is not null)
-                {
-                    pendingApproval.PromptMessageTs = promptMessageTs;
-                    Persist(new PendingApprovalPromptTracked
-                    {
-                        CallId = pendingApproval.CallId.Value,
-                        RequesterSenderId = pendingApproval.RequesterSenderId,
-                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
-                        OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptMessageTs.Value.Value,
-                        ToolName = pendingApproval.ToolName,
-                        // Preserve null-vs-set semantics on the wire: Truncate
-                        // returns string.Empty for null input, which would round-
-                        // trip as DisplayText="" with HasDisplayText=true.
-                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
-                            ? null
-                            : ApprovalDisplayTextFormatter.Truncate(
-                                pendingApproval.DisplayText,
-                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
-                    }, ApplyPendingApprovalPromptTracked);
-                }
-                else
-                {
-                    // Posting the approval prompt failed. Drop the pending entry and
-                    // route a deny back to the session so the blocked tool task can
-                    // unwind instead of waiting on the infinite-timeout TCS.
-                    _pendingApprovalRequests.Remove(pendingApproval);
-                    await SendApprovalDenyOnFailureAsync(interaction);
-                }
-                break;
-
-            case ErrorOutput err:
-                var refId = err.CorrelationId.ToString("N")[..8];
-                var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
-                if (errorResult.Success)
-                    _postedThisTurn = true;
-                else
-                    _lastFailedPost = errorResult;
-                break;
-
-            case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorTs is { } pendingTs)
-                    AdvanceCursor(pendingTs);
-                _pendingCursorTs = null;
-                _turnInFlight = false;
-
-                if (completed.SourceReminderId is { } sourceReminderKey
-                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
-                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
-                {
-                    var delivered = _postedThisTurn || _uploadedFileThisTurn;
-                    reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey,
-                        ChannelType.Slack,
-                        Delivered: delivered,
-                        FailureReason: delivered ? null : "Slack post did not succeed",
-                        ObservedAtMs: _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
-                }
-
-                if (!_postedThisTurn && !_uploadedFileThisTurn)
-                {
-                    if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
-                    {
-                        _log.Warning(
-                            "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
-                            failureKind);
-                        await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
-                    }
-                    else
-                    {
-                        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
-                        await SafePostAsync(EmptyTurnFallbackText);
-                    }
-                }
-
-                _postedThisTurn = false;
-                _uploadedFileThisTurn = false;
-                _lastFailedPost = null;
-                var clearedPrompts = _pendingApprovalRequests
-                    .Select(pending => new PendingApprovalPromptCleared
-                    {
-                        CallId = pending.CallId.Value
-                    })
-                    .ToArray();
-                if (clearedPrompts.Length > 0)
-                {
-                    PersistAll(
-                        clearedPrompts,
-                        cleared => ApplyPendingApprovalPromptCleared(cleared));
-                }
-                _pendingApprovalRequests.Clear();
-                break;
+            _log.Warning(
+                "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
+                failureKind);
+            await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
+        }
+        else
+        {
+            // Defensive: a failed post always carries a failure kind, so this
+            // branch is unreachable today. Keep the empty-turn reply as the
+            // safe outcome if that ever stops holding.
+            await PostEmptyTurnFallbackAsync();
         }
     }
 
@@ -1102,23 +1038,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    /// <summary>
-    /// Tells every in-flight reminder observer that delivery did not happen,
-    /// then clears them. Called when a turn can no longer reach TurnCompleted
-    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
-    /// rather than waiting out its backstop timeout.
-    /// </summary>
-    private void FailPendingReminderDeliveries(string reason)
-    {
-        if (_reminderDeliveryObservers.Count == 0)
-            return;
-
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Slack, Delivered: false, FailureReason: reason));
-
-        _reminderDeliveryObservers.Clear();
-    }
-
     private async Task NotifyDeliveryFailedAsync(Actors.Protocol.TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)
     {
         try
@@ -1282,7 +1201,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 file.FileName,
                 cts.Token);
 
-            _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
             return PostResult.Ok;
         }
@@ -1326,12 +1244,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             string? displayText = null)
             : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageTs, toolName, displayText)
         {
-        }
-
-        public SlackEventTs? PromptMessageTs
-        {
-            get => PromptId;
-            set => PromptId = value;
         }
     }
 

@@ -79,10 +79,4 @@ internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalR
         : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageId, toolName, displayText)
     {
     }
-
-    public DiscordMessageId? PromptMessageId
-    {
-        get => PromptId;
-        set => PromptId = value;
-    }
 }
