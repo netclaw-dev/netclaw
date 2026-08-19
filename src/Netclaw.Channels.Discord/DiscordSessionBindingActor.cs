@@ -845,8 +845,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         catch (Exception ex)
         {
             // A dead feedback pipe means the session never learns the turn
-            // failed. Rethrow so supervision restarts the actor and
-            // re-creates the pipeline, same as the Slack binding actor.
+            // failed. Rethrow so supervision tears this actor down. The parent
+            // conversation actor stops it; the next inbound re-creates it with
+            // a fresh pipeline. Slack's parent restarts its binding eagerly.
+            // Both paths replace the dead pipeline instead of leaving a zombie.
             _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
             throw;
         }
