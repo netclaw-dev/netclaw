@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
+using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Webhooks.WebhookRouteProtocol;
 
 namespace Netclaw.Actors.Tools;
 
@@ -14,31 +16,34 @@ namespace Netclaw.Actors.Tools;
     Grant = "webhook_admin")]
 public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Params>
 {
-    private readonly WebhookRouteStore _store;
+    private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly IActorRef _routeActor;
 
     public record Params(
         [property: Description("Webhook route name to delete (for example 'github-issues').")]
         string RouteName);
 
-    public DeleteWebhookTool(WebhookRouteStore store)
+    public DeleteWebhookTool(IActorRef routeActor)
     {
-        _store = store;
+        _routeActor = routeActor;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
-            return Task.FromResult($"Error: {routeError}");
+            return $"Error: {routeError}";
 
         try
         {
-            return Task.FromResult(_store.Delete(routeName, ct)
+            var response = await _routeActor.Ask<RouteDeleted>(new DeleteRoute(routeName), AskTimeout, ct);
+            return response.Found
                 ? $"Webhook route '{routeName}' deleted."
-                : $"Webhook route '{routeName}' not found.");
+                : $"Webhook route '{routeName}' not found.";
         }
         catch (TimeoutException ex)
         {
-            return Task.FromResult($"Error: {ex.Message}");
+            return $"Error: {ex.Message}";
         }
     }
 }

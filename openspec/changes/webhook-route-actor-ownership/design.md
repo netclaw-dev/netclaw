@@ -25,9 +25,9 @@
 
 `WebhookRouteActor` is an ordinary `ReceiveActor` (not persistent). It handles `UpsertRoute`/`DeleteRoute`/`GetRoute`/`ListRoutes` messages, validates via `WebhookRouteValidator`, and persists through the existing `WebhookRouteStore` (which keeps its atomic temp-file-and-move write and, for the skew window, its mutex). Disk is the canonical store; the actor is the serialization point, not a second source of truth. Rationale: Akka.Persistence would create journal types and a second copy of secret-bearing config — both forbidden by the back-compat and security constraints. Alternative considered: journaled actor with disk projection — rejected for exactly those reasons.
 
-### D2: External file changes reconcile through the existing hot-reload signal
+### D2: The actor is cacheless — external file changes need no reconciliation
 
-The `inbound-webhooks` spec already requires hot reload of route files. The actor subscribes to the same change signal the delivery pipeline uses and re-reads affected routes on external modification (old CLI or operator edits during the skew window). Reads served by the actor reflect disk after reconciliation; the mutex under the store keeps same-route cross-process RMW safe until the follow-up removes it. No new watcher machinery.
+Implementation finding (supersedes the original signal-based wording): no route change signal exists. The `inbound-webhooks` spec permits request-time mtime-gated reload, and `WebhookRouteCatalog` re-reads route files lazily; there is no watcher on the webhooks directory. Rather than build one, the actor holds no cache: every read and every read-modify-write goes through the store to disk. An external write (old CLI, operator edit) is therefore visible to the very next actor operation with no reconciliation step. This is the direct consequence of D1 — the actor is the serialization point, not a second source of truth. The mutex under the store keeps same-route cross-process RMW safe until the follow-up removes it. No new watcher machinery.
 
 ### D3: HTTP resource mirrors the reminders precedent
 

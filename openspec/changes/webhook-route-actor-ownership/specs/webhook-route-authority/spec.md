@@ -65,14 +65,13 @@ The CLI SHALL use the daemon API for webhook route mutations when the daemon is 
 
 ### Requirement: Version-skew tolerance for one deprecation release
 
-The route store SHALL keep its named cross-process mutex for one deprecation release. The actor SHALL reconcile external route-file changes through the existing hot-reload signal, so a direct file write by an old CLI is visible to actor reads after reconciliation. The per-route JSON file format SHALL NOT change.
+The route store SHALL keep its named cross-process mutex for one deprecation release. The actor SHALL hold no cache: every read and every read-modify-write SHALL go through the store to disk, so a direct file write by an old CLI is visible to the next actor operation without a reconciliation step. The per-route JSON file format SHALL NOT change.
 
 #### Scenario: Old CLI writes a file behind the actor
 
 - **GIVEN** a running new daemon and an old CLI that writes a route file directly
-- **WHEN** the hot-reload signal fires for that file
-- **THEN** the actor re-reads the route from disk
-- **AND** subsequent reads through the actor return the file's content
+- **WHEN** any subsequent read or update reaches the actor
+- **THEN** the actor serves the file's current content from disk
 
 ### Requirement: Deterministic tests replace scheduling choreography
 

@@ -316,6 +316,7 @@ static async Task RunDaemonAsync(
         .WithTags("Stats")
         .RequireAuthorization();
     app.MapWebhookEndpoints();
+    app.MapWebhookRouteEndpoints();
     app.MapMattermostActionEndpoint();
 
     app.MapPairingEndpoints();
@@ -1110,6 +1111,7 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawSerialization();
         akkaBuilder.WithNetclawActors(shellEnvironment, reminderStorage);
+        akkaBuilder.WithWebhookRouteActor();
         akkaBuilder.WithSessionLogDispatcher(paths.SessionLogsDirectory, sp.GetRequiredService<TimeProvider>());
         akkaBuilder.WithSignalRGateway();
         akkaBuilder.WithDailyStatsActor();
@@ -1126,6 +1128,12 @@ static void ConfigureDaemonServices(
 
             var bgJobManager = registry.Get<Netclaw.Actors.Hosting.BackgroundJobManagerActorKey>();
             toolRegistry.WithBackgroundJobTools(bgJobManager);
+
+            // Route mutation tools ask the webhook route actor, so they register
+            // here rather than with the other first-party tools. The webhooks
+            // config gate matches the one on `list_webhooks` above.
+            if (webhooksConfig.Enabled)
+                toolRegistry.WithWebhookRouteTools(registry.Get<Netclaw.Actors.Hosting.WebhookRouteActorKey>());
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.

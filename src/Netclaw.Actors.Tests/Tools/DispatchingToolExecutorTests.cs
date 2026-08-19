@@ -2589,6 +2589,10 @@ public class DispatchingToolExecutorTests
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-{audience}-tools-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(config, paths: paths, pathPolicy: new ToolPathPolicy([]), shellCommandPolicy: new ShellCommandPolicy(), toolAccessPolicy: policy, webhookRouteStore: new WebhookRouteStore(paths));
+        // set_webhook and delete_webhook ask WebhookRouteActor. This test reads
+        // exposure metadata only and never executes them, so an unresolvable
+        // actor reference is enough to put them in the registry.
+        registry.WithWebhookRouteTools(ActorRefs.Nobody);
 
         foreach (var toolName in exposedToolNames)
         {

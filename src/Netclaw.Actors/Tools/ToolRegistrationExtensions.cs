@@ -42,11 +42,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new FileEditTool(config, paths, pathPolicy));
         registry.Register(new AttachFileTool(config, paths, pathPolicy));
         if (webhookRouteStore is not null)
-        {
-            registry.Register(new SetWebhookTool(webhookRouteStore));
             registry.Register(new ListWebhooksTool(webhookRouteStore));
-            registry.Register(new DeleteWebhookTool(webhookRouteStore));
-        }
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));
@@ -108,6 +104,21 @@ public static class ToolRegistrationExtensions
         registry.Register(new CancelReminderTool(reminderManager, schedulingConfig));
         registry.Register(new ListRemindersTool(reminderManager, schedulingConfig));
         registry.Register(new GetReminderHistoryTool(historyStore, schedulingConfig));
+        return registry;
+    }
+
+    /// <summary>
+    /// Registers the webhook route mutation tools (set, delete). Both ask the
+    /// <see cref="Netclaw.Actors.Webhooks.WebhookRouteActor"/>, the single
+    /// mutation authority for route files. <c>list_webhooks</c> is a read and
+    /// stays on the store — see <see cref="WithFirstPartyTools"/>.
+    /// </summary>
+    public static ToolRegistry WithWebhookRouteTools(
+        this ToolRegistry registry,
+        IActorRef routeActor)
+    {
+        registry.Register(new SetWebhookTool(routeActor));
+        registry.Register(new DeleteWebhookTool(routeActor));
         return registry;
     }
 
