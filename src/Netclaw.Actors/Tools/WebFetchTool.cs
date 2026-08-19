@@ -266,7 +266,14 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
     {
         Directory.CreateDirectory(directory);
         var sanitized = SanitizeForFilename(uri);
-        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}{extension}";
+
+        // The second-precision timestamp is for a human to read, not for
+        // uniqueness. Two fetches of the same URL within one second gave the
+        // same filename, and File.WriteAllBytes/WriteAllText overwrote the
+        // first fetch with no warning. The guid segment gives real
+        // uniqueness; the timestamp stays for readability.
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}-{uniqueSuffix}{extension}";
         return Path.Combine(directory, filename);
     }
 
