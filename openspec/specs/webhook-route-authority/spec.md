@@ -5,7 +5,7 @@
 Guarantee single-writer ownership of webhook route mutations: the daemon's
 `WebhookRouteActor` is the one mutation authority, the `/api/webhooks`
 resource and the webhook agent tools are thin fronts over it, and the CLI
-selects its write path explicitly. Disk stays the canonical store during the
+daemon-only for route mutations. Disk stays the canonical store during the
 version-skew deprecation window.
 
 ## Requirements
