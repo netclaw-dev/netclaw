@@ -1212,11 +1212,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// default 5 second probe budget races a cold process start on a loaded machine
     /// (measured locally: a child that takes as little as 6 seconds to start answering
     /// fails every time). When the probe gives up first, the SDK abandons it and sends a
-    /// separate <c>initialize</c> request on the same connection. The child process does
-    /// not know the probe was abandoned and answers it anyway. That late answer pins the
-    /// session's negotiated protocol version on the server side, and the server then
-    /// rejects the fallback <c>initialize</c> request as a version it does not serve for
-    /// that session -- a server-side rejection, not a client-side comparison. The SDK
+    /// separate <c>initialize</c> request on the same connection. A server pinned to a
+    /// protocol revision that only the <c>server/discover</c> handshake carries (the SDK's
+    /// 2026-07-28 revision) rejects every plain <c>initialize</c> request, so the fallback
+    /// fails on such a server -- a server-side rejection, not a client-side comparison. An
+    /// unpinned server recovers from the fallback; the race only strands pinned ones. The SDK
     /// surfaces this as <c>UnsupportedProtocolVersionException</c>, which is neither
     /// <see cref="TimeoutException"/> nor <see cref="TaskCanceledException"/>, so the
     /// operator sees a bare "Failed to reach MCP server" with no timeout wording.
@@ -1455,9 +1455,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         // Requested/Supported are protocol version identifiers only, safe to surface.
         if (ex is UnsupportedProtocolVersionException versionMismatch)
         {
+            var supported = versionMismatch.Supported.Count > 0
+                ? string.Join(", ", versionMismatch.Supported)
+                : "none listed";
             return "MCP server protocol version negotiation failed "
-                + $"(requested {versionMismatch.Requested}; server supports "
-                + $"{string.Join(", ", versionMismatch.Supported)}).";
+                + $"(requested {versionMismatch.Requested}; server supports {supported}).";
         }
 
         if (ex is TimeoutException or TaskCanceledException)
