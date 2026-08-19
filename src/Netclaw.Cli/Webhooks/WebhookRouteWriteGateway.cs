@@ -97,14 +97,28 @@ internal sealed class WebhookRouteWriteGateway
         CancellationToken ct)
     {
         var api = RequireDaemonApi();
-        using var response = await api.UpsertWebhookRouteAsync(routeName, patch, ct);
-        if (response.IsSuccessStatusCode)
-            return new WebhookRouteApiResult(Success: true, NotFound: false, Error: null);
+        try
+        {
+            using var response = await api.UpsertWebhookRouteAsync(routeName, patch, ct);
+            if (response.IsSuccessStatusCode)
+                return new WebhookRouteApiResult(Success: true, NotFound: false, Error: null);
 
-        return new WebhookRouteApiResult(
-            Success: false,
-            NotFound: false,
-            Error: await DescribeFailureAsync(response, ct));
+            return new WebhookRouteApiResult(
+                Success: false,
+                NotFound: false,
+                Error: await DescribeFailureAsync(response, ct));
+        }
+        catch (Exception ex) when (IsDaemonUnreachable(ex, ct))
+        {
+            // The daemon died between the probe and this write. Fail with a
+            // readable error and do NOT fall back to a direct file write: the
+            // daemon may have applied the change before the connection broke,
+            // and a file write here could apply it twice.
+            return new WebhookRouteApiResult(
+                Success: false,
+                NotFound: false,
+                Error: MidFlightFailureMessage(ex));
+        }
     }
 
     /// <summary>
@@ -114,18 +128,36 @@ internal sealed class WebhookRouteWriteGateway
     public async Task<WebhookRouteApiResult> DeleteAsync(string routeName, CancellationToken ct)
     {
         var api = RequireDaemonApi();
-        using var response = await api.DeleteWebhookRouteAsync(routeName, ct);
-        if (response.IsSuccessStatusCode)
-            return new WebhookRouteApiResult(Success: true, NotFound: false, Error: null);
+        try
+        {
+            using var response = await api.DeleteWebhookRouteAsync(routeName, ct);
+            if (response.IsSuccessStatusCode)
+                return new WebhookRouteApiResult(Success: true, NotFound: false, Error: null);
 
-        if (response.StatusCode is HttpStatusCode.NotFound)
-            return new WebhookRouteApiResult(Success: false, NotFound: true, Error: null);
+            if (response.StatusCode is HttpStatusCode.NotFound)
+                return new WebhookRouteApiResult(Success: false, NotFound: true, Error: null);
 
-        return new WebhookRouteApiResult(
-            Success: false,
-            NotFound: false,
-            Error: await DescribeFailureAsync(response, ct));
+            return new WebhookRouteApiResult(
+                Success: false,
+                NotFound: false,
+                Error: await DescribeFailureAsync(response, ct));
+        }
+        catch (Exception ex) when (IsDaemonUnreachable(ex, ct))
+        {
+            // Same rule as UpsertAsync: a mid-flight transport failure fails
+            // the command with a readable error and never falls back to a
+            // direct file write.
+            return new WebhookRouteApiResult(
+                Success: false,
+                NotFound: false,
+                Error: MidFlightFailureMessage(ex));
+        }
     }
+
+    private static string MidFlightFailureMessage(Exception ex)
+        => "the daemon became unreachable while the write was in flight"
+           + $" ({ex.Message}). The daemon may or may not have applied the"
+           + " change. Verify with 'netclaw webhooks show' and retry.";
 
     private DaemonApi RequireDaemonApi()
         => _daemonApi ?? throw new InvalidOperationException(

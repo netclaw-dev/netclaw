@@ -7,7 +7,7 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 - [x] 1.1 Add `WebhookRouteActor` (plain `ReceiveActor`) with `UpsertRoute`/`DeleteRoute`/`GetRoute`/`ListRoutes` messages; validate via `WebhookRouteValidator` before persistence; persist through the existing `WebhookRouteStore`; store I/O failures return errors to the caller, never swallowed
 - [x] 1.2 Register the actor in daemon wiring; rewire `SetWebhookTool` and `DeleteWebhookTool` to `Ask` the actor; tool schemas and result shapes unchanged
 - [x] 1.3 RESOLVED BY DESIGN AMENDMENT (D2 rewritten): no route change signal exists in the codebase — the actor is cacheless instead, so every operation reads disk and external changes need no reconciliation; proven by `An_external_writer_change_is_visible_to_the_next_actor_read`
-- [x] 1.4 Actor tests: two concurrent FIELD-LEVEL updates to the same route lose neither field (the real RMW lost-update proof — mutation messages carry data, the actor does read-modify-write per message), validation-rejection-does-not-persist, restart rebuilds from disk, reconciliation on the hot-reload SIGNAL (fake the signal; the existing inbound-webhooks hot-reload coverage owns file-to-signal — do NOT write a new filesystem-watcher timing test)
+- [x] 1.4 Actor tests: two concurrent FIELD-LEVEL updates to the same route lose neither field (the real RMW lost-update proof — mutation messages carry data, the actor does read-modify-write per message), validation-rejection-does-not-persist, restart rebuilds from disk, external-writer visibility proven outcome-only (cacheless actor per amended D2)
 
 ## 2. /api/webhooks resource
 

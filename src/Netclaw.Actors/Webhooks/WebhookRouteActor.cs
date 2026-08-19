@@ -173,6 +173,29 @@ public sealed class WebhookRouteActor : ReceiveActor
 
         var existingVerification = existing?.Verification;
 
+        // The tool and the CLI reject timestamp settings on a non-timestamped
+        // kind before they reach this actor, each with its own parameter
+        // wording. The HTTP patch surface has no such front, so the authority
+        // enforces the same rule here: a patch that carries timestamp settings
+        // while the merged kind is not HmacTimestamped would persist inert
+        // fields that silently activate when the kind is later flipped.
+        var mergedKind = command.VerificationKind ?? existingVerification?.Kind ?? WebhookVerifierKind.Hmac;
+        var patchHasTimestampSettings =
+            command.TimestampField is not null
+            || command.SignatureField is not null
+            || command.SignedPayloadSeparator is not null
+            || command.ToleranceSeconds is not null;
+        if (mergedKind != WebhookVerifierKind.HmacTimestamped && patchHasTimestampSettings)
+        {
+            return (null, new RouteSaved(
+                routeName,
+                Success: false,
+                Created: false,
+                Route: null,
+                WebhookRouteError.Validation,
+                "Timestamp verification settings require verification kind 'hmac-timestamped'."));
+        }
+
         var definition = new WebhookRouteConfig
         {
             Enabled = command.Enabled ?? existing?.Enabled ?? true,
