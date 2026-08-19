@@ -893,7 +893,7 @@ run_prompt() {
     # stdout, producing a false eval failure rather than a real one.
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
+        timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
         > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
 
     # Brief pause for daemon log flush
@@ -947,7 +947,7 @@ run_prompt_resume() {
 
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p --resume "$session_id" \
+        timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p --resume "$session_id" \
         "${output_args[@]}" "$prompt" \
         > "$turn_file" 2> "$turn_stderr_file" || true
 
