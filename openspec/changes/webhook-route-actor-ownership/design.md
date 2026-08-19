@@ -72,4 +72,4 @@ Ship steps 1 and 2 together in one release. No data migration; no config change.
 ## Open Questions
 
 - RESOLVED: `InboundWebhooksConfigViewModel` needs no mode-selection seam — it has no route save. It writes only the `Webhooks.Enabled`/`ExecutionTimeoutSeconds` section of `netclaw.json` and delegates route authoring to the `netclaw webhooks` command. Its route read runs against canonical disk and is already correct under the cacheless design.
-- Exact change-signal plumbing for D2 (reuse the delivery pipeline's watcher subscription vs. a second subscription) — implementation detail; the requirement is single watcher machinery, no polling.
+- RESOLVED BY D2 AMENDMENT: no change-signal plumbing exists or is needed — the actor is cacheless, so no watcher machinery was built.
