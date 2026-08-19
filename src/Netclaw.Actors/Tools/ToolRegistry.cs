@@ -21,35 +21,80 @@ public sealed record ToolRegistration(INetclawTool Tool, string GrantCategory);
 /// </summary>
 public sealed record McpServerSummary(string ServerName, string Description, int ToolCount);
 
+internal enum ToolExposureTier
+{
+    Core,
+    Deferred
+}
+
 /// <summary>
 /// Registers <see cref="INetclawTool"/> definitions with grant categories for policy filtering.
 /// Sessions receive only tools whose grant category is in the session's allowed set.
 /// </summary>
 public sealed class ToolRegistry
 {
+    private sealed record RegistryEntry(ToolRegistration Registration, ToolExposureTier ExposureTier);
+
+    private sealed record RegistrySnapshot(RegistryEntry[] Entries, ToolRegistration[] Registrations)
+    {
+        public static RegistrySnapshot Empty { get; } = new([], []);
+
+        public static RegistrySnapshot Create(RegistryEntry[] entries) =>
+            new(entries, [..entries.Select(static entry => entry.Registration)]);
+    }
+
     // Copy-on-write. Registrations change at startup, at MCP reconnect, and at shutdown.
     // Reads happen on every tool call from every concurrent session, so a reader takes no
-    // lock and copies nothing: it reads this field once and works on that array. A writer
+    // lock: it reads this field once and works on that array. A writer
     // holds _writeSync, builds a replacement array, and publishes it in one volatile write,
     // so a reader sees either the old set or the new set and never a partial swap.
-    private volatile ToolRegistration[] _tools = [];
+    private volatile RegistrySnapshot _tools = RegistrySnapshot.Empty;
     private readonly object _writeSync = new();
 
     public void Register(INetclawTool tool)
-    {
-        lock (_writeSync)
-            _tools = [.._tools, new ToolRegistration(tool, tool.GrantCategory)];
-    }
+        => Register(tool, ToolExposureTier.Deferred);
 
-    public void Replace(INetclawTool tool)
+    /// <summary>
+    /// Registers a tool in the small model-visible core set.
+    /// </summary>
+    public void RegisterCore(INetclawTool tool)
+        => Register(tool, ToolExposureTier.Core);
+
+    private void Register(INetclawTool tool, ToolExposureTier exposureTier)
     {
         lock (_writeSync)
         {
-            _tools =
+            var current = _tools;
+            _tools = RegistrySnapshot.Create(
             [
-                .._tools.Where(t => !string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal)),
-                new ToolRegistration(tool, tool.GrantCategory),
-            ];
+                ..current.Entries,
+                new RegistryEntry(new ToolRegistration(tool, tool.GrantCategory), exposureTier)
+            ]);
+        }
+    }
+
+    public void Replace(INetclawTool tool)
+        => Replace(tool, ToolExposureTier.Deferred);
+
+    /// <summary>
+    /// Replaces a tool and keeps it in the small model-visible core set.
+    /// </summary>
+    public void ReplaceCore(INetclawTool tool)
+        => Replace(tool, ToolExposureTier.Core);
+
+    private void Replace(INetclawTool tool, ToolExposureTier exposureTier)
+    {
+        lock (_writeSync)
+        {
+            var current = _tools;
+            _tools = RegistrySnapshot.Create(
+            [
+                ..current.Entries.Where(entry => !string.Equals(
+                    entry.Registration.Tool.Name,
+                    tool.Name,
+                    StringComparison.Ordinal)),
+                new RegistryEntry(new ToolRegistration(tool, tool.GrantCategory), exposureTier),
+            ]);
         }
     }
 
@@ -67,12 +112,15 @@ public sealed class ToolRegistry
     {
         lock (_writeSync)
         {
-            _tools =
+            var current = _tools;
+            _tools = RegistrySnapshot.Create(
             [
-                .._tools.Where(t => t.Tool is not McpToolAdapter mcp
+                ..current.Entries.Where(entry => entry.Registration.Tool is not McpToolAdapter mcp
                                     || !string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase)),
-                ..tools.Select(t => new ToolRegistration(t, t.GrantCategory)),
-            ];
+                ..tools.Select(static tool => new RegistryEntry(
+                    new ToolRegistration(tool, tool.GrantCategory),
+                    ToolExposureTier.Deferred)),
+            ]);
         }
     }
 
@@ -80,9 +128,27 @@ public sealed class ToolRegistry
     /// Register an <see cref="AITool"/> directly (for test fakes that don't implement INetclawTool).
     /// </summary>
     public void Register(AITool tool, string grantCategory)
+        => Register(tool, grantCategory, ToolExposureTier.Deferred);
+
+    /// <summary>
+    /// Registers a test or framework tool in the small model-visible core set.
+    /// </summary>
+    public void RegisterCore(AITool tool, string grantCategory)
+        => Register(tool, grantCategory, ToolExposureTier.Core);
+
+    private void Register(AITool tool, string grantCategory, ToolExposureTier exposureTier)
     {
         lock (_writeSync)
-            _tools = [.._tools, new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory)];
+        {
+            var current = _tools;
+            _tools = RegistrySnapshot.Create(
+            [
+                ..current.Entries,
+                new RegistryEntry(
+                    new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory),
+                    exposureTier)
+            ]);
+        }
     }
 
     /// <summary>All registered tools as AITool for ChatOptions.Tools.</summary>
@@ -132,14 +198,24 @@ public sealed class ToolRegistry
     {
         // One volatile read. Both passes below scan the same array, so a concurrent
         // publication cannot make the canonical pass and the alias pass disagree.
-        var tools = _tools;
-        var direct = tools.FirstOrDefault(t => t.Tool.Name == name);
+        var tools = _tools.Entries;
+        var direct = tools.FirstOrDefault(entry => entry.Registration.Tool.Name == name);
         if (direct is not null)
-            return direct;
-        return tools.FirstOrDefault(t =>
-            t.Tool is McpToolAdapter mcp
-            && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal));
+            return direct.Registration;
+        return tools.FirstOrDefault(entry =>
+            entry.Registration.Tool is McpToolAdapter mcp
+            && string.Equals(mcp.LlmFacingName.Value, name, StringComparison.Ordinal))?.Registration;
     }
+
+    /// <summary>
+    /// Returns the small set of tools that a session can expose before discovery.
+    /// Invocation policy still filters this set for each current trust context.
+    /// </summary>
+    public IReadOnlyList<AITool> GetCoreTools() =>
+        GetEntriesSnapshot()
+            .Where(static entry => entry.ExposureTier == ToolExposureTier.Core)
+            .Select(static entry => entry.Registration.Tool.ToAITool())
+            .ToList();
 
     /// <summary>
     /// Returns tools that should always be loaded into the LLM context.
@@ -152,11 +228,10 @@ public sealed class ToolRegistry
             .ToList();
 
     /// <summary>
-    /// Returns all registered tool registrations (for search and dynamic loading).
+    /// Returns a read-only view of all registered tools without copying the snapshot.
     /// </summary>
-    // Wrapped, not copied: callers receive the shared array behind a read-only view so a
-    // cast cannot reach the registry's state.
-    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => Array.AsReadOnly(_tools);
+    public IReadOnlyList<ToolRegistration> GetAllRegistrations() =>
+        Array.AsReadOnly(_tools.Registrations);
 
     /// <summary>
     /// Returns tools discovered from one MCP server.
@@ -193,6 +268,17 @@ public sealed class ToolRegistry
             })
             .OrderBy(x => x.ServerName, StringComparer.Ordinal)
             .ToList();
+    }
+
+    internal static McpServerSummary SummarizeMcpServer(
+        string serverName,
+        IReadOnlyList<INetclawTool> tools)
+    {
+        var mcpTools = tools.OfType<McpToolAdapter>().ToList();
+        return new McpServerSummary(
+            serverName,
+            DescribeServerCapability(serverName, mcpTools),
+            mcpTools.Count);
     }
 
     /// <summary>
@@ -264,12 +350,12 @@ public sealed class ToolRegistry
 
     /// <summary>
     /// Generates a compressed tool index for the system prompt.
-    /// Uses progressive disclosure: list directly-callable tools and MCP servers,
-    /// then route detailed discovery through search_tools.
+    /// Uses progressive disclosure: list directly-callable tools and compact deferred
+    /// capabilities, then route detailed discovery through search_tools.
     /// </summary>
     public string GenerateCompressedIndex()
     {
-        var registrations = GetRegistrationsSnapshot();
+        var registrations = GetEntriesSnapshot();
         if (registrations.Count == 0)
             return string.Empty;
 
@@ -282,32 +368,54 @@ public sealed class ToolRegistry
     /// </summary>
     public string GenerateCompressedIndex(TrustAudience audience, ToolAccessPolicy policy)
     {
-        var visible = GetRegistrationsSnapshot()
-            .Where(t => policy.IsToolExposed(t.Tool, audience))
+        var visible = GetEntriesSnapshot()
+            .Where(entry => policy.IsToolExposed(entry.Registration.Tool, audience))
             .ToList();
 
         return BuildCompressedIndex(visible);
     }
 
-    private static string BuildCompressedIndex(IReadOnlyList<ToolRegistration> registrations)
+    private static string BuildCompressedIndex(IReadOnlyList<RegistryEntry> registrations)
     {
         if (registrations.Count == 0)
             return string.Empty;
 
         var sb = new StringBuilder();
 
-        // Separate always-loaded (directly callable) tools from MCP (dynamic) tools
-        var builtinTools = registrations.Where(t => t.Tool is not McpToolAdapter).ToList();
-        var mcpTools = registrations.Where(t => t.Tool is McpToolAdapter).ToList();
+        var coreTools = registrations
+            .Where(static entry => entry.ExposureTier == ToolExposureTier.Core)
+            .ToList();
+        var deferredFirstPartyTools = registrations
+            .Where(static entry => entry.ExposureTier == ToolExposureTier.Deferred
+                                   && entry.Registration.Tool is not McpToolAdapter)
+            .ToList();
+        var mcpTools = registrations
+            .Where(static entry => entry.Registration.Tool is McpToolAdapter)
+            .ToList();
 
-        if (builtinTools.Count > 0)
+        if (coreTools.Count > 0)
         {
-            sb.AppendLine("[directly callable tools]");
-            var builtinGrouped = builtinTools.GroupBy(t => t.GrantCategory);
+            sb.AppendLine("[directly callable core tools]");
+            var builtinGrouped = coreTools.GroupBy(entry => entry.Registration.GrantCategory);
             foreach (var group in builtinGrouped)
             {
-                var names = group.Select(t => t.Tool.Name);
+                var names = group.Select(entry => entry.Registration.Tool.Name);
                 sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
+            }
+        }
+
+        if (deferredFirstPartyTools.Count > 0)
+        {
+            if (sb.Length > 0)
+                sb.AppendLine();
+
+            sb.AppendLine("[deferred first-party tools - discover with search_tools]");
+            foreach (var entry in deferredFirstPartyTools.OrderBy(
+                         static entry => entry.Registration.Tool.Name,
+                         StringComparer.Ordinal))
+            {
+                var tool = entry.Registration.Tool;
+                sb.AppendLine($"{tool.Name}: {BuildCompactHint(tool.Description)}");
             }
         }
 
@@ -332,10 +440,10 @@ public sealed class ToolRegistry
         return sb.ToString();
     }
 
-    private static IReadOnlyList<McpServerSummary> GetMcpServerSummaries(IReadOnlyList<ToolRegistration> registrations)
+    private static IReadOnlyList<McpServerSummary> GetMcpServerSummaries(IReadOnlyList<RegistryEntry> registrations)
     {
         return registrations
-            .Select(t => t.Tool)
+            .Select(entry => entry.Registration.Tool)
             .OfType<McpToolAdapter>()
             .GroupBy(t => t.ServerName, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
@@ -347,6 +455,15 @@ public sealed class ToolRegistry
             })
             .OrderBy(x => x.ServerName, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static string BuildCompactHint(string description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+            return "No description available.";
+
+        var singleLine = Regex.Replace(description.Trim(), "\\s+", " ");
+        return singleLine.Length <= 80 ? singleLine : singleLine[..77] + "...";
     }
 
     private static string DescribeServerCapability(string serverName, IReadOnlyList<McpToolAdapter> tools)
@@ -473,7 +590,9 @@ public sealed class ToolRegistry
 
     // The published array is never mutated after publication, so a reader can use it
     // directly. This replaces a lock plus a full list copy on every read.
-    private IReadOnlyList<ToolRegistration> GetRegistrationsSnapshot() => _tools;
+    private IReadOnlyList<RegistryEntry> GetEntriesSnapshot() => _tools.Entries;
+
+    private IReadOnlyList<ToolRegistration> GetRegistrationsSnapshot() => _tools.Registrations;
 
     /// <summary>
     /// Adapter to wrap bare <see cref="AITool"/> instances (e.g. test fakes) as <see cref="INetclawTool"/>.

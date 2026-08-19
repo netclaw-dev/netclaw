@@ -206,7 +206,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkingContextSnapshotProvider>.Instance),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
 
-        registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
+        // This fixture drives spawn_agent directly from the main model. Mark only that
+        // test seam as Core; production registration keeps spawn_agent deferred.
+        registry.RegisterCore(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
         _recordingFileReadTool = new RecordingContextTool("file_read", "stub file content", "file");
         registry.Register(_recordingFileReadTool);
         _recordingApprovalTool = new RecordingContextTool(ApprovalProbeToolName, "approval ok");
@@ -310,7 +312,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Final_model_visible_tool_footprints_match_frozen_baseline()
+    public async Task Final_model_visible_tool_footprints_reduce_main_context_vs_frozen_baseline()
     {
         RegisterSyntheticMcpCatalog();
         _clientProvider.Main.ToolCallsOnFirstCall =
@@ -361,7 +363,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(ToolFootprintScenario, baseline.Scenario);
         Assert.Equal(ToolFootprintMetric, baseline.Metric);
         Assert.Equal(SyntheticMcpToolCount, baseline.SyntheticMcpToolCount);
-        Assert.Equal(new ToolFootprintPair(baseline.MainCore, baseline.SubagentFull), actual);
+        Assert.True(actual.MainCore.Count < baseline.MainCore.Count);
+        Assert.True(actual.MainCore.SerializedDefinitionBytes < baseline.MainCore.SerializedDefinitionBytes);
+        Assert.Equal(baseline.SubagentFull, actual.SubagentFull);
     }
 
     [Fact]

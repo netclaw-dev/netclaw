@@ -1,4 +1,4 @@
-# ADR-003: Progressive Tool Disclosure with Dynamic MCP Discovery
+# ADR-003: Progressive Tool Disclosure
 
 **Date:** 2026-03-01
 **Status:** Accepted
@@ -8,16 +8,16 @@
 
 Netclaw adopts progressive disclosure for tools:
 
-1. The always-on tool context contains only:
-   - directly callable built-in tools, and
-   - MCP server-level summaries (server name, purpose, tool count).
-2. MCP tools are loaded on demand via `search_tools` and are not directly
-   callable until discovered.
-3. Tool metadata is system-generated to disk as shadow catalogs and used as the
-   dynamic context source:
+1. Each tool registration has an internal `Core` or `Deferred` exposure tier.
+2. Existing registration methods select `Deferred`. Named core methods must select `Core`.
+3. The core contains only the workspace, discovery, skill, and shell compatibility tools.
+4. Deferred first-party and MCP tools load on demand through `search_tools` and `load_tool`.
+5. The live model catalog applies the current audience and feature policy.
+6. Operator metadata is system-generated as complete shadow catalogs:
    - `identity/tooling/shadow/tool-index.md`
    - `identity/tooling/shadow/mcp/<server>.md`
-4. Fuzzy matching remains discovery-only. Suggestion results do not implicitly
+7. Agent file and shell policies deny access to the complete shadow catalogs.
+8. Fuzzy matching remains discovery-only. Suggestion results do not implicitly
    load tools.
 
 ## Context
@@ -49,11 +49,9 @@ without hard-coding domain routers in actor logic.
 
 ### Why file-backed shadow catalogs
 
-Disk-backed catalogs make the tool graph observable and stable across daemon
-restarts. Operators and agents can inspect generated metadata directly instead
-of relying on transient in-memory state. This also creates a clear boundary:
-human-authored identity content remains separate from system-authored tool
-metadata.
+Disk-backed catalogs make the complete tool graph observable across daemon
+restarts. Operators can inspect this metadata outside agent tool paths. The
+model receives a separate live catalog which the current policy filters.
 
 ### Why discovery-only fuzzy matching
 
@@ -63,17 +61,20 @@ named tools and preserves explicit tool loading semantics.
 
 ## Implementation Shape
 
+- `ToolRegistry` stores exposure metadata without changing `ToolRegistration`.
 - `ToolRegistry.GenerateCompressedIndex()` emits:
-  - directly callable built-ins, then
-  - MCP server summaries and explicit discovery instructions.
+  - directly callable core tools,
+  - compact deferred first-party hints, and
+  - MCP server summaries and discovery instructions.
 - `search_tools` supports the progressive flow:
   - `search_tools(query: "servers")`
   - `search_tools(query: "all", server: "<server>")`
   - `search_tools(query: "<intent>", server: "<server>")`
 - `McpShadowCatalogWriter` generates and refreshes shadow catalogs at daemon
   startup after MCP initialization.
-- `FileContextLayerProvider` injects `tool-index.md` into dynamic context
-  layers on each LLM call.
+- `ToolIndexContextLayer` builds the model catalog from the live registry.
+- `ToolAccessPolicy` applies audience, feature, grant, and deny filters.
+- The session exposure cache gives all deferred tools the same bounded lease.
 
 ## Consequences
 
@@ -81,13 +82,14 @@ named tools and preserves explicit tool loading semantics.
 
 - Smaller always-on prompt surface for tooling.
 - Better multi-server navigation for models that struggle with large tool sets.
-- Auditable generated metadata in a predictable filesystem location.
+- Auditable operator metadata in a predictable filesystem location.
+- Hidden tool names stay absent from model catalogs, search, suggestions, and load errors.
 - Fewer accidental calls from fuzzy lookup results.
 
 ### Tradeoffs
 
 - Additional generated files to manage under `identity/tooling/shadow/`.
-- Dynamic tool index freshness is tied to generation/update lifecycle.
+- Loaded tool state is transient and must be rebuilt after actor recovery.
 - Tool accuracy still depends on model quality and memory retrieval quality; the
   disclosure strategy improves routing but does not solve semantic retrieval by
   itself.

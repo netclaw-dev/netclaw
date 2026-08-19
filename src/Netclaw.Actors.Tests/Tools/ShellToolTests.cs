@@ -651,6 +651,35 @@ public class ShellToolTests
         Assert.Contains("Access denied", result);
     }
 
+    [Fact]
+    public async Task Path_policy_blocks_a_denied_working_directory_before_execution()
+    {
+        var deniedDirectory = Directory.CreateTempSubdirectory("netclaw-shell-cwd-deny-");
+        try
+        {
+            var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
+            var pathPolicy = new ToolPathPolicy(ShellEnvironment, [deniedDirectory.FullName]);
+            var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
+            var args = ToolInput.Create(
+                "Command",
+                TestShellEnvironment.PrintWorkingDirectoryCommand,
+                "WorkingDirectory",
+                deniedDirectory.FullName);
+
+            var result = await tool.ExecuteAsync(
+                args,
+                TestToolExecutionContext.CreateUnbound(),
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("protected file path", result);
+            Assert.Contains("Access denied", result);
+        }
+        finally
+        {
+            deniedDirectory.Delete(recursive: true);
+        }
+    }
+
     [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
     public async Task Authorized_execution_rechecks_current_symbolic_link_state()

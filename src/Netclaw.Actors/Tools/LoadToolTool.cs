@@ -9,7 +9,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Activates a discovered MCP tool by name so the LLM can call it.
+/// Activates a deferred first-party or MCP tool by name so the LLM can call it.
 /// Tools must first be found via <see cref="SearchToolsTool"/> before loading.
 /// The session actor intercepts this tool by name and reads the tool call
 /// arguments to activate the requested tool — the output is LLM-facing only.
@@ -20,14 +20,17 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
 {
     private readonly ToolRegistry _registry;
-    private readonly ToolAccessPolicy? _policy;
+    private readonly ToolAccessPolicy _policy;
 
     public record Params(
         [property: Description("Full tool name to activate (e.g., 'notion/notion-search'). Use search_tools to find available tool names.")]
         string Name);
 
-    public LoadToolTool(ToolRegistry registry, ToolAccessPolicy? policy = null)
+    public LoadToolTool(ToolRegistry registry, ToolAccessPolicy policy)
     {
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(policy);
+
         _registry = registry;
         _policy = policy;
     }
@@ -40,20 +43,8 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
             return Task.FromResult("Error: tool name is required.");
 
         var registration = _registry.GetRegistrationByToolName(name);
-        if (registration is null)
-        {
-            var suggestions = _registry.SearchTools(name, null, 3);
-            if (suggestions.Count > 0)
-            {
-                var names = string.Join(", ", suggestions.Select(s => s.Name));
-                return Task.FromResult($"Tool '{name}' not found. Did you mean: {names}?");
-            }
-
-            return Task.FromResult($"Tool '{name}' not found. Use search_tools to find available tools.");
-        }
-
-        if (_policy is not null && !_policy.IsToolExposed(registration.Tool, context))
-            return Task.FromResult($"Tool '{name}' is not available in the current trust context.");
+        if (registration is null || !IsVisible(registration.Tool, context))
+            return Task.FromResult(BuildNotFound(name, context));
 
         // Return the LLM-facing alias so the model sees the same form
         // it must emit in a subsequent tool_use call. The session actor
@@ -64,4 +55,19 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
         return Task.FromResult(registration.Tool.LlmFacingName.Value);
     }
 
+    private bool IsVisible(INetclawTool tool, ToolInvocationContext context)
+        => _policy.IsToolExposed(tool, context);
+
+    private string BuildNotFound(string authoredName, ToolInvocationContext context)
+    {
+        var suggestions = _registry.SearchTools(authoredName, null, int.MaxValue)
+            .Where(tool => IsVisible(tool, context))
+            .Take(3)
+            .Select(static tool => tool.LlmFacingName.Value)
+            .ToList();
+
+        return suggestions.Count > 0
+            ? $"Tool '{authoredName}' not found. Did you mean: {string.Join(", ", suggestions)}?"
+            : $"Tool '{authoredName}' not found. Use search_tools to find available tools.";
+    }
 }

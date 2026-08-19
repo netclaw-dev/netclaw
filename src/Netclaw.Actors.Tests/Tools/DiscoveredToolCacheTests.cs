@@ -76,6 +76,29 @@ public class DiscoveredToolCacheTests
         Assert.Empty(cache.AvailableTools);
     }
 
+    [Fact]
+    public void Deferred_first_party_tool_uses_the_same_lease_and_eviction_path()
+    {
+        var registry = new ToolRegistry();
+        var cache = new DiscoveredToolCache();
+        var function = AIFunctionFactory.Create(() => "result", "set_reminder", "Schedule a reminder");
+        registry.Register(function, "builtin");
+        var tool = Assert.IsAssignableFrom<Netclaw.Tools.INetclawTool>(registry.GetByName("set_reminder"));
+
+        cache.Remember(tool.Name, tool, leaseTurns: 2, maxCount: 12);
+        cache.AddIfMissing(tool.ToAITool());
+
+        Assert.True(cache.HasTool("set_reminder"));
+        Assert.Contains(
+            cache.AvailableTools,
+            static candidate => candidate is AIFunction functionTool && functionTool.Name == "set_reminder");
+
+        cache.EvictAll();
+
+        Assert.False(cache.HasTool("set_reminder"));
+        Assert.Empty(cache.AvailableTools);
+    }
+
     private static McpToolAdapter RegisterAndRemember(
         ToolRegistry registry,
         DiscoveredToolCache cache,

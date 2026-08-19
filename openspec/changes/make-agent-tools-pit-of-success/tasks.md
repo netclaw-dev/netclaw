@@ -8,12 +8,12 @@
 
 ## 2. PR 2 - Progressive disclosure foundation
 
-- [ ] 2.1 Add explicit Core/Deferred registration metadata with Deferred as the safe default and preserve existing registry lookup identities.
-- [ ] 2.2 Mark the specified workspace/discovery tools Core and leave specialty first-party and MCP tools Deferred.
-- [ ] 2.3 Generalize the discovered-tool cache so leases and eviction apply to deferred first-party tools as well as MCP tools.
-- [ ] 2.4 Extend the compact audience-filtered capability catalog to include deferred first-party tool names and short hints without full schemas.
-- [ ] 2.5 Make search, suggestions, and load apply the same deployment, audience, grant, and feature filters without revealing hidden names.
-- [ ] 2.6 Add snapshots for exact core names, initial schema count/bytes, deferred discovery, load activation, eviction, and authorization-after-load.
+- [x] 2.1 Add explicit Core/Deferred registration metadata with Deferred as the safe default and preserve existing registry lookup identities.
+- [x] 2.2 Mark the specified workspace/discovery tools Core and leave specialty first-party and MCP tools Deferred.
+- [x] 2.3 Generalize the discovered-tool cache so leases and eviction apply to deferred first-party tools as well as MCP tools.
+- [x] 2.4 Extend the compact audience-filtered capability catalog to include deferred first-party tool names and short hints without full schemas.
+- [x] 2.5 Make search, suggestions, and load apply the same deployment, audience, grant, and feature filters without revealing hidden names.
+- [x] 2.6 Add snapshots for exact core names, initial schema count/bytes, deferred discovery, load activation, eviction, and authorization-after-load.
 
 ## 3. PR 3 - Subagent progressive disclosure
 

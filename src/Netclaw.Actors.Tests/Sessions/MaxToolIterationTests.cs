@@ -52,7 +52,7 @@ public class MaxToolIterationTests : LlmSessionTestBase
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
 
         var registry = new ToolRegistry();
-        registry.Register(
+        registry.RegisterCore(
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
         services.AddSingleton(registry);

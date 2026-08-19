@@ -11,7 +11,7 @@ namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
 /// Owns the session's exposed tool list — the always-loaded base tools plus the
-/// MCP tools discovered via search_tools — and manages lease-based retention and
+/// deferred tools discovered via search_tools — and manages lease-based retention and
 /// eviction of the discovered set across turns. Because the cache owns the list
 /// it rebuilds, callers seed the base tools once and then drive
 /// <see cref="PrepareForNewTurn"/> / <see cref="EvictAll"/> / <see cref="AddIfMissing"/>
@@ -93,13 +93,10 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Remember a discovered MCP tool with a lease for future turns.
+    /// Remember a discovered deferred tool with a lease for future turns.
     /// </summary>
     public void Remember(string toolName, INetclawTool tool, int leaseTurns, int maxCount)
     {
-        if (tool is not McpToolAdapter)
-            return;
-
         if (leaseTurns <= 0 || maxCount <= 0)
             return;
 

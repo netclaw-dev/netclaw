@@ -177,7 +177,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             config,
             new NetclawPaths(),
             pathPolicy,
-            commandPolicy);
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var policy = new ToolAccessPolicy(
             config,

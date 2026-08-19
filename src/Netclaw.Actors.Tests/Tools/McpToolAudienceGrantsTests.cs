@@ -208,6 +208,58 @@ public sealed class McpToolAudienceGrantsTests
         Assert.DoesNotContain("memorizer__delete", result);
     }
 
+    [Fact]
+    public async Task Hidden_tools_do_not_consume_the_visible_search_result_cap()
+    {
+        var registry = new ToolRegistry();
+        for (var i = 0; i < 12; i++)
+            registry.Register(CreateMcpTool("memorizer", $"archive_hidden_{i}", "Archive records"));
+        registry.Register(CreateMcpTool("memorizer", "archive_visible", "Archive records"));
+
+        var config = CreateConfigWithTeamServer("memorizer");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["archive_visible"]
+        };
+        var tool = new SearchToolsTool(
+            registry,
+            new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Query", "archive"),
+            CreateExecutionContext(TrustAudience.Team),
+            CancellationToken.None);
+
+        Assert.Contains("memorizer__archive_visible", result);
+        Assert.DoesNotContain("archive_hidden", result);
+    }
+
+    [Fact]
+    public async Task Server_catalog_counts_only_tools_visible_to_the_current_audience()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateMcpTool("memorizer", "search_memories", "Find stored memories"));
+        registry.Register(CreateMcpTool("memorizer", "store", "Store a value"));
+        registry.Register(CreateMcpTool("memorizer", "delete", "Delete a memory"));
+
+        var config = CreateConfigWithTeamServer("memorizer");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"]
+        };
+        var tool = new SearchToolsTool(
+            registry,
+            new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Query", "servers"),
+            CreateExecutionContext(TrustAudience.Team),
+            CancellationToken.None);
+
+        Assert.Contains("memorizer (1 tools)", result);
+        Assert.DoesNotContain("memorizer (3 tools)", result);
+    }
+
     // ── FilterExposedTools (session hot path) ──
 
     [Fact]
@@ -249,7 +301,7 @@ public sealed class McpToolAudienceGrantsTests
     // ── load_tool denial ──
 
     [Fact]
-    public async Task LoadTool_DeniesBlockedTool()
+    public async Task LoadTool_HiddenAndMissingToolsHaveTheSameResult()
     {
         var registry = new ToolRegistry();
         registry.Register(CreateMcpTool("memorizer", "search_memories"));
@@ -263,12 +315,21 @@ public sealed class McpToolAudienceGrantsTests
         var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = new LoadToolTool(registry, policy);
 
-        var result = await tool.ExecuteAsync(
+        var hiddenResult = await tool.ExecuteAsync(
             ToolInput.Create("Name", "memorizer/store"),
             CreateExecutionContext(TrustAudience.Team),
             CancellationToken.None);
 
-        Assert.Contains("not available", result);
+        var missingRegistry = new ToolRegistry();
+        missingRegistry.Register(CreateMcpTool("memorizer", "search_memories"));
+        var missingTool = new LoadToolTool(missingRegistry, policy);
+        var missingResult = await missingTool.ExecuteAsync(
+            ToolInput.Create("Name", "memorizer/store"),
+            CreateExecutionContext(TrustAudience.Team),
+            CancellationToken.None);
+
+        Assert.Equal(missingResult, hiddenResult);
+        Assert.DoesNotContain("not available", hiddenResult, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -294,6 +355,48 @@ public sealed class McpToolAudienceGrantsTests
         // call the tool back using the same form Anthropic surfaces in
         // its tool definitions.
         Assert.Equal("memorizer__search_memories", result);
+    }
+
+    [Fact]
+    public async Task Loading_deferred_tool_does_not_bypass_invocation_approval()
+    {
+        var registry = new ToolRegistry();
+        var deferredTool = CreateMcpTool("memorizer", "store");
+        registry.Register(deferredTool);
+
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["memorizer/store"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            Defaults,
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        var loadedName = await new LoadToolTool(registry, policy).ExecuteAsync(
+            ToolInput.Create("Name", "memorizer/store"),
+            CreateExecutionContext(TrustAudience.Personal),
+            CancellationToken.None);
+        var decision = policy.AuthorizeInvocation(
+            deferredTool,
+            CreateExecutionContext(TrustAudience.Personal));
+
+        Assert.Equal("memorizer__store", loadedName);
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void LoadTool_without_policy_is_rejected()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateMcpTool("memorizer", "search_memories"));
+
+        Assert.Throws<ArgumentNullException>(() => new LoadToolTool(registry, null!));
     }
 
     // ── Public audience ──

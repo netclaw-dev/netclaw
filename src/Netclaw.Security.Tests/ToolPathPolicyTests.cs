@@ -111,6 +111,16 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
+    public void CommandReferencesDeniedPath_checks_the_working_directory()
+    {
+        var policy = new ToolPathPolicy(["/protected/catalog"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("find", "/protected/catalog"));
+        Assert.True(policy.CommandReferencesDeniedPath("find", "/protected/catalog/mcp"));
+        Assert.False(policy.CommandReferencesDeniedPath("find", "/work"));
+    }
+
+    [Fact]
     public void CommandReferencesDeniedPath_checks_native_power_shell_path()
     {
         var environment = ShellExecutionEnvironment.CreatePowerShell(

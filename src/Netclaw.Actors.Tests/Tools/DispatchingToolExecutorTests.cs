@@ -53,7 +53,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(baseConfig, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            baseConfig,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(baseConfig, commandPolicy, pathPolicy));
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -83,7 +88,11 @@ public class DispatchingToolExecutorTests
             restrictedConfig,
             new NetclawPaths(),
             restrictedPathPolicy,
-            restrictedCommandPolicy);
+            restrictedCommandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(
+                restrictedConfig,
+                restrictedCommandPolicy,
+                restrictedPathPolicy));
         _restrictedExecutor = new DispatchingToolExecutor(
             restrictedRegistry,
             new ToolAccessPolicy(
@@ -416,7 +425,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -455,7 +469,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -604,7 +623,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(["git push"], [approvedMatch]));
@@ -660,7 +680,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
         var approvedCandidate = BashCandidate("git status");
         var unapprovedCandidate = BashCandidate("git push");
@@ -725,7 +746,12 @@ public class DispatchingToolExecutorTests
             var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
             var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
             var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+            registry.WithFirstPartyTools(
+                config,
+                new NetclawPaths(),
+                pathPolicy,
+                commandPolicy,
+                toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
             var approvalService = new FixedShellApprovalService(request =>
             {
                 var matches = request.Candidates.Select(candidate =>
@@ -2145,7 +2171,8 @@ public class DispatchingToolExecutorTests
                 config,
                 new NetclawPaths(),
                 new ToolPathPolicy([]),
-                new ShellCommandPolicy());
+                new ShellCommandPolicy(),
+                toolAccessPolicy: TestToolAccessPolicy.Create(config));
             var approvedScope = ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.Bash,
                 ["git", "push"],
@@ -2218,7 +2245,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(
                 ["git push"],
@@ -2274,7 +2302,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var forgedCandidate = new ApprovalCandidate("git status", Directory: null)
         {
             Shell = ApprovalShell.Bash,
@@ -2334,7 +2363,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(
                 [],
@@ -2795,7 +2825,12 @@ public class DispatchingToolExecutorTests
             };
 
             var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+            registry.WithFirstPartyTools(
+                config,
+                new NetclawPaths(),
+                new ToolPathPolicy([]),
+                new ShellCommandPolicy(),
+                toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
             var executor = new DispatchingToolExecutor(
                 registry,
@@ -2938,7 +2973,12 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
         var tempFile = Path.GetTempFileName();
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
@@ -3017,7 +3057,12 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
         var system = ActorSystem.Create($"tool-approval-session-{Guid.NewGuid():N}");
         try
@@ -3564,7 +3609,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             pathPolicy,
-            commandPolicy);
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(

@@ -100,7 +100,8 @@ public sealed class ToolIndexUpdaterTests
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
         var publicIndex = toolIndexLayer.GetContextLayer(TrustAudience.Public);
-        Assert.Contains("file: file_read", publicIndex);
+        Assert.Contains("[deferred first-party tools", publicIndex);
+        Assert.Contains("file_read:", publicIndex);
         Assert.DoesNotContain("set_reminder", publicIndex);
         Assert.DoesNotContain("memorizer", publicIndex);
     }

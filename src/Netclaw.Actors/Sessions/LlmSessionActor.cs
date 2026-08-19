@@ -262,13 +262,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 services.TimeProvider,
                 NoLogger.Instance);
 
-        // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools and can be retained for a
-        // small number of future turns (configurable lease) to reduce rediscovery churn.
+        // Load only the explicit core for initial LLM calls. Deferred first-party and
+        // MCP tools use search_tools and share the configured discovery lease.
         _fullRegistry = tools?.ToolRegistry;
         if (_fullRegistry is not null)
         {
-            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetAlwaysLoadedTools());
+            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetCoreTools());
         }
 
         // ── Recovery handlers ──

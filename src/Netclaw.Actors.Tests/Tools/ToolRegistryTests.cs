@@ -79,7 +79,7 @@ public class ToolRegistryTests
     public void GetAlwaysLoadedTools_returns_non_mcp_tools()
     {
         var registry = new ToolRegistry();
-        registry.Register(CreateFakeTool("shell_execute"), "shell");
+        registry.RegisterCore(CreateFakeTool("shell_execute"), "shell");
         registry.Register(CreateFakeTool("search_tools"), "builtin");
         registry.Register(CreateFakeTool("file_read"), "file");
         // MCP tools should be excluded
@@ -158,16 +158,38 @@ public class ToolRegistryTests
             CreateFakeTool("store"), "memorizer", "store"));
         registry.Register(new McpToolAdapter(
             CreateFakeTool("search"), "memorizer", "search"));
-        registry.Register(CreateFakeTool("shell_execute"), "shell");
+        registry.RegisterCore(CreateFakeTool("shell_execute"), "shell");
 
         var index = registry.GenerateCompressedIndex();
 
         Assert.Contains("[MCP capability servers - discover tools with search_tools]", index);
         Assert.Contains("memorizer (2 tools)", index);
         Assert.Contains("search_tools(query: \"all\", server: \"<server_name>\")", index);
+        Assert.Contains("[directly callable core tools]", index);
         Assert.Contains("shell: shell_execute", index);
         Assert.Contains("search_tools", index);
         Assert.DoesNotContain("mcp:memorizer: store, search", index);
+    }
+
+    [Fact]
+    public void GenerateCompressedIndex_lists_deferred_first_party_hint_without_schema()
+    {
+        static string Schedule(string deliveryTarget) => deliveryTarget;
+
+        var registry = new ToolRegistry();
+        registry.Register(
+            AIFunctionFactory.Create(
+                (Func<string, string>)Schedule,
+                "set_reminder",
+                "Schedule a future reminder for a delivery target."),
+            "builtin");
+
+        var index = registry.GenerateCompressedIndex();
+
+        Assert.Contains("[deferred first-party tools - discover with search_tools]", index);
+        Assert.Contains("set_reminder: Schedule a future reminder", index);
+        Assert.DoesNotContain("deliveryTarget", index);
+        Assert.DoesNotContain("inputSchema", index);
     }
 
     [Fact]
@@ -200,7 +222,7 @@ public class ToolRegistryTests
     public void GenerateCompressedIndex_for_public_hides_blocked_capabilities()
     {
         var registry = new ToolRegistry();
-        registry.Register(CreateFakeTool("file_read"), "file");
+        registry.RegisterCore(CreateFakeTool("file_read"), "file");
         registry.Register(CreateFakeTool("set_reminder"), "builtin");
         registry.Register(CreateFakeTool("spawn_agent"), "builtin");
         registry.Register(new McpToolAdapter(
@@ -223,6 +245,34 @@ public class ToolRegistryTests
         Assert.DoesNotContain("set_reminder", index);
         Assert.DoesNotContain("spawn_agent", index);
         Assert.DoesNotContain("memorizer", index);
+    }
+
+    [Fact]
+    public void Approval_deny_hides_first_party_tool_from_compact_catalog()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateFakeTool("specialty_tool"), "builtin");
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["specialty_tool"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        var index = registry.GenerateCompressedIndex(TrustAudience.Personal, policy);
+
+        Assert.DoesNotContain("specialty_tool", index);
     }
 
     [Fact]
@@ -295,8 +345,15 @@ public class ToolRegistryTests
         // canonical and LLM-facing are the same string. Round-tripping
         // must not mangle them in either direction.
         var config = new ToolConfig();
+        var pathPolicy = new Netclaw.Security.ToolPathPolicy([]);
+        var commandPolicy = new Netclaw.Security.ShellCommandPolicy();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         Assert.Equal("shell_execute", registry.ToCanonicalName("shell_execute"));
         Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));

@@ -35,22 +35,24 @@ public static class ToolRegistrationExtensions
         ToolAccessPolicy? toolAccessPolicy = null,
         WebhookRouteStore? webhookRouteStore = null)
     {
-        registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
-        registry.Register(new FileReadTool(config, paths, pathPolicy));
-        registry.Register(new FileListTool(config, paths, pathPolicy));
-        registry.Register(new FileWriteTool(config, paths, pathPolicy));
-        registry.Register(new FileEditTool(config, paths, pathPolicy));
+        ArgumentNullException.ThrowIfNull(toolAccessPolicy);
+
+        registry.RegisterCore(new ShellTool(config, pathPolicy, shellCommandPolicy));
+        registry.RegisterCore(new FileReadTool(config, paths, pathPolicy));
+        registry.RegisterCore(new FileListTool(config, paths, pathPolicy));
+        registry.RegisterCore(new FileWriteTool(config, paths, pathPolicy));
+        registry.RegisterCore(new FileEditTool(config, paths, pathPolicy));
         registry.Register(new AttachFileTool(config, paths, pathPolicy));
         if (webhookRouteStore is not null)
             registry.Register(new ListWebhooksTool(webhookRouteStore));
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));
-        registry.Register(new SetWorkingDirectoryTool(config, paths));
+        registry.RegisterCore(new SetWorkingDirectoryTool(config, paths));
 
         // Register search_tools and load_tool meta-tools (always loaded, "builtin" grant)
-        registry.Register(new SearchToolsTool(registry, toolAccessPolicy));
-        registry.Register(new LoadToolTool(registry, toolAccessPolicy));
+        registry.RegisterCore(new SearchToolsTool(registry, toolAccessPolicy));
+        registry.RegisterCore(new LoadToolTool(registry, toolAccessPolicy));
 
         return registry;
     }
@@ -73,7 +75,7 @@ public static class ToolRegistrationExtensions
         FileSubAgentDefinitionLoader? subAgentLoader = null,
         ILogger<SkillLoadTool>? skillLoadLogger = null)
     {
-        registry.Register(new SkillLoadTool(
+        registry.RegisterCore(new SkillLoadTool(
             skillRegistry,
             scanner,
             mcpPromptLoader,
@@ -83,7 +85,7 @@ public static class ToolRegistrationExtensions
             skillSyncConfig,
             skillLoadLogger,
             subAgentLoader));
-        registry.Register(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
+        registry.RegisterCore(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
         registry.Register(new SkillManageTool(skillRegistry, paths, scanner, inventoryRefresher));
         return registry;
     }

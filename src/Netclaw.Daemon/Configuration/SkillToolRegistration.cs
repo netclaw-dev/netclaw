@@ -40,7 +40,7 @@ internal static class SkillToolRegistration
         var skillSyncConfig = services.GetService<SkillSyncConfig>();
         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
-        registry.Replace(new FileReadTool(toolConfig, paths, pathPolicy, skillRegistry, metrics,
+        registry.ReplaceCore(new FileReadTool(toolConfig, paths, pathPolicy, skillRegistry, metrics,
             loggerFactory.CreateLogger<FileReadTool>()));
 
         registry.WithSkillTools(

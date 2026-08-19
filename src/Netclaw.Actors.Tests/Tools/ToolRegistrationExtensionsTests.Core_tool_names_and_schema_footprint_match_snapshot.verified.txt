@@ -1,0 +1,18 @@
+﻿{
+  Names: [
+    file_edit,
+    file_list,
+    file_read,
+    file_write,
+    load_tool,
+    search_tools,
+    set_working_directory,
+    shell_execute,
+    skill_load,
+    skill_read_resource
+  ],
+  Footprint: {
+    Count: 10,
+    SerializedDefinitionBytes: 10879
+  }
+}
