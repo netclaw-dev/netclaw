@@ -36,7 +36,7 @@ Implementation finding (supersedes the original signal-based wording): no route 
 
 ### D4: CLI route mutations are daemon-only
 
-REWORKED BY MAINTAINER DECISION. The first implementation gave the CLI a disclosed dual mode: daemon when reachable, direct file write with a stderr notice otherwise. The maintainer was asked whether the CLI should fall back to direct file writes when the daemon is unreachable, and answered verbatim: **"Don't have it."** There is no fallback, no `--offline` flag, and no local write path of any kind.
+Maintainer decision: no fallback of any kind — no dual mode, no `--offline` flag, no local write path. One store, one writer.
 
 `WebhooksCommand` probes availability once per invocation, immediately before the write. Three answers fail the command with exit code 1 and no file change:
 
