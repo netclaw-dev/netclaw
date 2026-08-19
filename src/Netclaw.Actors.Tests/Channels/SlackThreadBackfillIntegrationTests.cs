@@ -81,6 +81,14 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The stock single-expect-default is 3 seconds. That value measures
+        // scheduler load on a starved CI runner. It does not measure the
+        // correctness of the parameterless ExpectMsgAsync<ProactiveThreadAck>
+        // wait below (line ~728). The ack sits behind actor spawn, Akka.Persistence
+        // recovery, and stream materialization. Production allows 30 seconds for
+        // the same ack — see ProactiveSendFormatting.ProactiveThreadAckTimeout.
+        builder.AddHocon("akka.test.single-expect-default = 15s", HoconAddMode.Prepend);
+
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()

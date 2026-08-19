@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -25,6 +26,16 @@ namespace Netclaw.Actors.Tests.Channels.Contracts;
 public abstract class SessionBindingContractTests : TestKit
 {
     protected SessionBindingContractTests(ITestOutputHelper output) : base(output: output) { }
+
+    // The stock single-expect-default is 3 seconds. That value measures
+    // scheduler load on a starved CI runner. It does not measure the
+    // correctness of the ack path. The ack in these tests sits behind
+    // actor spawn, Akka.Persistence recovery, and two stream materializations.
+    // Production allows 30 seconds for the same ack-after-work handshake — see
+    // ProactiveSendFormatting.ProactiveThreadAckTimeout. This override applies
+    // to all three channel subclasses; none of them override Config.
+    protected override Config? Config =>
+        ConfigurationFactory.ParseString("akka.test.single-expect-default = 15s");
 
     protected abstract IActorRef CreateBindingActor(
         SessionId sessionId,

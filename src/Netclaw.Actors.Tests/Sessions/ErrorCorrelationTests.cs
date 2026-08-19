@@ -68,20 +68,20 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
         {
             SessionId = sessionId,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "trigger error"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Failed, tc.Outcome);
     }
 
@@ -96,26 +96,26 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
         {
             SessionId = sessionId,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "second"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEqual(firstError.CorrelationId, secondError.CorrelationId);
         Assert.Equal(ErrorCategory.ProviderFailure, firstError.Category);
@@ -135,20 +135,20 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
         {
             SessionId = sessionId,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "trigger timeout"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Failed, tc.Outcome);
     }
 

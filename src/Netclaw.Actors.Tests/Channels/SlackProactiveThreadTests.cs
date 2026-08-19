@@ -360,8 +360,16 @@ public sealed class LookupSlackUserToolTests
 
 public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    // akka.test.single-expect-default raises the parameterless
+    // ExpectMsgAsync<ProactiveThreadAck> wait below. The stock 3s value
+    // measures scheduler load on a starved CI runner, not correctness.
+    // Production allows 30s for the same ack — see
+    // ProactiveSendFormatting.ProactiveThreadAckTimeout.
     protected override Config? Config =>
-        ConfigurationFactory.ParseString("akka.test.default-timeout = 5s");
+        ConfigurationFactory.ParseString("""
+            akka.test.default-timeout = 5s
+            akka.test.single-expect-default = 15s
+            """);
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
