@@ -142,7 +142,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         if (persistentSeeds.Count > 0)
         {
-            await approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+            // The stop waits for a persistence flush and the actor teardown.
+            // The budget bounds a multi-hop shutdown under a starved CI
+            // scheduler. It does not measure correctness. Every shell-approval
+            // test goes through this shared harness, so a short budget makes a
+            // whole suite flake at once.
+            await approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
             approvalActor = CreateApprovalActor(actorSystem, store);
             approvalService = CreateApprovalService(approvalActor);
         }
@@ -295,7 +300,9 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+        // Same reason as the seed-phase stop above: the budget bounds a
+        // multi-hop teardown under a starved CI scheduler, not correctness.
+        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
         if (Directory.Exists(_rootDirectory))
             Directory.Delete(_rootDirectory, recursive: true);
     }

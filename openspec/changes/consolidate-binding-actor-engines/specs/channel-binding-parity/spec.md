@@ -32,7 +32,7 @@ The shared engine SHALL store cursors as strings, which matches the persisted `C
 
 ### Requirement: Shared approval-response flow
 
-The system SHALL implement text-approval parsing, cold-spawn approval forwarding, and pending-prompt resolution in a single shared flow. The requester identity check SHALL execute inside the shared flow. Per-channel hooks SHALL be limited to prompt rendering, the pending-approval match order, and, for Mattermost only, the synchronous webhook reply.
+The system SHALL implement text-approval parsing, cold-spawn approval forwarding, and pending-prompt resolution in a single shared flow. The requester identity check SHALL execute inside the shared flow. The pending-approval match order SHALL be the same on every channel. Per-channel hooks SHALL be limited to prompt rendering and, for Mattermost only, the synchronous webhook reply.
 
 #### Scenario: Wrong requester is rejected on every channel
 
@@ -48,20 +48,19 @@ The system SHALL implement text-approval parsing, cold-spawn approval forwarding
 - **THEN** the Mattermost hook sends the synchronous HTTP reply
 - **AND** Discord and Slack register no such hook
 
-#### Scenario: Channel match order picks the same candidate as before
+#### Scenario: Text approval resolves the earliest pending approval
 
 - **GIVEN** two pending approvals that the same sender may approve
 - **WHEN** that sender sends a text approval reply
-- **THEN** Slack resolves the earliest pending approval
-- **AND** Discord and Mattermost resolve the most recent pending approval
+- **THEN** Slack, Discord, and Mattermost each resolve the earliest pending approval
+- **AND** the next text approval reply resolves the second pending approval
 
-> Note: this match order is the one real difference the step-3 stop rule found
+> Note: the step-3 stop rule found this match order as the one real difference
 > between the three copies. Slack selected its candidate with `FindIndex`
 > (earliest match); Discord and Mattermost selected it with `LastOrDefault`
-> (most recent match). The shared lookup keeps one requester check and takes the
-> order as a required `ApprovalMatchOrder` input, so each channel keeps the
-> selection it had. Which order is correct is a separate product question,
-> tracked outside this change.
+> (most recent match). The maintainer resolved the difference: the earliest
+> pending approval wins on every channel. The shared lookup keeps one requester
+> check and hard-codes the earliest match, so no channel supplies an order.
 
 ### Requirement: Shared output-completion bookkeeping
 

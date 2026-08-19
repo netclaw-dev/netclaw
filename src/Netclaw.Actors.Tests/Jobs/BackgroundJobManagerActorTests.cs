@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
@@ -23,6 +24,7 @@ public class BackgroundJobManagerActorTests : TestKit
 {
     private readonly DisposableTempDir _dir = new();
     private BackgroundJobDefinitionStore _store = null!;
+    private string? _rejectedOutputDirectory;
 
     public BackgroundJobManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -30,7 +32,10 @@ public class BackgroundJobManagerActorTests : TestKit
     {
         var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
-        _store = new BackgroundJobDefinitionStore(paths);
+        _store = new BackgroundJobDefinitionStore(
+            paths,
+            NullLogger<BackgroundJobDefinitionStore>.Instance,
+            DeleteOutputDirectory);
 
         builder.StartActors((system, registry, _) =>
         {
@@ -51,6 +56,24 @@ public class BackgroundJobManagerActorTests : TestKit
     }
 
     private IActorRef GetManager() => ActorRegistry.For(Sys).Get<BackgroundJobManagerActorKey>();
+
+    private async Task<IActorRef> GetReadyManagerAsync()
+    {
+        var manager = GetManager();
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+        return manager;
+    }
+
+    private void DeleteOutputDirectory(string path, bool recursive)
+    {
+        if (string.Equals(path, Volatile.Read(ref _rejectedOutputDirectory), StringComparison.Ordinal))
+            throw new IOException("simulated output cleanup failure");
+
+        Directory.Delete(path, recursive);
+    }
 
     private async Task<BackgroundJobManagerHealthResponse> RunTerminalSweepAsync(IActorRef manager)
     {
@@ -406,7 +429,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DeletesJobPastRetentionWindow()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -422,7 +445,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_KeepsJobWithinRetentionWindow()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var recentMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         _store.Save(MakeTerminalDefinition("sweep-recent", BackgroundJobStatus.Completed, recentMs));
@@ -435,7 +458,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DoesNotTouchNonTerminalJobs()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -455,7 +478,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DeletesOutputLogWithDefinition()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -477,7 +500,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_CleanupFailureDoesNotRestartManagerAndLaterSweepRetries()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -487,10 +510,11 @@ public class BackgroundJobManagerActorTests : TestKit
         _store.Save(blocked);
         _store.Save(removable);
 
-        var blockedOutputPath = _store.GetOutputLogPathOnly(blocked.Id);
+        var blockedOutputPath = _store.GetOutputLogPath(blocked.Id);
         var blockedOutputDirectory = Path.GetDirectoryName(blockedOutputPath)!;
-        File.WriteAllText(blockedOutputDirectory, "path collision");
+        File.WriteAllText(blockedOutputPath, "failed output");
         File.WriteAllText(_store.GetOutputLogPath(removable.Id), "completed output");
+        Volatile.Write(ref _rejectedOutputDirectory, blockedOutputDirectory);
 
         var active = await manager.Ask<BackgroundJobStarted>(
             MakeStartCommand("sleep 60"),
@@ -505,15 +529,14 @@ public class BackgroundJobManagerActorTests : TestKit
             Assert.NotNull(_store.Get(blocked.Id));
             Assert.Null(_store.Get(removable.Id));
 
-            File.Delete(blockedOutputDirectory);
+            Volatile.Write(ref _rejectedOutputDirectory, null);
             await RunTerminalSweepAsync(manager);
 
             Assert.Null(_store.Get(blocked.Id));
         }
         finally
         {
-            if (File.Exists(blockedOutputDirectory))
-                File.Delete(blockedOutputDirectory);
+            Volatile.Write(ref _rejectedOutputDirectory, null);
 
             await manager.Ask<BackgroundJobCancelResponse>(
                 new CancelBackgroundJob(
@@ -529,7 +552,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_KeepsTerminalJobWithMissingCompletionTime()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))

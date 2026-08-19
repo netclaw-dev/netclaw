@@ -56,7 +56,6 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
     private readonly ISessionPipeline _pipeline;
     private readonly TimeSpan _operationTimeout;
     private readonly List<TRequest> _pendingRequests;
-    private readonly ApprovalMatchOrder _matchOrder;
     private readonly Func<bool> _hasObservedApprovalRequest;
     private readonly Func<Task> _postWrongRequesterWarningAsync;
     private readonly Action<ToolCallId> _persistPromptCleared;
@@ -77,7 +76,6 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
     /// The actor's own pending-approval list. The flow reads it and removes the
     /// entry it resolves; the actor keeps adding to it and replaying it.
     /// </param>
-    /// <param name="matchOrder">Which candidate wins when more than one matches.</param>
     /// <param name="hasObservedApprovalRequest">Reads the cold-path gate.</param>
     /// <param name="postWrongRequesterWarningAsync">Posts the channel's wrong-requester warning.</param>
     /// <param name="persistPromptCleared">
@@ -93,7 +91,6 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         ISessionPipeline pipeline,
         TimeSpan operationTimeout,
         List<TRequest> pendingRequests,
-        ApprovalMatchOrder matchOrder,
         Func<bool> hasObservedApprovalRequest,
         Func<Task> postWrongRequesterWarningAsync,
         Action<ToolCallId> persistPromptCleared,
@@ -106,7 +103,6 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         _pipeline = pipeline;
         _operationTimeout = operationTimeout;
         _pendingRequests = pendingRequests;
-        _matchOrder = matchOrder;
         _hasObservedApprovalRequest = hasObservedApprovalRequest;
         _postWrongRequesterWarningAsync = postWrongRequesterWarningAsync;
         _persistPromptCleared = persistPromptCleared;
@@ -125,7 +121,7 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
     public async Task<bool> TryHandleTextApprovalResponseAsync(string? text, string senderId)
     {
         var (result, pending) = PendingApprovalLookup.Resolve<TRequest, TPromptId>(
-            _pendingRequests, senderId, callId: null, _matchOrder);
+            _pendingRequests, senderId, callId: null);
 
         if (result is ApprovalLookupResult.NotFound)
         {
@@ -240,7 +236,7 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         Action<ISessionResponse>? respondSynchronously = null)
     {
         var (result, pending) = PendingApprovalLookup.Resolve<TRequest, TPromptId>(
-            _pendingRequests, senderId, callId, _matchOrder);
+            _pendingRequests, senderId, callId);
 
         // CanApprove fast-path: if the binding still holds the original request we can
         // post the wrong-requester warning locally without round-tripping through the

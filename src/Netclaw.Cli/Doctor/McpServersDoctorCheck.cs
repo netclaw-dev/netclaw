@@ -17,17 +17,36 @@ namespace Netclaw.Cli.Doctor;
 /// Second pass: prefer daemon-reported runtime truth; fall back to explicit
 /// offline connectivity checks when daemon status is unavailable.
 /// </summary>
-public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonApi) : IDoctorCheck
+public sealed class McpServersDoctorCheck : IDoctorCheck
 {
+    private readonly NetclawPaths _paths;
+    private readonly DaemonApi _daemonApi;
+    private readonly Func<Netclaw.Tools.McpServerName, McpServerEntry, CancellationToken, Task<McpProbeResult>> _probeServer;
+
+    public McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonApi)
+        : this(paths, daemonApi, McpCommand.ProbeServerAsync)
+    {
+    }
+
+    internal McpServersDoctorCheck(
+        NetclawPaths paths,
+        DaemonApi daemonApi,
+        Func<Netclaw.Tools.McpServerName, McpServerEntry, CancellationToken, Task<McpProbeResult>> probeServer)
+    {
+        _paths = paths;
+        _daemonApi = daemonApi;
+        _probeServer = probeServer;
+    }
+
     public async Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(paths.NetclawConfigPath))
+        if (!File.Exists(_paths.NetclawConfigPath))
             return DoctorCheckResult.Pass("mcp-servers", "No config file (skipped)");
 
         Dictionary<string, McpServerEntry> servers;
         try
         {
-            var text = File.ReadAllText(paths.NetclawConfigPath);
+            var text = File.ReadAllText(_paths.NetclawConfigPath);
             using var doc = JsonDocument.Parse(text);
 
             if (!doc.RootElement.TryGetProperty("McpServers", out var mcpSection))
@@ -82,15 +101,15 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonAp
 
         try
         {
-            daemonStatuses = await daemonApi.GetMcpServerStatusesAsync(cancellationToken);
+            daemonStatuses = await _daemonApi.GetMcpServerStatusesAsync(cancellationToken);
         }
         catch (HttpRequestException)
         {
-            daemonError = $"could not reach daemon at {daemonApi.Endpoint}";
+            daemonError = $"could not reach daemon at {_daemonApi.Endpoint}";
         }
         catch (OperationCanceledException)
         {
-            daemonError = $"daemon timed out at {daemonApi.Endpoint}";
+            daemonError = $"daemon timed out at {_daemonApi.Endpoint}";
         }
         catch (Exception ex)
         {
@@ -108,7 +127,7 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonAp
         string daemonError,
         CancellationToken cancellationToken)
     {
-        var fullServers = McpCommand.LoadMcpServers(paths);
+        var fullServers = McpCommand.LoadMcpServers(_paths);
         var statusMessages = new List<string>
         {
             $"daemon status unavailable: {daemonError}"
@@ -165,7 +184,7 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonAp
             }
 
             var probeEntry = fullServers.TryGetValue(name, out var full) ? full : entry;
-            var probe = await McpCommand.ProbeServerAsync(new Netclaw.Tools.McpServerName(name), probeEntry, cancellationToken);
+            var probe = await _probeServer(new Netclaw.Tools.McpServerName(name), probeEntry, cancellationToken);
 
             switch (probe.Status)
             {

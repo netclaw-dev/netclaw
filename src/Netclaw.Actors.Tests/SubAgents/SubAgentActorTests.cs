@@ -1012,7 +1012,7 @@ public class SubAgentActorTests : TestKit
                 Task = "Run the same approval-gated tool twice",
                 Timeout = TimeSpan.FromSeconds(5)
             },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal(2, approvalBridge.RequestCount);
